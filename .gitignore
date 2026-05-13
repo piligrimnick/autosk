@@ -1,0 +1,15 @@
+/bin/
+/dist/
+*.test
+*.out
+.DS_Store
+
+# autosk's own task DB (don't commit during dev)
+/.autosk/
+
+# Local scratch
+/tmp/
+/scratch/
+
+# pi harness state (local agent scratch)
+/.pi/

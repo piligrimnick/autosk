@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      # TODO: install libdoltlite from a release asset and export DOLTLITE_DIR.
+      # For now CI only verifies the code compiles against stock libsqlite3 (the
+      # smoke test will fail with "no such function: doltlite_engine" — that's
+      # expected until we wire doltlite acquisition).
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build (no doltlite)
+        run: |
+          # Build with the libsqlite3 tag but link against system libsqlite3 so
+          # the binary compiles; runtime doltlite calls will fail. This catches
+          # compile-time regressions until CI is taught to fetch doltlite.
+          CGO_LDFLAGS="-lsqlite3" go build -tags libsqlite3 ./...
