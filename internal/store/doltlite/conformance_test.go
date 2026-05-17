@@ -46,8 +46,8 @@ func TestOpen_InMemory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v != 1 {
-		t.Fatalf("want schema_version=1, got %d", v)
+	if v < 1 {
+		t.Fatalf("want schema_version >= 1, got %d", v)
 	}
 }
 

@@ -114,7 +114,7 @@ func testRawPassthrough(t *testing.T, f Factory) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows.Err: %v", err)
 	}
-	for _, want := range []string{"tasks", "task_deps", "schema_migrations"} {
+	for _, want := range []string{"tasks", "task_deps", "schema_migrations", "daemon_runs"} {
 		if !got[want] {
 			t.Errorf("expected table %q to exist after Migrate; got: %v", want, got)
 		}

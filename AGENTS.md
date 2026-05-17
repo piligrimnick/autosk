@@ -71,6 +71,25 @@ Your in-progress task stays `claimed`; `ready` will not surface it again, and
 `list` and `ready` return arrays of these. The shape is stable across patch
 releases; renames / removals are breaking changes.
 
+## When a daemon is running
+
+If `autosk daemon serve` is running for the project, prefer **submitting**
+your next task to the daemon instead of opening a fresh shell:
+
+```bash
+autosk daemon submit <as-id> --model sonnet:high --thinking high
+```
+
+The daemon will `claim` the task for you on start. **You** (the agent) are
+still responsible for closing it before stopping: `autosk done <id>`,
+`autosk cancel <id>`, or decompose with `autosk create ... --blocks <id>`.
+If you stop without closing, the daemon kicks you back with a corrective
+user message; after `max_corrections` attempts the run is marked failed.
+
+`autosk daemon status <job-id>` and `autosk daemon messages <job-id>`
+show the run's lifecycle and the transcript pi is writing. See
+[`docs/daemon.md`](docs/daemon.md).
+
 ## What autosk is NOT
 
 - Not a comment thread. Use commit messages or PR descriptions for that.

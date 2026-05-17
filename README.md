@@ -104,7 +104,28 @@ doltlite commit so future `autosk history` can recover field history.
 | `AUTOSK_NO_AUTOINIT` | Refuse to create a new DB on first write. |
 | `DOLTLITE_DIR` | Build-time only: directory containing `libdoltlite.a` and `sqlite3.h`. |
 
+## Daemon / pi orchestrator
+
+`autosk daemon serve` exposes an HTTP API that spawns `pi --mode rpc`
+against autosk tasks, verifies the agent closes the task per protocol,
+and kicks back when it doesn't.
+
+```bash
+autosk daemon serve &
+id=$(autosk create "do thing" -p 1 --json | jq -r .id)
+autosk daemon submit "$id" --model sonnet:medium --thinking high
+autosk daemon status   <job-id>
+autosk daemon messages <job-id> --limit 20
+```
+
+See [`docs/daemon.md`](docs/daemon.md) for the API surface, configuration
+flags, closure verification rules, and security caveats. The contract for
+the `pi --mode rpc` wire format is summarised in
+[`docs/notes/pi-rpc-contract.md`](docs/notes/pi-rpc-contract.md).
+
 ## Roadmap (post v0.1)
+
+Daemon plan and follow-ups: [`docs/plans/20260517-Daemon-Plan.md`](docs/plans/20260517-Daemon-Plan.md) §10.
 
 Deferred per the [init plan §8](docs/plans/20260513-Init-Plan.md#8-explicitly-deferred-post-v01):
 

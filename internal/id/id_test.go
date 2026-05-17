@@ -70,8 +70,10 @@ func TestValid(t *testing.T) {
 		{"as-a1b2", true},
 		{"as-0000", true},
 		{"foo-ffff", true},
-		{"as-A1B2", false}, // uppercase rejected
-		{"as-12345", false},
+		{"job-a1b2c3", true},   // 6 hex chars (3 bytes)
+		{"job-a1b2c3d4", true}, // 8 hex chars
+		{"as-A1B2", false},     // uppercase rejected
+		{"as-12345", false},    // odd hex length
 		{"as-12", false},
 		{"-a1b2", false},
 		{"as", false},
