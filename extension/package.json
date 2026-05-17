@@ -1,0 +1,31 @@
+{
+  "name": "pi-autosk",
+  "version": "0.1.0",
+  "description": "pi extension that exposes the autosk CLI as a single tool for AI agents.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "files": [
+    "src/",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.74.0",
+    "@earendil-works/pi-tui": ">=0.74.0",
+    "typebox": ">=1.1.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.74.1",
+    "@earendil-works/pi-tui": "^0.74.1",
+    "typebox": "^1.1.24",
+    "typescript": "^5.7.3"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}
