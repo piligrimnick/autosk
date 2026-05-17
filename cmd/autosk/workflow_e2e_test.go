@@ -178,6 +178,26 @@ func (s *e2eStack) waitForTaskStatus(t *testing.T, taskID string, want store.Sta
 	return store.Task{}
 }
 
+// waitForRunStatus polls until at least one daemon_runs row for taskID
+// matches the given status, or the timeout fires.
+func (s *e2eStack) waitForRunStatus(t *testing.T, taskID string, want runstore.RunStatus, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		rs, err := s.runs.ListRuns(context.Background(), runstore.RunFilter{TaskID: taskID})
+		if err == nil {
+			for _, r := range rs {
+				if r.Status == want {
+					return
+				}
+			}
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	rs, _ := s.runs.ListRuns(context.Background(), runstore.RunFilter{TaskID: taskID})
+	t.Fatalf("task %s never had a run reach status %q (rows=%+v)", taskID, want, rs)
+}
+
 // waitForCurrentStep polls until the task's current step name matches.
 func (s *e2eStack) waitForCurrentStep(t *testing.T, taskID, stepName string, timeout time.Duration) {
 	t.Helper()
@@ -363,13 +383,13 @@ func TestE2E_SingleAgent_Done(t *testing.T) {
 		t.Fatalf("workflow_id should be preserved for audit, got %q", got.WorkflowID)
 	}
 
-	// One daemon_runs row, status=done.
+	// The executor flips the task to done BEFORE marking the run done
+	// (advanceTask runs first, then runstore.MarkDone). Poll the run row
+	// here too so we don't race with the trailing MarkDone call.
+	stack.waitForRunStatus(t, tk.ID, runstore.StatusDone, 2*time.Second)
 	rs, _ := stack.runs.ListRuns(ctx, runstore.RunFilter{TaskID: tk.ID})
 	if len(rs) != 1 {
 		t.Fatalf("expected 1 run row, got %d", len(rs))
-	}
-	if rs[0].Status != runstore.StatusDone {
-		t.Fatalf("run status: %s", rs[0].Status)
 	}
 }
 

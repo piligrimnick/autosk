@@ -183,16 +183,8 @@ func stepByID(w workflow.Workflow, stepID string) (workflow.Step, error) {
 	return workflow.Step{}, fmt.Errorf("step %s not found in workflow %s", stepID, w.Name)
 }
 
-// renderOptsForTask returns render.Options that surface the derived
-// current_step + current_agent for a task. Best-effort: returns no opts
-// when the task is not in a workflow or the step/agent lookup fails.
+// renderOptsForTask is a thin alias for taskRenderOpts so the older
+// callsite name keeps compiling.
 func renderOptsForTask(ctx context.Context, wfs *workflow.Store, t store.Task) []render.Option {
-	if t.CurrentStepID == "" {
-		return nil
-	}
-	step, err := wfs.FindStepByID(ctx, t.CurrentStepID)
-	if err != nil {
-		return nil
-	}
-	return []render.Option{render.WithStep(step.Name, step.AgentName)}
+	return taskRenderOpts(ctx, wfs, t)
 }

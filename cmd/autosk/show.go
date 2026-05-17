@@ -43,13 +43,25 @@ func newShowCmd() *cobra.Command {
 				return fmt.Errorf("is_blocked: %w", err)
 			}
 			opts := []render.Option{render.WithBlocked(blocked, incoming, outgoing)}
-			// Surface derived current_step / current_agent when the task is
-			// in a workflow. Best-effort: failures here are ignored.
-			if t.CurrentStepID != "" {
-				if dl, ok := s.(*doltlite.Store); ok {
-					wfs := workflow.New(dl.DB(), agent.New(dl.DB()))
+			// Surface derived current_step / current_agent + author + workflow
+			// names when the underlying store is doltlite. Best-effort:
+			// failures here are ignored (the renderer falls back to bare ids).
+			if dl, ok := s.(*doltlite.Store); ok {
+				ag := agent.New(dl.DB())
+				wfs := workflow.New(dl.DB(), ag)
+				if t.CurrentStepID != "" {
 					if step, err := wfs.FindStepByID(cmd.Context(), t.CurrentStepID); err == nil {
-						opts = append(opts, render.WithStep(step.Name, step.AgentName))
+						opts = append(opts, render.WithStep(step.Name, step.AgentName, step.AgentID))
+					}
+				}
+				if t.AuthorID != "" {
+					if a, err := ag.GetByID(cmd.Context(), t.AuthorID); err == nil {
+						opts = append(opts, render.WithAuthor(a.Name))
+					}
+				}
+				if t.WorkflowID != "" {
+					if wf, err := wfs.GetByID(cmd.Context(), t.WorkflowID); err == nil {
+						opts = append(opts, render.WithWorkflow(wf.Name))
 					}
 				}
 			}

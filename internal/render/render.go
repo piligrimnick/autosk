@@ -19,21 +19,27 @@ import (
 // flag and edge arrays are present here; renderers fill them from
 // caller-supplied data so storage doesn't need to know about wire format.
 type TaskJSON struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	Status      string    `json:"status"`
-	Priority    int       `json:"priority"`
-	AuthorID    string    `json:"author_id,omitempty"`
-	WorkflowID  string    `json:"workflow_id,omitempty"`
-	CurrentStep string    `json:"current_step,omitempty"` // step name, not id
-	CurrentAgent string   `json:"current_agent,omitempty"` // derived: steps[current_step_id].agent.name
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID           string    `json:"id"`
+	Title        string    `json:"title"`
+	Description  string    `json:"description"`
+	Status       string    `json:"status"`
+	Priority     int       `json:"priority"`
+	AuthorID     string    `json:"author_id,omitempty"`
+	WorkflowID   string    `json:"workflow_id,omitempty"`
+	CurrentStep  string    `json:"current_step,omitempty"`  // step name, not id
+	CurrentAgent string    `json:"current_agent,omitempty"` // derived: steps[current_step_id].agent.name
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 
 	Blocked   bool     `json:"blocked"`
 	BlockedBy []string `json:"blocked_by"`
 	Blocks    []string `json:"blocks"`
+
+	// Display-only joins. Not emitted in JSON (those carry the raw id);
+	// only used by the human renderer to build the `[id]: name` form.
+	authorName   string
+	workflowName string
+	currentAgentID string
 }
 
 // ToWire converts a store.Task into the wire shape. blocked / arrays /
@@ -56,12 +62,27 @@ func ToWire(t store.Task) TaskJSON {
 }
 
 // WithStep sets the human-friendly step name and the derived
-// current_agent. Caller resolves both from the workflow store.
-func WithStep(stepName, agentName string) Option {
+// current_agent. agentID is optional (only used by the human renderer to
+// format `[ag-XXXX]: name`); passing "" omits the id prefix there.
+func WithStep(stepName, agentName, agentID string) Option {
 	return func(t *TaskJSON) {
 		t.CurrentStep = stepName
 		t.CurrentAgent = agentName
+		t.currentAgentID = agentID
 	}
+}
+
+// WithAuthor sets the human-friendly author name (with id) for the
+// task's author. Used by the human renderer only; the JSON wire shape
+// keeps the raw author_id.
+func WithAuthor(name string) Option {
+	return func(t *TaskJSON) { t.authorName = name }
+}
+
+// WithWorkflow sets the human-friendly workflow name for the task's
+// workflow_id. Used by the human renderer only.
+func WithWorkflow(name string) Option {
+	return func(t *TaskJSON) { t.workflowName = name }
 }
 
 // TaskJSONTo writes a single task as JSON (one line, no trailing newline
@@ -95,42 +116,85 @@ func TasksJSONTo(w io.Writer, ts []store.Task, deco Decorator) error {
 }
 
 // Task writes a key/value block for a single task (human format).
+//
+// Every field appears on a stable line, even when the underlying value
+// is null/empty (rendered as `-`). This gives a uniform, scannable
+// shape regardless of whether the task is currently in a workflow.
+// The header uses the `[id]: title` form, and references to other
+// entities (author, workflow, current_agent) use the same convention
+// when the caller supplied their names via WithAuthor/WithWorkflow/
+// WithStep. Lists (blocked_by/blocks) print `-` when empty.
+//
+// JSON output keeps `omitempty` semantics — this `-`-everywhere is
+// human-only.
 func Task(w io.Writer, t store.Task, opts ...Option) error {
 	wire := applyOptions(ToWire(t), opts...)
-	fmt.Fprintf(w, "id:           %s\n", wire.ID)
-	fmt.Fprintf(w, "title:        %s\n", wire.Title)
-	fmt.Fprintf(w, "status:       %s\n", wire.Status)
-	fmt.Fprintf(w, "priority:     %d\n", wire.Priority)
-	if wire.WorkflowID != "" {
-		fmt.Fprintf(w, "workflow_id:  %s\n", wire.WorkflowID)
-	}
-	if wire.CurrentStep != "" {
-		fmt.Fprintf(w, "current_step: %s\n", wire.CurrentStep)
-	}
-	if wire.CurrentAgent != "" {
-		fmt.Fprintf(w, "current_agent:%s\n", " "+wire.CurrentAgent)
-	}
-	if wire.AuthorID != "" {
-		fmt.Fprintf(w, "author_id:    %s\n", wire.AuthorID)
-	}
+	fmt.Fprintf(w, "[%s]: %s\n", wire.ID, wire.Title)
+	fmt.Fprintf(w, "status:        %s\n", wire.Status)
+	fmt.Fprintf(w, "priority:      %d\n", wire.Priority)
+	fmt.Fprintf(w, "workflow:      %s\n", bracketedRefOrDash(wire.WorkflowID, wire.workflowName))
+	fmt.Fprintf(w, "current_step:  %s\n", dashIfEmpty(wire.CurrentStep))
+	fmt.Fprintf(w, "current_agent: %s\n", bracketedRefOrDash(wire.currentAgentID, wire.CurrentAgent))
+	fmt.Fprintf(w, "author:        %s\n", bracketedRefOrDash(wire.AuthorID, wire.authorName))
 	if wire.Blocked {
-		fmt.Fprintf(w, "blocked:      yes\n")
+		fmt.Fprintf(w, "blocked:       yes\n")
 	} else {
-		fmt.Fprintf(w, "blocked:      no\n")
+		fmt.Fprintf(w, "blocked:       no\n")
 	}
-	if len(wire.BlockedBy) > 0 {
-		fmt.Fprintf(w, "blocked_by:   %s\n", strings.Join(wire.BlockedBy, ", "))
-	}
-	if len(wire.Blocks) > 0 {
-		fmt.Fprintf(w, "blocks:       %s\n", strings.Join(wire.Blocks, ", "))
-	}
-	fmt.Fprintf(w, "created_at:   %s\n", wire.CreatedAt.Format(time.RFC3339))
-	fmt.Fprintf(w, "updated_at:   %s\n", wire.UpdatedAt.Format(time.RFC3339))
+	fmt.Fprintf(w, "blocked_by:    %s\n", joinOrDash(wire.BlockedBy))
+	fmt.Fprintf(w, "blocks:        %s\n", joinOrDash(wire.Blocks))
+	fmt.Fprintf(w, "created_at:    %s\n", wire.CreatedAt.Format(time.RFC3339))
+	fmt.Fprintf(w, "updated_at:    %s\n", wire.UpdatedAt.Format(time.RFC3339))
 	if wire.Description != "" {
 		fmt.Fprintf(w, "description:\n%s\n", indent(wire.Description, "  "))
+	} else {
+		fmt.Fprintf(w, "description:   -\n")
 	}
 	return nil
 }
+
+// dashIfEmpty returns "-" for an empty string, otherwise the string.
+// Used by the human task renderer to keep field-line shape uniform.
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+// bracketedRefOrDash is bracketedRef with the convention that an empty
+// id (no reference at all) prints `-` rather than an empty bracket.
+func bracketedRefOrDash(id, name string) string {
+	if id == "" {
+		return "-"
+	}
+	return bracketedRef(id, name)
+}
+
+// joinOrDash joins ss with ", " or returns "-" when ss is empty.
+func joinOrDash(ss []string) string {
+	if len(ss) == 0 {
+		return "-"
+	}
+	return strings.Join(ss, ", ")
+}
+
+// bracketedRef formats a reference to another entity as `[id]: name`
+// when both are known, or `[id]` when the name lookup wasn't supplied.
+// Empty id is a programming error; we still return something useful.
+func bracketedRef(id, name string) string {
+	if id == "" {
+		return name
+	}
+	if name == "" {
+		return "[" + id + "]"
+	}
+	return "[" + id + "]: " + name
+}
+
+// BracketedRef is the exported form used by other render callers (e.g.
+// cmd/autosk/agent.go) so the format stays in one place.
+func BracketedRef(id, name string) string { return bracketedRef(id, name) }
 
 // Tasks writes a compact table for a slice of tasks.
 func Tasks(w io.Writer, ts []store.Task, deco Decorator) error {

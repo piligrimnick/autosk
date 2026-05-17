@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"autosk/internal/agent"
+	"autosk/internal/render"
 	"autosk/internal/store/doltlite"
 	"autosk/internal/workflow"
 )
@@ -222,18 +223,27 @@ func emitWorkflow(w workflow.Workflow, withSteps bool) error {
 	if flagJSON {
 		return json.NewEncoder(os.Stdout).Encode(toWorkflowJSON(w, withSteps))
 	}
-	fmt.Printf("id:           %s\n", w.ID)
-	fmt.Printf("name:         %s\n", w.Name)
+	fmt.Printf("%s\n", render.BracketedRef(w.ID, w.Name))
 	if w.Description != "" {
 		fmt.Printf("description:  %s\n", w.Description)
 	}
-	fmt.Printf("first_step:   %s\n", w.FirstStepID)
+	// first_step: render with the step name when we can find it among
+	// the loaded steps; fall back to raw id otherwise.
+	var firstStepName string
+	for _, st := range w.Steps {
+		if st.ID == w.FirstStepID {
+			firstStepName = st.Name
+			break
+		}
+	}
+	fmt.Printf("first_step:   %s\n", render.BracketedRef(w.FirstStepID, firstStepName))
 	fmt.Printf("synthetic:    %t\n", w.IsSynthetic)
 	fmt.Printf("created_at:   %s\n", w.CreatedAt.Format("2006-01-02T15:04:05Z"))
 	if withSteps && len(w.Steps) > 0 {
 		fmt.Println("steps:")
 		for _, st := range w.Steps {
-			fmt.Printf("  %s (id=%s, agent=%s)\n", st.Name, st.ID, st.AgentName)
+			fmt.Printf("  %s\n", render.BracketedRef(st.ID, st.Name))
+			fmt.Printf("    agent: %s\n", render.BracketedRef(st.AgentID, st.AgentName))
 			for _, tr := range st.Transitions {
 				if tr.IsTaskStatus() {
 					fmt.Printf("    → task_status=%s: %s\n", tr.TaskStatus, tr.PromptRule)

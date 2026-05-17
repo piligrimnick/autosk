@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"autosk/internal/agent"
+	"autosk/internal/render"
 	"autosk/internal/store/doltlite"
 )
 
@@ -173,8 +174,7 @@ func emitAgent(a agent.Agent) error {
 	if flagJSON {
 		return json.NewEncoder(os.Stdout).Encode(toJSON(a))
 	}
-	fmt.Printf("id:         %s\n", a.ID)
-	fmt.Printf("name:       %s\n", a.Name)
+	fmt.Printf("%s\n", render.BracketedRef(a.ID, a.Name))
 	fmt.Printf("is_human:   %t\n", a.IsHuman)
 	fmt.Printf("created_at: %s\n", a.CreatedAt.Format("2006-01-02T15:04:05Z"))
 	return nil

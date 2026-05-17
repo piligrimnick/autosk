@@ -74,6 +74,11 @@ func New(db *sql.DB, ag *agent.Store) *Store {
 	return &Store{db: db, agent: ag}
 }
 
+// Agents exposes the underlying agent.Store. Useful for CLI helpers that
+// want to resolve agent ids without re-constructing a store off the same
+// *sql.DB.
+func (s *Store) Agents() *agent.Store { return s.agent }
+
 // Create persists a parsed Definition transactionally. Returns the
 // materialised Workflow with all nested steps + transitions.
 //

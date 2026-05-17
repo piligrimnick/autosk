@@ -373,10 +373,13 @@ func (e *Executor) handleRunError(ctx, bg context.Context, jobID string, runner 
 			exit, _ = runner.Wait(bg, e.cfg.Grace)
 		}
 		_, _ = e.deps.Runs.MarkCancelled(bg, jobID, &exit)
+		// Cancellation: do NOT park the task. The caller asked to stop;
+		// they will decide whether to resume or cancel the task itself.
 		return runErr
 	}
 	exit, _ := e.shutdown(runner, ctx, bg)
 	_, _ = e.deps.Runs.MarkFailed(bg, jobID, &exit, runErr.Error())
+	e.parkTaskOnFailure(bg, jobID)
 	return runErr
 }
 
@@ -396,7 +399,39 @@ func (e *Executor) shutdown(runner PiRunner, ctx, bg context.Context) (int, erro
 
 func (e *Executor) failTerminal(ctx context.Context, jobID string, exit *int, cause error) error {
 	_, _ = e.deps.Runs.MarkFailed(ctx, jobID, exit, cause.Error())
+	e.parkTaskOnFailure(ctx, jobID)
 	return cause
+}
+
+// parkTaskOnFailure moves the run's task into `human_feedback` so the
+// poller stops re-picking it. Without this, a permanent failure (e.g.
+// agent_config_invalid, pi binary missing) spams daemon_runs forever
+// because the task stays in in_workflow with no queued/running row.
+//
+// `current_step_id` is preserved so `autosk resume <id>` returns to the
+// same step once the human has fixed the underlying problem. The
+// failure reason is in daemon_runs.error (visible via `daemon list` /
+// HTTP API).
+//
+// Best-effort: if Tasks/Runs lookups fail here we swallow the error
+// since we're already on a failure path.
+func (e *Executor) parkTaskOnFailure(ctx context.Context, jobID string) {
+	run, err := e.deps.Runs.GetRun(ctx, jobID)
+	if err != nil || run.TaskID == "" {
+		return
+	}
+	tk, err := e.deps.Tasks.GetTask(ctx, run.TaskID)
+	if err != nil {
+		return
+	}
+	// Only park tasks that are still in_workflow. If a human raced us
+	// (e.g. typed `autosk done` while the executor was failing), leave
+	// their terminal status intact.
+	if tk.Status != store.StatusInWorkflow {
+		return
+	}
+	parked := store.StatusHumanFeedback
+	_, _ = e.deps.Tasks.UpdateTask(ctx, run.TaskID, store.TaskPatch{Status: &parked})
 }
 
 func (e *Executor) cleanup(runner PiRunner, bg context.Context) {

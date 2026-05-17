@@ -366,7 +366,7 @@ func TestRun_MissingAgentConfig(t *testing.T) {
 	defer fx.close()
 	// Remove the developer config so the executor can't load it.
 	_ = os.Remove(filepath.Join(fx.cfg.ProjectRoot, ".autosk", "agents", "developer.toml"))
-	_, jobID := fx.makeRun(t, "Bad", "dev")
+	taskID, jobID := fx.makeRun(t, "Bad", "dev")
 
 	stub := newStub()
 	exec := executor.New(fx.deps, stubFactory(stub), fx.cfg)
@@ -380,6 +380,35 @@ func TestRun_MissingAgentConfig(t *testing.T) {
 	}
 	if !contains(run.Error, "agent_config_invalid") {
 		t.Errorf("run.Error: %q (expected agent_config_invalid)", run.Error)
+	}
+	// Failure parking: the task should have moved to human_feedback so
+	// the poller stops re-picking it.
+	tk, _ := fx.ts.GetTask(context.Background(), taskID)
+	if tk.Status != store.StatusHumanFeedback {
+		t.Fatalf("task should be parked to human_feedback, got %s", tk.Status)
+	}
+	if tk.CurrentStepID == "" {
+		t.Fatalf("current_step_id should be preserved on park (so resume works)")
+	}
+}
+
+// TestRun_KickbackThenFail_ParksTask: when the kickback budget is
+// exhausted, the task should also be parked (so the poller doesn't
+// resurrect it on the next tick).
+func TestRun_KickbackThenFail_ParksTask(t *testing.T) {
+	fx := newExecFixture(t)
+	defer fx.close()
+	ctx := context.Background()
+	taskID, jobID := fx.makeRun(t, "StuckLoop", "dev")
+
+	stub := newStub() // never emits a signal
+	exec := executor.New(fx.deps, stubFactory(stub), fx.cfg)
+	if err := exec.Run(ctx, jobID); err == nil {
+		t.Fatal("expected ErrAgentDidNotEmit")
+	}
+	tk, _ := fx.ts.GetTask(ctx, taskID)
+	if tk.Status != store.StatusHumanFeedback {
+		t.Fatalf("task should be parked, got %s", tk.Status)
 	}
 }
 

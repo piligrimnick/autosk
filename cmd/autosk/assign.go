@@ -78,21 +78,41 @@ func newAssignCmd() *cobra.Command {
 	return cmd
 }
 
-// emitRich prints a task with workflow-derived current_step / current_agent
-// surfaced via the renderer. Falls back to plain emit() when the task has
-// no current step.
+// emitRich prints a task with derived workflow / step / author info
+// resolved against the provided workflow store + an agent store derived
+// from it. Best-effort: lookup failures degrade to bare ids.
 func emitRich(ctx context.Context, wfs *workflow.Store, t store.Task) error {
 	if flagQuiet {
 		return nil
 	}
-	var opts []render.Option
-	if t.CurrentStepID != "" {
-		if step, err := wfs.FindStepByID(ctx, t.CurrentStepID); err == nil {
-			opts = append(opts, render.WithStep(step.Name, step.AgentName))
-		}
-	}
+	opts := taskRenderOpts(ctx, wfs, t)
 	if flagJSON {
 		return render.TaskJSONTo(os.Stdout, t, opts...)
 	}
 	return render.Task(os.Stdout, t, opts...)
+}
+
+// taskRenderOpts builds the standard set of render.Options for a task:
+// derived current_step + current_agent (from the step) and the
+// human-friendly names for workflow + author.
+func taskRenderOpts(ctx context.Context, wfs *workflow.Store, t store.Task) []render.Option {
+	var opts []render.Option
+	if t.CurrentStepID != "" {
+		if step, err := wfs.FindStepByID(ctx, t.CurrentStepID); err == nil {
+			opts = append(opts, render.WithStep(step.Name, step.AgentName, step.AgentID))
+		}
+	}
+	if t.WorkflowID != "" {
+		if w, err := wfs.GetByID(ctx, t.WorkflowID); err == nil {
+			opts = append(opts, render.WithWorkflow(w.Name))
+		}
+	}
+	if t.AuthorID != "" {
+		if ag := wfs.Agents(); ag != nil {
+			if a, err := ag.GetByID(ctx, t.AuthorID); err == nil {
+				opts = append(opts, render.WithAuthor(a.Name))
+			}
+		}
+	}
+	return opts
 }
