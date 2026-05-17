@@ -15,27 +15,30 @@ import (
 	"autosk/internal/store"
 )
 
-// TaskJSON is the wire shape for a single task. The derived `blocked` flag
-// and edge arrays are present here; renderers fill them from caller-supplied
-// data so storage doesn't need to know about wire format.
+// TaskJSON is the wire shape for a single task. The derived `blocked`
+// flag and edge arrays are present here; renderers fill them from
+// caller-supplied data so storage doesn't need to know about wire format.
 type TaskJSON struct {
 	ID          string    `json:"id"`
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
 	Status      string    `json:"status"`
 	Priority    int       `json:"priority"`
+	AuthorID    string    `json:"author_id,omitempty"`
+	WorkflowID  string    `json:"workflow_id,omitempty"`
+	CurrentStep string    `json:"current_step,omitempty"` // step name, not id
+	CurrentAgent string   `json:"current_agent,omitempty"` // derived: steps[current_step_id].agent.name
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 
-	// Derived fields. Populated by the CLI layer; zero-valued is acceptable
-	// during P2/P3 (P4 wires the real values).
 	Blocked   bool     `json:"blocked"`
 	BlockedBy []string `json:"blocked_by"`
 	Blocks    []string `json:"blocks"`
 }
 
-// ToWire converts a store.Task into the wire shape. blocked / arrays
-// default to false / nil — callers populate them when available.
+// ToWire converts a store.Task into the wire shape. blocked / arrays /
+// current_step / current_agent default to zero values — callers populate
+// them via Options or a Decorator when relevant.
 func ToWire(t store.Task) TaskJSON {
 	return TaskJSON{
 		ID:          t.ID,
@@ -43,10 +46,21 @@ func ToWire(t store.Task) TaskJSON {
 		Description: t.Description,
 		Status:      string(t.Status),
 		Priority:    t.Priority,
+		AuthorID:    t.AuthorID,
+		WorkflowID:  t.WorkflowID,
 		CreatedAt:   t.CreatedAt.UTC(),
 		UpdatedAt:   t.UpdatedAt.UTC(),
-		BlockedBy:   []string{}, // emit `[]` not `null` for stability
+		BlockedBy:   []string{},
 		Blocks:      []string{},
+	}
+}
+
+// WithStep sets the human-friendly step name and the derived
+// current_agent. Caller resolves both from the workflow store.
+func WithStep(stepName, agentName string) Option {
+	return func(t *TaskJSON) {
+		t.CurrentStep = stepName
+		t.CurrentAgent = agentName
 	}
 }
 
@@ -83,23 +97,35 @@ func TasksJSONTo(w io.Writer, ts []store.Task, deco Decorator) error {
 // Task writes a key/value block for a single task (human format).
 func Task(w io.Writer, t store.Task, opts ...Option) error {
 	wire := applyOptions(ToWire(t), opts...)
-	fmt.Fprintf(w, "id:          %s\n", wire.ID)
-	fmt.Fprintf(w, "title:       %s\n", wire.Title)
-	fmt.Fprintf(w, "status:      %s\n", wire.Status)
-	fmt.Fprintf(w, "priority:    %d\n", wire.Priority)
+	fmt.Fprintf(w, "id:           %s\n", wire.ID)
+	fmt.Fprintf(w, "title:        %s\n", wire.Title)
+	fmt.Fprintf(w, "status:       %s\n", wire.Status)
+	fmt.Fprintf(w, "priority:     %d\n", wire.Priority)
+	if wire.WorkflowID != "" {
+		fmt.Fprintf(w, "workflow_id:  %s\n", wire.WorkflowID)
+	}
+	if wire.CurrentStep != "" {
+		fmt.Fprintf(w, "current_step: %s\n", wire.CurrentStep)
+	}
+	if wire.CurrentAgent != "" {
+		fmt.Fprintf(w, "current_agent:%s\n", " "+wire.CurrentAgent)
+	}
+	if wire.AuthorID != "" {
+		fmt.Fprintf(w, "author_id:    %s\n", wire.AuthorID)
+	}
 	if wire.Blocked {
-		fmt.Fprintf(w, "blocked:     yes\n")
+		fmt.Fprintf(w, "blocked:      yes\n")
 	} else {
-		fmt.Fprintf(w, "blocked:     no\n")
+		fmt.Fprintf(w, "blocked:      no\n")
 	}
 	if len(wire.BlockedBy) > 0 {
-		fmt.Fprintf(w, "blocked_by:  %s\n", strings.Join(wire.BlockedBy, ", "))
+		fmt.Fprintf(w, "blocked_by:   %s\n", strings.Join(wire.BlockedBy, ", "))
 	}
 	if len(wire.Blocks) > 0 {
-		fmt.Fprintf(w, "blocks:      %s\n", strings.Join(wire.Blocks, ", "))
+		fmt.Fprintf(w, "blocks:       %s\n", strings.Join(wire.Blocks, ", "))
 	}
-	fmt.Fprintf(w, "created_at:  %s\n", wire.CreatedAt.Format(time.RFC3339))
-	fmt.Fprintf(w, "updated_at:  %s\n", wire.UpdatedAt.Format(time.RFC3339))
+	fmt.Fprintf(w, "created_at:   %s\n", wire.CreatedAt.Format(time.RFC3339))
+	fmt.Fprintf(w, "updated_at:   %s\n", wire.UpdatedAt.Format(time.RFC3339))
 	if wire.Description != "" {
 		fmt.Fprintf(w, "description:\n%s\n", indent(wire.Description, "  "))
 	}

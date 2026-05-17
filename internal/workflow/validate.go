@@ -1,0 +1,107 @@
+package workflow
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"autosk/internal/agent"
+)
+
+// ValidTaskStatuses is the closed set of `task_status` targets a
+// transition may carry. Mirrors the SQL CHECK in 001_init.sql.
+var ValidTaskStatuses = map[string]struct{}{
+	"human_feedback": {},
+	"done":           {},
+	"cancelled":      {},
+}
+
+// ValidateOpts narrows what Validate enforces.
+type ValidateOpts struct {
+	// AllowSyntheticName lets the synthetic-workflow generator bypass the
+	// reserved-prefix check. User-driven `workflow create` must keep it
+	// false so authors can't squat on the `single:` namespace.
+	AllowSyntheticName bool
+}
+
+// Validate runs structural + referential checks on a parsed Definition.
+// Agent existence is checked via the provided agent store. Pass nil for
+// the agent store to skip that check (used by parser-level tests).
+//
+// Errors are joined into a single message so the user sees every problem
+// in one pass.
+func Validate(ctx context.Context, def Definition, ag *agent.Store, opts ValidateOpts) error {
+	var problems []string
+	addf := func(format string, args ...any) {
+		problems = append(problems, fmt.Sprintf(format, args...))
+	}
+
+	if def.Name == "" {
+		addf("`name` is required")
+	}
+	if !opts.AllowSyntheticName && strings.HasPrefix(def.Name, SyntheticPrefix) {
+		addf("`name` starts with reserved prefix %q (used for synthetic single-agent workflows)", SyntheticPrefix)
+	}
+	if def.FirstStep == "" {
+		addf("`first_step` is required")
+	}
+	if len(def.Steps) == 0 {
+		addf("`steps` is empty")
+	} else if def.FirstStep != "" {
+		if _, ok := def.Steps[def.FirstStep]; !ok {
+			addf("`first_step` %q is not defined under `steps`", def.FirstStep)
+		}
+	}
+
+	for stepName, s := range def.Steps {
+		if stepName == "" {
+			addf("step has empty name")
+		}
+		if s.Agent == "" {
+			addf("step %q: `agent` is required", stepName)
+		}
+		if len(s.NextSteps) == 0 {
+			addf("step %q: needs at least one transition in `next_steps`", stepName)
+		}
+		for i, tr := range s.NextSteps {
+			if tr.PromptRule == "" {
+				addf("step %q transition %d: `prompt_rule` is required", stepName, i)
+			}
+			if tr.IsTaskStatus() {
+				if _, ok := ValidTaskStatuses[tr.TaskStatus]; !ok {
+					addf("step %q transition %d: task_status %q is not in {human_feedback,done,cancelled}",
+						stepName, i, tr.TaskStatus)
+				}
+				continue
+			}
+			// Sibling-step target.
+			if _, ok := def.Steps[tr.Step]; !ok {
+				addf("step %q transition %d: target step %q is not defined", stepName, i, tr.Step)
+			}
+		}
+	}
+
+	// Agent existence — checked last so the user sees structural issues
+	// first (they're usually the cause when an agent ref looks wrong).
+	if ag != nil {
+		seen := make(map[string]struct{}, len(def.Steps))
+		for _, s := range def.Steps {
+			if s.Agent == "" {
+				continue
+			}
+			if _, dup := seen[s.Agent]; dup {
+				continue
+			}
+			seen[s.Agent] = struct{}{}
+			if _, err := ag.GetByName(ctx, s.Agent); err != nil {
+				addf("agent %q is referenced by a step but is not in the `agents` table (run `autosk agent create %s`)", s.Agent, s.Agent)
+			}
+		}
+	}
+
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("workflow %q has %d problem(s):\n  - %s",
+		def.Name, len(problems), strings.Join(problems, "\n  - "))
+}

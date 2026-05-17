@@ -21,9 +21,17 @@ priority:    1
 
 ## Status
 
-**v0.1.** Six acceptance scenarios green; full plan lives at
-[`docs/plans/20260513-Init-Plan.md`](docs/plans/20260513-Init-Plan.md) and
-[`docs/plans/20260513-Impl-Plan.md`](docs/plans/20260513-Impl-Plan.md).
+**v0.2.** Tasks are now first-class citizens of a small workflow engine:
+agents, workflows, comments, and a daemon poller that drives tasks
+through step transitions. See:
+
+- Workflows plan: [`docs/plans/20260517-Workflows-Plan.md`](docs/plans/20260517-Workflows-Plan.md).
+- Concept doc + walkthrough: [`docs/workflows.md`](docs/workflows.md).
+- Daemon details: [`docs/daemon.md`](docs/daemon.md).
+
+There is **no migration** from v0.1: opening a v0.1 database with v0.2
+binary refuses with `schema_v1_unsupported`. Wipe `.autosk/db` and
+re-init.
 
 ## Install (from source)
 
@@ -54,26 +62,52 @@ autosk done as-a1b2
 
 ## Concepts
 
-- **Task** — id, title, description, status, priority, timestamps.
-- **Status** — one of `new`, `claimed`, `done`, `cancelled`. Any → any.
+- **Task** — id, title, description, status, priority, optional FKs to
+  `author_id` / `workflow_id` / `current_step_id`, timestamps.
+- **Status** — one of `new`, `in_workflow`, `human_feedback`, `done`,
+  `cancelled`. A SQL CHECK ties `status='in_workflow'` to
+  `current_step_id IS NOT NULL`.
 - **Priority** — `0..3`, `0` = highest.
-- **Dependency** — directed `blocker → blocked` edge. The only kind in v0.1.
-- **Ready set** — tasks where `status='new'` AND no open blocker
-  (open = blocker status in `{new, claimed}`).
-- **Blocked** — *derived*, not stored. A task is shown as `blocked: true` iff
-  it has at least one open blocker.
+- **Agent** — a named actor that can own a task. `human` is seeded on
+  init; background agents live in `.autosk/agents/<name>.toml`.
+- **Workflow** — a directed graph of `steps`; each step has an agent and
+  ≥1 outgoing transition. The daemon advances tasks via step transitions.
+- **Dependency** — directed `blocker → blocked` edge.
+- **Ready set** — tasks where `status='new'` AND no open blocker (open =
+  blocker status in `{new, in_workflow, human_feedback}`).
+- **Blocked** — *derived*, not stored.
 
 ## Command reference
 
 ```
 Lifecycle
-  autosk create [title] [-d desc | -d -] [-p N] [--blocks ID]... [--blocked-by ID]...
+  autosk create [title] [-d desc | -d -] [-p N]
+               [--workflow NAME | --agent NAME]
+               [--blocks ID]... [--blocked-by ID]...
   autosk show <id>
   autosk update <id> [--title S] [--description S] [--status S] [--priority N]
-  autosk claim <id>                   # idempotent: new|claimed → claimed
-  autosk done <id>
-  autosk cancel <id>
-  autosk reopen <id>                  # done|cancelled → new
+  autosk assign <id> --agent NAME    # only valid on status=new
+  autosk resume <id> [--to STEP]     # human_feedback → in_workflow
+  autosk done <id>                   # direct; also clears current_step_id
+  autosk cancel <id>                 # direct; also clears current_step_id
+  autosk reopen <id>                 # done|cancelled → new (preserves workflow_id)
+
+Agents
+  autosk agent create <name> [--human]
+  autosk agent list / show <name>
+
+Workflows
+  autosk workflow create --file PATH
+  autosk workflow list [--all]       # --all shows synthetic single:* workflows
+  autosk workflow show <name>
+  autosk workflow delete <name>
+
+Agent-facing (inside a workflow step)
+  autosk step next <id> --to <step-or-status>
+
+Comments
+  autosk comment add <id> [text]     # text from stdin if omitted or '-'
+  autosk comment list <id>
 
 Blocking
   autosk block <id> <blocker-id>...
@@ -86,11 +120,15 @@ Query
   autosk next                          # ready --limit 1
 
 Admin
-  autosk init [--prefix P]            # optional; writes auto-init
+  autosk init [--prefix P]
   autosk migrate
   autosk sql <query> [--write] [--pretty | --json]
   autosk version
-  autosk history <id>                 # stub; v0.2 will use doltlite log
+  autosk history <id>                  # stub
+
+Daemon
+  autosk daemon serve [--bind ADDR] [--workers N] [--poll-interval 2s] ...
+  autosk daemon list / status <job-id> / messages <job-id> / cancel <job-id>
 ```
 
 Every read command accepts `--json`. Every write command produces a
@@ -102,6 +140,7 @@ doltlite commit so future `autosk history` can recover field history.
 |---|---|
 | `AUTOSK_DB` | Override DB path (otherwise discovered by walking up). |
 | `AUTOSK_NO_AUTOINIT` | Refuse to create a new DB on first write. |
+| `AUTOSK_AGENT` | Name of the agent the CLI is running as (default `human`). Used to fill `tasks.author_id` and `comments.author_id`. |
 | `DOLTLITE_DIR` | Build-time only: directory containing `libdoltlite.a` and `sqlite3.h`. |
 
 ## Daemon / pi orchestrator
@@ -123,20 +162,16 @@ flags, closure verification rules, and security caveats. The contract for
 the `pi --mode rpc` wire format is summarised in
 [`docs/notes/pi-rpc-contract.md`](docs/notes/pi-rpc-contract.md).
 
-## Roadmap (post v0.1)
-
-Daemon plan and follow-ups: [`docs/plans/20260517-Daemon-Plan.md`](docs/plans/20260517-Daemon-Plan.md) §10.
-
-Deferred per the [init plan §8](docs/plans/20260513-Init-Plan.md#8-explicitly-deferred-post-v01):
+## Roadmap (post v0.2)
 
 - doltserver backend for multi-writer collaboration
-- comments
-- pluggable workflows (status transition constraints)
+- worktree isolation per run (re-introduces `tasks.git_branch`)
 - labels / tags
 - full-text search
 - audit log table / `autosk history` real implementation
 - hooks / plugin events
 - import/export / integrations
+- comment `--since-step` filtering / token-budget trimming in prompt render
 
 ## License
 

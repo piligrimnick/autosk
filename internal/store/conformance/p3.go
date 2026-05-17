@@ -2,8 +2,6 @@ package conformance
 
 import (
 	"context"
-	"sync"
-	"sync/atomic"
 	"testing"
 
 	"autosk/internal/store"
@@ -115,103 +113,16 @@ func testUpdateRejectsBadStatus(t *testing.T, f Factory) {
 	AssertErrIs(t, err, store.ErrInvalidStatus)
 }
 
-func testClaimNewToClaimed(t *testing.T, f Factory) {
-	s, cleanup := f(t)
-	defer cleanup()
-	t1 := mustCreate(t, s, "x", 2)
-	got, err := s.Claim(context.Background(), t1.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != store.StatusClaimed {
-		t.Fatalf("want claimed, got %s", got.Status)
-	}
-}
-
-func testClaimIdempotent(t *testing.T, f Factory) {
-	s, cleanup := f(t)
-	defer cleanup()
-	ctx := context.Background()
-	t1 := mustCreate(t, s, "x", 2)
-	if _, err := s.Claim(ctx, t1.ID); err != nil {
-		t.Fatal(err)
-	}
-	got, err := s.Claim(ctx, t1.ID) // second call
-	if err != nil {
-		t.Fatalf("second claim should be idempotent, got: %v", err)
-	}
-	if got.Status != store.StatusClaimed {
-		t.Fatalf("want claimed after idempotent claim, got %s", got.Status)
-	}
-}
-
-func testClaimRejectsTerminal(t *testing.T, f Factory) {
-	s, cleanup := f(t)
-	defer cleanup()
-	ctx := context.Background()
-	t1 := mustCreate(t, s, "x", 2)
-	tg := store.StatusDone
-	if _, err := s.UpdateTask(ctx, t1.ID, store.TaskPatch{Status: &tg}); err != nil {
-		t.Fatal(err)
-	}
-	_, err := s.Claim(ctx, t1.ID)
-	AssertErrIs(t, err, store.ErrNotClaimable)
-
-	// Same for cancelled.
-	t2 := mustCreate(t, s, "y", 2)
-	tg = store.StatusCancelled
-	if _, err := s.UpdateTask(ctx, t2.ID, store.TaskPatch{Status: &tg}); err != nil {
-		t.Fatal(err)
-	}
-	_, err = s.Claim(ctx, t2.ID)
-	AssertErrIs(t, err, store.ErrNotClaimable)
-}
-
-// testClaimRace implements acceptance scenario §11.4. N goroutines invoke
-// Claim concurrently on the same `new` task. All must succeed (idempotent).
-// The post-state must be a single `claimed` row.
-func testClaimRace(t *testing.T, f Factory) {
-	s, cleanup := f(t)
-	defer cleanup()
-	ctx := context.Background()
-	t1 := mustCreate(t, s, "race", 2)
-
-	const N = 8
-	var wg sync.WaitGroup
-	var errCount atomic.Int32
-	for i := 0; i < N; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if _, err := s.Claim(ctx, t1.ID); err != nil {
-				errCount.Add(1)
-				t.Errorf("concurrent Claim returned error: %v", err)
-			}
-		}()
-	}
-	wg.Wait()
-	if errCount.Load() != 0 {
-		t.Fatalf("expected zero errors, got %d", errCount.Load())
-	}
-
-	post, err := s.GetTask(ctx, t1.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if post.Status != store.StatusClaimed {
-		t.Fatalf("post-state must be claimed, got %s", post.Status)
-	}
-}
-
-func testReadyP3NoEdges(t *testing.T, f Factory) {
+func testReadyExcludesDone(t *testing.T, f Factory) {
 	s, cleanup := f(t)
 	defer cleanup()
 	ctx := context.Background()
 	mustCreate(t, s, "low", 3)
 	hi := mustCreate(t, s, "high", 0)
-	// One claimed (not eligible for ready since ready requires status='new').
-	c := mustCreate(t, s, "claimed", 0)
-	if _, err := s.Claim(ctx, c.ID); err != nil {
+	// One done (not eligible — ready requires status='new').
+	doneTask := mustCreate(t, s, "closed", 0)
+	doneStatus := store.StatusDone
+	if _, err := s.UpdateTask(ctx, doneTask.ID, store.TaskPatch{Status: &doneStatus}); err != nil {
 		t.Fatal(err)
 	}
 

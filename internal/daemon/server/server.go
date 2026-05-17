@@ -16,10 +16,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -94,93 +91,28 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 // ---- handlers -----------------------------------------------------------
 
 func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
+	// v0.2: the daemon is being rewired into a workflow engine. The Submit
+	// path will read tasks.current_step_id, render the prompt from the
+	// step's agent config, and enqueue. The whole flow lands in W6
+	// (docs/plans/20260517-Workflows-Plan.md §5.3). Until then we surface a
+	// clear 501 so clients don't silently 200 on a half-built engine.
+	//
+	// We still parse the body so request-shape regressions surface as 400.
 	var req api.SubmitRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "decode_body: "+err.Error(), nil)
 		return
 	}
-	req, err := req.Validate()
-	if err != nil {
+	if _, err := req.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
-
-	// Resolve cwd.
-	cwd := req.Cwd
-	if cwd == "" {
-		cwd = s.deps.DefaultCwd
-	}
-	if cwd == "" {
-		writeError(w, http.StatusBadRequest, "cwd is empty and no default configured", nil)
-		return
-	}
-	if !filepath.IsAbs(cwd) {
-		writeError(w, http.StatusBadRequest, "cwd must be absolute", map[string]any{"cwd": cwd})
-		return
-	}
-	if info, err := os.Stat(cwd); err != nil || !info.IsDir() {
-		writeError(w, http.StatusBadRequest, "cwd does not exist or is not a directory", map[string]any{"cwd": cwd})
-		return
-	}
-
-	// Verify the autosk task exists. Always do this first so the error
-	// includes the daemon's db_path — the #1 confusion is the daemon
-	// reading a different .autosk/db than the client.
-	if req.TaskID != "" {
-		if _, err := s.deps.Tasks.GetTask(r.Context(), req.TaskID); err != nil {
-			writeError(w, http.StatusBadRequest, "task not found", map[string]any{
-				"task_id":         req.TaskID,
-				"daemon_db_path":  s.deps.DBPath,
-				"hint":            "the daemon resolves .autosk/db relative to its own --cwd; make sure it matches the directory where you created the task",
-			})
-			return
-		}
-	}
-
-	// Resolve auto_claim default: true when task_id present, false for ad-hoc.
-	autoClaim := req.TaskID != ""
-	if req.AutoClaim != nil {
-		autoClaim = *req.AutoClaim
-	}
-	maxCorr := 3
-	if req.MaxCorrections != nil {
-		maxCorr = *req.MaxCorrections
-	}
-
-	// Materialise the prompt: if task_id is set and prompt is empty, render
-	// from the task's title + description. Existence was already verified above.
-	prompt := req.Prompt
-	if prompt == "" && req.TaskID != "" {
-		tk, err := s.deps.Tasks.GetTask(r.Context(), req.TaskID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "get_task: "+err.Error(), nil)
-			return
-		}
-		prompt = renderTaskPrompt(tk)
-	}
-
-	run, err := s.deps.Runs.CreateRun(r.Context(), runstore.NewRun{
-		TaskID:         req.TaskID,
-		Prompt:         prompt,
-		Model:          req.Model,
-		Thinking:       runstore.ThinkingLevel(req.Thinking),
-		Cwd:            cwd,
-		AutoClaim:      autoClaim,
-		MaxCorrections: maxCorr,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "create_run: "+err.Error(), nil)
-		return
-	}
-	if err := s.deps.Sched.Enqueue(run.JobID); err != nil {
-		if errors.Is(err, scheduler.ErrQueueFull) {
-			writeError(w, http.StatusServiceUnavailable, "queue_full", nil)
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "enqueue: "+err.Error(), nil)
-		return
-	}
-	writeJSON(w, http.StatusCreated, api.FromRun(run))
+	writeError(w, http.StatusNotImplemented,
+		"daemon submit is being rewired into the workflow engine and lands in W6 (docs/plans/20260517-Workflows-Plan.md)",
+		map[string]any{
+			"task_id":        req.TaskID,
+			"daemon_db_path": s.deps.DBPath,
+		})
 }
 
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
@@ -392,23 +324,9 @@ func rawOrNil(b []byte) any {
 	return json.RawMessage(b)
 }
 
-// renderTaskPrompt builds the initial prompt from a task's title and
-// description. We deliberately surface the autosk task id so the agent
-// can call `autosk done <id>` correctly.
-func renderTaskPrompt(t store.Task) string {
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "You are working on autosk task `%s`.\n\n", t.ID)
-	if t.Title != "" {
-		fmt.Fprintf(&sb, "Title: %s\n\n", t.Title)
-	}
-	if t.Description != "" {
-		sb.WriteString("Description:\n")
-		sb.WriteString(t.Description)
-		sb.WriteString("\n\n")
-	}
-	sb.WriteString("When the work is complete (or you have decided to cancel or decompose it), close the task via the `autosk` extension.\n")
-	return sb.String()
-}
-
 // nowUnix returns the current time. Exposed for tests if needed.
 func nowUnix() int64 { return time.Now().Unix() }
+
+// _ keeps the store import referenced (Deps.Tasks). When W6 reinstates the
+// real Submit path, this anchor is removed.
+var _ = store.StatusNew

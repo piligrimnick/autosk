@@ -11,35 +11,10 @@ import (
 	"autosk/internal/store"
 )
 
-// newClaimCmd implements `autosk claim <id>`: idempotent new|claimed → claimed.
-func newClaimCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "claim <id>",
-		Short: "Claim a task (new|claimed → claimed; idempotent)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			s, closeFn, err := openStore(cmd.Context(), true)
-			if err != nil {
-				return err
-			}
-			defer closeFn()
-			t, err := s.Claim(cmd.Context(), args[0])
-			if err != nil {
-				if errors.Is(err, store.ErrNotClaimable) {
-					return fmt.Errorf("task %s is not claimable (done or cancelled)", args[0])
-				}
-				if errors.Is(err, store.ErrNotFound) {
-					return fmt.Errorf("task not found: %s", args[0])
-				}
-				return err
-			}
-			commitWrite(cmd.Context(), s, "claim "+args[0])
-			return emit(t)
-		},
-	}
-}
-
-// newDoneCmd / newCancelCmd: simple status setters via UpdateTask.
+// newDoneCmd / newCancelCmd: direct status setters. They bypass the
+// workflow engine (see plan P9): humans can close their own tasks via
+// these verbs, and they also clear current_step_id so the CHECK in
+// 001_init.sql stays satisfied.
 func newDoneCmd() *cobra.Command {
 	return statusSetterCmd("done", "Mark a task done", store.StatusDone, nil)
 }
@@ -48,17 +23,50 @@ func newCancelCmd() *cobra.Command {
 	return statusSetterCmd("cancel", "Mark a task cancelled", store.StatusCancelled, nil)
 }
 
-// newReopenCmd: status → new, but only from done|cancelled.
+// newReopenCmd: status → new, but only from done|cancelled. Also clears
+// current_step_id so the task's CHECK constraint stays valid; workflow_id
+// is preserved for audit (plan §7).
 func newReopenCmd() *cobra.Command {
-	allowed := map[store.Status]bool{
-		store.StatusDone:      true,
-		store.StatusCancelled: true,
+	return &cobra.Command{
+		Use:   "reopen <id>",
+		Short: "Reopen a done/cancelled task (→ new)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, closeFn, err := openStore(cmd.Context(), true)
+			if err != nil {
+				return err
+			}
+			defer closeFn()
+			cur, err := s.GetTask(cmd.Context(), args[0])
+			if err != nil {
+				if errors.Is(err, store.ErrNotFound) {
+					return fmt.Errorf("task not found: %s", args[0])
+				}
+				return err
+			}
+			if cur.Status != store.StatusDone && cur.Status != store.StatusCancelled {
+				return fmt.Errorf("cannot reopen task in status %q (only done|cancelled)", cur.Status)
+			}
+			newStatus := store.StatusNew
+			empty := ""
+			t, err := s.UpdateTask(cmd.Context(), args[0], store.TaskPatch{
+				Status:        &newStatus,
+				CurrentStepID: &empty,
+			})
+			if err != nil {
+				return err
+			}
+			commitWrite(cmd.Context(), s, "reopen "+args[0])
+			return emit(t)
+		},
 	}
-	return statusSetterCmd("reopen", "Reopen a done/cancelled task (→ new)", store.StatusNew, allowed)
 }
 
 // statusSetterCmd builds a `<verb> <id>` command that sets status.
 // If allowedFrom is non-nil, the current status must be a key in the map.
+//
+// Terminal verbs (done/cancelled) also clear current_step_id so the SQL
+// CHECK on `tasks` stays satisfied when the task was in a workflow.
 func statusSetterCmd(use, short string, target store.Status, allowedFrom map[store.Status]bool) *cobra.Command {
 	return &cobra.Command{
 		Use:   use + " <id>",
@@ -84,7 +92,12 @@ func statusSetterCmd(use, short string, target store.Status, allowedFrom map[sto
 				}
 			}
 
-			t, err := s.UpdateTask(cmd.Context(), args[0], store.TaskPatch{Status: &target})
+			patch := store.TaskPatch{Status: &target}
+			if target == store.StatusDone || target == store.StatusCancelled {
+				empty := ""
+				patch.CurrentStepID = &empty
+			}
+			t, err := s.UpdateTask(cmd.Context(), args[0], patch)
 			if err != nil {
 				if errors.Is(err, store.ErrNotFound) {
 					return fmt.Errorf("task not found: %s", args[0])
@@ -126,7 +139,19 @@ func newUpdateCmd() *cobra.Command {
 			if cmd.Flags().Changed("status") {
 				st := store.Status(statusFlag)
 				if !st.Valid() {
-					return fmt.Errorf("invalid status %q (valid: new, claimed, done, cancelled)", statusFlag)
+					return fmt.Errorf("invalid status %q (valid: new, in_workflow, human_feedback, done, cancelled)", statusFlag)
+				}
+				// Reject status edits on workflow-tracked tasks: those
+				// transitions belong to the daemon / step engine (§10 risks).
+				cur, gerr := s.GetTask(cmd.Context(), args[0])
+				if gerr != nil {
+					if errors.Is(gerr, store.ErrNotFound) {
+						return fmt.Errorf("task not found: %s", args[0])
+					}
+					return gerr
+				}
+				if cur.Status == store.StatusInWorkflow {
+					return fmt.Errorf("refusing to --status on an `in_workflow` task; use `autosk done|cancel` or let the workflow engine advance it")
 				}
 				patch.Status = &st
 			}
@@ -150,7 +175,7 @@ func newUpdateCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&title, "title", "", "new title")
 	cmd.Flags().StringVarP(&description, "description", "d", "", "new description")
-	cmd.Flags().StringVar(&statusFlag, "status", "", "new status (new|claimed|done|cancelled)")
+	cmd.Flags().StringVar(&statusFlag, "status", "", "new status (new|in_workflow|human_feedback|done|cancelled)")
 	cmd.Flags().IntVarP(&priority, "priority", "p", 0, "new priority (0..3)")
 	return cmd
 }

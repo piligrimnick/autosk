@@ -8,28 +8,29 @@ import (
 	"time"
 )
 
-// Status is the lifecycle state of a task.
+// Status is the lifecycle state of a task. See docs/plans/20260517-Workflows-Plan.md §5.1.
 //
-// Transitions are unconstrained in v0.1 (any → any via UpdateTask), with the
-// exception of Claim which enforces "new|claimed → claimed" and Reopen
-// (in the CLI layer) which enforces "done|cancelled → new".
+// Transitions are unconstrained at the SQL layer (subject only to the
+// CHECK that ties `in_workflow` to a non-null `current_step_id`). The CLI
+// and the daemon are responsible for the rest of the lifecycle.
 //
 // "blocked" is NOT a stored status. A task is blocked iff it has at least
-// one open blocker edge whose blocker is in StatusNew or StatusClaimed; this
-// is computed by Ready and by GetTask consumers.
+// one open blocker edge whose blocker is in {new, in_workflow,
+// human_feedback}; this is computed by Ready and by GetTask consumers.
 type Status string
 
 const (
-	StatusNew       Status = "new"
-	StatusClaimed   Status = "claimed"
-	StatusDone      Status = "done"
-	StatusCancelled Status = "cancelled"
+	StatusNew           Status = "new"
+	StatusInWorkflow    Status = "in_workflow"
+	StatusHumanFeedback Status = "human_feedback"
+	StatusDone          Status = "done"
+	StatusCancelled     Status = "cancelled"
 )
 
-// Valid reports whether s is one of the four allowed values.
+// Valid reports whether s is one of the five allowed values.
 func (s Status) Valid() bool {
 	switch s {
-	case StatusNew, StatusClaimed, StatusDone, StatusCancelled:
+	case StatusNew, StatusInWorkflow, StatusHumanFeedback, StatusDone, StatusCancelled:
 		return true
 	}
 	return false
@@ -37,7 +38,14 @@ func (s Status) Valid() bool {
 
 // AllStatuses returns the enum in canonical order.
 func AllStatuses() []Status {
-	return []Status{StatusNew, StatusClaimed, StatusDone, StatusCancelled}
+	return []Status{StatusNew, StatusInWorkflow, StatusHumanFeedback, StatusDone, StatusCancelled}
+}
+
+// OpenStatuses returns the statuses that count as "open work" — the
+// default filter for `autosk list` and the set that keeps a task blocking
+// its dependents.
+func OpenStatuses() []Status {
+	return []Status{StatusNew, StatusInWorkflow, StatusHumanFeedback}
 }
 
 // MinPriority and MaxPriority bound the priority range (0 = highest).
@@ -48,27 +56,39 @@ const (
 )
 
 // Task is the core domain object.
+//
+// AuthorID, WorkflowID, CurrentStepID are nullable FKs: empty string
+// means "unset / NULL". The CHECK in 001_init.sql enforces
+// (status='in_workflow' ⇔ current_step_id IS NOT NULL).
 type Task struct {
-	ID          string
-	Title       string
-	Description string
-	Status      Status
-	Priority    int
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID            string
+	Title         string
+	Description   string
+	Status        Status
+	Priority      int
+	AuthorID      string
+	WorkflowID    string
+	CurrentStepID string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
-// TaskPatch is a partial update. Nil fields are left unchanged.
+// TaskPatch is a partial update. Nil fields are left unchanged. The
+// workflow / step pointers can be cleared by passing a non-nil pointer to
+// an empty string.
 type TaskPatch struct {
-	Title       *string
-	Description *string
-	Status      *Status
-	Priority    *int
+	Title         *string
+	Description   *string
+	Status        *Status
+	Priority      *int
+	WorkflowID    *string
+	CurrentStepID *string
 }
 
 // IsEmpty reports whether the patch would change nothing.
 func (p TaskPatch) IsEmpty() bool {
-	return p.Title == nil && p.Description == nil && p.Status == nil && p.Priority == nil
+	return p.Title == nil && p.Description == nil && p.Status == nil &&
+		p.Priority == nil && p.WorkflowID == nil && p.CurrentStepID == nil
 }
 
 // ListFilter narrows ListTasks results.
@@ -100,10 +120,6 @@ type Store interface {
 	GetTask(ctx context.Context, id string) (Task, error)
 	UpdateTask(ctx context.Context, id string, p TaskPatch) (Task, error)
 	ListTasks(ctx context.Context, f ListFilter) ([]Task, error)
-
-	// Claim is an atomic conditional update: new|claimed → claimed.
-	// Returns ErrNotClaimable if the task is in done or cancelled.
-	Claim(ctx context.Context, id string) (Task, error)
 
 	// Edges. Variadic; runs in a single transaction; rejects self-block and
 	// cycles. Block is idempotent (re-adding an existing edge is a no-op).

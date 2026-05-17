@@ -1,19 +1,22 @@
-// Package executor implements the per-job lifecycle the daemon's
-// scheduler hands to each worker. The contract:
+// Package executor drives a single workflow-step run end to end.
 //
-//   1. MarkRunning the run row.
-//   2. Snapshot the autosk task's incoming blockers; if AutoClaim, Claim.
-//   3. Spawn pi --mode rpc.
-//   4. GetState → persist pi_session_id / session_path.
-//   5. SendPrompt(initial), then loop on WaitForAgentEnd:
-//        - if ad-hoc (no task), one turn is enough → done.
-//        - else verifyClosure. If valid, done with closure_kind.
-//        - else if corrections remain, send corrective message and loop.
-//        - else fail with error="agent_did_not_close_task".
-//   6. Close stdin, wait, persist terminal state.
+// Per docs/plans/20260517-Workflows-Plan.md §5.3:
 //
-// The daemon never calls autosk done; the agent owns closing the task.
-// See plan §§6.1, 6.1.1, 6.1.2.
+//  1. MarkRunning(job_id).
+//  2. Resolve agent from step_id → steps.agent_id → agent.name; load
+//     `.autosk/agents/<name>.toml` (model, thinking, system_prompt,
+//     extra_args).
+//  3. Render the prompt from (task, current step, agent config, comments).
+//  4. Spawn pi --mode rpc.
+//  5. SendPrompt; WaitForAgentEnd.
+//  6. Read step_signals for the run. If present, advance the task
+//     atomically (§5.4) and MarkDone with transition_id. If absent,
+//     kickback up to max_corrections times; then fail with
+//     error="agent_did_not_emit_transition".
+//  7. Clean shutdown.
+//
+// Single code path: `--agent NAME` runs traverse the auto-generated
+// `single:<NAME>` workflow, so there is no second branch here.
 package executor
 
 import (
@@ -24,13 +27,17 @@ import (
 	"strings"
 	"time"
 
+	"autosk/internal/agent"
+	"autosk/internal/comments"
 	"autosk/internal/daemon/pi"
 	"autosk/internal/daemon/runstore"
+	"autosk/internal/step"
 	"autosk/internal/store"
+	"autosk/internal/workflow"
 )
 
 // PiRunner is the subset of *pi.Runner the executor uses. Tests substitute
-// a mock; production wiring uses pi.Spawn directly via Factory.
+// a fake.
 type PiRunner interface {
 	PID() int
 	Events() <-chan pi.Event
@@ -44,10 +51,10 @@ type PiRunner interface {
 	Wait(ctx context.Context, grace time.Duration) (int, error)
 }
 
-// Factory spawns a new PiRunner. The default factory wraps pi.Spawn.
+// Factory spawns a new PiRunner. Production wraps pi.Spawn; tests inject a stub.
 type Factory func(ctx context.Context, opts pi.Opts) (PiRunner, error)
 
-// DefaultFactory is the Factory that calls pi.Spawn.
+// DefaultFactory wraps pi.Spawn.
 var DefaultFactory Factory = func(ctx context.Context, opts pi.Opts) (PiRunner, error) {
 	return pi.Spawn(ctx, opts)
 }
@@ -56,35 +63,44 @@ var DefaultFactory Factory = func(ctx context.Context, opts pi.Opts) (PiRunner, 
 // store.Store satisfies it.
 type TaskStore interface {
 	GetTask(ctx context.Context, id string) (store.Task, error)
-	Claim(ctx context.Context, id string) (store.Task, error)
-	Deps(ctx context.Context, id string) (incoming, outgoing []string, err error)
+	UpdateTask(ctx context.Context, id string, p store.TaskPatch) (store.Task, error)
+}
+
+// Deps bundles every store/handle the executor needs.
+type Deps struct {
+	Runs      *runstore.Store
+	Tasks     TaskStore
+	Agents    *agent.Store
+	Workflows *workflow.Store
+	Comments  *comments.Store
+	Signals   *step.Store
 }
 
 // Config tunes the executor.
 type Config struct {
-	// PIBin overrides the binary used by the default factory. Empty → "pi".
+	// PIBin overrides the binary used by the default factory.
 	PIBin string
-	// SessionDirRoot is the base directory under which per-job session
-	// directories are created. Empty → ".autosk/sessions" relative to the
-	// run's cwd.
+	// SessionDirRoot is the parent dir for per-job pi session dirs.
+	// Empty → "<projectRoot>/.autosk/sessions".
 	SessionDirRoot string
-	// Grace is the time SIGTERM has to bring pi down before SIGKILL.
+	// ProjectRoot is where .autosk/ lives. Used to find agent config files
+	// (.autosk/agents/<name>.toml) and to default SessionDirRoot.
+	ProjectRoot string
+	// Grace is the SIGTERM → SIGKILL grace period.
 	Grace time.Duration
-	// IdleTimeout caps a single WaitForAgentEnd. Empty → 30 min.
+	// IdleTimeout caps a single WaitForAgentEnd.
 	IdleTimeout time.Duration
 }
 
-// Executor binds the store layer, the task store, the pi factory and the
-// config. It implements scheduler.Executor via Run.
+// Executor wires everything together. Implements scheduler.Executor.
 type Executor struct {
-	runs    *runstore.Store
-	tasks   TaskStore
+	deps    Deps
 	factory Factory
 	cfg     Config
 }
 
 // New constructs the executor.
-func New(runs *runstore.Store, tasks TaskStore, factory Factory, cfg Config) *Executor {
+func New(deps Deps, factory Factory, cfg Config) *Executor {
 	if factory == nil {
 		factory = DefaultFactory
 	}
@@ -94,281 +110,308 @@ func New(runs *runstore.Store, tasks TaskStore, factory Factory, cfg Config) *Ex
 	if cfg.IdleTimeout <= 0 {
 		cfg.IdleTimeout = 30 * time.Minute
 	}
-	return &Executor{runs: runs, tasks: tasks, factory: factory, cfg: cfg}
+	return &Executor{deps: deps, factory: factory, cfg: cfg}
 }
 
-// ErrAgentDidNotClose is the terminal failure produced when the agent runs
-// out of correction attempts without closing the task.
-var ErrAgentDidNotClose = errors.New("agent_did_not_close_task")
+// ErrAgentDidNotEmit is the terminal failure produced when the agent runs
+// out of correction attempts without emitting a `step next` signal.
+var ErrAgentDidNotEmit = errors.New("agent_did_not_emit_transition")
 
 // Run is the scheduler.Executor entry point.
 func (e *Executor) Run(ctx context.Context, jobID string) error {
-	bgCtx := context.Background() // for persisting terminal state after ctx cancel
+	bg := context.Background() // for persisting terminal state after ctx cancel
 
-	run, err := e.runs.GetRun(ctx, jobID)
+	run, err := e.deps.Runs.GetRun(ctx, jobID)
 	if err != nil {
 		return fmt.Errorf("get run: %w", err)
 	}
 
-	// Phase 1: transition queued → running and snapshot blockers.
-	run, err = e.runs.MarkRunning(ctx, jobID, 0)
+	// 1. queued → running.
+	run, err = e.deps.Runs.MarkRunning(ctx, jobID, 0)
 	if err != nil {
 		return fmt.Errorf("mark running: %w", err)
 	}
-	if run.TaskID != "" {
-		inc, _, err := e.tasks.Deps(ctx, run.TaskID)
-		if err == nil {
-			_ = e.runs.SetPreBlockedBy(ctx, jobID, inc)
-			run.PreBlockedBy = inc
-		}
-		if run.AutoClaim {
-			if _, err := e.tasks.Claim(ctx, run.TaskID); err != nil {
-				// Not fatal: log via stored error column. Plan §6.1 explicitly
-				// says claim failures are non-fatal.
-				_ = appendRunError(bgCtx, e.runs, jobID, "auto_claim_failed: "+err.Error())
-			}
-		}
+
+	// 2. Resolve step → agent → agent config.
+	stepRow, err := e.deps.Workflows.FindStepByID(ctx, run.StepID)
+	if err != nil {
+		return e.failTerminal(bg, jobID, nil, fmt.Errorf("find step %s: %w", run.StepID, err))
+	}
+	wf, err := e.deps.Workflows.GetByID(ctx, stepRow.WorkflowID)
+	if err != nil {
+		return e.failTerminal(bg, jobID, nil, fmt.Errorf("get workflow %s: %w", stepRow.WorkflowID, err))
+	}
+	tk, err := e.deps.Tasks.GetTask(ctx, run.TaskID)
+	if err != nil {
+		return e.failTerminal(bg, jobID, nil, fmt.Errorf("get task %s: %w", run.TaskID, err))
+	}
+	agentCfg, err := agent.Load(e.cfg.ProjectRoot, stepRow.AgentName)
+	if err != nil {
+		return e.failTerminal(bg, jobID, nil, fmt.Errorf("agent_config_invalid: %w", err))
 	}
 
-	// Phase 2: spawn pi.
+	// 3. Render prompt.
+	commentLines, _ := e.deps.Comments.RenderForPrompt(ctx, run.TaskID)
+	prompt := RenderPrompt(tk, wf, stepRow, agentCfg, commentLines)
+
+	// 4. Spawn pi.
 	sessionDir := e.sessionDirFor(run)
 	if err := ensureDir(sessionDir); err != nil {
-		return e.failTerminal(bgCtx, jobID, nil, fmt.Errorf("session dir: %w", err))
+		return e.failTerminal(bg, jobID, nil, fmt.Errorf("session dir: %w", err))
 	}
 	runner, err := e.factory(ctx, pi.Opts{
 		PIBin:      e.cfg.PIBin,
-		Cwd:        run.Cwd,
-		Model:      run.Model,
-		Thinking:   string(run.Thinking),
+		Cwd:        e.cfg.ProjectRoot,
+		Model:      agentCfg.Model,
+		Thinking:   agentCfg.Thinking,
 		SessionDir: sessionDir,
+		ExtraArgs:  agentCfg.ExtraArgs,
 	})
 	if err != nil {
-		return e.failTerminal(bgCtx, jobID, nil, fmt.Errorf("spawn pi: %w", err))
+		return e.failTerminal(bg, jobID, nil, fmt.Errorf("spawn pi: %w", err))
 	}
-	defer e.cleanup(runner, bgCtx)
+	defer e.cleanup(runner, bg)
 
 	if pid := runner.PID(); pid > 0 {
-		_ = e.runs.SetPID(ctx, jobID, pid)
+		_ = e.deps.Runs.SetPID(ctx, jobID, pid)
 	}
-
-	// Phase 3: pull session info.
 	stateCtx, stateCancel := context.WithTimeout(ctx, 10*time.Second)
-	info, sterr := runner.GetState(stateCtx)
+	if info, sterr := runner.GetState(stateCtx); sterr == nil {
+		_ = e.deps.Runs.SetPISession(ctx, jobID, info.SessionID, info.SessionFile)
+	}
 	stateCancel()
-	if sterr == nil {
-		_ = e.runs.SetPISession(ctx, jobID, info.SessionID, info.SessionFile)
+
+	// 5. Initial prompt.
+	if err := runner.SendPrompt(ctx, prompt); err != nil {
+		return e.handleRunError(ctx, bg, jobID, runner, err)
 	}
 
-	// Phase 4: initial prompt.
-	if err := runner.SendPrompt(ctx, run.Prompt); err != nil {
-		return e.handleRunError(ctx, bgCtx, jobID, runner, err)
-	}
-
-	// Phase 5: turn-end loop with closure verification + kickback.
-	var closure runstore.ClosureKind
+	// 6. Turn loop: WaitForAgentEnd, then check step_signals; kickback on miss.
+	var signaled step.Emitted
 	for {
 		turnCtx, turnCancel := context.WithTimeout(ctx, e.cfg.IdleTimeout)
 		werr := runner.WaitForAgentEnd(turnCtx)
 		turnCancel()
 		if werr != nil {
-			return e.handleRunError(ctx, bgCtx, jobID, runner, werr)
+			return e.handleRunError(ctx, bg, jobID, runner, werr)
 		}
-		// Ad-hoc prompt → one turn is enough.
-		if run.TaskID == "" {
-			closure = ""
+		sig, gerr := e.deps.Signals.GetForRun(ctx, jobID)
+		if gerr == nil {
+			signaled = sig
 			break
 		}
-		kind, verr := verifyClosure(ctx, e.tasks, run.TaskID, run.PreBlockedBy)
-		if verr != nil {
-			return e.handleRunError(ctx, bgCtx, jobID, runner, verr)
+		if !errors.Is(gerr, step.ErrNoActiveRun) {
+			return e.handleRunError(ctx, bg, jobID, runner, gerr)
 		}
-		if kind != "" {
-			closure = kind
-			break
-		}
-		// Invalid closure. Kick the agent back, unless we're exhausted.
+		// Invalid closure: kick back if budget remains, else fail.
 		if run.CorrectionsUsed >= run.MaxCorrections {
 			_ = runner.Abort(ctx)
-			return e.failTerminal(bgCtx, jobID, nil, ErrAgentDidNotClose)
+			return e.failTerminal(bg, jobID, nil, ErrAgentDidNotEmit)
 		}
-		newCount, ierr := e.runs.IncCorrections(ctx, jobID)
+		used, ierr := e.deps.Runs.IncCorrections(ctx, jobID)
 		if ierr != nil {
-			return e.handleRunError(ctx, bgCtx, jobID, runner, ierr)
+			return e.handleRunError(ctx, bg, jobID, runner, ierr)
 		}
-		run.CorrectionsUsed = newCount
-		msg := CorrectiveMessage(run.TaskID, newCount, run.MaxCorrections)
+		run.CorrectionsUsed = used
+		msg := CorrectiveMessage(run.TaskID, stepRow, used, run.MaxCorrections)
 		if err := runner.SendPrompt(ctx, msg); err != nil {
-			return e.handleRunError(ctx, bgCtx, jobID, runner, err)
+			return e.handleRunError(ctx, bg, jobID, runner, err)
 		}
 	}
 
-	// Phase 6: clean shutdown.
-	exit, werr := e.shutdown(runner, ctx, bgCtx)
+	// 7. Clean shutdown of pi.
+	exit, werr := e.shutdown(runner, ctx, bg)
 	if werr != nil && !errors.Is(werr, context.Canceled) {
-		return e.failTerminal(bgCtx, jobID, &exit, fmt.Errorf("pi exit: %w", werr))
+		return e.failTerminal(bg, jobID, &exit, fmt.Errorf("pi exit: %w", werr))
 	}
-	if _, err := e.runs.MarkDone(bgCtx, jobID, exit, closure); err != nil {
+
+	// 8. Advance the task atomically + persist transition_id.
+	if err := e.advanceTask(bg, run.TaskID, signaled); err != nil {
+		return e.failTerminal(bg, jobID, &exit, fmt.Errorf("advance task: %w", err))
+	}
+	tid := signaled.TransitionID
+	if _, err := e.deps.Runs.MarkDone(bg, jobID, exit, &tid); err != nil {
 		return fmt.Errorf("mark done: %w", err)
 	}
 	return nil
 }
 
-// handleRunError routes a non-terminal error into the right terminal state.
-func (e *Executor) handleRunError(ctx, bgCtx context.Context, jobID string, runner PiRunner, runErr error) error {
+// advanceTask applies the transition's effect to tasks per §5.4.
+//
+//   - next_step_id   → current_step_id = next; status = in_workflow.
+//   - human_feedback → current_step_id preserved (resume rewinds here);
+//                      status = human_feedback.
+//   - done|cancelled → current_step_id = NULL; status flipped.
+func (e *Executor) advanceTask(ctx context.Context, taskID string, sig step.Emitted) error {
+	// Resolve target step / status via the recorded transition id.
+	var (
+		status        store.Status
+		nextStepID    string
+		clearStep     bool
+	)
+	switch {
+	case sig.NextStepName != "":
+		// Look the next step up via the workflow store; we know the task's
+		// workflow_id, so use it.
+		tk, err := e.deps.Tasks.GetTask(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		if tk.WorkflowID == "" {
+			return fmt.Errorf("task %s has no workflow_id", taskID)
+		}
+		st, err := e.deps.Workflows.FindStepByName(ctx, tk.WorkflowID, sig.NextStepName)
+		if err != nil {
+			return fmt.Errorf("find next step %q: %w", sig.NextStepName, err)
+		}
+		status = store.StatusInWorkflow
+		nextStepID = st.ID
+	case sig.TaskStatus == "human_feedback":
+		status = store.StatusHumanFeedback
+		// current_step_id preserved; we don't include it in the patch.
+	case sig.TaskStatus == "done":
+		status = store.StatusDone
+		clearStep = true
+	case sig.TaskStatus == "cancelled":
+		status = store.StatusCancelled
+		clearStep = true
+	default:
+		return fmt.Errorf("invalid transition signal (neither sibling nor recognised task_status): %+v", sig)
+	}
+
+	patch := store.TaskPatch{Status: &status}
+	if nextStepID != "" {
+		patch.CurrentStepID = &nextStepID
+	}
+	if clearStep {
+		empty := ""
+		patch.CurrentStepID = &empty
+	}
+	if _, err := e.deps.Tasks.UpdateTask(ctx, taskID, patch); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ---- prompt rendering ----------------------------------------------------
+
+// RenderPrompt builds the user-facing prompt sent to pi at the start of a
+// step run. Public for unit tests / golden snapshots.
+func RenderPrompt(
+	t store.Task,
+	wf workflow.Workflow,
+	stepRow workflow.Step,
+	cfg agent.Config,
+	commentLines []string,
+) string {
+	var sb strings.Builder
+	if cfg.SystemPrompt != "" {
+		sb.WriteString(strings.TrimRight(cfg.SystemPrompt, "\n"))
+		sb.WriteString("\n\n")
+	}
+	fmt.Fprintf(&sb, "You are agent %q on step %q of workflow %q.\n",
+		stepRow.AgentName, stepRow.Name, wf.Name)
+	fmt.Fprintf(&sb, "Task: %s\n", t.ID)
+	if t.Title != "" {
+		fmt.Fprintf(&sb, "Title: %s\n", t.Title)
+	}
+	if t.Description != "" {
+		sb.WriteString("\nDescription:\n")
+		sb.WriteString(t.Description)
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\nAvailable transitions (pick exactly one before you stop):\n")
+	for _, tr := range stepRow.Transitions {
+		switch {
+		case tr.IsTaskStatus():
+			fmt.Fprintf(&sb, "  - task_status=%s — %s\n", tr.TaskStatus, tr.PromptRule)
+		default:
+			fmt.Fprintf(&sb, "  - step=%s — %s\n", tr.NextStepName, tr.PromptRule)
+		}
+	}
+	sb.WriteString("\n")
+	fmt.Fprintf(&sb, "When you have decided, call: `autosk step next %s --to <name>` (sibling step name OR done|cancelled|human_feedback).\n", t.ID)
+	sb.WriteString("Do not stop before issuing exactly one such call.\n")
+	if len(commentLines) > 0 {
+		sb.WriteString("\nComments (oldest first):\n")
+		for _, line := range commentLines {
+			sb.WriteString("  ")
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
+}
+
+// CorrectiveMessage is the kickback message sent when the agent ends a turn
+// without emitting `step next`. Plan §6.1.2 (adapted for v0.2).
+func CorrectiveMessage(taskID string, stepRow workflow.Step, attempt, max int) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "You stopped without recording a transition on task %s.\n", taskID)
+	sb.WriteString("Before you stop you MUST call `autosk step next` exactly once with one of:\n")
+	for _, tr := range stepRow.Transitions {
+		if tr.IsTaskStatus() {
+			fmt.Fprintf(&sb, "  - autosk step next %s --to %s\n", taskID, tr.TaskStatus)
+		} else {
+			fmt.Fprintf(&sb, "  - autosk step next %s --to %s\n", taskID, tr.NextStepName)
+		}
+	}
+	fmt.Fprintf(&sb, "This is correction attempt %d of %d. If you ignore it the run will be marked failed.\n", attempt, max)
+	return sb.String()
+}
+
+// ---- error / shutdown plumbing -------------------------------------------
+
+func (e *Executor) handleRunError(ctx, bg context.Context, jobID string, runner PiRunner, runErr error) error {
 	if errors.Is(runErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-		// Cancel path: SIGTERM the child, then mark cancelled.
-		_ = runner.Abort(bgCtx)
+		_ = runner.Abort(bg)
 		_ = runner.CloseStdin()
 		_ = runner.Terminate()
-		exit, _ := runner.Wait(bgCtx, e.cfg.Grace)
-		if waitTimedOut(runner, exit) {
+		exit, _ := runner.Wait(bg, e.cfg.Grace)
+		if exit < 0 && runner.PID() > 0 {
 			_ = runner.Kill()
-			exit, _ = runner.Wait(bgCtx, e.cfg.Grace)
+			exit, _ = runner.Wait(bg, e.cfg.Grace)
 		}
-		_, _ = e.runs.MarkCancelled(bgCtx, jobID, &exit)
+		_, _ = e.deps.Runs.MarkCancelled(bg, jobID, &exit)
 		return runErr
 	}
-	// Other error: best-effort shutdown then mark failed.
-	exit, _ := e.shutdown(runner, ctx, bgCtx)
-	_, _ = e.runs.MarkFailed(bgCtx, jobID, &exit, runErr.Error())
+	exit, _ := e.shutdown(runner, ctx, bg)
+	_, _ = e.deps.Runs.MarkFailed(bg, jobID, &exit, runErr.Error())
 	return runErr
 }
 
-// shutdown closes stdin and waits up to grace; SIGKILLs on timeout. Used on
-// both clean and error paths after the run loop exits.
-func (e *Executor) shutdown(runner PiRunner, ctx, bgCtx context.Context) (int, error) {
+func (e *Executor) shutdown(runner PiRunner, ctx, bg context.Context) (int, error) {
 	_ = runner.CloseStdin()
-	exit, err := runner.Wait(bgCtx, e.cfg.Grace)
+	exit, err := runner.Wait(bg, e.cfg.Grace)
 	if pi.IsWaitTimeout(err) {
 		_ = runner.Terminate()
-		exit, err = runner.Wait(bgCtx, e.cfg.Grace)
+		exit, err = runner.Wait(bg, e.cfg.Grace)
 		if pi.IsWaitTimeout(err) {
 			_ = runner.Kill()
-			exit, err = runner.Wait(bgCtx, e.cfg.Grace)
+			exit, err = runner.Wait(bg, e.cfg.Grace)
 		}
 	}
 	return exit, err
 }
 
 func (e *Executor) failTerminal(ctx context.Context, jobID string, exit *int, cause error) error {
-	_, _ = e.runs.MarkFailed(ctx, jobID, exit, cause.Error())
+	_, _ = e.deps.Runs.MarkFailed(ctx, jobID, exit, cause.Error())
 	return cause
 }
 
-func (e *Executor) cleanup(runner PiRunner, bgCtx context.Context) {
-	// Best-effort: if Wait already ran this is idempotent (Wait uses sync.Once).
+func (e *Executor) cleanup(runner PiRunner, bg context.Context) {
 	go func() {
 		_ = runner.CloseStdin()
-		_, _ = runner.Wait(bgCtx, e.cfg.Grace)
+		_, _ = runner.Wait(bg, e.cfg.Grace)
 	}()
 }
 
 // sessionDirFor returns the directory passed as `--session-dir` to pi.
-// We create a per-job subdirectory so transcripts are easy to find.
+// One per job so transcripts are easy to find.
 func (e *Executor) sessionDirFor(run runstore.Run) string {
 	root := e.cfg.SessionDirRoot
 	if root == "" {
-		root = filepath.Join(run.Cwd, ".autosk", "sessions")
+		root = filepath.Join(e.cfg.ProjectRoot, ".autosk", "sessions")
 	}
 	return filepath.Join(root, run.JobID)
-}
-
-// ---- closure verification --------------------------------------------------
-
-// VerifyClosure inspects the autosk task right after an end-of-turn and
-// classifies the run's closure. Returns "" when the agent has not closed
-// per protocol — the caller is expected to kick back.
-//
-// Closure kinds (plan §6.1.1):
-//
-//	"done"       → tasks.status == done
-//	"cancelled"  → tasks.status == cancelled
-//	"decomposed" → status still new|claimed but incoming blockers grew
-//	"" (empty)   → invalid closure
-func VerifyClosure(ctx context.Context, tasks TaskStore, taskID string, preBlockedBy []string) (runstore.ClosureKind, error) {
-	return verifyClosure(ctx, tasks, taskID, preBlockedBy)
-}
-
-func verifyClosure(ctx context.Context, tasks TaskStore, taskID string, preBlockedBy []string) (runstore.ClosureKind, error) {
-	if taskID == "" {
-		return "", nil
-	}
-	t, err := tasks.GetTask(ctx, taskID)
-	if err != nil {
-		return "", fmt.Errorf("get task: %w", err)
-	}
-	switch t.Status {
-	case store.StatusDone:
-		return runstore.ClosureDone, nil
-	case store.StatusCancelled:
-		return runstore.ClosureCancelled, nil
-	}
-	inc, _, err := tasks.Deps(ctx, taskID)
-	if err != nil {
-		return "", fmt.Errorf("get deps: %w", err)
-	}
-	if hasNewBlocker(inc, preBlockedBy) {
-		return runstore.ClosureDecomposed, nil
-	}
-	return "", nil
-}
-
-func hasNewBlocker(current, pre []string) bool {
-	preSet := make(map[string]struct{}, len(pre))
-	for _, id := range pre {
-		if id != "" {
-			preSet[id] = struct{}{}
-		}
-	}
-	for _, id := range current {
-		if _, seen := preSet[id]; !seen && id != "" {
-			return true
-		}
-	}
-	return false
-}
-
-// CorrectiveMessage renders the user-facing kickback text. See plan §6.1.2.
-func CorrectiveMessage(taskID string, attempt, max int) string {
-	var sb strings.Builder
-	sb.WriteString("Your autosk task ")
-	sb.WriteString(taskID)
-	sb.WriteString(" is still open and you have not closed it per protocol.\n")
-	sb.WriteString("Before you stop, you must do exactly one of:\n")
-	sb.WriteString("  1. `autosk done ")
-	sb.WriteString(taskID)
-	sb.WriteString("` — if the work is complete.\n")
-	sb.WriteString("  2. `autosk cancel ")
-	sb.WriteString(taskID)
-	sb.WriteString("` — if it cannot be done.\n")
-	sb.WriteString("  3. Decompose: create new tasks with `autosk create ... --blocks ")
-	sb.WriteString(taskID)
-	sb.WriteString("` and then stop. The parent is treated as resolved when at least one new blocker is added.\n")
-	fmt.Fprintf(&sb, "This is correction attempt %d of %d. If you ignore it, the run will be marked failed.", attempt, max)
-	return sb.String()
-}
-
-// waitTimedOut is a small helper: returns true if exit == -1 and the
-// runner is still alive (best-effort heuristic; real callers should rely
-// on pi.IsWaitTimeout via the returned error instead).
-func waitTimedOut(runner PiRunner, exit int) bool {
-	// We don't have direct access to the wait error here without state;
-	// a -1 exit conventionally means "did not exit normally". Callers that
-	// need authoritative answers use pi.IsWaitTimeout.
-	return exit < 0 && runner.PID() > 0
-}
-
-func appendRunError(ctx context.Context, runs *runstore.Store, jobID, msg string) error {
-	// We don't currently expose a "append note" method; instead, leave a
-	// breadcrumb in the daemon log. This stub keeps the call site honest
-	// in case we add a note column later.
-	_ = ctx
-	_ = runs
-	_ = jobID
-	_ = msg
-	return nil
-}
-
-func ensureDir(p string) error {
-	return mkdirAll(p, 0o755)
 }

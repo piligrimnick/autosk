@@ -71,24 +71,49 @@ Your in-progress task stays `claimed`; `ready` will not surface it again, and
 `list` and `ready` return arrays of these. The shape is stable across patch
 releases; renames / removals are breaking changes.
 
-## When a daemon is running
+## When you're running inside a workflow step (v0.2)
 
-If `autosk daemon serve` is running for the project, prefer **submitting**
-your next task to the daemon instead of opening a fresh shell:
+If the daemon spawned you to work on an autosk task, you are operating
+**inside a workflow step**. Before you stop your turn, you MUST call
+`autosk step next` exactly once with one of the targets listed at the
+top of your prompt:
 
 ```bash
-autosk daemon submit <as-id> --model sonnet:high --thinking high
+autosk step next <as-id> --to <sibling-step-name>
+autosk step next <as-id> --to done
+autosk step next <as-id> --to cancelled
+autosk step next <as-id> --to human_feedback
 ```
 
-The daemon will `claim` the task for you on start. **You** (the agent) are
-still responsible for closing it before stopping: `autosk done <id>`,
-`autosk cancel <id>`, or decompose with `autosk create ... --blocks <id>`.
-If you stop without closing, the daemon kicks you back with a corrective
-user message; after `max_corrections` attempts the run is marked failed.
+Valid targets are spelled out per step in your initial prompt (one bullet
+per outgoing transition). The autosk pi-extension exposes this as the
+`step_next` action; either form works.
+
+If you stop without recording a transition, the daemon sends you a
+corrective message and reruns the step. After `max_corrections` (default
+3) attempts the run is marked `failed`.
+
+**Do not** call `autosk done`/`cancel`/`update --status` while you're
+inside a step — those are owned by the workflow engine. Use `step next`.
+
+## When a daemon is running
+
+If `autosk daemon serve` is running for the project, prefer **creating**
+your next task in a workflow (or with `--agent`) so the engine picks it
+up automatically:
+
+```bash
+autosk create "Implement auth module" --workflow feature-dev
+autosk create "Bump version" --agent developer    # single:developer
+```
+
+The poller (default cadence 2s) surfaces `in_workflow` tasks whose
+current step's agent is non-human. The executor reads the agent's config
+from `.autosk/agents/<name>.toml` and spawns `pi --mode rpc` with it.
 
 `autosk daemon status <job-id>` and `autosk daemon messages <job-id>`
 show the run's lifecycle and the transcript pi is writing. See
-[`docs/daemon.md`](docs/daemon.md).
+[`docs/daemon.md`](docs/daemon.md) and [`docs/workflows.md`](docs/workflows.md).
 
 ## What autosk is NOT
 

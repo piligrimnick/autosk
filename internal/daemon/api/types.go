@@ -3,6 +3,12 @@
 // Routes live in package server; this file is the source of truth for
 // request/response JSON shapes. Both the daemon HTTP server and the
 // CLI client (cmd/autosk/daemon.go subcommands) import these types.
+//
+// v0.2 (workflows): SubmitRequest carries only task_id; everything else
+// (agent, model, thinking, prompt, cwd) is derived from the workflow,
+// step, agent-config file, and daemon config. The pre-W1 fields are
+// preserved here as deprecated optionals for one release so old clients
+// don't break instantly; they are ignored by the server.
 package api
 
 import (
@@ -15,37 +21,41 @@ import (
 )
 
 // SubmitRequest is POST /v1/jobs.
+//
+// In v0.2 only TaskID and MaxCorrections are honored. Other fields are
+// accepted (for backwards compatibility of the JSON shape only) but the
+// server logs and ignores them. The CLI clients no longer set them.
 type SubmitRequest struct {
-	TaskID         string   `json:"task_id,omitempty"`
-	Prompt         string   `json:"prompt,omitempty"`
-	Model          string   `json:"model,omitempty"`
-	Thinking       string   `json:"thinking,omitempty"`
-	Cwd            string   `json:"cwd,omitempty"`
-	AutoClaim      *bool    `json:"auto_claim,omitempty"`
-	MaxCorrections *int     `json:"max_corrections,omitempty"`
-	ExtraArgs      []string `json:"extra_args,omitempty"`
+	TaskID         string `json:"task_id"`
+	MaxCorrections *int   `json:"max_corrections,omitempty"`
+
+	// Deprecated; accepted but ignored. Removed in a future release.
+	Prompt    string   `json:"prompt,omitempty"`
+	Model     string   `json:"model,omitempty"`
+	Thinking  string   `json:"thinking,omitempty"`
+	Cwd       string   `json:"cwd,omitempty"`
+	AutoClaim *bool    `json:"auto_claim,omitempty"`
+	ExtraArgs []string `json:"extra_args,omitempty"`
 }
 
-// JobResponse is the canonical Job shape returned by the API. Mirrors
-// plan §5.3.
+// JobResponse is the canonical Job shape returned by the API.
+//
+// Most v0.1 fields are gone. The agent that ran is now derivable from
+// (StepID → agents); for convenience the projection at runtime fills
+// AgentName when the join is cheap, but the wire shape does not require it.
 type JobResponse struct {
 	JobID           string     `json:"job_id"`
-	TaskID          string     `json:"task_id,omitempty"`
+	TaskID          string     `json:"task_id"`
+	StepID          string     `json:"step_id"`
 	Status          string     `json:"status"`
-	Model           string     `json:"model,omitempty"`
-	Thinking        string     `json:"thinking,omitempty"`
-	Cwd             string     `json:"cwd"`
-	PromptPreview   string     `json:"prompt_preview"`
+	TransitionID    *int64     `json:"transition_id,omitempty"`
 	PISessionID     string     `json:"pi_session_id,omitempty"`
 	SessionPath     string     `json:"session_path,omitempty"`
 	PID             *int       `json:"pid,omitempty"`
 	ExitCode        *int       `json:"exit_code,omitempty"`
 	Error           string     `json:"error,omitempty"`
-	ClosureKind     string     `json:"closure_kind,omitempty"`
-	AutoClaim       bool       `json:"auto_claim"`
 	CorrectionsUsed int        `json:"corrections_used"`
 	MaxCorrections  int        `json:"max_corrections"`
-	PreBlockedBy    []string   `json:"pre_blocked_by,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
 	StartedAt       *time.Time `json:"started_at,omitempty"`
 	FinishedAt      *time.Time `json:"finished_at,omitempty"`
@@ -54,14 +64,12 @@ type JobResponse struct {
 
 // MessagesResponse is GET /v1/jobs/{id}/messages.
 type MessagesResponse struct {
-	JobID     string          `json:"job_id"`
-	Events    []MessageEvent  `json:"events"`
-	Truncated bool            `json:"truncated"`
+	JobID     string         `json:"job_id"`
+	Events    []MessageEvent `json:"events"`
+	Truncated bool           `json:"truncated"`
 }
 
 // MessageEvent is the transcript event shape served by the messages API.
-// Mirrors internal/daemon/transcript.Event but with explicit JSON tags so
-// the wire form is stable.
 type MessageEvent struct {
 	Kind    string      `json:"kind"`
 	TS      time.Time   `json:"ts,omitempty"`
@@ -78,8 +86,8 @@ type HealthResponse struct {
 	Workers    int    `json:"workers"`
 	Queued     int    `json:"queued"`
 	Running    int    `json:"running"`
-	DBPath     string `json:"db_path,omitempty"`     // absolute path to .autosk/db the daemon uses
-	DefaultCwd string `json:"default_cwd,omitempty"` // cwd applied when a submit omits it
+	DBPath     string `json:"db_path,omitempty"`
+	DefaultCwd string `json:"default_cwd,omitempty"`
 }
 
 // VersionResponse is GET /v1/version.
@@ -104,45 +112,12 @@ type ListResponse struct {
 // ErrInvalidRequest is wrapped by validation failures.
 var ErrInvalidRequest = errors.New("invalid request")
 
-// dangerousExtraArgs are CLI flags the daemon manages itself; the client
-// must not override them via extra_args (plan §5.2).
-var dangerousExtraArgs = map[string]struct{}{
-	"--api-key":         {},
-	"--system-prompt":   {},
-	"--mode":            {},
-	"--session-dir":     {},
-	"--session":         {},
-	"--no-session":      {},
-	"--print":           {},
-	"-p":                {},
-	"--model":           {},
-	"--thinking":        {},
-}
-
-// Validate checks SubmitRequest and normalises blank fields. Returns the
-// canonical form on success.
+// Validate checks SubmitRequest and normalises blank fields.
 func (r SubmitRequest) Validate() (SubmitRequest, error) {
 	out := r
 	out.TaskID = strings.TrimSpace(out.TaskID)
-	out.Prompt = strings.TrimSpace(out.Prompt)
-	out.Cwd = strings.TrimSpace(out.Cwd)
-	out.Model = strings.TrimSpace(out.Model)
-	out.Thinking = strings.TrimSpace(out.Thinking)
-
-	if out.TaskID == "" && out.Prompt == "" {
-		return out, fmt.Errorf("%w: task_id or prompt is required", ErrInvalidRequest)
-	}
-	if !runstore.ThinkingLevel(out.Thinking).Valid() {
-		return out, fmt.Errorf("%w: thinking %q is not in {off,minimal,low,medium,high,xhigh}", ErrInvalidRequest, out.Thinking)
-	}
-	for _, a := range out.ExtraArgs {
-		key := a
-		if i := strings.IndexByte(a, '='); i > 0 {
-			key = a[:i]
-		}
-		if _, bad := dangerousExtraArgs[key]; bad {
-			return out, fmt.Errorf("%w: extra_args may not contain %q (daemon-managed)", ErrInvalidRequest, key)
-		}
+	if out.TaskID == "" {
+		return out, fmt.Errorf("%w: task_id is required", ErrInvalidRequest)
 	}
 	if out.MaxCorrections != nil && *out.MaxCorrections < 0 {
 		return out, fmt.Errorf("%w: max_corrections must be >= 0", ErrInvalidRequest)
@@ -152,35 +127,22 @@ func (r SubmitRequest) Validate() (SubmitRequest, error) {
 
 // FromRun projects a runstore.Run to its API shape.
 func FromRun(r runstore.Run) JobResponse {
-	resp := JobResponse{
+	return JobResponse{
 		JobID:           r.JobID,
 		TaskID:          r.TaskID,
+		StepID:          r.StepID,
 		Status:          string(r.Status),
-		Model:           r.Model,
-		Thinking:        string(r.Thinking),
-		Cwd:             r.Cwd,
-		PromptPreview:   preview(r.Prompt, 200),
+		TransitionID:    r.TransitionID,
 		PISessionID:     r.PISessionID,
 		SessionPath:     r.SessionPath,
 		PID:             r.PID,
 		ExitCode:        r.ExitCode,
 		Error:           r.Error,
-		ClosureKind:     string(r.ClosureKind),
-		AutoClaim:       r.AutoClaim,
 		CorrectionsUsed: r.CorrectionsUsed,
 		MaxCorrections:  r.MaxCorrections,
-		PreBlockedBy:    r.PreBlockedBy,
 		CreatedAt:       r.CreatedAt,
 		StartedAt:       r.StartedAt,
 		FinishedAt:      r.FinishedAt,
 		DurationMS:      r.Duration().Milliseconds(),
 	}
-	return resp
-}
-
-func preview(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "\u2026"
 }

@@ -28,13 +28,15 @@ function summarizeArgs(action: AutoskAction | "?", args: AutoskArgs): string {
 		case "create":
 			return args.title ? `"${args.title}"` + priorityHint(args) : priorityHint(args);
 		case "show":
-		case "claim":
 		case "done":
 		case "cancel":
 		case "reopen":
 		case "update":
 		case "dep_list":
 			return args.id ?? "";
+		case "step_next":
+			if (!args.id) return "";
+			return args.to ? `${args.id} --to ${args.to}` : args.id;
 		case "block":
 			return args.id ? `${args.id} ← [${(args.blocker_ids ?? []).join(", ")}]` : "";
 		case "unblock":
@@ -150,7 +152,9 @@ function statusColor(status: TaskStatus): "success" | "warning" | "muted" | "tex
 	switch (status) {
 		case "done":
 			return "success";
-		case "claimed":
+		case "in_workflow":
+			return "warning";
+		case "human_feedback":
 			return "warning";
 		case "cancelled":
 			return "muted";

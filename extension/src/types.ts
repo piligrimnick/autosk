@@ -16,7 +16,7 @@ export interface Task {
 	blocks: string[];
 }
 
-export type TaskStatus = "new" | "claimed" | "done" | "cancelled";
+export type TaskStatus = "new" | "in_workflow" | "human_feedback" | "done" | "cancelled";
 
 /** Discriminated union of details that the renderer / LLM consumes. */
 export type AutoskDetails =
@@ -37,7 +37,6 @@ export type AutoskAction =
 	| "create"
 	| "show"
 	| "update"
-	| "claim"
 	| "done"
 	| "cancel"
 	| "reopen"
@@ -47,4 +46,5 @@ export type AutoskAction =
 	| "list"
 	| "ready"
 	| "next"
-	| "init";
+	| "init"
+	| "step_next";

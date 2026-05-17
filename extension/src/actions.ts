@@ -30,11 +30,12 @@ export async function runAction(
 				return await runShow(ctx);
 			case "update":
 				return await runUpdate(ctx);
-			case "claim":
 			case "done":
 			case "cancel":
 			case "reopen":
 				return await runStatusChange(action, ctx);
+			case "step_next":
+				return await runStepNext(ctx);
 			case "block":
 				return await runBlock(ctx);
 			case "unblock":
@@ -140,7 +141,7 @@ async function runUpdate({ pi, args, runOptions }: ActionContext): Promise<Actio
 }
 
 async function runStatusChange(
-	action: Extract<AutoskAction, "claim" | "done" | "cancel" | "reopen">,
+	action: Extract<AutoskAction, "done" | "cancel" | "reopen">,
 	{ pi, args, runOptions }: ActionContext,
 ): Promise<ActionResponse> {
 	const id = requireId(action, args);
@@ -148,6 +149,34 @@ async function runStatusChange(
 	return {
 		text: `${action} ${task.id} → status=${task.status}, blocked=${task.blocked}\n${JSON.stringify(task)}`,
 		details: { kind: "task", action, task },
+	};
+}
+
+/** runStepNext records a workflow transition signal (plan §5.4). */
+async function runStepNext({ pi, args, runOptions }: ActionContext): Promise<ActionResponse> {
+	const id = requireId("step_next", args);
+	if (!args.to || args.to.trim() === "") {
+		throw new AutoskCliError(
+			"step_next",
+			"invalid_args",
+			"step_next requires `to`: a sibling step name or one of done|cancelled|human_feedback",
+		);
+	}
+	const result = await runAutosk(pi, "step_next", ["step", "next", id, "--to", args.to, "--json"], runOptions);
+	const signal = parseJson<{
+		run_id: string;
+		task_id: string;
+		transition_id: number;
+		next_step?: string;
+		task_status?: string;
+		prompt_rule: string;
+		created_at: string;
+	}>("step_next", result.stdout);
+	const target = signal.next_step ? `step=${signal.next_step}` : `task_status=${signal.task_status}`;
+	const msg = `step_next ${signal.task_id}: recorded transition to ${target} (run=${signal.run_id})`;
+	return {
+		text: `${msg}\n${JSON.stringify(signal)}`,
+		details: { kind: "ack", action: "step_next", message: msg },
 	};
 }
 

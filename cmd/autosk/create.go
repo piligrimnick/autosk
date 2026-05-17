@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,8 +10,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"autosk/internal/agent"
 	"autosk/internal/render"
 	"autosk/internal/store"
+	"autosk/internal/store/doltlite"
+	"autosk/internal/workflow"
 )
 
 func newCreateCmd() *cobra.Command {
@@ -20,18 +24,27 @@ func newCreateCmd() *cobra.Command {
 		priority    int
 		blocks      []string
 		blockedBy   []string
+		workflowArg string
+		agentArg    string
 	)
 	cmd := &cobra.Command{
 		Use:   "create [title]",
-		Short: "Create a new task",
+		Short: "Create a new task (optionally enter a workflow)",
 		Long: `Create a new task.
 
-Title may be passed positionally or via --title (but not both with different values).
+The task starts in status='new' unless --workflow or --agent (mutually
+exclusive) is given:
+
+  --workflow NAME   join an existing workflow at its first_step (status
+                    becomes 'in_workflow').
+
+  --agent    NAME   shorthand for joining the auto-generated workflow
+                    single:<NAME> (status becomes 'in_workflow').
 
 If --description is "-", the description is read from stdin.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Resolve title: positional or flag.
+			// Title resolution.
 			switch {
 			case len(args) == 1 && title != "" && args[0] != title:
 				return errors.New("title given both positionally and via --title with different values")
@@ -42,8 +55,10 @@ If --description is "-", the description is read from stdin.`,
 			if title == "" {
 				return errors.New("title is required")
 			}
+			if workflowArg != "" && agentArg != "" {
+				return errors.New("--workflow and --agent are mutually exclusive")
+			}
 
-			// Description from stdin if "-".
 			if description == "-" {
 				b, err := io.ReadAll(os.Stdin)
 				if err != nil {
@@ -52,23 +67,46 @@ If --description is "-", the description is read from stdin.`,
 				description = strings.TrimRight(string(b), "\n")
 			}
 
-			s, closeFn, err := openStore(cmd.Context(), true /*writeOK*/)
+			s, closeFn, err := openStore(cmd.Context(), true)
 			if err != nil {
 				return err
 			}
 			defer closeFn()
+			dl := s.(*doltlite.Store)
+			ag := agent.New(dl.DB())
+			wfStore := workflow.New(dl.DB(), ag)
 
-			t, err := s.CreateTask(cmd.Context(), store.Task{
+			// Resolve caller → author_id.
+			author, err := resolveCallerAgent(cmd.Context(), ag)
+			if err != nil {
+				return fmt.Errorf("resolve caller agent: %w", err)
+			}
+
+			task := store.Task{
 				Title:       title,
 				Description: description,
 				Status:      store.StatusNew,
 				Priority:    priority,
-			})
+				AuthorID:    author.ID,
+			}
+
+			// Workflow assignment, if any.
+			if workflowArg != "" || agentArg != "" {
+				wf, firstStep, err := resolveWorkflowEntry(cmd.Context(), wfStore, ag, workflowArg, agentArg)
+				if err != nil {
+					return err
+				}
+				task.Status = store.StatusInWorkflow
+				task.WorkflowID = wf.ID
+				task.CurrentStepID = firstStep.ID
+			}
+
+			t, err := s.CreateTask(cmd.Context(), task)
 			if err != nil {
 				return err
 			}
 
-			// Edges. --blocks: t blocks each listed id. --blocked-by: each listed id blocks t.
+			// Edges.
 			if len(blocks) > 0 {
 				for _, otherID := range blocks {
 					if err := s.Block(cmd.Context(), otherID, t.ID); err != nil {
@@ -85,7 +123,8 @@ If --description is "-", the description is read from stdin.`,
 			commitWrite(cmd.Context(), s, "create "+t.ID)
 
 			if flagJSON {
-				return render.TaskJSONTo(os.Stdout, t)
+				opts := renderOptsForTask(cmd.Context(), wfStore, t)
+				return render.TaskJSONTo(os.Stdout, t, opts...)
 			}
 			fmt.Println(t.ID)
 			return nil
@@ -94,7 +133,66 @@ If --description is "-", the description is read from stdin.`,
 	cmd.Flags().StringVar(&title, "title", "", "task title")
 	cmd.Flags().StringVarP(&description, "description", "d", "", "task description ('-' reads stdin)")
 	cmd.Flags().IntVarP(&priority, "priority", "p", store.DefaultPriority, "priority (0=highest..3=lowest)")
-	cmd.Flags().StringSliceVar(&blocks, "blocks", nil, "ids of tasks this task blocks (P4)")
-	cmd.Flags().StringSliceVar(&blockedBy, "blocked-by", nil, "ids of tasks that block this task (P4)")
+	cmd.Flags().StringSliceVar(&blocks, "blocks", nil, "ids of tasks this task blocks")
+	cmd.Flags().StringSliceVar(&blockedBy, "blocked-by", nil, "ids of tasks that block this task")
+	cmd.Flags().StringVar(&workflowArg, "workflow", "", "join this named workflow at its first step")
+	cmd.Flags().StringVar(&agentArg, "agent", "", "shorthand for --workflow single:<name>; ensures the synthetic workflow exists")
 	return cmd
+}
+
+// resolveWorkflowEntry returns the workflow + entry step the task should
+// land on, given either --workflow NAME or --agent NAME. Exactly one of
+// the two must be non-empty (caller verifies that).
+func resolveWorkflowEntry(ctx context.Context, wfs *workflow.Store, ag *agent.Store, wfName, agentName string) (workflow.Workflow, workflow.Step, error) {
+	if wfName != "" {
+		w, err := wfs.GetByName(ctx, wfName)
+		if err != nil {
+			if errors.Is(err, workflow.ErrNotFound) {
+				return workflow.Workflow{}, workflow.Step{}, fmt.Errorf("workflow not found: %s", wfName)
+			}
+			return workflow.Workflow{}, workflow.Step{}, err
+		}
+		st, err := stepByID(w, w.FirstStepID)
+		if err != nil {
+			return workflow.Workflow{}, workflow.Step{}, fmt.Errorf("first step missing in %s: %w", wfName, err)
+		}
+		return w, st, nil
+	}
+	// --agent NAME: ensure the agent exists, then ensure single:<name>.
+	if _, err := ag.EnsureByName(ctx, agentName); err != nil {
+		return workflow.Workflow{}, workflow.Step{}, fmt.Errorf("ensure agent %s: %w", agentName, err)
+	}
+	w, err := wfs.EnsureSingle(ctx, agentName)
+	if err != nil {
+		return workflow.Workflow{}, workflow.Step{}, fmt.Errorf("ensure single:%s: %w", agentName, err)
+	}
+	st, err := stepByID(w, w.FirstStepID)
+	if err != nil {
+		return workflow.Workflow{}, workflow.Step{}, fmt.Errorf("single:%s missing first step: %w", agentName, err)
+	}
+	return w, st, nil
+}
+
+// stepByID returns the step with the given id from a loaded Workflow.
+func stepByID(w workflow.Workflow, stepID string) (workflow.Step, error) {
+	for _, s := range w.Steps {
+		if s.ID == stepID {
+			return s, nil
+		}
+	}
+	return workflow.Step{}, fmt.Errorf("step %s not found in workflow %s", stepID, w.Name)
+}
+
+// renderOptsForTask returns render.Options that surface the derived
+// current_step + current_agent for a task. Best-effort: returns no opts
+// when the task is not in a workflow or the step/agent lookup fails.
+func renderOptsForTask(ctx context.Context, wfs *workflow.Store, t store.Task) []render.Option {
+	if t.CurrentStepID == "" {
+		return nil
+	}
+	step, err := wfs.FindStepByID(ctx, t.CurrentStepID)
+	if err != nil {
+		return nil
+	}
+	return []render.Option{render.WithStep(step.Name, step.AgentName)}
 }

@@ -2,4 +2,6 @@ package executor
 
 import "os"
 
-func mkdirAll(p string, perm os.FileMode) error { return os.MkdirAll(p, perm) }
+// ensureDir is a tiny wrapper kept separate so tests can stub it later
+// without touching executor.go's main flow.
+func ensureDir(p string) error { return os.MkdirAll(p, 0o755) }

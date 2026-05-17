@@ -27,7 +27,7 @@ func fixedTask() store.Task {
 		ID:          "as-a1b2",
 		Title:       "Wire up doltlite store",
 		Description: "Implement Open/Close/Migrate and the smoke test.",
-		Status:      store.StatusClaimed,
+		Status:      store.StatusInWorkflow,
 		Priority:    1,
 		CreatedAt:   time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC),
 		UpdatedAt:   time.Date(2026, 5, 13, 11, 42, 13, 0, time.UTC),

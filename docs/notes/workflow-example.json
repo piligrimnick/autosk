@@ -1,0 +1,42 @@
+{
+  "name": "feature-dev",
+  "description": "Implement, review, validate, then ask the human.",
+  "first_step": "dev",
+  "steps": {
+    "dev": {
+      "agent": "developer",
+      "next_steps": [
+        {
+          "step": "review",
+          "prompt_rule": "When all requirements of the task are met and the implementation builds and tests locally."
+        }
+      ]
+    },
+    "review": {
+      "agent": "code-reviewer",
+      "next_steps": [
+        {
+          "step": "validator",
+          "prompt_rule": "When the review uncovered no blocking issues and coverage looks healthy."
+        },
+        {
+          "step": "dev",
+          "prompt_rule": "When the review surfaced bugs, missing tests, or style issues that need to go back to dev."
+        }
+      ]
+    },
+    "validator": {
+      "agent": "task-validator",
+      "next_steps": [
+        {
+          "step": "dev",
+          "prompt_rule": "When the implementation does not satisfy the task description strictly."
+        },
+        {
+          "task_status": "human_feedback",
+          "prompt_rule": "When the task is implemented and verified and a human should accept it."
+        }
+      ]
+    }
+  }
+}

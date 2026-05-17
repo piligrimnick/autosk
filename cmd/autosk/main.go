@@ -35,7 +35,6 @@ func newRootCmd() *cobra.Command {
 		newListCmd(),
 		newReadyCmd(),
 		newNextCmd(),
-		newClaimCmd(),
 		newDoneCmd(),
 		newCancelCmd(),
 		newReopenCmd(),
@@ -48,6 +47,12 @@ func newRootCmd() *cobra.Command {
 		newSQLCmd(),
 		newHistoryCmd(),
 		newDaemonCmd(),
+		newAgentCmd(),
+		newWorkflowCmd(),
+		newAssignCmd(),
+		newResumeCmd(),
+		newCommentCmd(),
+		newStepCmd(),
 	)
 	return root
 }

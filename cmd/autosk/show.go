@@ -7,8 +7,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"autosk/internal/agent"
 	"autosk/internal/render"
 	"autosk/internal/store"
+	"autosk/internal/store/doltlite"
+	"autosk/internal/workflow"
 )
 
 func newShowCmd() *cobra.Command {
@@ -39,12 +42,22 @@ func newShowCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("is_blocked: %w", err)
 			}
-			opt := render.WithBlocked(blocked, incoming, outgoing)
+			opts := []render.Option{render.WithBlocked(blocked, incoming, outgoing)}
+			// Surface derived current_step / current_agent when the task is
+			// in a workflow. Best-effort: failures here are ignored.
+			if t.CurrentStepID != "" {
+				if dl, ok := s.(*doltlite.Store); ok {
+					wfs := workflow.New(dl.DB(), agent.New(dl.DB()))
+					if step, err := wfs.FindStepByID(cmd.Context(), t.CurrentStepID); err == nil {
+						opts = append(opts, render.WithStep(step.Name, step.AgentName))
+					}
+				}
+			}
 
 			if flagJSON {
-				return render.TaskJSONTo(os.Stdout, t, opt)
+				return render.TaskJSONTo(os.Stdout, t, opts...)
 			}
-			return render.Task(os.Stdout, t, opt)
+			return render.Task(os.Stdout, t, opts...)
 		},
 	}
 	return cmd

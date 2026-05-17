@@ -38,7 +38,9 @@ func (s *Store) ListTasks(ctx context.Context, f store.ListFilter) ([]store.Task
 		args = append(args, *f.Priority)
 	}
 
-	q := `SELECT id, title, description, status, priority, created_at, updated_at
+	q := `SELECT id, title, description, status, priority,
+		           author_id, workflow_id, current_step_id,
+		           created_at, updated_at
 		    FROM tasks`
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")
@@ -51,20 +53,24 @@ func (s *Store) ListTasks(ctx context.Context, f store.ListFilter) ([]store.Task
 	return s.scanTasks(ctx, q, args...)
 }
 
-// Ready returns the ready set. P3 version: ignores edges (status='new' only).
-// P4 replaces this with the edge-aware version.
+// Ready returns the ready set: status='new' AND every incoming blocker is
+// already in a terminal state (done|cancelled). Tasks already in_workflow
+// or human_feedback are owned by the daemon / a human and are not surfaced
+// as "ready to pick up".
 func (s *Store) Ready(ctx context.Context, limit int) ([]store.Task, error) {
 	if s.db == nil {
 		return nil, store.ErrNotOpen
 	}
-	q := `SELECT t.id, t.title, t.description, t.status, t.priority, t.created_at, t.updated_at
+	q := `SELECT t.id, t.title, t.description, t.status, t.priority,
+		           t.author_id, t.workflow_id, t.current_step_id,
+		           t.created_at, t.updated_at
 		    FROM tasks t
 		   WHERE t.status = 'new'
 		     AND NOT EXISTS (
 		         SELECT 1 FROM task_deps d
 		           JOIN tasks b ON b.id = d.blocker_id
 		          WHERE d.blocked_id = t.id
-		            AND b.status IN ('new','claimed'))
+		            AND b.status IN ('new','in_workflow','human_feedback'))
 		ORDER BY t.priority ASC, t.created_at ASC`
 	args := []any{}
 	if limit > 0 {
@@ -80,7 +86,6 @@ func (s *Store) UpdateTask(ctx context.Context, idStr string, p store.TaskPatch)
 		return store.Task{}, store.ErrNotOpen
 	}
 	if p.IsEmpty() {
-		// Nothing to do; return current state for ergonomics.
 		return s.GetTask(ctx, idStr)
 	}
 	if err := validatePatch(p); err != nil {
@@ -111,6 +116,14 @@ func (s *Store) UpdateTask(ctx context.Context, idStr string, p store.TaskPatch)
 		sets = append(sets, "priority = ?")
 		args = append(args, *p.Priority)
 	}
+	if p.WorkflowID != nil {
+		sets = append(sets, "workflow_id = ?")
+		args = append(args, nullText(*p.WorkflowID))
+	}
+	if p.CurrentStepID != nil {
+		sets = append(sets, "current_step_id = ?")
+		args = append(args, nullText(*p.CurrentStepID))
+	}
 	sets = append(sets, "updated_at = ?")
 	args = append(args, time.Now().UTC().Unix())
 	args = append(args, idStr)
@@ -137,51 +150,6 @@ func (s *Store) UpdateTask(ctx context.Context, idStr string, p store.TaskPatch)
 	return s.GetTask(ctx, idStr)
 }
 
-// Claim sets status='claimed' if currently in {new, claimed}. Idempotent.
-//
-// Returns ErrNotFound if no such task; ErrNotClaimable if status is done or
-// cancelled. The returned Task always reflects post-state.
-func (s *Store) Claim(ctx context.Context, idStr string) (store.Task, error) {
-	if s.db == nil {
-		return store.Task{}, store.ErrNotOpen
-	}
-	now := time.Now().UTC().Unix()
-	var res sql.Result
-	err := retryOnBusy(ctx, func() error {
-		var e error
-		res, e = s.db.ExecContext(ctx, `
-			UPDATE tasks
-			   SET status = 'claimed', updated_at = ?
-			 WHERE id = ?
-			   AND status IN ('new','claimed')
-		`, now, idStr)
-		return e
-	})
-	if err != nil {
-		return store.Task{}, fmt.Errorf("claim: %w", err)
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		// Two cases: not found OR in terminal status. Resolve via GetTask.
-		t, gerr := s.GetTask(ctx, idStr)
-		if gerr != nil {
-			return store.Task{}, gerr // ErrNotFound
-		}
-		switch t.Status {
-		case store.StatusDone, store.StatusCancelled:
-			return store.Task{}, store.ErrNotClaimable
-		case store.StatusClaimed:
-			// Race window: another writer transitioned to claimed before our
-			// UPDATE; that's still the idempotent success case.
-			return t, nil
-		}
-		// Anything else is unexpected.
-		return store.Task{}, fmt.Errorf("unexpected status after no-op claim: %s", t.Status)
-	}
-	// We may have updated either a 'new' or already-'claimed' row to 'claimed'.
-	return s.GetTask(ctx, idStr)
-}
-
 // ---- helpers --------------------------------------------------------------
 
 func (s *Store) scanTasks(ctx context.Context, q string, args ...any) ([]store.Task, error) {
@@ -192,32 +160,22 @@ func (s *Store) scanTasks(ctx context.Context, q string, args ...any) ([]store.T
 	defer rows.Close()
 	var out []store.Task
 	for rows.Next() {
-		var (
-			t              store.Task
-			statusStr      string
-			createdU, updU int64
-		)
-		if err := rows.Scan(&t.ID, &t.Title, &t.Description, &statusStr, &t.Priority, &createdU, &updU); err != nil {
+		t, err := scanOneTask(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan task: %w", err)
 		}
-		t.Status = store.Status(statusStr)
-		t.CreatedAt = time.Unix(createdU, 0).UTC()
-		t.UpdatedAt = time.Unix(updU, 0).UTC()
 		out = append(out, t)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // defaultStatuses applies the "nil = backend default" rule.
-// nil  → {new, claimed} (open work).
+// nil  → OpenStatuses (new + in_workflow + human_feedback).
 // []   → no filter (all statuses).
 // list → as given.
 func defaultStatuses(in []store.Status) []store.Status {
 	if in == nil {
-		return []store.Status{store.StatusNew, store.StatusClaimed}
+		return store.OpenStatuses()
 	}
 	return in
 }

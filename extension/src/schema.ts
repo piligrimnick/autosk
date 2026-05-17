@@ -11,7 +11,6 @@ export const AutoskActionSchema = Type.Union([
 	Type.Literal("create"),
 	Type.Literal("show"),
 	Type.Literal("update"),
-	Type.Literal("claim"),
 	Type.Literal("done"),
 	Type.Literal("cancel"),
 	Type.Literal("reopen"),
@@ -22,11 +21,13 @@ export const AutoskActionSchema = Type.Union([
 	Type.Literal("ready"),
 	Type.Literal("next"),
 	Type.Literal("init"),
+	Type.Literal("step_next"),
 ]);
 
 export const AutoskTaskStatusSchema = Type.Union([
 	Type.Literal("new"),
-	Type.Literal("claimed"),
+	Type.Literal("in_workflow"),
+	Type.Literal("human_feedback"),
 	Type.Literal("done"),
 	Type.Literal("cancelled"),
 ]);
@@ -78,6 +79,10 @@ export const AutoskArgsSchema = Type.Partial(
 		}),
 		/** init: reserved prefix override (currently always 'as'). */
 		prefix: Type.String({ description: "init only: reserved ID prefix (currently always 'as')." }),
+		/** step_next: transition target — sibling step name OR done|cancelled|human_feedback. */
+		to: Type.String({
+			description: "step_next only: transition target. Either a sibling step name in the current workflow, or one of {done, cancelled, human_feedback}.",
+		}),
 	}),
 );
 

@@ -18,13 +18,18 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"autosk/internal/agent"
+	"autosk/internal/comments"
 	"autosk/internal/daemon/api"
 	"autosk/internal/daemon/executor"
+	"autosk/internal/daemon/poller"
 	"autosk/internal/daemon/runstore"
 	"autosk/internal/daemon/scheduler"
 	"autosk/internal/daemon/server"
 	"autosk/internal/projectdb"
+	"autosk/internal/step"
 	"autosk/internal/store/doltlite"
+	"autosk/internal/workflow"
 )
 
 func newDaemonCmd() *cobra.Command {
@@ -56,6 +61,7 @@ func newDaemonServeCmd() *cobra.Command {
 		cwd          string
 		grace        time.Duration
 		idleTimeout  time.Duration
+		pollInterval time.Duration
 		piBin        string
 		sessionDir   string
 	)
@@ -90,6 +96,10 @@ func newDaemonServeCmd() *cobra.Command {
 				return fmt.Errorf("migrate: %w", err)
 			}
 			runs := runstore.New(tasks.DB())
+			ag := agent.New(tasks.DB())
+			wfs := workflow.New(tasks.DB(), ag)
+			cs := comments.New(tasks.DB())
+			sigs := step.New(tasks.DB())
 
 			// Resolve token.
 			var token string
@@ -101,10 +111,18 @@ func newDaemonServeCmd() *cobra.Command {
 				token = strings.TrimSpace(string(b))
 			}
 
-			// Executor.
-			exec := executor.New(runs, tasks, executor.DefaultFactory, executor.Config{
+			// Executor wires the new (v0.2) deps.
+			exec := executor.New(executor.Deps{
+				Runs:      runs,
+				Tasks:     tasks,
+				Agents:    ag,
+				Workflows: wfs,
+				Comments:  cs,
+				Signals:   sigs,
+			}, executor.DefaultFactory, executor.Config{
 				PIBin:          piBin,
 				SessionDirRoot: sessionDir,
+				ProjectRoot:    cwd,
 				Grace:          grace,
 				IdleTimeout:    idleTimeout,
 			})
@@ -113,6 +131,12 @@ func newDaemonServeCmd() *cobra.Command {
 			}), scheduler.Config{Workers: workers})
 			if err := sched.Start(ctx); err != nil {
 				return fmt.Errorf("scheduler start: %w", err)
+			}
+
+			// Poller surfaces in_workflow tasks into the scheduler.
+			poll := poller.New(tasks.DB(), runs, sched, poller.Config{Interval: pollInterval})
+			if err := poll.Start(ctx); err != nil {
+				return fmt.Errorf("poller start: %w", err)
 			}
 
 			srv := server.New(server.Deps{
@@ -163,6 +187,9 @@ func newDaemonServeCmd() *cobra.Command {
 			if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 				fmt.Fprintf(os.Stderr, "autosk daemon: http shutdown: %v\n", err)
 			}
+			if err := poll.Stop(shutdownCtx); err != nil {
+				fmt.Fprintf(os.Stderr, "autosk daemon: poller stop: %v\n", err)
+			}
 			if err := sched.Stop(shutdownCtx); err != nil {
 				fmt.Fprintf(os.Stderr, "autosk daemon: scheduler stop: %v\n", err)
 			}
@@ -175,6 +202,7 @@ func newDaemonServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cwd, "cwd", "", "default cwd for jobs (default: current dir)")
 	cmd.Flags().DurationVar(&grace, "grace", 10*time.Second, "SIGTERM grace before SIGKILL")
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 30*time.Minute, "per-turn idle timeout")
+	cmd.Flags().DurationVar(&pollInterval, "poll-interval", poller.DefaultInterval, "how often to scan in_workflow tasks")
 	cmd.Flags().StringVar(&piBin, "pi-bin", "", "pi binary (default: 'pi' on PATH)")
 	cmd.Flags().StringVar(&sessionDir, "session-dir", "", "parent dir for per-job session subdirs (default: <cwd>/.autosk/sessions)")
 	return cmd
@@ -258,15 +286,15 @@ func formatDetails(d map[string]any) string {
 // printJobTable renders a list of jobs as a compact ASCII table.
 func printJobTable(jobs []api.JobResponse) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "JOB\tSTATUS\tTASK\tMODEL\tDURATION\tCLOSURE\tERROR")
+	fmt.Fprintln(w, "JOB\tSTATUS\tTASK\tSTEP\tDURATION\tERROR")
 	for _, j := range jobs {
 		dur := ""
 		if j.DurationMS > 0 {
 			dur = time.Duration(j.DurationMS * int64(time.Millisecond)).Round(time.Second).String()
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			j.JobID, j.Status, dashEmpty(j.TaskID), dashEmpty(j.Model),
-			dashEmpty(dur), dashEmpty(j.ClosureKind), trimError(j.Error))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			j.JobID, j.Status, dashEmpty(j.TaskID), dashEmpty(j.StepID),
+			dashEmpty(dur), trimError(j.Error))
 	}
 	_ = w.Flush()
 }
@@ -290,44 +318,19 @@ func trimError(s string) string {
 func newDaemonSubmitCmd() *cobra.Command {
 	var (
 		client         daemonClient
-		prompt         string
-		model          string
-		thinking       string
-		cwd            string
 		maxCorrections int
-		noClaim        bool
-		clientCwd      bool
 	)
 	cmd := &cobra.Command{
-		Use:   "submit [as-id]",
-		Short: "Submit a task (or ad-hoc prompt) to the daemon",
-		Args:  cobra.MaximumNArgs(1),
+		Use:   "submit <as-id>",
+		Short: "Submit a task to the daemon (workflow engine lands in W6)",
+		Long: "Submit an autosk task for the daemon to execute. v0.2 transitions " +
+			"the daemon into a workflow engine; until W6 lands the server returns 501 " +
+			"for this endpoint. The client still validates the request shape.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			req := api.SubmitRequest{
-				Prompt:   prompt,
-				Model:    model,
-				Thinking: thinking,
-				Cwd:      cwd,
-			}
-			if len(args) == 1 {
-				req.TaskID = args[0]
-			}
+			req := api.SubmitRequest{TaskID: args[0]}
 			if cmd.Flags().Changed("max-corrections") {
 				req.MaxCorrections = &maxCorrections
-			}
-			if noClaim {
-				v := false
-				req.AutoClaim = &v
-			}
-			if clientCwd && req.Cwd == "" {
-				wd, err := os.Getwd()
-				if err != nil {
-					return err
-				}
-				req.Cwd = wd
-			}
-			if req.TaskID == "" && req.Prompt == "" {
-				return errors.New("provide either a task id or --prompt")
 			}
 			resp, err := client.request(cmd.Context(), "POST", "/v1/jobs", req)
 			if err != nil {
@@ -345,13 +348,7 @@ func newDaemonSubmitCmd() *cobra.Command {
 		},
 	}
 	addClientFlags(cmd, &client)
-	cmd.Flags().StringVar(&prompt, "prompt", "", "prompt text (ad-hoc; overrides task description)")
-	cmd.Flags().StringVar(&model, "model", "", "pi --model")
-	cmd.Flags().StringVar(&thinking, "thinking", "", "pi --thinking (off|minimal|low|medium|high|xhigh)")
-	cmd.Flags().StringVar(&cwd, "cwd", "", "working directory for pi (default: daemon's default)")
 	cmd.Flags().IntVar(&maxCorrections, "max-corrections", 3, "kickback attempts before failing")
-	cmd.Flags().BoolVar(&noClaim, "no-claim", false, "do not auto-claim the autosk task")
-	cmd.Flags().BoolVar(&clientCwd, "use-cwd", false, "send the client's cwd to the daemon")
 	return cmd
 }
 
@@ -386,20 +383,14 @@ func newDaemonStatusCmd() *cobra.Command {
 func printJobDetail(j api.JobResponse) {
 	fmt.Printf("job:          %s\n", j.JobID)
 	fmt.Printf("task:         %s\n", dashEmpty(j.TaskID))
+	fmt.Printf("step:         %s\n", dashEmpty(j.StepID))
 	fmt.Printf("status:       %s\n", j.Status)
-	if j.ClosureKind != "" {
-		fmt.Printf("closure_kind: %s\n", j.ClosureKind)
+	if j.TransitionID != nil {
+		fmt.Printf("transition:   %d\n", *j.TransitionID)
 	}
 	if j.Error != "" {
 		fmt.Printf("error:        %s\n", j.Error)
 	}
-	if j.Model != "" {
-		fmt.Printf("model:        %s\n", j.Model)
-	}
-	if j.Thinking != "" {
-		fmt.Printf("thinking:     %s\n", j.Thinking)
-	}
-	fmt.Printf("cwd:          %s\n", j.Cwd)
 	if j.PISessionID != "" {
 		fmt.Printf("pi_session:   %s\n", j.PISessionID)
 	}
@@ -412,12 +403,7 @@ func printJobDetail(j api.JobResponse) {
 	if j.DurationMS > 0 {
 		fmt.Printf("duration:     %s\n", time.Duration(j.DurationMS*int64(time.Millisecond)).Round(time.Millisecond))
 	}
-	fmt.Printf("auto_claim:   %t\n", j.AutoClaim)
 	fmt.Printf("corrections:  %d/%d\n", j.CorrectionsUsed, j.MaxCorrections)
-	if j.PromptPreview != "" {
-		fmt.Println()
-		fmt.Println(j.PromptPreview)
-	}
 }
 
 // ---- messages -----------------------------------------------------------

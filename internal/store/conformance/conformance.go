@@ -6,7 +6,7 @@
 //
 //   - P1: Open / Close / Migrate / SchemaVersion (this file).
 //   - P2: CreateTask / GetTask basics.
-//   - P3: ListTasks / Ready / Claim.
+//   - P3: ListTasks / Ready (v0.2: no Claim).
 //   - P4: Block / Unblock / cycle detection / edge-aware Ready.
 package conformance
 
@@ -39,11 +39,9 @@ func RunConformance(t *testing.T, f Factory) {
 	t.Run("ListSorting", func(t *testing.T) { testListSorting(t, f) })
 	t.Run("UpdatePartial", func(t *testing.T) { testUpdatePartial(t, f) })
 	t.Run("UpdateRejectsBadStatus", func(t *testing.T) { testUpdateRejectsBadStatus(t, f) })
-	t.Run("ClaimNewToClaimed", func(t *testing.T) { testClaimNewToClaimed(t, f) })
-	t.Run("ClaimIdempotent", func(t *testing.T) { testClaimIdempotent(t, f) })
-	t.Run("ClaimRejectsTerminal", func(t *testing.T) { testClaimRejectsTerminal(t, f) })
-	t.Run("ClaimRace", func(t *testing.T) { testClaimRace(t, f) })
-	t.Run("ReadyP3_NoEdges", func(t *testing.T) { testReadyP3NoEdges(t, f) })
+	t.Run("ReadyExcludesDone", func(t *testing.T) { testReadyExcludesDone(t, f) })
+	t.Run("V02_HumanAgentSeeded", func(t *testing.T) { testHumanAgentSeeded(t, f) })
+	t.Run("V02_TablesPresent", func(t *testing.T) { testV02TablesPresent(t, f) })
 
 	t.Run("BlockBasics", func(t *testing.T) { testBlockBasics(t, f) })
 	t.Run("BlockRejectsSelfBlock", func(t *testing.T) { testBlockRejectsSelfBlock(t, f) })
@@ -114,11 +112,45 @@ func testRawPassthrough(t *testing.T, f Factory) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows.Err: %v", err)
 	}
-	for _, want := range []string{"tasks", "task_deps", "schema_migrations", "daemon_runs"} {
+	for _, want := range []string{
+		"agents", "workflows", "steps", "step_transitions",
+		"tasks", "task_deps", "comments",
+		"daemon_runs", "step_signals",
+		"schema_migrations",
+	} {
 		if !got[want] {
 			t.Errorf("expected table %q to exist after Migrate; got: %v", want, got)
 		}
 	}
+}
+
+// testHumanAgentSeeded verifies migrations.SeedHumanAgent ran.
+func testHumanAgentSeeded(t *testing.T, f Factory) {
+	s, cleanup := f(t)
+	defer cleanup()
+	ctx := context.Background()
+	rows, err := s.QueryRaw(ctx, `SELECT name, is_human FROM agents WHERE name='human'`)
+	if err != nil {
+		t.Fatalf("QueryRaw agents: %v", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatal("expected a row in agents with name='human' after migration")
+	}
+	var name string
+	var isHuman int
+	if err := rows.Scan(&name, &isHuman); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if name != "human" || isHuman != 1 {
+		t.Fatalf("unexpected human agent row: name=%q is_human=%d", name, isHuman)
+	}
+}
+
+// testV02TablesPresent re-uses testRawPassthrough but exists under a
+// stable name so future suites can assert it from their own t.Runs.
+func testV02TablesPresent(t *testing.T, f Factory) {
+	testRawPassthrough(t, f)
 }
 
 // AssertErrIs is a small helper used by per-phase suites.

@@ -30,16 +30,19 @@ func (s *Store) CreateTask(ctx context.Context, t store.Task) (store.Task, error
 		}
 		t.ID = newID
 	}
-	// Persist at second precision; return the same so callers see what the DB sees.
 	now := time.Unix(time.Now().Unix(), 0).UTC()
 	t.CreatedAt = now
 	t.UpdatedAt = now
 
 	err := retryOnBusy(ctx, func() error {
 		_, e := s.db.ExecContext(ctx, `
-			INSERT INTO tasks(id, title, description, status, priority, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, t.ID, t.Title, t.Description, string(t.Status), t.Priority, now.Unix(), now.Unix())
+			INSERT INTO tasks(id, title, description, status, priority,
+			                  author_id, workflow_id, current_step_id,
+			                  created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, t.ID, t.Title, t.Description, string(t.Status), t.Priority,
+			nullText(t.AuthorID), nullText(t.WorkflowID), nullText(t.CurrentStepID),
+			now.Unix(), now.Unix())
 		return e
 	})
 	if err != nil {
@@ -48,27 +51,57 @@ func (s *Store) CreateTask(ctx context.Context, t store.Task) (store.Task, error
 	return t, nil
 }
 
+// nullText converts a possibly-empty Go string into a SQL NULL or text
+// value for use as a parameter. Mirrors the convention in daemon/runstore.
+func nullText(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 // GetTask returns the task with the given id, or ErrNotFound.
 func (s *Store) GetTask(ctx context.Context, idStr string) (store.Task, error) {
 	if s.db == nil {
 		return store.Task{}, store.ErrNotOpen
 	}
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, title, description, status, priority, created_at, updated_at
+		SELECT id, title, description, status, priority,
+		       author_id, workflow_id, current_step_id,
+		       created_at, updated_at
 		  FROM tasks WHERE id = ?
 	`, idStr)
-	var (
-		t                store.Task
-		statusStr        string
-		createdU, updU   int64
-	)
-	if err := row.Scan(&t.ID, &t.Title, &t.Description, &statusStr, &t.Priority, &createdU, &updU); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return store.Task{}, store.ErrNotFound
-		}
+	t, err := scanOneTask(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.Task{}, store.ErrNotFound
+	}
+	if err != nil {
 		return store.Task{}, fmt.Errorf("select task: %w", err)
 	}
+	return t, nil
+}
+
+// scanOneTask scans a single tasks-row from sql.Row or sql.Rows.
+func scanOneTask(sc interface{ Scan(...any) error }) (store.Task, error) {
+	var (
+		t              store.Task
+		statusStr      string
+		authorID       sql.NullString
+		workflowID     sql.NullString
+		currentStepID  sql.NullString
+		createdU, updU int64
+	)
+	if err := sc.Scan(
+		&t.ID, &t.Title, &t.Description, &statusStr, &t.Priority,
+		&authorID, &workflowID, &currentStepID,
+		&createdU, &updU,
+	); err != nil {
+		return store.Task{}, err
+	}
 	t.Status = store.Status(statusStr)
+	t.AuthorID = authorID.String
+	t.WorkflowID = workflowID.String
+	t.CurrentStepID = currentStepID.String
 	t.CreatedAt = time.Unix(createdU, 0).UTC()
 	t.UpdatedAt = time.Unix(updU, 0).UTC()
 	return t, nil
@@ -87,7 +120,9 @@ func (s *Store) taskExists(ctx context.Context, idStr string) (bool, error) {
 }
 
 // validateForCreate normalizes and validates a Task before insert.
-// Mutates t to fill in defaults.
+// Mutates t to fill in defaults. Enforces the v0.2 invariant that ties
+// status to current_step_id (also enforced by SQL CHECK, but failing
+// fast in Go gives a clearer error).
 func validateForCreate(t *store.Task) error {
 	t.Title = strings.TrimSpace(t.Title)
 	if t.Title == "" {
@@ -99,13 +134,20 @@ func validateForCreate(t *store.Task) error {
 	if !t.Status.Valid() {
 		return store.ErrInvalidStatus
 	}
-	if t.Priority == 0 && false {
-		// Reserved: do not silently default 0 since 0 is a valid (highest) priority.
-	}
-	// Priority defaults to MaxPriority/2 (==2) when zero-value AND title omitted? No —
-	// the caller controls priority. The CLI layer applies DefaultPriority if no flag is given.
 	if t.Priority < store.MinPriority || t.Priority > store.MaxPriority {
 		return store.ErrInvalidPriority
+	}
+	switch t.Status {
+	case store.StatusInWorkflow:
+		if t.CurrentStepID == "" || t.WorkflowID == "" {
+			return fmt.Errorf("%w: status=in_workflow requires workflow_id and current_step_id",
+				store.ErrInvalidStatus)
+		}
+	case store.StatusNew, store.StatusDone, store.StatusCancelled:
+		if t.CurrentStepID != "" {
+			return fmt.Errorf("%w: status=%s must have current_step_id cleared",
+				store.ErrInvalidStatus, t.Status)
+		}
 	}
 	return nil
 }

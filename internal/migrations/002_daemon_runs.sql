@@ -1,45 +1,44 @@
--- 002_daemon_runs.sql — daemon / pi orchestrator run state.
+-- 002_daemon_runs.sql — v0.2 daemon state.
 --
--- See docs/plans/20260517-Daemon-Plan.md §4.1 for the canonical spec.
+-- See docs/plans/20260517-Workflows-Plan.md §4.1 for the canonical spec.
 --
--- Notes:
---   * status enum mirrors plan §6 ({queued, running, done, failed, cancelled}).
---   * thinking enum allows "" for "pi default".
---   * closure_kind is null until terminal success ({done, cancelled, decomposed}).
---   * pre_blocked_by is a comma-separated snapshot of incoming blockers at
---     run start; used to detect new blockers ("decomposed") during
---     verifyClosure.
---   * task_id is nullable so ad-hoc prompts (no autosk task) are supported.
---   * Foreign key uses ON DELETE SET NULL so deleting a task does not
---     destroy historical run rows.
+-- One row per STEP execution. step_id is always set: even single-agent
+-- runs go through the synthetic `single:<agent>` workflow created by
+-- internal/workflow.EnsureSingle.
+--
+-- Everything that used to be derivable per-spawn (prompt, model, thinking,
+-- cwd, auto_claim, pre_blocked_by, closure_kind, agent_id) has been
+-- removed. On success the engine records which transition the agent took
+-- via transition_id; that is the closure signal.
 
 CREATE TABLE daemon_runs (
   job_id           TEXT PRIMARY KEY,
-  task_id          TEXT,
-  prompt           TEXT NOT NULL,
-  model            TEXT NOT NULL DEFAULT '',
-  thinking         TEXT NOT NULL DEFAULT ''
-                   CHECK (thinking IN ('','off','minimal','low','medium','high','xhigh')),
-  cwd              TEXT NOT NULL,
+  task_id          TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  step_id          TEXT NOT NULL REFERENCES steps(id) ON DELETE RESTRICT,
   status           TEXT NOT NULL
                    CHECK (status IN ('queued','running','done','failed','cancelled')),
+  transition_id    INTEGER REFERENCES step_transitions(id),
   exit_code        INTEGER,
   pid              INTEGER,
   pi_session_id    TEXT,
   session_path     TEXT,
   error            TEXT,
-  auto_claim       INTEGER NOT NULL DEFAULT 1,
-  max_corrections  INTEGER NOT NULL DEFAULT 3,
   corrections_used INTEGER NOT NULL DEFAULT 0,
-  closure_kind     TEXT
-                   CHECK (closure_kind IS NULL OR closure_kind IN ('done','cancelled','decomposed')),
-  pre_blocked_by   TEXT NOT NULL DEFAULT '',
+  max_corrections  INTEGER NOT NULL DEFAULT 3,
   created_at       INTEGER NOT NULL,
   started_at       INTEGER,
-  finished_at      INTEGER,
-  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL
+  finished_at      INTEGER
 );
 
-CREATE INDEX idx_daemon_runs_task_id ON daemon_runs(task_id);
-CREATE INDEX idx_daemon_runs_status  ON daemon_runs(status, created_at);
-CREATE INDEX idx_daemon_runs_created ON daemon_runs(created_at);
+CREATE INDEX idx_runs_task   ON daemon_runs(task_id, created_at);
+CREATE INDEX idx_runs_status ON daemon_runs(status, created_at);
+
+-- Staging table. Written by `autosk step next` (the pi-extension tool),
+-- read by the executor at end-of-turn. PK on run_id enforces "exactly one
+-- signal per run"; a second call returns step_next_already_emitted.
+CREATE TABLE step_signals (
+  run_id        TEXT PRIMARY KEY REFERENCES daemon_runs(job_id) ON DELETE CASCADE,
+  task_id       TEXT NOT NULL,
+  transition_id INTEGER NOT NULL REFERENCES step_transitions(id),
+  created_at    INTEGER NOT NULL
+);

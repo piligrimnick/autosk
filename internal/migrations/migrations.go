@@ -7,8 +7,11 @@ package migrations
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"embed"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"regexp"
@@ -17,6 +20,10 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrSchemaV1Unsupported is returned when a v0.1-shaped database is opened
+// with a v0.2 binary. See docs/plans/20260517-Workflows-Plan.md §7.
+var ErrSchemaV1Unsupported = errors.New("schema_v1_unsupported: this database was created by autosk v0.1; wipe .autosk/db and re-init")
 
 //go:embed *.sql
 var sqlFS embed.FS
@@ -93,7 +100,13 @@ func CurrentVersion(ctx context.Context, db *sql.DB) (int, error) {
 // Each migration runs in its own transaction. If a migration fails, that
 // transaction is rolled back and Apply returns the error; earlier successful
 // migrations remain applied.
+//
+// Before running anything, Apply checks for v0.1 leftovers and refuses if
+// it finds them — there is no migration path from v0.1 to v0.2.
 func Apply(ctx context.Context, db *sql.DB) (int, error) {
+	if err := CheckV1(ctx, db); err != nil {
+		return 0, err
+	}
 	migs, err := All()
 	if err != nil {
 		return 0, err
@@ -111,8 +124,86 @@ func Apply(ctx context.Context, db *sql.DB) (int, error) {
 			return applied, fmt.Errorf("migration %03d_%s: %w", m.Version, m.Name, err)
 		}
 		applied++
+		// 001 creates the agents table; seed the `human` row exactly once.
+		if m.Version == 1 {
+			if err := SeedHumanAgent(ctx, db); err != nil {
+				return applied, fmt.Errorf("seed human agent: %w", err)
+			}
+		}
 	}
 	return applied, nil
+}
+
+// CheckV1 returns ErrSchemaV1Unsupported when the database carries v0.1
+// shape markers — schema_migrations rows present but no `agents` table.
+// On a brand-new DB (no tables at all) it returns nil. On a v0.2 DB it
+// also returns nil.
+func CheckV1(ctx context.Context, db *sql.DB) error {
+	// schema_migrations may or may not exist yet. If it doesn't, the DB is
+	// fresh and there's nothing to refuse.
+	var migName sql.NullString
+	err := db.QueryRowContext(ctx,
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'`).Scan(&migName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("probe schema_migrations: %w", err)
+	}
+	// Has migrations been applied?
+	var n int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
+		return fmt.Errorf("count schema_migrations: %w", err)
+	}
+	if n == 0 {
+		return nil // empty tracking table, DB is fresh-ish
+	}
+	// v0.2 always creates the `agents` table in migration 001. If at least
+	// one migration is recorded but `agents` is missing, this is a v0.1 DB.
+	var agentsName sql.NullString
+	err = db.QueryRowContext(ctx,
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='agents'`).Scan(&agentsName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrSchemaV1Unsupported
+	}
+	if err != nil {
+		return fmt.Errorf("probe agents: %w", err)
+	}
+	return nil
+}
+
+// SeedHumanAgent inserts the canonical `human` agent if it is not already
+// present. Idempotent: safe to call on every Apply.
+func SeedHumanAgent(ctx context.Context, db *sql.DB) error {
+	var exists int
+	err := db.QueryRowContext(ctx,
+		`SELECT 1 FROM agents WHERE name = 'human'`).Scan(&exists)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	id, err := newAgentID()
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO agents(id, name, is_human, created_at) VALUES (?, 'human', 1, ?)`,
+		id, time.Now().Unix())
+	return err
+}
+
+// newAgentID generates a unique "ag-XXXX" id. The migrations package owns
+// this small helper because the seed step is the only place where we mint
+// an id without going through the (yet-unbuilt) agent store.
+func newAgentID() (string, error) {
+	var b [2]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return "ag-" + hex.EncodeToString(b[:]), nil
 }
 
 func applyOne(ctx context.Context, db *sql.DB, m Migration) error {
