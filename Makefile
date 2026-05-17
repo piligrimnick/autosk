@@ -15,21 +15,46 @@ export CGO_LDFLAGS := $(DOLTLITE_DIR)/libdoltlite.a -lz -lpthread
 
 GO       ?= go
 BIN_DIR  := bin
-BIN      := $(BIN_DIR)/autosk
+BIN_NAME := autosk
+BIN      := $(BIN_DIR)/$(BIN_NAME)
+PKG      := ./cmd/autosk
 
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS  := -X 'autosk/internal/buildinfo.Version=$(VERSION)' \
             -X 'autosk/internal/buildinfo.Commit=$(COMMIT)'
 
-.PHONY: all build test test-short lint doctor clean tidy fmt vet help
+# Install destination resolution (matches `go install`):
+#   1. $GOBIN if set
+#   2. $GOPATH/bin (first entry of GOPATH)
+#   3. $HOME/go/bin
+GOBIN_DIR := $(shell $(GO) env GOBIN)
+ifeq ($(strip $(GOBIN_DIR)),)
+GOBIN_DIR := $(firstword $(subst :, ,$(shell $(GO) env GOPATH)))/bin
+endif
+
+.PHONY: all build install uninstall test test-short lint doctor clean tidy fmt vet help
 
 all: build
 
 ## build: compile bin/autosk
 build: doctor
 	@mkdir -p $(BIN_DIR)
-	$(GO) build -tags $(GO_TAGS) -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/autosk
+	$(GO) build -tags $(GO_TAGS) -ldflags "$(LDFLAGS)" -o $(BIN) $(PKG)
+
+## install: install autosk into $$GOBIN (or $$GOPATH/bin)
+install: doctor
+	$(GO) install -tags $(GO_TAGS) -ldflags "$(LDFLAGS)" $(PKG)
+	@echo "installed: $(GOBIN_DIR)/$(BIN_NAME)"
+
+## uninstall: remove autosk from $$GOBIN (or $$GOPATH/bin)
+uninstall:
+	@if [ -f "$(GOBIN_DIR)/$(BIN_NAME)" ]; then \
+		rm -f "$(GOBIN_DIR)/$(BIN_NAME)" && \
+		echo "removed: $(GOBIN_DIR)/$(BIN_NAME)"; \
+	else \
+		echo "not installed: $(GOBIN_DIR)/$(BIN_NAME)"; \
+	fi
 
 ## test: run all tests
 test: doctor
