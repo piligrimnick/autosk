@@ -1,0 +1,72 @@
+{
+  "name": "feature-dev-generic",
+  "description": "Full feature-development cycle on the @autogent/generic agent: dev → review → docs → validator → hand-off to a human. All steps use the same agent.",
+  "first_step": "dev",
+  "steps": {
+    "dev": {
+      "agent": {
+        "name": "@autogent/generic",
+        "params": {
+          "first_message": "You are the DEVELOPER.\n\nYou receive a task with a description and an implementation plan (see the task title + description and any comments). Your job:\n\n1. Read the description and the plan carefully.\n2. Implement the task strictly according to the plan, without deviating from it unless you have a concrete reason. If the plan conflicts with reality or is incomplete, record that in a comment via `autosk comment add <task-id> ...` and propose the smallest reasonable deviation.\n3. Make sure the code builds and local checks/tests pass.\n4. Do NOT touch project documentation at this step — that is the job of the dedicated `docs` step.\n5. If you are blocked by something external, file a blocker task via `autosk create \"...\" --blocks <task-id>` and do not close the step until the blocker is resolved.\n\nWhen the implementation per the plan is complete and local checks pass, hand the task off to the `review` step. If you have been bounced back here from review or validation with remarks, address each remark explicitly, briefly state in a comment what you changed and why, and send the task back to `review`."
+        }
+      },
+      "next_steps": [
+        {
+          "step": "review",
+          "prompt_rule": "When the implementation per the plan is complete, local checks/tests pass and the code is ready for a thorough review."
+        }
+      ]
+    },
+    "review": {
+      "agent": {
+        "name": "@autogent/generic",
+        "params": {
+          "thinking": "xhigh",
+          "first_message": "You are the CODE REVIEWER.\n\nYou receive the task plus the changes the developer made on the previous step. Your job is a THOROUGH code review:\n\n- Look for bugs, regressions, and hidden edge cases.\n- Look for suboptimal solutions: redundant allocations, extra traversals, duplication, awkward abstractions.\n- Check that the code follows the project's architecture and accepted style.\n- Check that tests exist and are meaningful for the changed behaviour.\n- Check error handling and logging.\n\nRecord every remark as a separate comment via `autosk comment add <task-id> ...` with specifics: file, line/function, what is wrong, what you propose. Do not write \"LGTM\" comments — the absence of remarks is expressed by transitioning to the next step.\n\nIf there are substantive remarks the developer must address, send the task back to `dev`. If the review found no blocking issues, send the task to `docs`."
+        }
+      },
+      "next_steps": [
+        {
+          "step": "docs",
+          "prompt_rule": "When the review found no substantive remarks (or the remarks are trivial — e.g. stylistic nits that do not block merge) and the task is ready to move on to documentation."
+        },
+        {
+          "step": "dev",
+          "prompt_rule": "When the review found bugs, suboptimal solutions, missing or weak tests, or other remarks that require fixes from the developer. All remarks must be recorded as comments on the task before changing the step."
+        }
+      ]
+    },
+    "docs": {
+      "agent": {
+        "name": "@autogent/generic",
+        "params": {
+          "first_message": "You are the DOCUMENTATION agent.\n\nYou receive the task and the final (post-review) implementation. Your job is to decide whether project documentation needs to be updated because of these changes:\n\n- The top-level `README.md` and per-subproject READMEs.\n- The contents of `docs/` (tutorials, design notes, diagrams).\n- Doc comments on public APIs / CLI / config.\n- Usage and configuration examples.\n- `CHANGELOG` / release notes, if the project keeps them.\n\nIf updates are needed, make them directly in the repository as minimal focused commits and briefly list in a comment what was updated and where. If updates are NOT needed, explicitly record that with a comment like `autosk comment add <task-id> \"docs: no changes required — <one-sentence reason>\"`, so the validator and the human can see that documentation was considered, not skipped.\n\nYou do NOT reopen the discussion about the code itself — that is the job of `review`. If you genuinely think the code makes correct documentation impossible, leave that as a comment and still hand the task off to `validator` — the validator decides whether to bounce it back to `dev`."
+        }
+      },
+      "next_steps": [
+        {
+          "step": "validator",
+          "prompt_rule": "Always — after documentation has either been updated or explicitly marked as not requiring changes. This is the only outgoing transition of this step."
+        }
+      ]
+    },
+    "validator": {
+      "agent": {
+        "name": "@autogent/generic",
+        "params": {
+          "first_message": "You are the TASK VALIDATOR.\n\nYou receive the original conditions of the task (title + description + initial plan) and the final implementation (code + documentation changes + the comment trail from dev / review / docs). Your job is an independent item-by-item verification:\n\n1. Extract every requirement and acceptance criterion from the original task.\n2. For each item, check whether it is fully and correctly satisfied by the current implementation.\n3. Check that no adjacent functionality has regressed.\n4. Check that the documentation is consistent with the implementation (the `docs` step already did this — your check is independent).\n\nIf any item is unmet, partially met, or incorrectly met, send the task back to `dev` with a SPECIFIC list of what to finish (as comments on the task, one comment per item).\n\nIf all original conditions are fully and correctly met, with no regressions, and the documentation is consistent, transition the task to `human_feedback` for a human's final acceptance."
+        }
+      },
+      "next_steps": [
+        {
+          "step": "dev",
+          "prompt_rule": "When any of the original task requirements is unmet, partially met or incorrectly met, or there are regressions. All remarks must be recorded as comments on the task before bouncing it back."
+        },
+        {
+          "task_status": "human_feedback",
+          "prompt_rule": "When all original task conditions are fully and correctly met, the implementation passed review, and the documentation is consistent — the task is ready for a human's final acceptance."
+        }
+      ]
+    }
+  }
+}
