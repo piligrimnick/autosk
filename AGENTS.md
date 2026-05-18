@@ -107,6 +107,20 @@ autosk create "Implement auth module" --workflow feature-dev
 autosk create "Bump version" --agent @autosk/developer  # single:@autosk/developer
 ```
 
+If the task already exists in `status=new`, use `enroll` instead of
+recreating it:
+
+```bash
+autosk enroll as-bea9 --workflow feature-dev
+autosk enroll as-bea9 --agent    @autosk/developer
+```
+
+`enroll` is the post-creation mirror of `create --workflow` /
+`create --agent`: it moves the task into `status=in_workflow` at the
+workflow's first step. It only accepts tasks in `status=new` — for
+`human_feedback` use `autosk resume`, for `done`/`cancelled` use
+`autosk reopen` first.
+
 The poller (default cadence 2s) surfaces `in_workflow` tasks whose
 current step's agent is non-human. The executor resolves the agent's
 config from the installed npm package at

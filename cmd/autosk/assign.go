@@ -24,7 +24,10 @@ func newAssignCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "assign <id>",
 		Short: "Assign a task to an agent (puts it into single:<agent> workflow)",
-		Args:  cobra.ExactArgs(1),
+		Long: "Move a `new` task into the synthetic single:<agent> workflow.\n\n" +
+			"This is the agent-shorthand variant; for enrolling an existing task\n" +
+			"into an arbitrary named workflow, see `autosk enroll <id> --workflow NAME`.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if agentName == "" {
 				return errors.New("--agent NAME is required")
@@ -90,6 +93,27 @@ func emitRich(ctx context.Context, wfs *workflow.Store, t store.Task) error {
 		return nil
 	}
 	opts := taskRenderOpts(ctx, wfs, t)
+	if flagJSON {
+		return render.TaskJSONTo(os.Stdout, t, opts...)
+	}
+	return render.Task(os.Stdout, t, opts...)
+}
+
+// emitRichWithBlocked is emitRich plus the derived `blocked` /
+// `blocked_by` / `blocks` fields pulled from the store. This is what
+// `show --json` emits, and `enroll --json` promises shape parity with
+// it (plan acceptance §5). Best-effort: a dep-lookup failure surfaces
+// as a non-fatal warning and the call falls back to emitRich.
+func emitRichWithBlocked(ctx context.Context, wfs *workflow.Store, s store.Store, t store.Task) error {
+	if flagQuiet {
+		return nil
+	}
+	opts := taskRenderOpts(ctx, wfs, t)
+	incoming, outgoing, derr := s.Deps(ctx, t.ID)
+	blocked, berr := s.IsBlocked(ctx, t.ID)
+	if derr == nil && berr == nil {
+		opts = append(opts, render.WithBlocked(blocked, incoming, outgoing))
+	}
 	if flagJSON {
 		return render.TaskJSONTo(os.Stdout, t, opts...)
 	}

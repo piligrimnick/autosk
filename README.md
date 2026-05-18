@@ -97,6 +97,8 @@ Lifecycle
   autosk show <id>
   autosk update <id> [--title S] [--description S] [--status S] [--priority N]
   autosk assign <id> --agent NAME    # only valid on status=new
+  autosk enroll <id> --workflow NAME # attach an existing `new` task to a workflow
+  autosk enroll <id> --agent    NAME # ...or the synthetic single:<NAME> flow
   autosk resume <id> [--to STEP]     # human_feedback → in_workflow
   autosk done <id>                   # direct; also clears current_step_id
   autosk cancel <id>                 # direct; also clears current_step_id

@@ -317,6 +317,33 @@ autosk show "$id"
 # The developer agent runs once, picks `--to done`, and the task closes.
 ```
 
+### Enrolling an existing task
+
+If a task already exists (typically `status='new'`, created without
+`--workflow` / `--agent`), use `enroll` instead of recreating it:
+
+```bash
+autosk enroll as-bea9 --workflow feature-dev
+autosk enroll as-bea9 --agent    @autosk/developer   # single:@autosk/developer
+```
+
+`enroll` is the post-creation mirror of `create --workflow` /
+`create --agent`: it sets `workflow_id`, `current_step_id =
+workflow.first_step` and flips status to `in_workflow`. Exactly one of
+`--workflow` / `--agent` is required.
+
+Only `status='new'` is accepted; other states get pointed at the right
+verb instead:
+
+| Current status   | Error hint                                                        |
+|------------------|-------------------------------------------------------------------|
+| `in_workflow`    | the daemon will advance this task — to switch workflows, `cancel + reopen + enroll`. |
+| `human_feedback` | use `autosk resume <id> [--to STEP]` to put it back into the workflow. |
+| `done` / `cancelled` | use `autosk reopen <id>` first.                                |
+
+`enroll --json` emits the same shape as `autosk show --json`
+(including the derived `blocked` / `blocked_by` / `blocks` fields).
+
 ---
 
 ## Agent contract: `autosk step next`

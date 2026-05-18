@@ -41,6 +41,10 @@ exclusive) is given:
   --agent    NAME   shorthand for joining the auto-generated workflow
                     single:<NAME> (status becomes 'in_workflow').
 
+For tasks that already exist (status='new'), use 'autosk enroll <id>
+--workflow NAME' / '--agent NAME' to attach them to a workflow without
+recreating the task.
+
 If --description is "-", the description is read from stdin.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
