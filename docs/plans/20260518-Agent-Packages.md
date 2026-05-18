@@ -509,7 +509,12 @@ the runtime here — that's done lazily on the first `agent install`.
 
 ### 7.3 Workflow JSON
 
-Workflow JSON's `"agent": "..."` now expects the full npm package name.
+Workflow JSON's `"agent"` is the per-step agent object
+`{ "name": "...", "params": {...} }`; `name` is the full npm package
+name. The bare-string form (`"agent": "name"`) used in earlier drafts
+is no longer accepted — the parser rejects it with a hint to switch to
+the object form.
+
 Validation:
 
 - `workflow create --file` requires every referenced agent name to either
@@ -519,6 +524,11 @@ Validation:
   `single:<urlencoded-pkg-name>` to avoid clashing with the reserved
   workflow-name prefix. (Slashes in `@scope/name` are escaped; the
   resulting synthetic workflow name is never user-typed.)
+- `agent.params` (optional) overrides the standard agent fields
+  (`model`, `thinking`, `first_message`/`first_message_file`,
+  `extra_args`, `pi_extensions`, `pi_skills`) per step. Override
+  semantics, the closed key set and the runner-package guard are
+  documented in [`docs/workflows.md`](../workflows.md#per-step-agent-overrides).
 
 ---
 

@@ -32,9 +32,11 @@ autosk agent install @autosk/code-reviewer
 autosk agent install @autosk/task-validator
 ```
 
-Workflows reference agents by their full npm package name (e.g.
-`"agent": "@autosk/developer"`). The `human` name is the only one that
-doesn't need to come from a package.
+Workflows reference agents by their full npm package name via the
+per-step `agent` object: `{ "name": "@autosk/developer" }`. The
+`human` name is the only one that doesn't need to come from a package.
+Per-step overrides for the package's defaults live under
+`agent.params` (see [Per-step agent overrides](#per-step-agent-overrides) below).
 
 The agent's **executable configuration** (model, thinking depth, the
 text prepended to the first user turn, extra pi args, custom runner)
@@ -142,12 +144,12 @@ The shipped example:
   "description": "Implement, review, validate, then ask the human.",
   "first_step": "dev",
   "steps": {
-    "dev":       { "agent": "developer",     "next_steps": [{"step":"review", "prompt_rule":"…"}] },
-    "review":    { "agent": "code-reviewer", "next_steps": [
+    "dev":       { "agent": { "name": "developer" },     "next_steps": [{"step":"review", "prompt_rule":"…"}] },
+    "review":    { "agent": { "name": "code-reviewer" }, "next_steps": [
                      {"step":"validator", "prompt_rule":"…"},
                      {"step":"dev",       "prompt_rule":"…"}
                    ]},
-    "validator": { "agent": "task-validator","next_steps": [
+    "validator": { "agent": { "name": "task-validator" },"next_steps": [
                      {"step":"dev",                    "prompt_rule":"…"},
                      {"task_status":"human_feedback",  "prompt_rule":"…"}
                    ]}
@@ -155,11 +157,71 @@ The shipped example:
 }
 ```
 
+The `agent` field is always an object. The bare-string form
+(`"agent": "developer"`) used in earlier drafts is no longer
+accepted; the parser rejects it with a hint.
+
 A `next_steps[]` entry has either a `step` (sibling step name in the
 same workflow) or a `task_status` (one of `done`, `cancelled`,
 `human_feedback`), never both. `prompt_rule` is natural-language guidance
 shown to the agent in its prompt — the agent uses it to decide which
 transition to emit.
+
+### Per-step agent overrides
+
+A step's `agent.params` block overrides the agent package's defaults
+for *this step only*. The whole block is optional; absent keys keep
+the package's value.
+
+```jsonc
+{
+  "name": "generic-wf",
+  "first_step": "generic",
+  "steps": {
+    "generic": {
+      "agent": {
+        "name": "@autogent/generic",
+        "params": {
+          "model": "claude-sonnet-4-6",
+          "thinking": "high",
+          "first_message": "You are generic agent...",
+          "extra_args": ["--no-tool", "web_fetch"],
+          "pi_extensions": ["/abs/path/to/ext.ts"],
+          "pi_skills":     ["/abs/path/to/skill"]
+        }
+      },
+      "next_steps": [
+        { "task_status": "human_feedback", "prompt_rule": "When a human should accept it." },
+        { "task_status": "done",           "prompt_rule": "When the task is complete." }
+      ]
+    }
+  }
+}
+```
+
+Merge semantics:
+
+- **Scalars** (`model`, `thinking`, `first_message`) replace the
+  package default when the key is present (even when set to the empty
+  string).
+- **Arrays** (`extra_args`, `pi_extensions`, `pi_skills`) replace the
+  package default wholesale when the key is present with a non-null
+  slice. There is no append mode.
+- **`first_message_file`** is accepted in `params` (paths are resolved
+  relative to the workflow JSON file at parse time) and inlined into
+  `first_message`. It is mutually exclusive with `first_message`.
+- **`runner`** is intentionally NOT supported: overrides can only
+  change standard-agent fields. Trying to override a custom-runner
+  agent (a package that declares `autosk.agent.runner`) with any
+  `params` block fails the run with `agent_config_invalid`.
+- The `thinking` value, when set, must be one of
+  `off|minimal|low|medium|high|xhigh` (same as the package field).
+- Unknown keys inside `params` are rejected at parse time.
+
+> **Edge case.** Because `params` is persisted as JSON with
+> `omitempty`, an explicit empty array (e.g. `"extra_args": []`)
+> collapses to "absent" after a round-trip through the DB. If you
+> need to clear an array, edit the package instead.
 
 Validation enforces:
 

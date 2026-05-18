@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -31,9 +33,70 @@ type Definition struct {
 }
 
 // StepDef is one entry under "steps".
+//
+// AgentName is the agent's npm package name (the `name` field of the
+// step's `agent` object in the JSON file). AgentParams carries per-step
+// overrides for the agent's package config; nil means "use the package's
+// defaults verbatim". An empty (zero-valued) AgentParams is also treated
+// as nil.
 type StepDef struct {
-	Agent       string
+	AgentName   string
+	AgentParams *AgentParams
 	NextSteps   []TransitionDef
+}
+
+// AgentParams overrides the standard agent-package config fields per
+// step. See docs/workflows.md for merge semantics. Pointer scalars
+// disambiguate "absent" (nil → use package default) from "explicitly
+// set" (non-nil — even when the value is the empty string).
+//
+// Arrays use nil → absent and non-nil → replace-the-package-default
+// semantics. Note that, because the persisted JSON uses `omitempty`,
+// a round-trip through the DB collapses an explicit empty slice into
+// "absent"; this is intentional MVP behaviour. If you need to clear
+// a package's default array, edit the package instead.
+//
+// FirstMessageFile is a *parse-time only* field: ParseFile inlines its
+// contents into FirstMessage (resolved relative to the workflow JSON
+// file) and zeroes the path so the field is never persisted to the DB.
+// ParseReader rejects it because it has no base directory to resolve
+// against.
+//
+// The `runner` field is intentionally NOT supported — agent overrides
+// can only change standard-agent fields. Use the package's
+// `autosk.agent.runner` for custom runners.
+type AgentParams struct {
+	Model            *string  `json:"model,omitempty"`
+	Thinking         *string  `json:"thinking,omitempty"`
+	FirstMessage     *string  `json:"first_message,omitempty"`
+	FirstMessageFile string   `json:"first_message_file,omitempty"`
+	ExtraArgs        []string `json:"extra_args,omitempty"`
+	PiExtensions     []string `json:"pi_extensions,omitempty"`
+	PiSkills         []string `json:"pi_skills,omitempty"`
+}
+
+// allowedParamKeys is the closed set of JSON keys accepted inside a
+// step's `agent.params` block. Anything else (most notably `runner`)
+// is rejected at parse time so misuse fails loudly.
+var allowedParamKeys = map[string]struct{}{
+	"model":              {},
+	"thinking":           {},
+	"first_message":      {},
+	"first_message_file": {},
+	"extra_args":         {},
+	"pi_extensions":      {},
+	"pi_skills":          {},
+}
+
+// IsZero reports whether the params block carries no overrides at all.
+// Useful for the executor's "package has runner + params set" guard.
+func (p *AgentParams) IsZero() bool {
+	if p == nil {
+		return true
+	}
+	return p.Model == nil && p.Thinking == nil && p.FirstMessage == nil &&
+		p.FirstMessageFile == "" && p.ExtraArgs == nil &&
+		p.PiExtensions == nil && p.PiSkills == nil
 }
 
 // TransitionDef is one entry under "steps.<name>.next_steps". Exactly one
@@ -50,18 +113,23 @@ func (t TransitionDef) IsTaskStatus() bool { return t.TaskStatus != "" }
 
 // rawDoc mirrors the on-disk shape one-to-one for json.Unmarshal.
 type rawDoc struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	FirstStep   string                 `json:"first_step"`
-	Steps       map[string]rawStep     `json:"steps"`
-	// We capture the raw bytes so we can recover step order even though
-	// map iteration is unordered.
-	RawSteps json.RawMessage `json:"steps_raw,omitempty"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	FirstStep   string             `json:"first_step"`
+	Steps       map[string]rawStep `json:"steps"`
 }
 
 type rawStep struct {
-	Agent     string           `json:"agent"`
+	// Agent is the per-step agent object: `{ "name": "...", "params": {...} }`.
+	// The previous string-only form (`"agent": "name"`) is no longer
+	// accepted; see parseAgentRef for the diagnostic.
+	Agent     json.RawMessage  `json:"agent"`
 	NextSteps []rawTransition  `json:"next_steps"`
+}
+
+type rawAgentRef struct {
+	Name   string          `json:"name"`
+	Params json.RawMessage `json:"params,omitempty"`
 }
 
 type rawTransition struct {
@@ -70,26 +138,42 @@ type rawTransition struct {
 	PromptRule string `json:"prompt_rule"`
 }
 
-// ParseFile is a convenience over ParseReader.
+// ParseFile is a convenience over ParseReader that also resolves
+// per-step `first_message_file` paths relative to the workflow JSON
+// file's directory (and inlines their contents into FirstMessage).
 func ParseFile(path string) (Definition, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return Definition{}, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
-	return ParseReader(f)
+	def, err := parseReader(f, false /*rejectFirstMessageFile*/)
+	if err != nil {
+		return Definition{}, err
+	}
+	if err := resolveAgentParamFiles(&def, filepath.Dir(path)); err != nil {
+		return Definition{}, err
+	}
+	return def, nil
 }
 
 // ParseReader reads a JSON workflow definition from r and returns its
 // in-memory form. Performs only structural / format checks; deeper
 // validation (agent existence, reserved name, etc.) is in Validate.
+//
+// ParseReader rejects per-step `first_message_file` because it has no
+// base directory to resolve the path against. Callers with a path on
+// disk should use ParseFile instead.
 func ParseReader(r io.Reader) (Definition, error) {
+	return parseReader(r, true /*rejectFirstMessageFile*/)
+}
+
+func parseReader(r io.Reader, rejectFirstMessageFile bool) (Definition, error) {
 	body, err := io.ReadAll(r)
 	if err != nil {
 		return Definition{}, fmt.Errorf("read workflow: %w", err)
 	}
-	// First pass: standard unmarshal. The raw 'steps' field is also kept
-	// (as json.RawMessage) so we can extract source-file step order.
+	// First pass: standard unmarshal.
 	var raw rawDoc
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return Definition{}, fmt.Errorf("decode workflow: %w", err)
@@ -102,7 +186,14 @@ func ParseReader(r io.Reader) (Definition, error) {
 		Steps:       make(map[string]StepDef, len(raw.Steps)),
 	}
 	for stepName, s := range raw.Steps {
-		stepDef := StepDef{Agent: strings.TrimSpace(s.Agent)}
+		name, params, perr := parseAgentRef(stepName, s.Agent)
+		if perr != nil {
+			return Definition{}, perr
+		}
+		if rejectFirstMessageFile && params != nil && params.FirstMessageFile != "" {
+			return Definition{}, fmt.Errorf("step %q: agent.params.first_message_file requires a workflow file path; use ParseFile or move the prompt into `first_message`", stepName)
+		}
+		stepDef := StepDef{AgentName: name, AgentParams: params}
 		for i, tr := range s.NextSteps {
 			step := strings.TrimSpace(tr.Step)
 			status := strings.TrimSpace(tr.TaskStatus)
@@ -127,6 +218,124 @@ func ParseReader(r io.Reader) (Definition, error) {
 		return Definition{}, err
 	}
 	return def, nil
+}
+
+// parseAgentRef decodes the `agent` field of one step. The accepted
+// shape is the object form `{ "name": "...", "params": {...} }`; the
+// legacy string form (`"agent": "name"`) is rejected with a hint.
+func parseAgentRef(stepName string, raw json.RawMessage) (string, *AgentParams, error) {
+	if len(raw) == 0 {
+		return "", nil, fmt.Errorf("step %q: `agent` is required", stepName)
+	}
+	// Quick-discriminate: leading non-whitespace token.
+	trimmed := strings.TrimLeft(string(raw), " \t\n\r")
+	if trimmed == "" {
+		return "", nil, fmt.Errorf("step %q: empty `agent`", stepName)
+	}
+	if trimmed[0] == '"' {
+		return "", nil, fmt.Errorf("step %q: `agent` must be an object `{ \"name\": \"...\", \"params\": {...} }`; the bare-string form is no longer supported", stepName)
+	}
+	if trimmed[0] != '{' {
+		return "", nil, fmt.Errorf("step %q: `agent` must be an object, got %s", stepName, firstRune(trimmed))
+	}
+	var ref rawAgentRef
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&ref); err != nil {
+		return "", nil, fmt.Errorf("step %q: parse agent object: %w", stepName, err)
+	}
+	name := strings.TrimSpace(ref.Name)
+	if name == "" {
+		return "", nil, fmt.Errorf("step %q: agent.name is required", stepName)
+	}
+	if len(ref.Params) == 0 {
+		return name, nil, nil
+	}
+	params, perr := parseAgentParams(stepName, ref.Params)
+	if perr != nil {
+		return "", nil, perr
+	}
+	return name, params, nil
+}
+
+// parseAgentParams decodes the params object with strict unknown-key
+// rejection so misuse (e.g. `runner`, typos) fails loudly.
+func parseAgentParams(stepName string, raw json.RawMessage) (*AgentParams, error) {
+	// First validate the key set against the whitelist. Decoding into
+	// the typed struct with DisallowUnknownFields would also catch
+	// unknown keys, but a custom check lets us spell out the closed
+	// set in the error message.
+	var asMap map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &asMap); err != nil {
+		return nil, fmt.Errorf("step %q: agent.params must be an object: %w", stepName, err)
+	}
+	for k := range asMap {
+		if _, ok := allowedParamKeys[k]; !ok {
+			return nil, fmt.Errorf("step %q: agent.params has unknown key %q (allowed: %s)",
+				stepName, k, allowedParamKeysList())
+		}
+	}
+	var p AgentParams
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
+		return nil, fmt.Errorf("step %q: parse agent.params: %w", stepName, err)
+	}
+	if p.IsZero() {
+		return nil, nil
+	}
+	return &p, nil
+}
+
+func allowedParamKeysList() string {
+	keys := make([]string, 0, len(allowedParamKeys))
+	for k := range allowedParamKeys {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
+}
+
+// resolveAgentParamFiles reads any per-step `first_message_file` from
+// disk (paths are interpreted relative to baseDir) and inlines the
+// contents into FirstMessage. After this call, no step's params should
+// have a non-empty FirstMessageFile.
+//
+// Errors out for absolute paths and paths that escape baseDir, mirror
+// of pkgregistry.resolveInsidePkg.
+func resolveAgentParamFiles(def *Definition, baseDir string) error {
+	for stepName, sd := range def.Steps {
+		if sd.AgentParams == nil || sd.AgentParams.FirstMessageFile == "" {
+			continue
+		}
+		if sd.AgentParams.FirstMessage != nil {
+			return fmt.Errorf("step %q: agent.params has both first_message and first_message_file (pick one)", stepName)
+		}
+		path := sd.AgentParams.FirstMessageFile
+		if filepath.IsAbs(path) {
+			return fmt.Errorf("step %q: agent.params.first_message_file must be a relative path inside the workflow file's directory, got %q", stepName, path)
+		}
+		abs := filepath.Join(baseDir, path)
+		body, err := os.ReadFile(abs)
+		if err != nil {
+			return fmt.Errorf("step %q: read first_message_file %q: %w", stepName, abs, err)
+		}
+		s := string(body)
+		sd.AgentParams.FirstMessage = &s
+		sd.AgentParams.FirstMessageFile = ""
+		def.Steps[stepName] = sd
+	}
+	return nil
+}
+
+func firstRune(s string) string {
+	if s == "" {
+		return "(empty)"
+	}
+	for _, r := range s {
+		return fmt.Sprintf("%q", r)
+	}
+	return "(empty)"
 }
 
 // recoverStepOrder rescans the JSON body to extract the textual order of

@@ -118,10 +118,10 @@ func autoInstallMissingAgents(ctx context.Context, def workflow.Definition, ag *
 	// Collect unique referenced agent names.
 	seen := make(map[string]struct{}, len(def.Steps))
 	for _, s := range def.Steps {
-		if s.Agent == "" {
+		if s.AgentName == "" {
 			continue
 		}
-		seen[s.Agent] = struct{}{}
+		seen[s.AgentName] = struct{}{}
 	}
 	if len(seen) == 0 {
 		return nil
@@ -284,11 +284,12 @@ type workflowJSON struct {
 }
 
 type stepJSON struct {
-	ID          string             `json:"id"`
-	Name        string             `json:"name"`
-	AgentID     string             `json:"agent_id"`
-	AgentName   string             `json:"agent_name"`
-	Transitions []transitionJSON   `json:"transitions"`
+	ID          string               `json:"id"`
+	Name        string               `json:"name"`
+	AgentID     string               `json:"agent_id"`
+	AgentName   string               `json:"agent_name"`
+	AgentParams *workflow.AgentParams `json:"agent_params,omitempty"`
+	Transitions []transitionJSON     `json:"transitions"`
 }
 
 type transitionJSON struct {
@@ -312,6 +313,7 @@ func toWorkflowJSON(w workflow.Workflow, withSteps bool) workflowJSON {
 		for _, st := range w.Steps {
 			sj := stepJSON{
 				ID: st.ID, Name: st.Name, AgentID: st.AgentID, AgentName: st.AgentName,
+				AgentParams: st.AgentParams,
 			}
 			for _, tr := range st.Transitions {
 				sj.Transitions = append(sj.Transitions, transitionJSON{
@@ -356,6 +358,7 @@ func emitWorkflow(w workflow.Workflow, withSteps bool) error {
 		for _, st := range w.Steps {
 			fmt.Printf("  %s\n", render.BracketedRef(st.ID, st.Name))
 			fmt.Printf("    agent: %s\n", render.BracketedRef(st.AgentID, st.AgentName))
+			renderAgentParams(st.AgentParams)
 			for _, tr := range st.Transitions {
 				if tr.IsTaskStatus() {
 					fmt.Printf("    → task_status=%s: %s\n", tr.TaskStatus, tr.PromptRule)
@@ -366,6 +369,34 @@ func emitWorkflow(w workflow.Workflow, withSteps bool) error {
 		}
 	}
 	return nil
+}
+
+// renderAgentParams pretty-prints the per-step agent.params overrides
+// under `agent:` in `workflow show`. Skips the long FirstMessage body
+// (shows just the byte count) so the output stays scannable.
+func renderAgentParams(p *workflow.AgentParams) {
+	if p.IsZero() {
+		return
+	}
+	fmt.Println("    agent_params:")
+	if p.Model != nil {
+		fmt.Printf("      model: %q\n", *p.Model)
+	}
+	if p.Thinking != nil {
+		fmt.Printf("      thinking: %q\n", *p.Thinking)
+	}
+	if p.FirstMessage != nil {
+		fmt.Printf("      first_message: <%d bytes>\n", len(*p.FirstMessage))
+	}
+	if p.ExtraArgs != nil {
+		fmt.Printf("      extra_args: %v\n", p.ExtraArgs)
+	}
+	if p.PiExtensions != nil {
+		fmt.Printf("      pi_extensions: %v\n", p.PiExtensions)
+	}
+	if p.PiSkills != nil {
+		fmt.Printf("      pi_skills: %v\n", p.PiSkills)
+	}
 }
 
 func emitWorkflows(ws []workflow.Workflow) error {

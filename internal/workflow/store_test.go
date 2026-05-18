@@ -94,7 +94,7 @@ func TestCreate_AgentMissingFailsValidate(t *testing.T) {
 	ctx := context.Background()
 	body := `{
 		"name": "bad", "first_step": "a",
-		"steps": {"a": {"agent": "nobody", "next_steps": [{"task_status":"done","prompt_rule":"."}]}}
+		"steps": {"a": {"agent": {"name": "nobody"}, "next_steps": [{"task_status":"done","prompt_rule":"."}]}}
 	}`
 	def, err := workflow.ParseReader(strings.NewReader(body))
 	if err != nil {
@@ -103,6 +103,67 @@ func TestCreate_AgentMissingFailsValidate(t *testing.T) {
 	_, err = wf.Create(ctx, def, false)
 	if err == nil || !strings.Contains(err.Error(), "nobody") {
 		t.Fatalf("want agent-not-found error, got %v", err)
+	}
+}
+
+// TestCreate_RoundTripsAgentParams verifies that per-step agent.params
+// blocks are persisted through the steps table and read back as a
+// non-nil AgentParams.
+func TestCreate_RoundTripsAgentParams(t *testing.T) {
+	wf, _, _, done := newWFFixture(t)
+	defer done()
+	ctx := context.Background()
+	body := `{
+		"name": "params-wf",
+		"first_step": "a",
+		"steps": {
+			"a": {
+				"agent": {
+					"name": "developer",
+					"params": {
+						"model": "claude-sonnet-4-6",
+						"thinking": "high",
+						"first_message": "You are generic agent",
+						"extra_args": ["--no-tool", "web_fetch"]
+					}
+				},
+				"next_steps": [{"task_status": "done", "prompt_rule": "."}]
+			}
+		}}`
+	def, err := workflow.ParseReader(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := wf.Create(ctx, def, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(w.Steps) != 1 {
+		t.Fatalf("steps: %d", len(w.Steps))
+	}
+	p := w.Steps[0].AgentParams
+	if p == nil {
+		t.Fatal("AgentParams lost during round-trip")
+	}
+	if p.Model == nil || *p.Model != "claude-sonnet-4-6" {
+		t.Errorf("model: %v", p.Model)
+	}
+	if p.Thinking == nil || *p.Thinking != "high" {
+		t.Errorf("thinking: %v", p.Thinking)
+	}
+	if p.FirstMessage == nil || *p.FirstMessage != "You are generic agent" {
+		t.Errorf("first_message: %v", p.FirstMessage)
+	}
+	if len(p.ExtraArgs) != 2 || p.ExtraArgs[1] != "web_fetch" {
+		t.Errorf("extra_args: %v", p.ExtraArgs)
+	}
+	// Sanity-check the path used by the executor too.
+	st, err := wf.FindStepByID(ctx, w.Steps[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.AgentParams == nil || st.AgentParams.Model == nil || *st.AgentParams.Model != "claude-sonnet-4-6" {
+		t.Fatalf("FindStepByID lost params: %+v", st.AgentParams)
 	}
 }
 

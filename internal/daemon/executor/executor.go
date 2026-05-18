@@ -182,6 +182,9 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 	if err != nil {
 		return e.failTerminal(bg, jobID, nil, fmt.Errorf("agent_config_invalid: %w", err))
 	}
+	if merr := applyAgentParamOverrides(&agentCfg, stepRow.AgentParams); merr != nil {
+		return e.failTerminal(bg, jobID, nil, fmt.Errorf("agent_config_invalid: %w", merr))
+	}
 	// 3. Render prompt + (for custom runners) a JSON seed.
 	commentLines, _ := e.deps.Comments.RenderForPrompt(ctx, run.TaskID)
 	prompt := RenderPrompt(tk, wf, stepRow, agentCfg, commentLines)
@@ -350,6 +353,48 @@ func (e *Executor) advanceTask(ctx context.Context, taskID string, sig step.Emit
 	}
 	if _, err := e.deps.Tasks.UpdateTask(ctx, taskID, patch); err != nil {
 		return err
+	}
+	return nil
+}
+
+// applyAgentParamOverrides merges per-step AgentParams overrides on top
+// of the agent package's resolved PackageConfig. Per docs/workflows.md:
+//
+//   - Scalar fields (`model`, `thinking`, `first_message`) are replaced
+//     when the params block sets them (including to the empty string).
+//   - Array fields (`extra_args`, `pi_extensions`, `pi_skills`) are
+//     replaced wholesale when the params block carries a non-nil slice.
+//     `pi_extensions` and `pi_skills` paths are interpreted as absolute
+//     paths because we have no notion of a package install dir for
+//     workflow-level overrides; callers should supply absolute paths.
+//
+// Custom (runner-based) packages cannot be overridden because their
+// fields don't apply to the Node bootstrapper. We reject any non-zero
+// params with a clear error rather than silently dropping the overrides.
+func applyAgentParamOverrides(cfg *pkgregistry.PackageConfig, p *workflow.AgentParams) error {
+	if p.IsZero() {
+		return nil
+	}
+	if cfg.Runner != "" {
+		return fmt.Errorf("step's agent.params cannot override custom-runner package %q (the runner code path ignores standard fields)", cfg.Name)
+	}
+	if p.Model != nil {
+		cfg.Model = *p.Model
+	}
+	if p.Thinking != nil {
+		cfg.Thinking = *p.Thinking
+	}
+	if p.FirstMessage != nil {
+		cfg.FirstMessage = *p.FirstMessage
+	}
+	if p.ExtraArgs != nil {
+		cfg.ExtraArgs = append([]string(nil), p.ExtraArgs...)
+	}
+	if p.PiExtensions != nil {
+		cfg.PiExtensions = append([]string(nil), p.PiExtensions...)
+	}
+	if p.PiSkills != nil {
+		cfg.PiSkills = append([]string(nil), p.PiSkills...)
 	}
 	return nil
 }

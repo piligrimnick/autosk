@@ -44,7 +44,7 @@ func (s *Store) EnsureSingle(ctx context.Context, agentName string) (Workflow, e
 		FirstStep:   "do",
 		Steps: map[string]StepDef{
 			"do": {
-				Agent: agentName,
+				AgentName: agentName,
 				NextSteps: []TransitionDef{
 					{TaskStatus: "done", PromptRule: "When the work is complete."},
 					{TaskStatus: "cancelled", PromptRule: "When the task cannot be completed."},

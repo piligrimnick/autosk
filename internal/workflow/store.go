@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -43,8 +44,9 @@ type Step struct {
 	WorkflowID  string
 	Name        string
 	AgentID     string
-	AgentName   string         // joined-in for convenience
-	Transitions []Transition   // outgoing, in source order
+	AgentName   string       // joined-in for convenience
+	AgentParams *AgentParams // nil = use the package's defaults verbatim
+	Transitions []Transition // outgoing, in source order
 }
 
 // Transition mirrors one `step_transitions` row.
@@ -93,9 +95,9 @@ func (s *Store) Create(ctx context.Context, def Definition, isSynthetic bool) (W
 	// Resolve agent names to ids up-front so we fail fast.
 	stepAgents := make(map[string]string, len(def.Steps))
 	for stepName, sd := range def.Steps {
-		a, err := s.agent.GetByName(ctx, sd.Agent)
+		a, err := s.agent.GetByName(ctx, sd.AgentName)
 		if err != nil {
-			return Workflow{}, fmt.Errorf("resolve agent %q for step %q: %w", sd.Agent, stepName, err)
+			return Workflow{}, fmt.Errorf("resolve agent %q for step %q: %w", sd.AgentName, stepName, err)
 		}
 		stepAgents[stepName] = a.ID
 	}
@@ -151,9 +153,14 @@ func (s *Store) Create(ctx context.Context, def Definition, isSynthetic bool) (W
 	// transitions like dev→review don't hit FK), then insert transitions.
 	names := orderedStepNames(def)
 	for seq, stepName := range names {
+		sd := def.Steps[stepName]
+		paramsJSON, perr := marshalAgentParams(sd.AgentParams)
+		if perr != nil {
+			return Workflow{}, fmt.Errorf("marshal agent_params for step %q: %w", stepName, perr)
+		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO steps(id, workflow_id, name, agent_id, seq) VALUES (?, ?, ?, ?, ?)
-		`, stepIDs[stepName], wfID, stepName, stepAgents[stepName], seq); err != nil {
+			INSERT INTO steps(id, workflow_id, name, agent_id, seq, agent_params) VALUES (?, ?, ?, ?, ?, ?)
+		`, stepIDs[stepName], wfID, stepName, stepAgents[stepName], seq, paramsJSON); err != nil {
 			return Workflow{}, fmt.Errorf("insert step %q: %w", stepName, err)
 		}
 	}
@@ -274,14 +281,14 @@ func (s *Store) FindStepByID(ctx context.Context, stepID string) (Step, error) {
 		return Step{}, ErrNotOpen
 	}
 	row := s.db.QueryRowContext(ctx, `
-		SELECT s.id, s.workflow_id, s.name, s.agent_id, a.name
+		SELECT s.id, s.workflow_id, s.name, s.agent_id, a.name, s.agent_params
 		  FROM steps s JOIN agents a ON s.agent_id = a.id
 		 WHERE s.id = ?`, stepID)
-	var st Step
-	if err := row.Scan(&st.ID, &st.WorkflowID, &st.Name, &st.AgentID, &st.AgentName); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Step{}, ErrNotFound
-		}
+	st, err := scanStep(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Step{}, ErrNotFound
+	}
+	if err != nil {
 		return Step{}, err
 	}
 	trs, err := s.loadTransitions(ctx, st.ID)
@@ -322,15 +329,15 @@ func (s *Store) FindStepByName(ctx context.Context, workflowID, stepName string)
 		return Step{}, ErrNotOpen
 	}
 	row := s.db.QueryRowContext(ctx, `
-		SELECT s.id, s.workflow_id, s.name, s.agent_id, a.name
+		SELECT s.id, s.workflow_id, s.name, s.agent_id, a.name, s.agent_params
 		  FROM steps s JOIN agents a ON s.agent_id = a.id
 		 WHERE s.workflow_id = ? AND s.name = ?`,
 		workflowID, stepName)
-	var st Step
-	if err := row.Scan(&st.ID, &st.WorkflowID, &st.Name, &st.AgentID, &st.AgentName); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Step{}, ErrNotFound
-		}
+	st, err := scanStep(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Step{}, ErrNotFound
+	}
+	if err != nil {
 		return Step{}, err
 	}
 	trs, err := s.loadTransitions(ctx, st.ID)
@@ -363,7 +370,7 @@ func (s *Store) stepIDExists(ctx context.Context, stID string) (bool, error) {
 
 func (s *Store) loadSteps(ctx context.Context, workflowID string) ([]Step, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT s.id, s.workflow_id, s.name, s.agent_id, a.name
+		SELECT s.id, s.workflow_id, s.name, s.agent_id, a.name, s.agent_params
 		  FROM steps s JOIN agents a ON s.agent_id = a.id
 		 WHERE s.workflow_id = ?
 		 ORDER BY s.seq ASC`, workflowID)
@@ -373,8 +380,8 @@ func (s *Store) loadSteps(ctx context.Context, workflowID string) ([]Step, error
 	defer rows.Close()
 	var out []Step
 	for rows.Next() {
-		var st Step
-		if err := rows.Scan(&st.ID, &st.WorkflowID, &st.Name, &st.AgentID, &st.AgentName); err != nil {
+		st, err := scanStep(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, st)
@@ -420,6 +427,41 @@ func (s *Store) loadTransitions(ctx context.Context, stepID string) ([]Transitio
 		out = append(out, tr)
 	}
 	return out, rows.Err()
+}
+
+// scanStep scans one steps-table row (joined against agents.name) into
+// a Step value, including any non-null agent_params JSON blob.
+func scanStep(sc interface{ Scan(...any) error }) (Step, error) {
+	var (
+		st        Step
+		paramsRaw sql.NullString
+	)
+	if err := sc.Scan(&st.ID, &st.WorkflowID, &st.Name, &st.AgentID, &st.AgentName, &paramsRaw); err != nil {
+		return Step{}, err
+	}
+	if paramsRaw.Valid && strings.TrimSpace(paramsRaw.String) != "" {
+		var p AgentParams
+		if err := json.Unmarshal([]byte(paramsRaw.String), &p); err != nil {
+			return Step{}, fmt.Errorf("unmarshal agent_params for step %s: %w", st.ID, err)
+		}
+		if !p.IsZero() {
+			st.AgentParams = &p
+		}
+	}
+	return st, nil
+}
+
+// marshalAgentParams returns the SQL-friendly NullString representation
+// of an AgentParams pointer. nil/zero collapses to SQL NULL.
+func marshalAgentParams(p *AgentParams) (any, error) {
+	if p.IsZero() {
+		return nil, nil
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 func scanWorkflowRow(sc interface{ Scan(...any) error }) (Workflow, error) {

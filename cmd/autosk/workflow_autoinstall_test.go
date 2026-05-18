@@ -25,7 +25,7 @@ func TestWorkflowCreate_AutoInstallsScopedAgent(t *testing.T) {
 		"first_step": "do",
 		"steps": map[string]any{
 			"do": map[string]any{
-				"agent": "@autosk/dev-fixture",
+				"agent": map[string]any{"name": "@autosk/dev-fixture"},
 				"next_steps": []any{
 					map[string]any{"task_status": "done", "prompt_rule": "when complete"},
 				},
@@ -74,7 +74,7 @@ func TestWorkflowCreate_NoInstallFlag(t *testing.T) {
 		"first_step": "do",
 		"steps": map[string]any{
 			"do": map[string]any{
-				"agent": "@autosk/dev-fixture",
+				"agent": map[string]any{"name": "@autosk/dev-fixture"},
 				"next_steps": []any{
 					map[string]any{"task_status": "done", "prompt_rule": "."},
 				},
@@ -111,7 +111,7 @@ func TestWorkflowCreate_BareNameNotAutoInstalled(t *testing.T) {
 		"first_step": "do",
 		"steps": map[string]any{
 			"do": map[string]any{
-				"agent": "developer", // bare name; not auto-installed
+				"agent": map[string]any{"name": "developer"}, // bare name; not auto-installed
 				"next_steps": []any{
 					map[string]any{"task_status": "done", "prompt_rule": "."},
 				},

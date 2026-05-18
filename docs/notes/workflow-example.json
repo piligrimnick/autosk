@@ -4,7 +4,9 @@
   "first_step": "dev",
   "steps": {
     "dev": {
-      "agent": "developer",
+      "agent": {
+        "name": "developer"
+      },
       "next_steps": [
         {
           "step": "review",
@@ -13,7 +15,9 @@
       ]
     },
     "review": {
-      "agent": "code-reviewer",
+      "agent": {
+        "name": "code-reviewer"
+      },
       "next_steps": [
         {
           "step": "validator",
@@ -26,7 +30,9 @@
       ]
     },
     "validator": {
-      "agent": "task-validator",
+      "agent": {
+        "name": "task-validator"
+      },
       "next_steps": [
         {
           "step": "dev",

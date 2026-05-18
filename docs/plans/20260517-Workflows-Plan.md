@@ -381,7 +381,7 @@ exist yet, autosk creates it transactionally:
   "first_step": "do",
   "steps": {
     "do": {
-      "agent": "foo",
+      "agent": { "name": "foo" },
       "next_steps": [
         {"task_status": "done",            "prompt_rule": "When the work is complete."},
         {"task_status": "cancelled",       "prompt_rule": "When the task cannot be completed."},
@@ -479,17 +479,22 @@ typo at the schema level (`next_steps`, not `next_setps`) and add `description`:
   "description": "Implement, review, validate, then ask the human.",
   "first_step": "dev",
   "steps": {
-    "dev":       { "agent": "developer",     "next_steps": [{"step":"review", "prompt_rule":"…"}] },
-    "review":    { "agent": "code-reviewer", "next_steps": [
+    "dev":       { "agent": { "name": "developer" },     "next_steps": [{"step":"review", "prompt_rule":"…"}] },
+    "review":    { "agent": { "name": "code-reviewer" }, "next_steps": [
                      {"step":"validator", "prompt_rule":"…"},
                      {"step":"dev",       "prompt_rule":"…"}
                    ]},
-    "validator": { "agent": "task-validator","next_steps": [
+    "validator": { "agent": { "name": "task-validator" },"next_steps": [
                      {"step":"dev",                    "prompt_rule":"…"},
                      {"task_status":"human_feedback",  "prompt_rule":"…"}
                    ]}
   }
 }
+
+The per-step `agent` is always an object; the bare string form is
+rejected. `agent.params` (optional) overrides standard-agent fields
+per step. See [`docs/workflows.md`](../workflows.md#per-step-agent-overrides)
+for the full schema and merge semantics.
 ```
 
 Validation on create:

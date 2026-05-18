@@ -16,6 +16,18 @@ var ValidTaskStatuses = map[string]struct{}{
 	"cancelled":      {},
 }
 
+// ValidThinkingLevels mirrors the table in pkgregistry/resolve.go.
+// Kept in sync with pi's thinking levels.
+var ValidThinkingLevels = map[string]struct{}{
+	"":        {},
+	"off":     {},
+	"minimal": {},
+	"low":     {},
+	"medium":  {},
+	"high":    {},
+	"xhigh":   {},
+}
+
 // ValidateOpts narrows what Validate enforces.
 type ValidateOpts struct {
 	// AllowSyntheticName lets the synthetic-workflow generator bypass the
@@ -57,11 +69,22 @@ func Validate(ctx context.Context, def Definition, ag *agent.Store, opts Validat
 		if stepName == "" {
 			addf("step has empty name")
 		}
-		if s.Agent == "" {
-			addf("step %q: `agent` is required", stepName)
+		if s.AgentName == "" {
+			addf("step %q: `agent.name` is required", stepName)
 		}
 		if len(s.NextSteps) == 0 {
 			addf("step %q: needs at least one transition in `next_steps`", stepName)
+		}
+		if s.AgentParams != nil {
+			if s.AgentParams.Thinking != nil {
+				if _, ok := ValidThinkingLevels[*s.AgentParams.Thinking]; !ok {
+					addf("step %q: agent.params.thinking=%q (want one of off|minimal|low|medium|high|xhigh)",
+						stepName, *s.AgentParams.Thinking)
+				}
+			}
+			if s.AgentParams.FirstMessage != nil && s.AgentParams.FirstMessageFile != "" {
+				addf("step %q: agent.params declares both first_message and first_message_file (pick one)", stepName)
+			}
 		}
 		for i, tr := range s.NextSteps {
 			if tr.PromptRule == "" {
@@ -86,15 +109,15 @@ func Validate(ctx context.Context, def Definition, ag *agent.Store, opts Validat
 	if ag != nil {
 		seen := make(map[string]struct{}, len(def.Steps))
 		for _, s := range def.Steps {
-			if s.Agent == "" {
+			if s.AgentName == "" {
 				continue
 			}
-			if _, dup := seen[s.Agent]; dup {
+			if _, dup := seen[s.AgentName]; dup {
 				continue
 			}
-			seen[s.Agent] = struct{}{}
-			if _, err := ag.GetByName(ctx, s.Agent); err != nil {
-				addf("agent %q is referenced by a step but is not installed (run `autosk agent install %s`)", s.Agent, s.Agent)
+			seen[s.AgentName] = struct{}{}
+			if _, err := ag.GetByName(ctx, s.AgentName); err != nil {
+				addf("agent %q is referenced by a step but is not installed (run `autosk agent install %s`)", s.AgentName, s.AgentName)
 			}
 		}
 	}
