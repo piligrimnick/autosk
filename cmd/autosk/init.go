@@ -50,6 +50,18 @@ optional unless you want to set a custom ID prefix (not yet implemented).`,
 				return err
 			}
 			v, _ := s.SchemaVersion(cmd.Context())
+
+			// Eagerly create the global agent-packages prefix so subsequent
+			// `autosk agent install` calls have somewhere to write to.
+			// Failure here is non-fatal: the prefix is created lazily on
+			// first install anyway. We just emit a warning to surface
+			// permission issues early.
+			if reg, perr := openPackagesRegistry(); perr == nil {
+				if err := reg.EnsurePrefix(); err != nil && !flagQuiet {
+					fmt.Fprintf(os.Stderr, "warning: could not create packages prefix at %s: %v\n", reg.Prefix(), err)
+				}
+			}
+
 			if !flagQuiet {
 				fmt.Printf("initialized %s (schema_version=%d)\n", dbPath, v)
 			}

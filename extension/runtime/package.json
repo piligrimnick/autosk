@@ -1,0 +1,30 @@
+{
+  "name": "@autosk/agent-runtime",
+  "version": "0.1.0",
+  "description": "Node bootstrapper that runs custom-runner autosk agents.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist/",
+    "src/",
+    "README.md"
+  ],
+  "bin": {
+    "autosk-agent-runtime": "./dist/bootstrap.js"
+  },
+  "main": "./dist/bootstrap.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "@autosk/agent-sdk": ">=0.1.0 <0.2.0",
+    "tsx": ">=4.0.0"
+  },
+  "devDependencies": {
+    "@autosk/agent-sdk": "file:../sdk",
+    "typescript": "^5.7.3",
+    "@types/node": "^22.0.0"
+  }
+}

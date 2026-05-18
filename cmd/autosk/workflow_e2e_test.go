@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"autosk/internal/agent"
+	"autosk/internal/agent/pkgregistry"
 	"autosk/internal/comments"
 	"autosk/internal/daemon/executor"
 	"autosk/internal/daemon/pi"
@@ -22,6 +24,37 @@ import (
 	"autosk/internal/workflow"
 )
 
+// e2eFakeNpm is a no-op npm runner used by the in-process e2e stack.
+// installStubPkg writes the on-disk shape directly.
+type e2eFakeNpm struct{}
+
+func (e2eFakeNpm) Install(_ context.Context, prefix, spec string) error  { return nil }
+func (e2eFakeNpm) Uninstall(_ context.Context, prefix, name string) error {
+	return os.RemoveAll(filepath.Join(prefix, "node_modules", filepath.FromSlash(name)))
+}
+
+func installStubPkg(t *testing.T, reg *pkgregistry.Registry, name string) {
+	t.Helper()
+	pj := map[string]any{
+		"name":    name,
+		"version": "0.0.1",
+		"autosk": map[string]any{"agent": map[string]any{
+			"first_message": "You are the " + name + " agent.",
+		}},
+	}
+	body, _ := json.MarshalIndent(pj, "", "  ")
+	dir := filepath.Join(reg.Prefix(), "node_modules", filepath.FromSlash(name))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), body, 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+	if _, err := reg.Install(context.Background(), name, "0.0.1"); err != nil {
+		t.Fatalf("reg.Install %s: %v", name, err)
+	}
+}
+
 // e2eStack wires the real workflow engine in-process for the W9
 // acceptance scenarios. It does not spawn `autosk daemon serve` — the
 // goal is to exercise the runstore/poller/scheduler/executor stack
@@ -32,6 +65,7 @@ type e2eStack struct {
 	runs      *runstore.Store
 	wfs       *workflow.Store
 	ag        *agent.Store
+	reg       *pkgregistry.Registry
 	scheduler *scheduler.Scheduler
 	poller    *poller.Poller
 	projDir   string
@@ -92,7 +126,19 @@ func newE2EStack(t *testing.T) *e2eStack {
 		t.Fatalf("Migrate: %v", err)
 	}
 	ag := agent.New(ts.DB())
+
+	// Bring up an isolated packages prefix and install stub packages.
+	reg, err := pkgregistry.Open(filepath.Join(dir, "packages"), pkgregistry.WithNpm(e2eFakeNpm{}))
+	if err != nil {
+		_ = ts.Close()
+		t.Fatalf("pkgregistry.Open: %v", err)
+	}
+	if err := reg.EnsurePrefix(); err != nil {
+		_ = ts.Close()
+		t.Fatalf("EnsurePrefix: %v", err)
+	}
 	for _, name := range []string{"developer", "code-reviewer", "task-validator"} {
+		installStubPkg(t, reg, name)
 		if _, err := ag.Create(ctx, name, false); err != nil {
 			_ = ts.Close()
 			t.Fatalf("agent: %v", err)
@@ -100,24 +146,10 @@ func newE2EStack(t *testing.T) *e2eStack {
 	}
 	wfs := workflow.New(ts.DB(), ag)
 
-	// Stub agent config files for every step's agent.
-	agentsDir := filepath.Join(dir, ".autosk", "agents")
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		_ = ts.Close()
-		t.Fatalf("mkdir agents: %v", err)
-	}
-	for _, name := range []string{"developer", "code-reviewer", "task-validator"} {
-		body := "system_prompt = \"You are the " + name + " agent.\"\n"
-		if err := os.WriteFile(filepath.Join(agentsDir, name+".toml"), []byte(body), 0o644); err != nil {
-			_ = ts.Close()
-			t.Fatalf("write agent config: %v", err)
-		}
-	}
-
 	runs := runstore.New(ts.DB())
 	sigs := step.New(ts.DB())
 	return &e2eStack{
-		ts: ts, signals: sigs, runs: runs, wfs: wfs, ag: ag,
+		ts: ts, signals: sigs, runs: runs, wfs: wfs, ag: ag, reg: reg,
 		projDir: dir,
 		close:   func() { _ = ts.Close() },
 	}
@@ -135,6 +167,7 @@ func (s *e2eStack) startEngine(t *testing.T, factory executor.Factory) func() {
 		Workflows: s.wfs,
 		Comments:  comments.New(s.ts.DB()),
 		Signals:   s.signals,
+		Packages:  s.reg,
 	}, factory, executor.Config{
 		ProjectRoot: s.projDir,
 		Grace:       100 * time.Millisecond,

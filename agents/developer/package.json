@@ -1,0 +1,20 @@
+{
+  "name": "developer",
+  "version": "0.1.0",
+  "description": "Reference autosk developer agent. Implements tasks and hands off to code-reviewer.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "files": [
+    "package.json",
+    "prompts/",
+    "README.md"
+  ],
+  "autosk": {
+    "agent": {
+      "model": "claude-sonnet-4-6",
+      "thinking": "high",
+      "first_message_file": "./prompts/first_message.md"
+    }
+  }
+}

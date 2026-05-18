@@ -95,8 +95,16 @@ func newDaemonServeCmd() *cobra.Command {
 			if err := tasks.Migrate(ctx); err != nil {
 				return fmt.Errorf("migrate: %w", err)
 			}
+			// Global packages prefix — source of truth for installed agents.
+			reg, err := openPackagesRegistry()
+			if err != nil {
+				return fmt.Errorf("pkgregistry: %w", err)
+			}
+			if err := reg.EnsurePrefix(); err != nil {
+				return fmt.Errorf("pkgregistry ensure prefix: %w", err)
+			}
 			runs := runstore.New(tasks.DB())
-			ag := agent.New(tasks.DB())
+			ag := agent.New(tasks.DB()).WithResolver(reg)
 			wfs := workflow.New(tasks.DB(), ag)
 			cs := comments.New(tasks.DB())
 			sigs := step.New(tasks.DB())
@@ -119,6 +127,7 @@ func newDaemonServeCmd() *cobra.Command {
 				Workflows: wfs,
 				Comments:  cs,
 				Signals:   sigs,
+				Packages:  reg,
 			}, executor.DefaultFactory, executor.Config{
 				PIBin:          piBin,
 				SessionDirRoot: sessionDir,

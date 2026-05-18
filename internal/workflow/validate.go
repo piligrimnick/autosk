@@ -94,7 +94,7 @@ func Validate(ctx context.Context, def Definition, ag *agent.Store, opts Validat
 			}
 			seen[s.Agent] = struct{}{}
 			if _, err := ag.GetByName(ctx, s.Agent); err != nil {
-				addf("agent %q is referenced by a step but is not in the `agents` table (run `autosk agent create %s`)", s.Agent, s.Agent)
+				addf("agent %q is referenced by a step but is not installed (run `autosk agent install %s`)", s.Agent, s.Agent)
 			}
 		}
 	}

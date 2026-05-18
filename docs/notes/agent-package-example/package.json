@@ -1,0 +1,16 @@
+{
+  "name": "@autosk/example-custom-agent",
+  "version": "0.1.0",
+  "description": "Tiny example custom-runner agent. Adds a comment, then closes the task.",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "autosk": {
+    "agent": {
+      "runner": "./agent.ts"
+    }
+  },
+  "peerDependencies": {
+    "@autosk/agent-sdk": ">=0.1.0 <0.2.0"
+  }
+}

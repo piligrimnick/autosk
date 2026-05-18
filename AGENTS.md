@@ -104,16 +104,29 @@ up automatically:
 
 ```bash
 autosk create "Implement auth module" --workflow feature-dev
-autosk create "Bump version" --agent developer    # single:developer
+autosk create "Bump version" --agent @autosk/developer  # single:@autosk/developer
 ```
 
 The poller (default cadence 2s) surfaces `in_workflow` tasks whose
-current step's agent is non-human. The executor reads the agent's config
-from `.autosk/agents/<name>.toml` and spawns `pi --mode rpc` with it.
+current step's agent is non-human. The executor resolves the agent's
+config from the installed npm package at
+`~/.autosk/packages/node_modules/<pkg>/package.json` (managed via
+`autosk agent install/uninstall`) and dispatches to one of two
+branches:
+
+- standard → spawn `pi --mode rpc` with the package's settings
+  (model, thinking, first-turn message, pi_extensions, pi_skills).
+- custom → spawn `@autosk/agent-runtime` to run the package's
+  TS/JS runner module.
+
+Referencing an agent name that isn't installed produces
+`agent_not_installed: <name>` at task-create / workflow-create time
+(and at executor spawn time as a fail-fast).
 
 `autosk daemon status <job-id>` and `autosk daemon messages <job-id>`
-show the run's lifecycle and the transcript pi is writing. See
-[`docs/daemon.md`](docs/daemon.md) and [`docs/workflows.md`](docs/workflows.md).
+show the run's lifecycle and the transcript pi/the runner is writing.
+See [`docs/daemon.md`](docs/daemon.md) and
+[`docs/workflows.md`](docs/workflows.md).
 
 ## What autosk is NOT
 

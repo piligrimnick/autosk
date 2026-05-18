@@ -2,6 +2,7 @@ package executor_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"autosk/internal/agent"
+	"autosk/internal/agent/pkgregistry"
 	"autosk/internal/comments"
 	"autosk/internal/daemon/executor"
 	"autosk/internal/daemon/pi"
@@ -20,6 +22,53 @@ import (
 	"autosk/internal/store/doltlite"
 	"autosk/internal/workflow"
 )
+
+// fakeNpm satisfies pkgregistry.NpmRunner by materialising on-disk
+// shapes directly. Mirror of the pkgregistry test fake; kept private
+// here so we don't expose test infrastructure across packages.
+type fakeNpm struct {
+	installFn func(prefix, spec string) error
+}
+
+func (f fakeNpm) Install(_ context.Context, prefix, spec string) error {
+	if f.installFn != nil {
+		return f.installFn(prefix, spec)
+	}
+	return nil
+}
+
+func (f fakeNpm) Uninstall(_ context.Context, prefix, name string) error {
+	return os.RemoveAll(filepath.Join(prefix, "node_modules", filepath.FromSlash(name)))
+}
+
+func installStubPackage(t *testing.T, reg *pkgregistry.Registry, name string) {
+	t.Helper()
+	installStubPackageWith(t, reg, name, map[string]any{
+		"model":         "sonnet:high",
+		"thinking":      "high",
+		"first_message": "You are the " + name + " agent.",
+	})
+}
+
+func installStubPackageWith(t *testing.T, reg *pkgregistry.Registry, name string, autoskAgent map[string]any) {
+	t.Helper()
+	pj := map[string]any{
+		"name":    name,
+		"version": "0.0.1",
+		"autosk":  map[string]any{"agent": autoskAgent},
+	}
+	body, _ := json.MarshalIndent(pj, "", "  ")
+	dir := filepath.Join(reg.Prefix(), "node_modules", filepath.FromSlash(name))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), body, 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+	if _, err := reg.Install(context.Background(), name, "0.0.1"); err != nil {
+		t.Fatalf("reg.Install %s: %v", name, err)
+	}
+}
 
 // ---- stub pi runner ------------------------------------------------------
 
@@ -95,6 +144,7 @@ func stubFactory(r *stubRunner) executor.Factory {
 
 type execFixture struct {
 	ts      *doltlite.Store
+	reg     *pkgregistry.Registry
 	deps    executor.Deps
 	cfg     executor.Config
 	wf      workflow.Workflow
@@ -115,7 +165,21 @@ func newExecFixture(t *testing.T) *execFixture {
 		t.Fatalf("Migrate: %v", err)
 	}
 	ag := agent.New(ts.DB())
+
+	// Set up an isolated packages prefix and install stub packages for
+	// every agent the example workflow references.
+	prefix := filepath.Join(dir, "packages")
+	reg, err := pkgregistry.Open(prefix, pkgregistry.WithNpm(fakeNpm{}))
+	if err != nil {
+		_ = ts.Close()
+		t.Fatalf("pkgregistry.Open: %v", err)
+	}
+	if err := reg.EnsurePrefix(); err != nil {
+		_ = ts.Close()
+		t.Fatalf("EnsurePrefix: %v", err)
+	}
 	for _, name := range []string{"developer", "code-reviewer", "task-validator"} {
+		installStubPackage(t, reg, name)
 		if _, err := ag.Create(ctx, name, false); err != nil {
 			_ = ts.Close()
 			t.Fatalf("agent %s: %v", name, err)
@@ -133,22 +197,9 @@ func newExecFixture(t *testing.T) *execFixture {
 		t.Fatalf("Workflow Create: %v", err)
 	}
 
-	// Stub agent config files for every step's agent.
-	agentsDir := filepath.Join(dir, ".autosk", "agents")
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		_ = ts.Close()
-		t.Fatalf("mkdir agents: %v", err)
-	}
-	for _, name := range []string{"developer", "code-reviewer", "task-validator"} {
-		body := "model = \"sonnet:high\"\nthinking = \"high\"\nsystem_prompt = \"You are the " + name + " agent.\"\n"
-		if err := os.WriteFile(filepath.Join(agentsDir, name+".toml"), []byte(body), 0o644); err != nil {
-			_ = ts.Close()
-			t.Fatalf("write agent config: %v", err)
-		}
-	}
-
 	return &execFixture{
-		ts: ts,
+		ts:  ts,
+		reg: reg,
 		deps: executor.Deps{
 			Runs:      runstore.New(ts.DB()),
 			Tasks:     ts,
@@ -156,6 +207,7 @@ func newExecFixture(t *testing.T) *execFixture {
 			Workflows: wfs,
 			Comments:  comments.New(ts.DB()),
 			Signals:   step.New(ts.DB()),
+			Packages:  reg,
 		},
 		cfg: executor.Config{
 			ProjectRoot: dir,
@@ -364,8 +416,10 @@ func TestRun_TerminalDoneClearsStep(t *testing.T) {
 func TestRun_MissingAgentConfig(t *testing.T) {
 	fx := newExecFixture(t)
 	defer fx.close()
-	// Remove the developer config so the executor can't load it.
-	_ = os.Remove(filepath.Join(fx.cfg.ProjectRoot, ".autosk", "agents", "developer.toml"))
+	// Uninstall the developer package so the executor can't resolve it.
+	if err := fx.reg.Uninstall(context.Background(), "developer"); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
 	taskID, jobID := fx.makeRun(t, "Bad", "dev")
 
 	stub := newStub()

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -51,11 +53,19 @@ func newWorkflowCmd() *cobra.Command {
 }
 
 func newWorkflowCreateCmd() *cobra.Command {
-	var file string
+	var (
+		file      string
+		noInstall bool
+	)
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a workflow from a JSON definition file",
-		Args:  cobra.NoArgs,
+		Long: "Create a workflow from a JSON definition file.\n\n" +
+			"Scoped npm-style agent names (e.g. @scope/name) that aren't yet\n" +
+			"installed are auto-installed from the registry before the workflow\n" +
+			"is created (same as `autosk agent install <name>`). Use\n" +
+			"--no-install to disable this and fail on any missing agent instead.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if file == "" {
 				return errors.New("--file is required")
@@ -69,6 +79,13 @@ func newWorkflowCreateCmd() *cobra.Command {
 				return err
 			}
 			defer closeFn()
+
+			if !noInstall {
+				if err := autoInstallMissingAgents(cmd.Context(), def, wf.Agents(), dl); err != nil {
+					return err
+				}
+			}
+
 			w, err := wf.Create(cmd.Context(), def, false /*isSynthetic*/)
 			if err != nil {
 				if errors.Is(err, workflow.ErrAlreadyExist) {
@@ -81,8 +98,103 @@ func newWorkflowCreateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", "", "path to workflow JSON definition")
+	cmd.Flags().BoolVar(&noInstall, "no-install", false, "do not auto-install missing scoped-npm agents; fail validation instead")
 	return cmd
 }
+
+// autoInstallMissingAgents scans def.Steps for agents not present in the
+// DB and installs the ones whose names look like scoped npm packages
+// (`@scope/name`). Bare names are skipped: we can't safely guess that
+// `developer` on the public npm registry is the same agent the workflow
+// author had in mind, so those still produce the standard validation
+// error.
+//
+// On a successful install the matching `agents` row is created so the
+// downstream workflow validation sees a real agent.
+//
+// The function is a no-op (returns nil) when every agent is either
+// `human` or already in the DB.
+func autoInstallMissingAgents(ctx context.Context, def workflow.Definition, ag *agent.Store, dl *doltlite.Store) error {
+	// Collect unique referenced agent names.
+	seen := make(map[string]struct{}, len(def.Steps))
+	for _, s := range def.Steps {
+		if s.Agent == "" {
+			continue
+		}
+		seen[s.Agent] = struct{}{}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+
+	// Determine which need install (not in DB, not 'human', scoped name).
+	var todo []string
+	for name := range seen {
+		if name == agent.HumanAgentName {
+			continue
+		}
+		if _, err := ag.GetByName(ctx, name); err == nil {
+			continue
+		}
+		if !looksLikeScopedNpmName(name) {
+			continue
+		}
+		todo = append(todo, name)
+	}
+	if len(todo) == 0 {
+		return nil
+	}
+	sort.Strings(todo)
+
+	reg, err := openPackagesRegistry()
+	if err != nil {
+		return fmt.Errorf("open packages registry: %w", err)
+	}
+	if err := reg.EnsurePrefix(); err != nil {
+		return fmt.Errorf("ensure packages prefix: %w", err)
+	}
+
+	// Attach the registry to the agent store so EnsureByName accepts the
+	// newly-installed names. Re-uses the same *sql.DB handle.
+	agWithResolver := agent.New(dl.DB()).WithResolver(reg)
+
+	if !flagQuiet {
+		fmt.Fprintf(os.Stderr, "workflow references %d uninstalled agent(s); installing: %s\n",
+			len(todo), strings.Join(todo, ", "))
+	}
+
+	for _, name := range todo {
+		if !flagQuiet {
+			fmt.Fprintf(os.Stderr, "\u2192 agent install %s\n", name)
+		}
+		entry, ierr := reg.Install(ctx, name, "")
+		if ierr != nil {
+			return fmt.Errorf("auto-install %s failed: %w (pass --no-install to skip, or install manually with `autosk agent install %s`)",
+				name, ierr, name)
+		}
+		if _, eerr := agWithResolver.EnsureByName(ctx, entry.Name); eerr != nil {
+			return fmt.Errorf("register %s in agents table: %w", entry.Name, eerr)
+		}
+		if !flagQuiet {
+			fmt.Fprintf(os.Stderr, "  installed %s@%s\n", entry.Name, entry.Version)
+		}
+	}
+	return nil
+}
+
+// looksLikeScopedNpmName reports whether s is an npm name with a
+// leading `@scope/` prefix. We only auto-install scoped names because
+// bare names (`developer`, `code-reviewer`) collide too easily with
+// arbitrary public npm packages.
+func looksLikeScopedNpmName(s string) bool {
+	if len(s) < 3 || s[0] != '@' {
+		return false
+	}
+	slash := strings.IndexByte(s, '/')
+	return slash > 1 && slash < len(s)-1
+}
+
+
 
 func newWorkflowListCmd() *cobra.Command {
 	var all bool

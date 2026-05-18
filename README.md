@@ -26,12 +26,21 @@ agents, workflows, comments, and a daemon poller that drives tasks
 through step transitions. See:
 
 - Workflows plan: [`docs/plans/20260517-Workflows-Plan.md`](docs/plans/20260517-Workflows-Plan.md).
+- Agent packages plan: [`docs/plans/20260518-Agent-Packages.md`](docs/plans/20260518-Agent-Packages.md).
 - Concept doc + walkthrough: [`docs/workflows.md`](docs/workflows.md).
 - Daemon details: [`docs/daemon.md`](docs/daemon.md).
 
 There is **no migration** from v0.1: opening a v0.1 database with v0.2
 binary refuses with `schema_v1_unsupported`. Wipe `.autosk/db` and
 re-init.
+
+**Upgrade note (from a pre-2026-05-18 v0.2 checkout):** the file-based
+`.autosk/agents/<name>.toml` mechanism is gone. Agents now come from
+npm packages installed via `autosk agent install <pkg>`. After
+upgrading, install replacement packages for each agent your workflows
+reference and (optionally) `rm -rf .autosk/agents/` — the directory is
+ignored, not parsed. See
+[`docs/plans/20260518-Agent-Packages.md`](docs/plans/20260518-Agent-Packages.md).
 
 ## Install (from source)
 
@@ -69,7 +78,8 @@ autosk done as-a1b2
   `current_step_id IS NOT NULL`.
 - **Priority** — `0..3`, `0` = highest.
 - **Agent** — a named actor that can own a task. `human` is seeded on
-  init; background agents live in `.autosk/agents/<name>.toml`.
+  init; background agents are npm packages installed into
+  `~/.autosk/packages/` (see `autosk agent install`).
 - **Workflow** — a directed graph of `steps`; each step has an agent and
   ≥1 outgoing transition. The daemon advances tasks via step transitions.
 - **Dependency** — directed `blocker → blocked` edge.
@@ -92,9 +102,12 @@ Lifecycle
   autosk cancel <id>                 # direct; also clears current_step_id
   autosk reopen <id>                 # done|cancelled → new (preserves workflow_id)
 
-Agents
-  autosk agent create <name> [--human]
-  autosk agent list / show <name>
+Agents (npm-package-based)
+  autosk agent install <npm-name> [--version SPEC]
+  autosk agent uninstall <npm-name> [--force]
+  autosk agent list                  # union of installed pkgs + DB rows
+  autosk agent show <npm-name>
+  autosk agent runtime install       # eager install @autosk/agent-runtime
 
 Workflows
   autosk workflow create --file PATH
@@ -141,6 +154,8 @@ doltlite commit so future `autosk history` can recover field history.
 | `AUTOSK_DB` | Override DB path (otherwise discovered by walking up). |
 | `AUTOSK_NO_AUTOINIT` | Refuse to create a new DB on first write. |
 | `AUTOSK_AGENT` | Name of the agent the CLI is running as (default `human`). Used to fill `tasks.author_id` and `comments.author_id`. |
+| `AUTOSK_PACKAGES` | Override the global agent-packages prefix (defaults to `~/.autosk/packages` / `$XDG_DATA_HOME/autosk/packages`). |
+| `AUTOSK_BIN` | Used by `@autosk/agent-runtime` so custom-runner agents can shell the right autosk binary. Defaults to `autosk` on PATH. |
 | `DOLTLITE_DIR` | Build-time only: directory containing `libdoltlite.a` and `sqlite3.h`. |
 
 ## Daemon / pi orchestrator

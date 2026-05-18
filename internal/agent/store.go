@@ -1,13 +1,18 @@
 // Package agent owns the `agents` table.
 //
-// In v0.2 (see docs/plans/20260517-Workflows-Plan.md §2.1) an agent is a
-// minimal DB row: id + name + is_human + created_at. The executable
-// configuration (model, thinking, system prompt, extra args) lives in
-// .autosk/agents/<name>.toml; see package agent/config.
+// In v0.2 (see docs/plans/20260517-Workflows-Plan.md §2.1) an agent is
+// a minimal DB row: id + name + is_human + created_at. The executable
+// configuration (model, thinking, first-turn prompt, extra args) is no
+// longer stored next to the project — it lives in npm packages
+// installed into the autosk packages prefix (see
+// internal/agent/pkgregistry and docs/plans/20260518-Agent-Packages.md).
 //
-// `human` is seeded by migrations.SeedHumanAgent on first migrate. Other
-// agents are created either explicitly (`autosk agent create foo`) or
-// lazily when $AUTOSK_AGENT names one that doesn't exist yet.
+// `human` is seeded by migrations.SeedHumanAgent on first migrate.
+// Other agents are created either explicitly (`autosk agent install
+// @scope/name`) or lazily when $AUTOSK_AGENT names one that doesn't
+// exist yet. The lazy path is gated by an optional PackageResolver
+// (see WithResolver / EnsureByName) so the CLI fails fast when a
+// workflow references a package that isn't installed.
 package agent
 
 import (
@@ -26,11 +31,19 @@ const IDPrefix = "ag"
 
 // Sentinel errors.
 var (
-	ErrNotOpen      = errors.New("agent store: not open")
-	ErrNotFound     = errors.New("agent not found")
-	ErrAlreadyExist = errors.New("agent already exists")
-	ErrInvalidName  = errors.New("invalid agent name")
+	ErrNotOpen         = errors.New("agent store: not open")
+	ErrNotFound        = errors.New("agent not found")
+	ErrAlreadyExist    = errors.New("agent already exists")
+	ErrInvalidName     = errors.New("invalid agent name")
+	ErrNotInstalled    = errors.New("agent_not_installed")
 )
+
+// PackageResolver is the validation hook used by EnsureByName and
+// Create to confirm that a non-human agent name corresponds to an
+// installed agent package. The pkgregistry.Registry satisfies it.
+type PackageResolver interface {
+	Has(name string) bool
+}
 
 // Agent is the in-memory representation of an `agents` row.
 type Agent struct {
@@ -42,13 +55,27 @@ type Agent struct {
 
 // Store wraps the `agents` table CRUD on the shared *sql.DB.
 type Store struct {
-	db *sql.DB
+	db       *sql.DB
+	resolver PackageResolver
 }
 
 // New constructs a Store. Migrations must already have run.
 func New(db *sql.DB) *Store {
 	return &Store{db: db}
 }
+
+// WithResolver attaches a PackageResolver so that Create/EnsureByName
+// reject names other than "human" that are not registered. Passing nil
+// detaches the resolver (the default — useful for tests that don't
+// touch the global packages prefix).
+func (s *Store) WithResolver(r PackageResolver) *Store {
+	s.resolver = r
+	return s
+}
+
+// HumanAgentName is the reserved name of the seeded human agent. The
+// resolver is bypassed for this name.
+const HumanAgentName = "human"
 
 // Create inserts a new agent. Returns ErrAlreadyExist on UNIQUE(name).
 // Name is normalised (trimmed). is_human=1 only when name is literally
@@ -64,6 +91,9 @@ func (s *Store) Create(ctx context.Context, name string, isHuman bool) (Agent, e
 	}
 	if strings.ContainsAny(name, " \t\n\r") {
 		return Agent{}, fmt.Errorf("%w: contains whitespace", ErrInvalidName)
+	}
+	if s.resolver != nil && name != HumanAgentName && !s.resolver.Has(name) {
+		return Agent{}, fmt.Errorf("%w: %s (run: autosk agent install %s)", ErrNotInstalled, name, name)
 	}
 	agentID, err := id.NewUnique(IDPrefix, func(candidate string) (bool, error) {
 		return s.idExists(ctx, candidate)
@@ -126,11 +156,15 @@ func (s *Store) List(ctx context.Context) ([]Agent, error) {
 	return out, rows.Err()
 }
 
-// EnsureByName returns the agent with the given name, creating it if it
-// doesn't exist. Used by the lazy-resolve path that maps $AUTOSK_AGENT
-// to an agent row on the fly. is_human is auto-set to true for the
-// literal name "human", false otherwise (callers wanting an explicit
-// non-default human flag should use Create directly).
+// EnsureByName returns the agent with the given name, creating it if
+// it doesn't exist. Used by the lazy-resolve path that maps
+// $AUTOSK_AGENT to an agent row on the fly. is_human is auto-set to
+// true for the literal name "human", false otherwise (callers wanting
+// an explicit non-default human flag should use Create directly).
+//
+// When a PackageResolver is attached (WithResolver), names other than
+// "human" must be present in the resolver, otherwise the call fails
+// with ErrNotInstalled before any DB write.
 func (s *Store) EnsureByName(ctx context.Context, name string) (Agent, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -143,7 +177,7 @@ func (s *Store) EnsureByName(ctx context.Context, name string) (Agent, error) {
 	if !errors.Is(err, ErrNotFound) {
 		return Agent{}, err
 	}
-	isHuman := name == "human"
+	isHuman := name == HumanAgentName
 	return s.Create(ctx, name, isHuman)
 }
 

@@ -1,0 +1,20 @@
+{
+  "name": "task-validator",
+  "version": "0.1.0",
+  "description": "Reference autosk task-validator agent. Final gate before handing back to a human.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "files": [
+    "package.json",
+    "prompts/",
+    "README.md"
+  ],
+  "autosk": {
+    "agent": {
+      "model": "sonnet:high",
+      "thinking": "medium",
+      "first_message_file": "./prompts/first_message.md"
+    }
+  }
+}

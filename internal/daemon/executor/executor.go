@@ -1,17 +1,21 @@
 // Package executor drives a single workflow-step run end to end.
 //
-// Per docs/plans/20260517-Workflows-Plan.md §5.3:
+// Per docs/plans/20260518-Agent-Packages.md §6:
 //
 //  1. MarkRunning(job_id).
-//  2. Resolve agent from step_id → steps.agent_id → agent.name; load
-//     `.autosk/agents/<name>.toml` (model, thinking, system_prompt,
-//     extra_args).
+//  2. Resolve agent from step_id → steps.agent_id → agent.name, then
+//     resolve the npm package config via pkgregistry.
 //  3. Render the prompt from (task, current step, agent config, comments).
-//  4. Spawn pi --mode rpc.
+//  4. Spawn the right runner:
+//       - cfg.Runner == "" → spawn pi --mode rpc with the package's
+//         model / thinking / first_message / extra_args /
+//         pi_extensions / pi_skills.
+//       - cfg.Runner != "" → spawn the Node bootstrapper (handled in a
+//         later phase; today this path returns ErrCustomRunnerNotWired).
 //  5. SendPrompt; WaitForAgentEnd.
 //  6. Read step_signals for the run. If present, advance the task
-//     atomically (§5.4) and MarkDone with transition_id. If absent,
-//     kickback up to max_corrections times; then fail with
+//     atomically and MarkDone with transition_id. If absent, kickback
+//     up to max_corrections times; then fail with
 //     error="agent_did_not_emit_transition".
 //  7. Clean shutdown.
 //
@@ -28,7 +32,9 @@ import (
 	"time"
 
 	"autosk/internal/agent"
+	"autosk/internal/agent/pkgregistry"
 	"autosk/internal/comments"
+	"autosk/internal/daemon/agentnode"
 	"autosk/internal/daemon/pi"
 	"autosk/internal/daemon/runstore"
 	"autosk/internal/step"
@@ -59,6 +65,16 @@ var DefaultFactory Factory = func(ctx context.Context, opts pi.Opts) (PiRunner, 
 	return pi.Spawn(ctx, opts)
 }
 
+// NodeFactory spawns a new PiRunner backed by a Node bootstrapper, for
+// custom-runner agent packages. Tests inject a stub; production wraps
+// agentnode.Spawn.
+type NodeFactory func(ctx context.Context, opts agentnode.Opts) (PiRunner, error)
+
+// DefaultNodeFactory wraps agentnode.Spawn.
+var DefaultNodeFactory NodeFactory = func(ctx context.Context, opts agentnode.Opts) (PiRunner, error) {
+	return agentnode.Spawn(ctx, opts)
+}
+
 // TaskStore is the subset of the autosk task store the executor depends on.
 // store.Store satisfies it.
 type TaskStore interface {
@@ -74,6 +90,9 @@ type Deps struct {
 	Workflows *workflow.Store
 	Comments  *comments.Store
 	Signals   *step.Store
+	// Packages resolves agent names to installed npm package configs.
+	// Required; nil means "no agents available" and every spawn fails.
+	Packages  *pkgregistry.Registry
 }
 
 // Config tunes the executor.
@@ -83,8 +102,8 @@ type Config struct {
 	// SessionDirRoot is the parent dir for per-job pi session dirs.
 	// Empty → "<projectRoot>/.autosk/sessions".
 	SessionDirRoot string
-	// ProjectRoot is where .autosk/ lives. Used to find agent config files
-	// (.autosk/agents/<name>.toml) and to default SessionDirRoot.
+	// ProjectRoot is where .autosk/ lives. Used as cwd for the spawned
+	// agent process and to default SessionDirRoot.
 	ProjectRoot string
 	// Grace is the SIGTERM → SIGKILL grace period.
 	Grace time.Duration
@@ -96,10 +115,11 @@ type Config struct {
 type Executor struct {
 	deps    Deps
 	factory Factory
+	nodeFactory NodeFactory
 	cfg     Config
 }
 
-// New constructs the executor.
+// New constructs the executor with the default Node factory.
 func New(deps Deps, factory Factory, cfg Config) *Executor {
 	if factory == nil {
 		factory = DefaultFactory
@@ -110,7 +130,17 @@ func New(deps Deps, factory Factory, cfg Config) *Executor {
 	if cfg.IdleTimeout <= 0 {
 		cfg.IdleTimeout = 30 * time.Minute
 	}
-	return &Executor{deps: deps, factory: factory, cfg: cfg}
+	return &Executor{deps: deps, factory: factory, nodeFactory: DefaultNodeFactory, cfg: cfg}
+}
+
+// WithNodeFactory overrides the Node bootstrapper factory. Used by
+// tests to inject a stub runner that doesn't actually shell node.
+func (e *Executor) WithNodeFactory(nf NodeFactory) *Executor {
+	if nf == nil {
+		nf = DefaultNodeFactory
+	}
+	e.nodeFactory = nf
+	return e
 }
 
 // ErrAgentDidNotEmit is the terminal failure produced when the agent runs
@@ -145,30 +175,61 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 	if err != nil {
 		return e.failTerminal(bg, jobID, nil, fmt.Errorf("get task %s: %w", run.TaskID, err))
 	}
-	agentCfg, err := agent.Load(e.cfg.ProjectRoot, stepRow.AgentName)
+	if e.deps.Packages == nil {
+		return e.failTerminal(bg, jobID, nil, fmt.Errorf("agent_config_invalid: executor has no package registry attached"))
+	}
+	agentCfg, err := e.deps.Packages.Resolve(stepRow.AgentName)
 	if err != nil {
 		return e.failTerminal(bg, jobID, nil, fmt.Errorf("agent_config_invalid: %w", err))
 	}
-
-	// 3. Render prompt.
+	// 3. Render prompt + (for custom runners) a JSON seed.
 	commentLines, _ := e.deps.Comments.RenderForPrompt(ctx, run.TaskID)
 	prompt := RenderPrompt(tk, wf, stepRow, agentCfg, commentLines)
 
-	// 4. Spawn pi.
+	// 4. Spawn the right runner.
 	sessionDir := e.sessionDirFor(run)
 	if err := ensureDir(sessionDir); err != nil {
 		return e.failTerminal(bg, jobID, nil, fmt.Errorf("session dir: %w", err))
 	}
-	runner, err := e.factory(ctx, pi.Opts{
-		PIBin:      e.cfg.PIBin,
-		Cwd:        e.cfg.ProjectRoot,
-		Model:      agentCfg.Model,
-		Thinking:   agentCfg.Thinking,
-		SessionDir: sessionDir,
-		ExtraArgs:  agentCfg.ExtraArgs,
-	})
-	if err != nil {
-		return e.failTerminal(bg, jobID, nil, fmt.Errorf("spawn pi: %w", err))
+	var (
+		runner    PiRunner
+		initialMsg = prompt
+	)
+	if agentCfg.Runner != "" {
+		// Custom JS runner: spawn the Node bootstrapper. The initial
+		// stdin payload is a JSON RunContextSeed, not the rendered
+		// prompt. Custom runners are single-shot; we force the local
+		// MaxCorrections to 0 so a missed signal fails immediately.
+		bootstrap := e.deps.Packages.RuntimeBootstrapPath()
+		seed, serr := RenderSeedJSON(tk, wf, stepRow, agentCfg, commentLines, run.JobID)
+		if serr != nil {
+			return e.failTerminal(bg, jobID, nil, fmt.Errorf("render seed: %w", serr))
+		}
+		initialMsg = seed
+		runner, err = e.nodeFactory(ctx, agentnode.Opts{
+			BootstrapPath: bootstrap,
+			PackageName:   agentCfg.Name,
+			RunnerPath:    agentCfg.Runner,
+			Cwd:           e.cfg.ProjectRoot,
+			UseTsxLoader:  true,
+		})
+		if err != nil {
+			return e.failTerminal(bg, jobID, nil, fmt.Errorf("spawn runner: %w", err))
+		}
+		run.MaxCorrections = 0
+	} else {
+		extraArgs := buildPiExtraArgs(agentCfg)
+		runner, err = e.factory(ctx, pi.Opts{
+			PIBin:      e.cfg.PIBin,
+			Cwd:        e.cfg.ProjectRoot,
+			Model:      agentCfg.Model,
+			Thinking:   agentCfg.Thinking,
+			SessionDir: sessionDir,
+			ExtraArgs:  extraArgs,
+		})
+		if err != nil {
+			return e.failTerminal(bg, jobID, nil, fmt.Errorf("spawn pi: %w", err))
+		}
 	}
 	defer e.cleanup(runner, bg)
 
@@ -181,8 +242,8 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 	}
 	stateCancel()
 
-	// 5. Initial prompt.
-	if err := runner.SendPrompt(ctx, prompt); err != nil {
+	// 5. Initial prompt / JSON seed.
+	if err := runner.SendPrompt(ctx, initialMsg); err != nil {
 		return e.handleRunError(ctx, bg, jobID, runner, err)
 	}
 
@@ -295,18 +356,34 @@ func (e *Executor) advanceTask(ctx context.Context, taskID string, sig step.Emit
 
 // ---- prompt rendering ----------------------------------------------------
 
+// buildPiExtraArgs translates a resolved package config into the slice
+// of CLI flags appended after the daemon-managed flags (--model,
+// --thinking, --session-dir). pi_extensions / pi_skills are appended
+// as `-e <path>` / `--skill <path>` pairs, matching pi's own CLI.
+func buildPiExtraArgs(cfg pkgregistry.PackageConfig) []string {
+	out := make([]string, 0, len(cfg.ExtraArgs)+2*len(cfg.PiExtensions)+2*len(cfg.PiSkills))
+	out = append(out, cfg.ExtraArgs...)
+	for _, ext := range cfg.PiExtensions {
+		out = append(out, "-e", ext)
+	}
+	for _, sk := range cfg.PiSkills {
+		out = append(out, "--skill", sk)
+	}
+	return out
+}
+
 // RenderPrompt builds the user-facing prompt sent to pi at the start of a
 // step run. Public for unit tests / golden snapshots.
 func RenderPrompt(
 	t store.Task,
 	wf workflow.Workflow,
 	stepRow workflow.Step,
-	cfg agent.Config,
+	cfg pkgregistry.PackageConfig,
 	commentLines []string,
 ) string {
 	var sb strings.Builder
-	if cfg.SystemPrompt != "" {
-		sb.WriteString(strings.TrimRight(cfg.SystemPrompt, "\n"))
+	if cfg.FirstMessage != "" {
+		sb.WriteString(strings.TrimRight(cfg.FirstMessage, "\n"))
 		sb.WriteString("\n\n")
 	}
 	fmt.Fprintf(&sb, "You are agent %q on step %q of workflow %q.\n",

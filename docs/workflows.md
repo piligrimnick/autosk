@@ -15,40 +15,115 @@ If you haven't yet, read the design plan first:
 
 ### Agent
 
-A named actor that can own a task. Stored in the `agents` table with the
-minimal shape `(id, name, is_human)`. `human` is seeded on first migrate.
-Other agents are created either explicitly:
+A named actor that can own a task. Stored in the `agents` table with
+the minimal shape `(id, name, is_human)`. `human` is seeded on first
+migrate.
+
+All other agents come from **npm packages** installed into the global
+autosk packages prefix (`~/.autosk/packages/` by default; override with
+`$AUTOSK_PACKAGES`). The agent's name in `agents.name` is the **full
+npm package name** — there's no aliasing.
+
+Install one and start using it:
 
 ```bash
-autosk agent create developer
-autosk agent create code-reviewer
-autosk agent create task-validator
+autosk agent install @autosk/developer
+autosk agent install @autosk/code-reviewer
+autosk agent install @autosk/task-validator
 ```
 
-…or lazily on first use via `$AUTOSK_AGENT` (the env var the CLI uses to
-identify its caller).
+Workflows reference agents by their full npm package name (e.g.
+`"agent": "@autosk/developer"`). The `human` name is the only one that
+doesn't need to come from a package.
 
-The **executable configuration** of an agent (model, thinking depth,
-system prompt, extra pi flags) lives outside the DB in
-`.autosk/agents/<name>.toml`:
+The agent's **executable configuration** (model, thinking depth, the
+text prepended to the first user turn, extra pi args, custom runner)
+lives inside the package's `package.json`:
 
-```toml
-# .autosk/agents/developer.toml
-model         = "sonnet:high"
-thinking      = "high"
-system_prompt = """
-You are the developer agent. Implement the task in this codebase
-and run the tests before handing off to the reviewer.
-"""
-extra_args    = ["--no-tool", "web_fetch"]
+```jsonc
+{
+  "name":    "@autosk/developer",
+  "version": "0.3.1",
+  "type":    "module",
+  "autosk": {
+    "agent": {
+      "model":              "sonnet:high",
+      "thinking":           "high",
+      "first_message_file": "./prompts/first_message.md",
+      "extra_args":         ["--no-tool", "web_fetch"],
+      "pi_extensions":      ["./extensions/foo.ts"],
+      "pi_skills":          ["./skills"]
+    }
+  }
+}
 ```
 
-The daemon reads this file at spawn time. The `human` agent does not
-need a config file — the workflow engine never tries to spawn it.
+> The `first_message`(_file) text is **not** a system-role prompt. pi
+> has its own system prompt; this field is the leading block of the
+> first user turn the executor sends. Earlier drafts called this
+> `system_prompt_file` — the name was misleading and was renamed.
 
-> **Security:** never put API keys or other secrets in these files.
-> The daemon inherits the environment from the user who started it;
-> pi picks up its own credentials from env.
+The daemon resolves this configuration at spawn time. The `human` agent
+has no package — the workflow engine never tries to spawn it.
+
+#### Two flavours of agent
+
+A package can be one of:
+
+- **Standard** — declares `model`, `thinking`, `first_message`(_file),
+  `extra_args`, `pi_extensions`, `pi_skills`. The daemon spawns `pi
+  --mode rpc` with these settings; the agent is just pi configured
+  through the package.
+
+- **Custom** — declares an `autosk.agent.runner` pointing at a TS/JS
+  module. The daemon spawns the Node bootstrapper
+  (`@autosk/agent-runtime`), which imports the runner module and awaits
+  its default export. The runner is free to do anything (call any
+  LLM, run a deterministic shell pipeline, delegate back into pi via
+  `ctx.spawnPi(...)`); it just needs to call `ctx.stepNext(...)` once
+  before returning.
+
+  Minimal custom runner:
+
+  ```ts
+  // my-agent/src/agent.ts
+  import type { RunAgent } from "@autosk/agent-sdk";
+
+  const run: RunAgent = async (ctx) => {
+    await ctx.cli(["comment", "add", ctx.task.id, "starting"]);
+    // ... do work ...
+    await ctx.stepNext("done");
+  };
+  export default run;
+  ```
+
+  Custom runners are **single-shot**: the bootstrapper's process runs
+  once and the executor checks `step_signals` after it exits. There is
+  no kickback loop for the custom branch — a missed signal fails the
+  run with `agent_did_not_emit_transition` immediately.
+
+  See [`@autosk/agent-sdk`](../extension/sdk/README.md) for the full
+  contract and [`@autosk/agent-runtime`](../extension/runtime/README.md)
+  for the bootstrapper.
+
+#### Manage installed agents
+
+```bash
+autosk agent list                       # union of installed pkgs + DB rows
+autosk agent show  @autosk/developer    # registry + DB view
+autosk agent uninstall @autosk/developer
+autosk agent runtime install            # eagerly install @autosk/agent-runtime
+```
+
+The `human` agent always shows up with `source=builtin`. Packages whose
+row is in the project DB but no matching install exists locally are
+flagged `source=db_only` so the diagnostic surface is obvious.
+
+Plan: [`docs/plans/20260518-Agent-Packages.md`](plans/20260518-Agent-Packages.md).
+
+> **Security:** the spawned agent inherits the daemon's environment.
+> Never put API keys in `package.json`. pi reads credentials from env;
+> custom runners should do the same.
 
 ### Workflow
 
@@ -126,21 +201,18 @@ These rows have `is_synthetic = 1` and are hidden from
 
 ## CLI walkthrough
 
-This mirrors the W9 acceptance scenario (see plan §9).
+This mirrors the W9 acceptance scenario (see plan §9), updated for the
+npm-package agent model.
 
 ```bash
 # 1. Bootstrap.
 autosk init
-autosk agent create developer
-autosk agent create code-reviewer
-autosk agent create task-validator
+autosk agent install @autosk/developer
+autosk agent install @autosk/code-reviewer
+autosk agent install @autosk/task-validator
 
-cat > .autosk/agents/developer.toml <<EOF
-model         = "sonnet:high"
-thinking      = "high"
-system_prompt = "You are the developer agent."
-EOF
-# … repeat for the other two agents …
+# (each install reads the package's autosk.agent block from
+#  ~/.autosk/packages/node_modules/<pkg>/package.json and registers it)
 
 autosk workflow create --file docs/notes/workflow-example.json
 # wf-XXXX
@@ -176,9 +248,9 @@ autosk resume "$id"          # back to status=in_workflow at validator
 The single-agent shorthand:
 
 ```bash
-id=$(autosk create "Bump version to 0.2" --agent developer --json | jq -r .id)
+id=$(autosk create "Bump version to 0.2" --agent @autosk/developer --json | jq -r .id)
 autosk show "$id"
-# status: in_workflow, workflow: single:developer, current_step: do
+# status: in_workflow, workflow: single:@autosk/developer, current_step: do
 
 # The developer agent runs once, picks `--to done`, and the task closes.
 ```

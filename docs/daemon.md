@@ -1,11 +1,29 @@
 # autosk daemon — pi orchestrator
 
-`autosk daemon` is an HTTP service that runs `pi --mode rpc` against
-autosk tasks. It accepts a task id (or a raw prompt), spawns pi with the
-requested model + thinking level, surfaces lifecycle / messages / SSE,
-and verifies that the agent closes the task per protocol. The agent
-itself is responsible for calling `autosk done` — the daemon only checks
-and kicks back when the agent forgets.
+`autosk daemon` is an HTTP service that drives autosk tasks through
+their workflows.
+
+For each in-flight task it picks up, the daemon resolves the current
+step's **agent package** (an npm package installed via `autosk agent
+install`) and dispatches to one of two branches:
+
+- **Standard branch** — the package declares `model` / `thinking` /
+  `first_message` / etc. but no `runner`. The executor spawns
+  `pi --mode rpc` with those settings and waits for the agent to call
+  `autosk step next`. On a missed turn it kicks back up to
+  `max_corrections` times before failing.
+
+- **Custom branch** — the package declares an `autosk.agent.runner`
+  path. The executor spawns the Node bootstrapper
+  (`@autosk/agent-runtime`, installed in `~/.autosk/packages/`), feeds
+  it a JSON `RunContextSeed` on stdin, and waits for the process to
+  exit. Custom runners are single-shot — there is no kickback. They
+  emit `autosk step next` via `ctx.cli(...)` (or `ctx.stepNext(...)`)
+  inside the runner module; the executor observes `step_signals`
+  exactly like the standard branch.
+
+Agent packages plan:
+[`docs/plans/20260518-Agent-Packages.md`](plans/20260518-Agent-Packages.md).
 
 Plan: [`docs/plans/20260517-Daemon-Plan.md`](plans/20260517-Daemon-Plan.md).
 RPC contract notes: [`docs/notes/pi-rpc-contract.md`](notes/pi-rpc-contract.md).

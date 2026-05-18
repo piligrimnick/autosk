@@ -37,7 +37,11 @@ func newAssignCmd() *cobra.Command {
 			}
 			defer closeFn()
 			dl := s.(*doltlite.Store)
-			ag := agent.New(dl.DB())
+			reg, err := openPackagesRegistry()
+			if err != nil {
+				return err
+			}
+			ag := agent.New(dl.DB()).WithResolver(reg)
 			wfs := workflow.New(dl.DB(), ag)
 
 			cur, err := s.GetTask(cmd.Context(), taskID)

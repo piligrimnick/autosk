@@ -73,7 +73,11 @@ If --description is "-", the description is read from stdin.`,
 			}
 			defer closeFn()
 			dl := s.(*doltlite.Store)
-			ag := agent.New(dl.DB())
+			reg, err := openPackagesRegistry()
+			if err != nil {
+				return err
+			}
+			ag := agent.New(dl.DB()).WithResolver(reg)
 			wfStore := workflow.New(dl.DB(), ag)
 
 			// Resolve caller → author_id.
