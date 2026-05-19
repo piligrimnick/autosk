@@ -167,7 +167,21 @@ func (gu *Gui) tickLoop(d time.Duration) {
 // drives a trailing refresh. (The previous implementation dropped
 // the latest request, which could leave the Jobs panel showing
 // results filtered by a stale cursor row after j-spam.)
+//
+// scheduleRefresh is a thin convenience over scheduleRefreshWith
+// that wires the production work function (gu.refreshAll). Tests
+// drive the CAS dance through scheduleRefreshWith with a stub work
+// callback so a future refactor of the loop can't silently regress
+// the trailing-pickup invariant.
 func (gu *Gui) scheduleRefresh() {
+	gu.scheduleRefreshWith(gu.refreshAll)
+}
+
+// scheduleRefreshWith is the testable shape of scheduleRefresh. The
+// CAS loop + pending-flag invariants live here; the production
+// entry passes gu.refreshAll, tests pass a stub that mirrors the
+// timing (a sleep, a counter increment) without touching gocui.
+func (gu *Gui) scheduleRefreshWith(work func()) {
 	if !gu.refreshInFlight.CompareAndSwap(false, true) {
 		gu.refreshPending.Store(true)
 		dlog("scheduleRefresh: coalesced (pending set)")
@@ -175,10 +189,10 @@ func (gu *Gui) scheduleRefresh() {
 	}
 	gu.runDispatch(func() {
 		for {
-			gu.refreshAll()
+			work()
 			gu.refreshInFlight.Store(false)
-			// If a request arrived during refreshAll, run it now. The
-			// CAS reclaims the in-flight slot so a concurrent
+			// If a request arrived during work(), run it now. The CAS
+			// reclaims the in-flight slot so a concurrent
 			// scheduleRefresh either parks in pending or wins the race
 			// (in which case we exit here).
 			if !gu.refreshPending.CompareAndSwap(true, false) {

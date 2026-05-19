@@ -221,15 +221,19 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 }
 
 // evictCacheIfNeeded drops one arbitrary non-key entry from m if the
-// map is at the cap AND key isn't already present. (When key is
+// map is at maxLen AND key isn't already present. (When key is
 // already in the map we're replacing it, not growing, so no eviction
 // is needed.) Generic over the cache's value type so the comments
 // and signals caches share the policy.
-func evictCacheIfNeeded[V any](m map[string]V, key string, cap int) {
+//
+// The parameter is named maxLen (not cap) to avoid shadowing the Go
+// built-in cap — a small landmine if anyone ever needs cap(slice)
+// inside this function in the future.
+func evictCacheIfNeeded[V any](m map[string]V, key string, maxLen int) {
 	if _, exists := m[key]; exists {
 		return
 	}
-	if len(m) < cap {
+	if len(m) < maxLen {
 		return
 	}
 	for k := range m {

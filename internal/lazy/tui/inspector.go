@@ -101,6 +101,16 @@ func (gu *Gui) hydrateInspectorTab(tab inspectorTab) {
 			if cerr != nil {
 				gu.flashf("warn", "comments: %v", cerr)
 			}
+			// Design plan §5.5: the Signals tab's comments sub-region is
+			// scoped to those added "since started_at" so the operator
+			// sees "comments observed during THIS run" — not the full
+			// task ledger that spans every kickback. Filter client-side
+			// (the offline base returns the full slice anyway, so this is
+			// the cheapest place to cut). When the run hasn't started yet
+			// (queued/dispatched) we don't filter — there's no cutoff to
+			// apply, and the operator wants to see the comments that
+			// pushed the work into the queue.
+			cms = filterCommentsSinceJob(cms, t)
 			gu.g.Update(func(_ *gocui.Gui) error {
 				gu.st.withLock(func() {
 					gu.st.insp.signals = sigs
@@ -270,6 +280,26 @@ func renderLiveEvent(ev datasource.LiveEvent) string {
 		return styleErr.Render(fmt.Sprintf("— error: %v", ev.Err))
 	}
 	return ""
+}
+
+// filterCommentsSinceJob returns the subset of cms whose CreatedAt
+// is at or after j.StartedAt. When j.StartedAt is nil (the run
+// hasn't started yet) the full slice is returned — there's no
+// cutoff to apply and the design intent ("comments observed during
+// this run") is degenerate.
+func filterCommentsSinceJob(cms []datasource.Comment, j datasource.Job) []datasource.Comment {
+	if j.StartedAt == nil || j.StartedAt.IsZero() {
+		return cms
+	}
+	cutoff := *j.StartedAt
+	out := make([]datasource.Comment, 0, len(cms))
+	for _, c := range cms {
+		if c.CreatedAt.Before(cutoff) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // currentJobID returns the inspector's current job id.

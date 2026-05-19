@@ -3,7 +3,9 @@ package tui
 import (
 	"context"
 	"testing"
+	"time"
 
+	"autosk/internal/daemon/api"
 	"autosk/internal/lazy/datasource"
 )
 
@@ -64,4 +66,55 @@ func TestInspectorClose(t *testing.T) {
 	if gu.st.insp.JobID != "" || gu.st.insp.archive != nil {
 		t.Fatalf("inspector state not cleared: %+v", gu.st.insp)
 	}
+}
+
+// TestFilterCommentsSinceJob pins the design plan §5.5 contract:
+// the Inspector Signals tab's comments sub-region must be scoped to
+// "comments observed during this run" — i.e. only those whose
+// CreatedAt is at or after the job's StartedAt. Prior to this fix
+// the tab pulled every comment ever attached to the task, which for
+// a kickback loop with 30 comments across 5 runs surfaced all 30
+// when the operator opened run-5 (instead of only the comments
+// added during run-5).
+func TestFilterCommentsSinceJob(t *testing.T) {
+	t0 := time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC)
+	started := t0.Add(30 * time.Minute)
+	comments := []datasource.Comment{
+		{ID: 1, Text: "before run", CreatedAt: t0},
+		{ID: 2, Text: "start boundary", CreatedAt: started},
+		{ID: 3, Text: "during run", CreatedAt: started.Add(5 * time.Minute)},
+	}
+	t.Run("filters_before_started_at", func(t *testing.T) {
+		j := datasource.Job{JobResponse: api.JobResponse{StartedAt: &started}}
+		got := filterCommentsSinceJob(comments, j)
+		if len(got) != 2 {
+			t.Fatalf("got %d comments want 2 (boundary inclusive + during)", len(got))
+		}
+		if got[0].ID != 2 || got[1].ID != 3 {
+			t.Fatalf("unexpected ids: %+v", got)
+		}
+	})
+	t.Run("started_at_nil_keeps_all", func(t *testing.T) {
+		j := datasource.Job{}
+		got := filterCommentsSinceJob(comments, j)
+		if len(got) != len(comments) {
+			t.Fatalf("got %d want %d (no cutoff)", len(got), len(comments))
+		}
+	})
+	t.Run("started_at_zero_keeps_all", func(t *testing.T) {
+		var zero time.Time
+		j := datasource.Job{JobResponse: api.JobResponse{StartedAt: &zero}}
+		got := filterCommentsSinceJob(comments, j)
+		if len(got) != len(comments) {
+			t.Fatalf("got %d want %d (zero cutoff treated as no cutoff)", len(got), len(comments))
+		}
+	})
+	t.Run("started_after_all_returns_empty", func(t *testing.T) {
+		late := started.Add(time.Hour)
+		j := datasource.Job{JobResponse: api.JobResponse{StartedAt: &late}}
+		got := filterCommentsSinceJob(comments, j)
+		if len(got) != 0 {
+			t.Fatalf("got %d comments want 0 (all before cutoff)", len(got))
+		}
+	})
 }
