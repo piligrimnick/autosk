@@ -52,6 +52,23 @@ func Resolve(cwd, override string) (string, error) {
 	return "", ErrNotFound
 }
 
+// ResolveNoEnv is Resolve without the AUTOSK_DB fallback. It honours
+// `override` (intended for per-request headers) and walks up from cwd,
+// but never consults the current process's environment.
+//
+// The multi-project daemon uses this so its own AUTOSK_DB cannot leak
+// into a request from a different project. See
+// docs/plans/20260518-Daemon-UDS-Plan.md §2.
+func ResolveNoEnv(cwd, override string) (string, error) {
+	if override != "" {
+		return override, nil
+	}
+	if p, ok := walkUp(cwd); ok {
+		return p, nil
+	}
+	return "", ErrNotFound
+}
+
 // ResolveOrInit is the write-side cousin of Resolve. If discovery fails it
 // creates ./.autosk/db in cwd, unless AUTOSK_NO_AUTOINIT is set.
 //

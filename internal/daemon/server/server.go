@@ -1,16 +1,24 @@
 // Package server hosts the daemon's HTTP API.
 //
-// Routes (see plan §5.1):
+// The daemon listens on a single per-host unix-domain socket and serves
+// requests scoped to any number of projects. The project is selected by
+// the X-Autosk-Cwd / X-Autosk-DB request headers and resolved through
+// internal/daemon/projectmgr.
 //
-//	POST   /v1/jobs
+// Routes:
+//
 //	GET    /v1/jobs
 //	GET    /v1/jobs/{job_id}
 //	DELETE /v1/jobs/{job_id}
 //	GET    /v1/jobs/{job_id}/messages
-//	GET    /v1/healthz
+//	GET    /v1/jobs/{job_id}/stream
+//	GET    /v1/healthz                  (per-project; ?all=true → aggregate)
 //	GET    /v1/version
 //
-// SSE (`/v1/jobs/{id}/stream`) is added in D7.
+// POST /v1/jobs no longer exists — work is enrolled into a workflow
+// via the autosk CLI and picked up by the per-project poller.
+//
+// Per docs/plans/20260518-Daemon-UDS-Plan.md §4.4–4.6.
 package server
 
 import (
@@ -19,29 +27,25 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"autosk/internal/buildinfo"
 	"autosk/internal/daemon/api"
+	"autosk/internal/daemon/projectmgr"
 	"autosk/internal/daemon/runstore"
 	"autosk/internal/daemon/scheduler"
 	"autosk/internal/daemon/transcript"
-	"autosk/internal/store"
 )
 
-// Deps is the set of collaborators a Server needs. They are wired up by
-// cmd/autosk/daemon.go.
+// Deps is the set of collaborators a Server needs. The multi-project
+// daemon wires Projects + Sched at startup; per-request handlers fish
+// their per-project stores out of the resolved *projectmgr.Project.
 type Deps struct {
-	Runs       *runstore.Store
-	Tasks      store.Store
-	Sched      *scheduler.Scheduler
-	Workers    int
-	Token      string // empty disables auth
-	DefaultCwd string
-	DBPath     string // absolute path to .autosk/db (for diagnostics)
+	Projects *projectmgr.Manager
+	Sched    *scheduler.Scheduler
+	Workers  int
 }
 
-// Server wraps an *http.ServeMux with our routes + auth middleware.
+// Server wraps an *http.ServeMux with our routes + project middleware.
 type Server struct {
 	deps Deps
 	mux  *http.ServeMux
@@ -54,13 +58,12 @@ func New(d Deps) *Server {
 	return s
 }
 
-// Handler returns the http.Handler with auth middleware applied.
+// Handler returns the http.Handler with project middleware applied.
 func (s *Server) Handler() http.Handler {
-	return s.authMiddleware(s.mux)
+	return s.projectMiddleware(s.mux)
 }
 
 func (s *Server) routes() {
-	s.mux.HandleFunc("POST /v1/jobs", s.handleSubmit)
 	s.mux.HandleFunc("GET /v1/jobs", s.handleList)
 	s.mux.HandleFunc("GET /v1/jobs/{job_id}", s.handleGet)
 	s.mux.HandleFunc("DELETE /v1/jobs/{job_id}", s.handleCancel)
@@ -70,52 +73,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/version", s.handleVersion)
 }
 
-// ---- middleware ----------------------------------------------------------
-
-func (s *Server) authMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.deps.Token == "" || r.URL.Path == "/v1/healthz" || r.URL.Path == "/v1/version" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		got := r.Header.Get("Authorization")
-		want := "Bearer " + s.deps.Token
-		if got != want {
-			writeError(w, http.StatusUnauthorized, "unauthorized", nil)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 // ---- handlers -----------------------------------------------------------
 
-func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
-	// v0.2: the daemon is being rewired into a workflow engine. The Submit
-	// path will read tasks.current_step_id, render the prompt from the
-	// step's agent config, and enqueue. The whole flow lands in W6
-	// (docs/plans/20260517-Workflows-Plan.md §5.3). Until then we surface a
-	// clear 501 so clients don't silently 200 on a half-built engine.
-	//
-	// We still parse the body so request-shape regressions surface as 400.
-	var req api.SubmitRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "decode_body: "+err.Error(), nil)
-		return
-	}
-	if _, err := req.Validate(); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error(), nil)
-		return
-	}
-	writeError(w, http.StatusNotImplemented,
-		"daemon submit is being rewired into the workflow engine and lands in W6 (docs/plans/20260517-Workflows-Plan.md)",
-		map[string]any{
-			"task_id":        req.TaskID,
-			"daemon_db_path": s.deps.DBPath,
-		})
-}
-
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
+	proj := projectFromCtx(r.Context())
+	if proj == nil {
+		writeError(w, http.StatusInternalServerError, "missing project context", nil)
+		return
+	}
 	q := r.URL.Query()
 	filter := runstore.RunFilter{
 		TaskID: q.Get("task_id"),
@@ -138,7 +103,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		filter.Limit = n
 	}
-	runs, err := s.deps.Runs.ListRuns(r.Context(), filter)
+	runs, err := proj.Runs.ListRuns(r.Context(), filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list_runs: "+err.Error(), nil)
 		return
@@ -151,8 +116,13 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
+	proj := projectFromCtx(r.Context())
+	if proj == nil {
+		writeError(w, http.StatusInternalServerError, "missing project context", nil)
+		return
+	}
 	jobID := r.PathValue("job_id")
-	run, err := s.deps.Runs.GetRun(r.Context(), jobID)
+	run, err := proj.Runs.GetRun(r.Context(), jobID)
 	if err != nil {
 		if errors.Is(err, runstore.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "job not found", map[string]any{"job_id": jobID})
@@ -165,8 +135,13 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
+	proj := projectFromCtx(r.Context())
+	if proj == nil {
+		writeError(w, http.StatusInternalServerError, "missing project context", nil)
+		return
+	}
 	jobID := r.PathValue("job_id")
-	run, err := s.deps.Runs.GetRun(r.Context(), jobID)
+	run, err := proj.Runs.GetRun(r.Context(), jobID)
 	if err != nil {
 		if errors.Is(err, runstore.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "job not found", nil)
@@ -180,26 +155,32 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, api.FromRun(run))
 		return
 	}
-	// Try the scheduler first (active jobs).
-	if err := s.deps.Sched.Cancel(jobID); err != nil && !errors.Is(err, scheduler.ErrJobNotActive) {
-		writeError(w, http.StatusInternalServerError, "cancel: "+err.Error(), nil)
+	job := scheduler.Job{Project: proj.Root, ID: jobID}
+	cerr := s.deps.Sched.Cancel(job)
+	if cerr != nil && !errors.Is(cerr, scheduler.ErrJobNotActive) {
+		writeError(w, http.StatusInternalServerError, "cancel: "+cerr.Error(), nil)
 		return
 	}
-	if errors.Is(err, scheduler.ErrJobNotActive) || err == nil {
+	if errors.Is(cerr, scheduler.ErrJobNotActive) || cerr == nil {
 		// Queued (never executed) or not yet picked up: persist cancellation
 		// directly so the worker won't pick up a cancelled run.
 		if run.Status == runstore.StatusQueued {
-			_, _ = s.deps.Runs.MarkCancelled(r.Context(), jobID, nil)
+			_, _ = proj.Runs.MarkCancelled(r.Context(), jobID, nil)
 		}
 	}
 	// Re-read for the response.
-	run, _ = s.deps.Runs.GetRun(r.Context(), jobID)
+	run, _ = proj.Runs.GetRun(r.Context(), jobID)
 	writeJSON(w, http.StatusAccepted, api.FromRun(run))
 }
 
 func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
+	proj := projectFromCtx(r.Context())
+	if proj == nil {
+		writeError(w, http.StatusInternalServerError, "missing project context", nil)
+		return
+	}
 	jobID := r.PathValue("job_id")
-	run, err := s.deps.Runs.GetRun(r.Context(), jobID)
+	run, err := proj.Runs.GetRun(r.Context(), jobID)
 	if err != nil {
 		if errors.Is(err, runstore.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "job not found", nil)
@@ -275,27 +256,66 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	// Count queued + running rows for an at-a-glance health view.
-	runs, _ := s.deps.Runs.ListRuns(r.Context(), runstore.RunFilter{
+	aggregate := strings.EqualFold(r.URL.Query().Get("all"), "true")
+	if aggregate {
+		s.writeAggregateHealth(w, r)
+		return
+	}
+	proj := projectFromCtx(r.Context())
+	if proj == nil {
+		writeError(w, http.StatusInternalServerError, "missing project context", nil)
+		return
+	}
+	queued, running := s.projectCounts(r, proj)
+	writeJSON(w, http.StatusOK, api.HealthResponse{
+		OK:          true,
+		Workers:     s.deps.Workers,
+		Queued:      queued,
+		Running:     running,
+		DBPath:      proj.DBPath,
+		ProjectRoot: proj.Root,
+	})
+}
+
+// writeAggregateHealth returns a snapshot of every loaded project.
+func (s *Server) writeAggregateHealth(w http.ResponseWriter, r *http.Request) {
+	loaded := s.deps.Projects.Loaded()
+	out := api.HealthResponse{
+		OK:       true,
+		Workers:  s.deps.Workers,
+		Projects: make([]api.HealthProject, 0, len(loaded)),
+	}
+	for _, p := range loaded {
+		q, n := s.projectCounts(r, p)
+		out.Projects = append(out.Projects, api.HealthProject{
+			Root:     p.Root,
+			DBPath:   p.DBPath,
+			Queued:   q,
+			Running:  n,
+			OpenedAt: p.OpenedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// projectCounts returns (queued, running) for one project.
+func (s *Server) projectCounts(r *http.Request, p *projectmgr.Project) (int, int) {
+	rows, err := p.Runs.ListRuns(r.Context(), runstore.RunFilter{
 		Statuses: []runstore.RunStatus{runstore.StatusQueued, runstore.StatusRunning},
 	})
-	var queued, running int
-	for _, r := range runs {
-		switch r.Status {
+	if err != nil {
+		return 0, 0
+	}
+	var q, n int
+	for _, rr := range rows {
+		switch rr.Status {
 		case runstore.StatusQueued:
-			queued++
+			q++
 		case runstore.StatusRunning:
-			running++
+			n++
 		}
 	}
-	writeJSON(w, http.StatusOK, api.HealthResponse{
-		OK:         true,
-		Workers:    s.deps.Workers,
-		Queued:     queued,
-		Running:    running,
-		DBPath:     s.deps.DBPath,
-		DefaultCwd: s.deps.DefaultCwd,
-	})
+	return q, n
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
@@ -323,10 +343,3 @@ func rawOrNil(b []byte) any {
 	}
 	return json.RawMessage(b)
 }
-
-// nowUnix returns the current time. Exposed for tests if needed.
-func nowUnix() int64 { return time.Now().Unix() }
-
-// _ keeps the store import referenced (Deps.Tasks). When W6 reinstates the
-// real Submit path, this anchor is removed.
-var _ = store.StatusNew

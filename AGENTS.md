@@ -98,9 +98,14 @@ inside a step — those are owned by the workflow engine. Use `step next`.
 
 ## When a daemon is running
 
-If `autosk daemon serve` is running for the project, prefer **creating**
-your next task in a workflow (or with `--agent`) so the engine picks it
-up automatically:
+The autosk daemon is **per host, not per project**: one
+`autosk daemon serve` process listens on a single unix-domain socket
+(`~/.autosk/daemon.sock` by default, override with `--sock` or
+`AUTOSK_SOCK`) and serves any project whose `.autosk/db` the requesting
+client points it at.
+
+Prefer **creating** your next task in a workflow (or with `--agent`)
+so the engine picks it up automatically:
 
 ```bash
 autosk create "Implement auth module" --workflow feature-dev
@@ -121,9 +126,9 @@ workflow's first step. It only accepts tasks in `status=new` — for
 `human_feedback` use `autosk resume`, for `done`/`cancelled` use
 `autosk reopen` first.
 
-The poller (default cadence 2s) surfaces `in_workflow` tasks whose
-current step's agent is non-human. The executor resolves the agent's
-config from the installed npm package at
+The poller (default cadence 2s, per project) surfaces `in_workflow`
+tasks whose current step's agent is non-human. The executor resolves
+the agent's config from the installed npm package at
 `~/.autosk/packages/node_modules/<pkg>/package.json` (managed via
 `autosk agent install/uninstall`) and dispatches to one of two
 branches:
@@ -137,9 +142,28 @@ Referencing an agent name that isn't installed produces
 `agent_not_installed: <name>` at task-create / workflow-create time
 (and at executor spawn time as a fail-fast).
 
-`autosk daemon status <job-id>` and `autosk daemon messages <job-id>`
-show the run's lifecycle and the transcript pi/the runner is writing.
-See [`docs/daemon.md`](docs/daemon.md) and
+### Talking to the daemon
+
+All `autosk daemon ...` client commands speak HTTP over the unix
+socket and attach a per-request `X-Autosk-Cwd` header (set from
+`--cwd` or `os.Getwd()`). If you have an explicit project DB, set
+`AUTOSK_DB` (or pass the global `--db`) and the client will forward it
+as `X-Autosk-DB`. The daemon itself **ignores** its own `AUTOSK_DB`.
+
+```bash
+autosk daemon list                       # jobs in *this* project (cwd-scoped)
+autosk daemon list --all-projects        # every project the daemon has loaded
+autosk daemon status   <job-id>          # one job (cwd-scoped)
+autosk daemon messages <job-id> --limit  # transcript (cwd-scoped)
+autosk daemon cancel   <job-id>          # idempotent cancel
+```
+
+There is no `autosk daemon submit` command; work enters the daemon
+through `autosk create --workflow|--agent` or `autosk enroll`.
+
+For a deep dive (socket layout, single-instance semantics, headers,
+the SSE endpoint, security model) see
+[`docs/daemon.md`](docs/daemon.md). For workflow plumbing see
 [`docs/workflows.md`](docs/workflows.md).
 
 ## What autosk is NOT

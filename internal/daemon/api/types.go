@@ -1,48 +1,22 @@
-// Package api defines the daemon's HTTP wire types and validation rules.
+// Package api defines the daemon's HTTP wire types.
 //
 // Routes live in package server; this file is the source of truth for
 // request/response JSON shapes. Both the daemon HTTP server and the
 // CLI client (cmd/autosk/daemon.go subcommands) import these types.
 //
-// v0.2 (workflows): SubmitRequest carries only task_id; everything else
-// (agent, model, thinking, prompt, cwd) is derived from the workflow,
-// step, agent-config file, and daemon config. The pre-W1 fields are
-// preserved here as deprecated optionals for one release so old clients
-// don't break instantly; they are ignored by the server.
+// The daemon listens on a per-host unix-domain socket and serves any
+// number of projects. Per-request project context is carried in
+// X-Autosk-Cwd and (optionally) X-Autosk-DB headers. There is no
+// server-side default cwd anymore.
 package api
 
 import (
-	"errors"
-	"fmt"
-	"strings"
 	"time"
 
 	"autosk/internal/daemon/runstore"
 )
 
-// SubmitRequest is POST /v1/jobs.
-//
-// In v0.2 only TaskID and MaxCorrections are honored. Other fields are
-// accepted (for backwards compatibility of the JSON shape only) but the
-// server logs and ignores them. The CLI clients no longer set them.
-type SubmitRequest struct {
-	TaskID         string `json:"task_id"`
-	MaxCorrections *int   `json:"max_corrections,omitempty"`
-
-	// Deprecated; accepted but ignored. Removed in a future release.
-	Prompt    string   `json:"prompt,omitempty"`
-	Model     string   `json:"model,omitempty"`
-	Thinking  string   `json:"thinking,omitempty"`
-	Cwd       string   `json:"cwd,omitempty"`
-	AutoClaim *bool    `json:"auto_claim,omitempty"`
-	ExtraArgs []string `json:"extra_args,omitempty"`
-}
-
 // JobResponse is the canonical Job shape returned by the API.
-//
-// Most v0.1 fields are gone. The agent that ran is now derivable from
-// (StepID → agents); for convenience the projection at runtime fills
-// AgentName when the join is cheap, but the wire shape does not require it.
 type JobResponse struct {
 	JobID           string     `json:"job_id"`
 	TaskID          string     `json:"task_id"`
@@ -81,13 +55,29 @@ type MessageEvent struct {
 }
 
 // HealthResponse is GET /v1/healthz.
+//
+// When the request did not opt into the cross-project aggregate
+// (?all=true), Queued/Running are the scoped counts for the project
+// identified by X-Autosk-Cwd and ProjectRoot/DBPath are set. With
+// ?all=true the per-project counts are reported as a list under
+// Projects and the scoped fields are zero.
 type HealthResponse struct {
-	OK         bool   `json:"ok"`
-	Workers    int    `json:"workers"`
-	Queued     int    `json:"queued"`
-	Running    int    `json:"running"`
-	DBPath     string `json:"db_path,omitempty"`
-	DefaultCwd string `json:"default_cwd,omitempty"`
+	OK          bool            `json:"ok"`
+	Workers     int             `json:"workers"`
+	Queued      int             `json:"queued"`
+	Running     int             `json:"running"`
+	DBPath      string          `json:"db_path,omitempty"`
+	ProjectRoot string          `json:"project_root,omitempty"`
+	Projects    []HealthProject `json:"projects,omitempty"`
+}
+
+// HealthProject is one row of the aggregated health view (?all=true).
+type HealthProject struct {
+	Root     string    `json:"root"`
+	DBPath   string    `json:"db_path"`
+	Queued   int       `json:"queued"`
+	Running  int       `json:"running"`
+	OpenedAt time.Time `json:"opened_at"`
 }
 
 // VersionResponse is GET /v1/version.
@@ -105,24 +95,6 @@ type ErrorResponse struct {
 // ListResponse is GET /v1/jobs.
 type ListResponse struct {
 	Jobs []JobResponse `json:"jobs"`
-}
-
-// ---- validation ----------------------------------------------------------
-
-// ErrInvalidRequest is wrapped by validation failures.
-var ErrInvalidRequest = errors.New("invalid request")
-
-// Validate checks SubmitRequest and normalises blank fields.
-func (r SubmitRequest) Validate() (SubmitRequest, error) {
-	out := r
-	out.TaskID = strings.TrimSpace(out.TaskID)
-	if out.TaskID == "" {
-		return out, fmt.Errorf("%w: task_id is required", ErrInvalidRequest)
-	}
-	if out.MaxCorrections != nil && *out.MaxCorrections < 0 {
-		return out, fmt.Errorf("%w: max_corrections must be >= 0", ErrInvalidRequest)
-	}
-	return out, nil
 }
 
 // FromRun projects a runstore.Run to its API shape.

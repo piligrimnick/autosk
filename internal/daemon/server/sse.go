@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,14 +21,20 @@ import (
 //	event: done     — terminal status reached; the server closes the connection
 //
 // Query params:
-//   ?limit=N  — initial replay size (default 20, max 500)
-//   ?full=true — replay the entire transcript before tailing
+//
+//	?limit=N  — initial replay size (default 20, max 500)
+//	?full=true — replay the entire transcript before tailing
 //
 // `Last-Event-ID` is honoured: when present and numeric, we skip that
 // many leading events on first replay so reconnects don't duplicate.
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
+	proj := projectFromCtx(r.Context())
+	if proj == nil {
+		writeError(w, http.StatusInternalServerError, "missing project context", nil)
+		return
+	}
 	jobID := r.PathValue("job_id")
-	run, err := s.deps.Runs.GetRun(r.Context(), jobID)
+	run, err := proj.Runs.GetRun(r.Context(), jobID)
 	if err != nil {
 		if errors.Is(err, runstore.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "job not found", nil)
@@ -97,7 +102,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			cur, err := s.deps.Runs.GetRun(r.Context(), jobID)
+			cur, err := proj.Runs.GetRun(r.Context(), jobID)
 			if err != nil {
 				return
 			}
@@ -214,6 +219,3 @@ func pidOrZero(p *int) int {
 	}
 	return *p
 }
-
-// Compile-time silencer so context import is always used.
-var _ = context.Background

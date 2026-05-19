@@ -28,7 +28,7 @@ import (
 // installStubPkg writes the on-disk shape directly.
 type e2eFakeNpm struct{}
 
-func (e2eFakeNpm) Install(_ context.Context, prefix, spec string) error  { return nil }
+func (e2eFakeNpm) Install(_ context.Context, prefix, spec string) error { return nil }
 func (e2eFakeNpm) Uninstall(_ context.Context, prefix, name string) error {
 	return os.RemoveAll(filepath.Join(prefix, "node_modules", filepath.FromSlash(name)))
 }
@@ -80,9 +80,11 @@ type scriptedPi struct {
 	closed   atomic.Bool
 }
 
-func (r *scriptedPi) PID() int                                            { return 4242 }
-func (r *scriptedPi) Events() <-chan pi.Event                             { return nil }
-func (r *scriptedPi) GetState(ctx context.Context) (pi.SessionInfo, error) { return pi.SessionInfo{SessionID: "sess-e2e", SessionFile: "/tmp/e2e.jsonl"}, nil }
+func (r *scriptedPi) PID() int                { return 4242 }
+func (r *scriptedPi) Events() <-chan pi.Event { return nil }
+func (r *scriptedPi) GetState(ctx context.Context) (pi.SessionInfo, error) {
+	return pi.SessionInfo{SessionID: "sess-e2e", SessionFile: "/tmp/e2e.jsonl"}, nil
+}
 func (r *scriptedPi) SendPrompt(ctx context.Context, m string) error {
 	if r.onPrompt != nil {
 		r.onPrompt(m)
@@ -173,13 +175,19 @@ func (s *e2eStack) startEngine(t *testing.T, factory executor.Factory) func() {
 		Grace:       100 * time.Millisecond,
 		IdleTimeout: 5 * time.Second,
 	})
-	sched := scheduler.New(s.runs, scheduler.ExecutorFunc(func(ctx context.Context, jobID string) error {
-		return exec.Run(ctx, jobID)
+	sched := scheduler.New(scheduler.ExecutorFunc(func(ctx context.Context, job scheduler.Job) error {
+		return exec.Run(ctx, job.ID)
 	}), scheduler.Config{Workers: 1})
 	if err := sched.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	p := poller.New(s.ts.DB(), s.runs, sched, poller.Config{Interval: 75 * time.Millisecond})
+	// In-process e2e: a single fake project key works.
+	// Restart-recovery is normally owned by projectmgr; this stack
+	// constructs the engine directly, so run the sweep by hand.
+	if _, err := s.runs.SweepRunningOnStartup(ctx); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	p := poller.New(s.ts.DB(), s.runs, sched, poller.Config{Interval: 75 * time.Millisecond, ProjectKey: "e2e-project"})
 	if err := p.Start(ctx); err != nil {
 		_ = sched.Stop(ctx)
 		t.Fatal(err)

@@ -464,9 +464,15 @@ Removed
 - From `done`/`cancelled`: **rejected** (`error: reopen first`).
 
 `autosk daemon serve` learns one new flag, `--poll-interval`, default `2s`.
-The `daemon submit` flow keeps working as a manual escape hatch (single
-job, bypasses the poller), but `autosk create --workflow|--agent` is the
-primary entry point.
+
+> **Update (2026-05-18, superseded by [`20260518-Daemon-UDS-Plan.md`](20260518-Daemon-UDS-Plan.md)):**
+> The `daemon submit` flow described in this section is **removed** in
+> the UDS revision. Work enters the daemon exclusively through
+> `autosk create --workflow|--agent` or `autosk enroll`, and the
+> per-project poller picks it up. `POST /v1/jobs` is no longer routed.
+
+The primary entry point is `autosk create --workflow|--agent` (or
+`autosk enroll` for an existing `new` task).
 
 ### 6.2 `workflow create --file` input format
 

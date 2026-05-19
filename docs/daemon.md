@@ -1,7 +1,9 @@
-# autosk daemon — pi orchestrator
+# autosk daemon — multi-project pi orchestrator
 
-`autosk daemon` is an HTTP service that drives autosk tasks through
-their workflows.
+`autosk daemon` is an HTTP-over-UDS service that drives autosk tasks
+through their workflows. **One daemon per host** serves **any number
+of projects** from a single process. The project is selected per
+request via `X-Autosk-Cwd` / `X-Autosk-DB` headers.
 
 For each in-flight task it picks up, the daemon resolves the current
 step's **agent package** (an npm package installed via `autosk agent
@@ -22,153 +24,179 @@ install`) and dispatches to one of two branches:
   inside the runner module; the executor observes `step_signals`
   exactly like the standard branch.
 
+Multi-project plan:
+[`docs/plans/20260518-Daemon-UDS-Plan.md`](plans/20260518-Daemon-UDS-Plan.md).
 Agent packages plan:
 [`docs/plans/20260518-Agent-Packages.md`](plans/20260518-Agent-Packages.md).
-
-Plan: [`docs/plans/20260517-Daemon-Plan.md`](plans/20260517-Daemon-Plan.md).
-RPC contract notes: [`docs/notes/pi-rpc-contract.md`](notes/pi-rpc-contract.md).
+Daemon foundations:
+[`docs/plans/20260517-Daemon-Plan.md`](plans/20260517-Daemon-Plan.md)
+(transport/auth/scope sections are superseded by the UDS plan).
 
 ---
 
 ## Quickstart
 
 ```bash
-# 0. From your project root (must contain `.autosk/`):
-autosk init                     # one-time, if not done already
+# 0. Have one or more project roots with .autosk/ initialised:
+cd ~/work/project-a && autosk init        # one-time per project
+cd ~/work/project-b && autosk init
 
-# 1. Launch the daemon. Default bind = 127.0.0.1:7878, workers = 2.
+# 1. Launch the daemon. Default socket = ~/.autosk/daemon.sock, workers = 2.
 autosk daemon serve &
 
-# 2. Submit a task. Daemon renders the prompt from title + description.
+# 2. Enroll a task into a workflow from any project root. The per-project
+#    poller picks it up automatically.
+cd ~/work/project-a
 id=$(autosk create "Tidy README" -p 1 --json | jq -r .id)
-job=$(autosk daemon submit "$id" --model sonnet:medium --thinking high)
+autosk enroll "$id" --workflow feature-dev
 
-# 3. Watch status / messages.
-autosk daemon status   "$job"
-autosk daemon messages "$job" --limit 20
+# 3. Inspect what the daemon is doing for *this* project:
+autosk daemon list
 
-# 4. Stream live (raw curl example).
-curl -N http://127.0.0.1:7878/v1/jobs/"$job"/stream
+# 4. See every project the daemon currently has loaded:
+autosk daemon list --all-projects
 
-# 5. Cancel.
-autosk daemon cancel "$job"
+# 5. Tail a job (cwd-scoped):
+autosk daemon status   "$JOB"
+autosk daemon messages "$JOB" --limit 20
+
+# 6. SSE stream (raw curl over the socket):
+curl -N --unix-socket "$HOME/.autosk/daemon.sock" \
+     -H "X-Autosk-Cwd: $PWD" \
+     "http://autosk/v1/jobs/$JOB/stream"
+
+# 7. Cancel.
+autosk daemon cancel "$JOB"
 ```
 
-Ad-hoc prompt (no autosk task) — useful for one-offs:
-
-```bash
-autosk daemon submit --prompt "explore this repo" --thinking low
-```
+There is no `autosk daemon submit` command and no `POST /v1/jobs`
+route. Work enters the daemon through workflow enrolment; the poller
+(default cadence 2s, per project) surfaces it from `daemon_runs`.
 
 ---
 
 ## Configuration
 
-`autosk daemon serve` is CLI-flag-only in v0 (no TOML yet).
+`autosk daemon serve` is CLI-flag-only.
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--bind` | `127.0.0.1:7878` | TCP listen address. |
-| `--token-file` | (empty) | If set, file contents are required as `Authorization: Bearer <token>` for everything except `/v1/healthz` and `/v1/version`. |
-| `--workers` | `2` | Max concurrent pi processes. |
-| `--cwd` | current dir | Default working directory passed to pi when a request omits `cwd`. |
-| `--grace` | `10s` | Time SIGTERM has to bring pi down before SIGKILL. |
+| `--sock` | `~/.autosk/daemon.sock` (env `AUTOSK_SOCK`) | Unix-domain socket path. Parent dir is created with mode `0700`, socket with mode `0600`. |
+| `--workers` | `2` | Max concurrent agent processes **across all projects** (single FIFO queue). |
+| `--grace` | `10s` | Time SIGTERM has to bring the agent down before SIGKILL. |
 | `--idle-timeout` | `30m` | Max time between agent events on a single turn before failing the run. |
+| `--poll-interval` | `2s` | Per-project workflow scan cadence. |
 | `--pi-bin` | `pi` | pi binary to spawn (looked up on PATH unless absolute). |
-| `--session-dir` | `<cwd>/.autosk/sessions` | Parent directory for per-job pi sessions. |
+| `--session-dir-root` | `<projectRoot>/.autosk/sessions` when unset | Literal parent dir for per-job session subdirs. When set, the same path is shared across **all** projects served by this daemon; when empty (the default) each project gets its own `<projectRoot>/.autosk/sessions`. No template substitution is performed. |
 
-The runtime state of each job lives in `daemon_runs` inside the project's
-`.autosk/db`. Surviving `daemon_runs` rows are still queryable when the
-daemon is offline (via `autosk sql` or `autosk daemon status` once it is
-back up). Rows whose `status='running'` at daemon startup are rewritten
-to `failed` with `error='daemon_restart'`.
+Project state lives in each project's `.autosk/db`. Projects are
+opened **lazily** on the first request that names them and stay
+resident until the daemon exits. Rows whose `status='running'` at
+first-open are rewritten to `failed` with `error='daemon_restart'`
+(per project, once per daemon lifetime).
+
+### Single-instance guarantee
+
+`daemon serve` refuses to start if another live daemon already owns
+the socket:
+
+```
+$ autosk daemon serve
+autosk: uds: daemon already running at /Users/me/.autosk/daemon.sock
+```
+
+If the socket file is *stale* (no peer accepts connections — typical
+after a crash), the daemon unlinks it and rebinds.
+
+### The daemon ignores its own AUTOSK_DB
+
+`AUTOSK_DB` is **client-side only**. The daemon process itself never
+consults the env var; every request resolves a project via
+`X-Autosk-Cwd` + optional `X-Autosk-DB`. This is what lets one daemon
+serve many projects safely.
 
 ---
 
-## HTTP API
+## HTTP API (over unix-domain socket)
+
+The wire shape is plain HTTP/1.1 over `AF_UNIX`. Use `curl --unix-socket`
+or, in code, an `http.Client` with `Transport.DialContext` returning a
+`net.Dial("unix", path)` connection.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST`   | `/v1/jobs`                        | Submit a job (see §Request body). |
-| `GET`    | `/v1/jobs`                        | List jobs. `?status=`, `?task_id=`, `?limit=`. |
-| `GET`    | `/v1/jobs/{job_id}`               | Read one job. |
+| `GET`    | `/v1/jobs`                        | List jobs for the request's project. `?status=`, `?task_id=`, `?limit=`. |
+| `GET`    | `/v1/jobs/{job_id}`               | Read one job (scoped to project). |
 | `DELETE` | `/v1/jobs/{job_id}`               | Cancel (SIGTERM → grace → SIGKILL); idempotent on terminal rows. |
 | `GET`    | `/v1/jobs/{job_id}/messages`      | `?limit=N` (≤500), `?full=true`. 410 Gone when session is missing. |
 | `GET`    | `/v1/jobs/{job_id}/stream`        | SSE: `event: message`, `event: status`, `event: done`. Supports `Last-Event-ID`. |
-| `GET`    | `/v1/healthz`                     | `{"ok":true,"workers":N,"queued":Q,"running":R}`. |
-| `GET`    | `/v1/version`                     | autosk build info. |
+| `GET`    | `/v1/healthz`                     | Scoped: `{ok, workers, queued, running, db_path, project_root}`. With `?all=true`: cross-project aggregate (no `X-Autosk-Cwd` required). |
+| `GET`    | `/v1/version`                     | autosk build info. Exempt from project headers. |
 
-### Submit body
+### Required headers
 
-```json
-{
-  "task_id":          "as-a1b2",
-  "prompt":           "optional override; if absent, daemon renders from task",
-  "model":            "sonnet:high",
-  "thinking":         "high",
-  "cwd":              "/abs/path",
-  "auto_claim":       true,
-  "max_corrections":  3,
-  "extra_args":       ["--no-tools"]
-}
+Every endpoint except `GET /v1/version` and `GET /v1/healthz?all=true`
+requires:
+
+| Header | Required | Meaning |
+|---|---|---|
+| `X-Autosk-Cwd` | yes (absolute path) | Project root or any path inside it; the daemon walks up to find `.autosk/db`. |
+| `X-Autosk-DB`  | optional (absolute path) | Overrides walk-up resolution. Wins over `X-Autosk-Cwd` for DB selection, but the project root is still derived from this DB path. |
+
+Missing/malformed `X-Autosk-Cwd` → `400`. A `cwd` that does not
+contain `.autosk/db` anywhere up the tree → `404`.
+
+### POST `/v1/jobs` is gone
+
+The previous v0.1 submit endpoint (which spawned ad-hoc pi sessions
+with caller-supplied prompts) is removed. Submitting work is now
+strictly:
+
+```bash
+autosk create   "..." --workflow feature-dev
+autosk create   "..." --agent    @autosk/developer
+autosk enroll   <id>  --workflow feature-dev
+autosk enroll   <id>  --agent    @autosk/developer
 ```
 
-Validation:
+…and the per-project poller picks it up.
 
-- At least one of `task_id`, `prompt` is required.
-- `task_id` must exist in `tasks`.
-- `cwd` must be absolute and a directory.
-- `thinking` must be `off|minimal|low|medium|high|xhigh` or empty.
-- `extra_args` rejects daemon-managed flags (`--model`, `--thinking`,
-  `--mode`, `--session-dir`, `--session`, `--no-session`, `--print`,
-  `-p`, `--api-key`, `--system-prompt`).
+---
 
-### Job response
+## Security model
 
-See `internal/daemon/api/types.go::JobResponse`. The interesting fields:
-
-| Field | Meaning |
-|---|---|
-| `status` | `queued|running|done|failed|cancelled`. |
-| `closure_kind` | On success: `done|cancelled|decomposed`. |
-| `corrections_used` / `max_corrections` | Kickback attempt counter. |
-| `pi_session_id` / `session_path` | Captured from pi `get_state`; used by `messages`. |
-| `pre_blocked_by` | Snapshot of `task.blocked_by` taken at run start. |
-| `error` | Non-empty on terminal failure; `"agent_did_not_close_task"` when corrections were exhausted. |
+- **Auth = filesystem permissions.** The socket is `0600`, its
+  parent directory is `0700`. Anyone able to read `~/.autosk/` already
+  has full read/write access to your project DB(s), so there is no
+  additional trust boundary to defend with tokens here.
+- **No network exposure.** The daemon does not listen on TCP. There
+  is no `--bind` flag, no `--token-file`, no Bearer auth. A future
+  iteration will reintroduce a network mode behind a clearly distinct
+  command surface.
+- **Tool access is pi's.** The spawned pi (or custom runner)
+  inherits the parent environment, can shell, edit files, install
+  dependencies, etc. Do not point a project's cwd at directories you
+  would not give an interactive pi session access to.
+- **Concurrent runs in the same project will race on files.** There
+  is no worktree isolation in this iteration. The global worker pool
+  serialises across projects but does not prevent two jobs in
+  *different* projects from touching the same path if the user
+  chose to symlink them.
 
 ---
 
 ## Closure verification
 
-After every `agent_end` event the daemon classifies the autosk task:
+After every `agent_end` event the daemon classifies the workflow step's
+outcome via `step_signals`:
 
 | Verdict | Condition | Action |
 |---|---|---|
-| `done` | `tasks.status == done` | Run terminates as `done`. |
-| `cancelled` | `tasks.status == cancelled` | Run terminates as `done` (the agent cancelled by design). |
-| `decomposed` | Status still open AND at least one new blocker was added by the agent | Run terminates as `done`. |
-| (invalid) | None of the above | Daemon sends a corrective user message; `corrections_used += 1`. After `max_corrections`, the run terminates as `failed` with `error="agent_did_not_close_task"`. |
+| `transition_emitted` | the step's runner called `autosk step next` | Run terminates as `done`, task advances. |
+| (none) | no signal observed | Daemon sends a corrective user message; `corrections_used += 1`. After `max_corrections` the run terminates as `failed` with `error="agent_did_not_emit_transition"`. |
 
-The daemon **never** calls `autosk done`. The autosk extension running
-inside pi is expected to do that.
-
----
-
-## Security caveats
-
-- **Loopback by default; no auth.** Anyone with a process on the host
-  (and access to the bind port) can submit jobs. Use `--token-file` if
-  this matters.
-- **Token at rest.** A token file is exactly as secure as the filesystem
-  permissions on `.autosk/daemon-token` (or wherever you point
-  `--token-file`). Same trust boundary as `.autosk/db` itself.
-- **Tool access is pi's.** The spawned pi inherits the parent
-  environment, can shell, edit files, install dependencies, etc. Do not
-  point `--cwd` at directories you would not give an interactive pi
-  session access to.
-- **Concurrent runs in the same cwd will race on files.** v0 has no
-  worktree isolation. Either run one worker per cwd or pass distinct
-  `cwd` values per submit (the request field is honoured).
+The daemon **never** calls `autosk done`/`cancel` directly — that is
+owned by the runner via `step next`.
 
 ---
 
@@ -176,20 +204,26 @@ inside pi is expected to do that.
 
 | Symptom | Likely cause |
 |---|---|
-| `submit_status 400 "task not found"` | The provided `task_id` does not exist in this `.autosk/db`. |
+| `daemon already running at <sock>` | Another `autosk daemon serve` owns the socket. `ps -fU $(whoami) \| grep autosk` to find it. |
+| `400 "X-Autosk-Cwd header required"` | Client did not set the header. CLI subcommands set it automatically from `--cwd` or `os.Getwd()`. |
+| `404 "no .autosk/db found from <cwd>"` | The cwd is outside any autosk project. Run `autosk init` or supply `--cwd` pointing into a real project. |
 | Run sits in `running` forever | The agent never emits `agent_end`. The daemon will fail it after `--idle-timeout`. |
-| Run fails with `agent_did_not_close_task` | The agent stopped without calling `autosk done|cancel` and without adding new blockers, `max_corrections` times in a row. Inspect transcript via `messages`. |
-| Run fails with `daemon_restart` | The daemon was restarted while this run was active. v0 does not re-attach. Resubmit if needed. |
+| Run fails with `agent_did_not_emit_transition` | The agent stopped without calling `autosk step next`, `max_corrections` times. Inspect transcript via `autosk daemon messages`. |
+| Run fails with `daemon_restart` | The daemon was restarted while this run was active. This iteration does not re-attach. Re-enroll the task. |
 | 410 on `/v1/jobs/{id}/messages` | `session_path` is empty or the file was deleted. |
 | Stream connection drops | Long polls may need `X-Accel-Buffering: no` (already sent). Use `Last-Event-ID` on reconnect to skip replay. |
 
 ---
 
-## Open items (post-v0)
+## Open items (next iterations)
 
-See plan §10. The big ones:
-
+- Reintroduce a remote HTTP API for network-accessible deployments.
+- Idle-eviction of projects from memory.
+- Per-project worker limits / priorities between projects.
+- Multi-user / shared-host hardening (SO_PEERCRED).
+- `autosk daemon attach`/`detach` for explicit project registration.
 - Re-attach to surviving pi processes after a daemon restart.
-- `POST /v1/jobs/{id}/retry`.
 - Worktree-per-job isolation.
-- TOML config file.
+
+See [`docs/plans/20260518-Daemon-UDS-Plan.md`](plans/20260518-Daemon-UDS-Plan.md)
+§10 for the canonical out-of-scope list.

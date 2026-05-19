@@ -26,17 +26,22 @@ const DefaultInterval = 2 * time.Second
 type Config struct {
 	// Interval between scans. ≤ 0 → DefaultInterval.
 	Interval time.Duration
+	// ProjectKey identifies the project this poller belongs to. Each
+	// scheduler.Job enqueued by this poller is tagged with it so the
+	// global executor knows which project to dispatch into.
+	ProjectKey string
 	// Logger receives info/warn output. nil → slog.Default().
 	Logger *slog.Logger
 }
 
 // Poller scans the DB and feeds the scheduler.
 type Poller struct {
-	db    *sql.DB
-	runs  *runstore.Store
-	sched *scheduler.Scheduler
-	cfg   Config
-	log   *slog.Logger
+	db         *sql.DB
+	runs       *runstore.Store
+	sched      *scheduler.Scheduler
+	cfg        Config
+	log        *slog.Logger
+	projectKey string
 
 	startMu sync.Mutex
 	started bool
@@ -44,7 +49,9 @@ type Poller struct {
 	doneCh  chan struct{}
 }
 
-// New constructs a Poller.
+// New constructs a Poller. cfg.ProjectKey must be set when the poller
+// is wired into the multi-project daemon — tests that don't care can
+// leave it empty.
 func New(db *sql.DB, runs *runstore.Store, sched *scheduler.Scheduler, cfg Config) *Poller {
 	if cfg.Interval <= 0 {
 		cfg.Interval = DefaultInterval
@@ -53,7 +60,7 @@ func New(db *sql.DB, runs *runstore.Store, sched *scheduler.Scheduler, cfg Confi
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Poller{db: db, runs: runs, sched: sched, cfg: cfg, log: log}
+	return &Poller{db: db, runs: runs, sched: sched, cfg: cfg, log: log, projectKey: cfg.ProjectKey}
 }
 
 // Sentinel errors.
@@ -185,8 +192,8 @@ func (p *Poller) enqueueCandidate(ctx context.Context, c Candidate) error {
 	if err != nil {
 		return fmt.Errorf("create run: %w", err)
 	}
-	p.log.Info("poller: enqueued", "task", c.TaskID, "step", c.StepID, "job", run.JobID)
-	if err := p.sched.Enqueue(run.JobID); err != nil {
+	p.log.Info("poller: enqueued", "task", c.TaskID, "step", c.StepID, "job", run.JobID, "project", p.projectKey)
+	if err := p.sched.Enqueue(scheduler.Job{Project: p.projectKey, ID: run.JobID}); err != nil {
 		if errors.Is(err, scheduler.ErrQueueFull) {
 			// Leave the row queued; the worker will pick it up when a slot
 			// frees. The next tick will skip it (it's already in

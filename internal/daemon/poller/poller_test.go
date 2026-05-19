@@ -99,16 +99,19 @@ func TestPoller_EnqueuesNonHumanTask(t *testing.T) {
 
 	enqueued := make(chan string, 4)
 	var seen atomic.Int32
-	exec := scheduler.ExecutorFunc(func(ctx context.Context, jobID string) error {
+	exec := scheduler.ExecutorFunc(func(ctx context.Context, job scheduler.Job) error {
 		seen.Add(1)
-		enqueued <- jobID
+		enqueued <- job.ID
+		if job.Project != "proj-test" {
+			t.Errorf("expected project key 'proj-test', got %q", job.Project)
+		}
 		// Stay running long enough that a second tick observes the row as
 		// active (so dedupe is exercised in TestPoller_Dedupes).
 		time.Sleep(2 * time.Second)
-		_, _ = fx.runs.MarkDone(ctx, jobID, 0, nil)
+		_, _ = fx.runs.MarkDone(ctx, job.ID, 0, nil)
 		return nil
 	})
-	sched := scheduler.New(fx.runs, exec, scheduler.Config{Workers: 1})
+	sched := scheduler.New(exec, scheduler.Config{Workers: 1})
 	if err := sched.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +121,7 @@ func TestPoller_EnqueuesNonHumanTask(t *testing.T) {
 		_ = sched.Stop(gctx)
 	})
 
-	p := poller.New(fx.ts.DB(), fx.runs, sched, poller.Config{Interval: 150 * time.Millisecond})
+	p := poller.New(fx.ts.DB(), fx.runs, sched, poller.Config{Interval: 150 * time.Millisecond, ProjectKey: "proj-test"})
 	if err := p.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -154,14 +157,14 @@ func TestPoller_Dedupes(t *testing.T) {
 	taskID := fx.makeTask(t, "No double-tap", "dev")
 
 	// Long-running executor so the row stays in 'running' across ticks.
-	exec := scheduler.ExecutorFunc(func(ctx context.Context, jobID string) error {
-		_, _ = fx.runs.MarkRunning(ctx, jobID, 0)
+	exec := scheduler.ExecutorFunc(func(ctx context.Context, job scheduler.Job) error {
+		_, _ = fx.runs.MarkRunning(ctx, job.ID, 0)
 		<-ctx.Done()
 		// terminal so cleanup is graceful
-		_, _ = fx.runs.MarkCancelled(context.Background(), jobID, nil)
+		_, _ = fx.runs.MarkCancelled(context.Background(), job.ID, nil)
 		return ctx.Err()
 	})
-	sched := scheduler.New(fx.runs, exec, scheduler.Config{Workers: 1})
+	sched := scheduler.New(exec, scheduler.Config{Workers: 1})
 	if err := sched.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +174,7 @@ func TestPoller_Dedupes(t *testing.T) {
 		_ = sched.Stop(gctx)
 	})
 
-	p := poller.New(fx.ts.DB(), fx.runs, sched, poller.Config{Interval: 60 * time.Millisecond})
+	p := poller.New(fx.ts.DB(), fx.runs, sched, poller.Config{Interval: 60 * time.Millisecond, ProjectKey: "proj-test"})
 	if err := p.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -215,11 +218,11 @@ func TestPoller_SkipsHumanAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	exec := scheduler.ExecutorFunc(func(ctx context.Context, jobID string) error {
-		t.Errorf("scheduler should not have received job for human task; got %s", jobID)
+	exec := scheduler.ExecutorFunc(func(ctx context.Context, job scheduler.Job) error {
+		t.Errorf("scheduler should not have received job for human task; got %s", job.ID)
 		return nil
 	})
-	sched := scheduler.New(fx.runs, exec, scheduler.Config{Workers: 1})
+	sched := scheduler.New(exec, scheduler.Config{Workers: 1})
 	if err := sched.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +232,7 @@ func TestPoller_SkipsHumanAgent(t *testing.T) {
 		_ = sched.Stop(gctx)
 	})
 
-	p := poller.New(fx.ts.DB(), fx.runs, sched, poller.Config{Interval: 60 * time.Millisecond})
+	p := poller.New(fx.ts.DB(), fx.runs, sched, poller.Config{Interval: 60 * time.Millisecond, ProjectKey: "proj-test"})
 	if err := p.Start(ctx); err != nil {
 		t.Fatal(err)
 	}

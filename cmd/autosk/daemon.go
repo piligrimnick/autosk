@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,31 +20,40 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"autosk/internal/agent"
-	"autosk/internal/comments"
 	"autosk/internal/daemon/api"
 	"autosk/internal/daemon/executor"
 	"autosk/internal/daemon/poller"
-	"autosk/internal/daemon/runstore"
+	"autosk/internal/daemon/projectmgr"
 	"autosk/internal/daemon/scheduler"
 	"autosk/internal/daemon/server"
-	"autosk/internal/projectdb"
-	"autosk/internal/step"
-	"autosk/internal/store/doltlite"
-	"autosk/internal/workflow"
+	"autosk/internal/daemon/uds"
 )
+
+// defaultSockPath returns the default ~/.autosk/daemon.sock for the
+// current user. Falls back to ./.autosk/daemon.sock if HOME is unset.
+func defaultSockPath() string {
+	if env := os.Getenv("AUTOSK_SOCK"); env != "" {
+		return env
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ".autosk/daemon.sock"
+	}
+	return filepath.Join(home, ".autosk", "daemon.sock")
+}
 
 func newDaemonCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "daemon",
 		Aliases: []string{"d"},
-		Short:   "Daemon: serve pi-orchestrator HTTP API; submit/get/cancel jobs",
-		Long: "autosk daemon hosts an HTTP API that spawns pi --mode rpc to work on autosk tasks.\n" +
-			"Submit, inspect status, and tail messages. See docs/plans/20260517-Daemon-Plan.md.",
+		Short:   "Daemon: serve the multi-project pi orchestrator over a unix socket",
+		Long: "autosk daemon hosts an HTTP-over-UDS API that runs autosk workflow steps.\n" +
+			"It serves any number of projects from a single process; the project is\n" +
+			"selected per request via X-Autosk-Cwd / X-Autosk-DB headers.\n" +
+			"See docs/plans/20260518-Daemon-UDS-Plan.md.",
 	}
 	cmd.AddCommand(
 		newDaemonServeCmd(),
-		newDaemonSubmitCmd(),
 		newDaemonStatusCmd(),
 		newDaemonMessagesCmd(),
 		newDaemonCancelCmd(),
@@ -55,47 +66,32 @@ func newDaemonCmd() *cobra.Command {
 
 func newDaemonServeCmd() *cobra.Command {
 	var (
-		bind         string
-		tokenFile    string
-		workers      int
-		cwd          string
-		grace        time.Duration
-		idleTimeout  time.Duration
-		pollInterval time.Duration
-		piBin        string
-		sessionDir   string
+		sockPath       string
+		workers        int
+		grace          time.Duration
+		idleTimeout    time.Duration
+		pollInterval   time.Duration
+		piBin          string
+		sessionDirRoot string
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Run the daemon",
+		Short: "Run the daemon (single-instance UDS listener)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			// Resolve project DB.
-			if cwd == "" {
-				wd, err := os.Getwd()
-				if err != nil {
-					return err
-				}
-				cwd = wd
+			// Resolve socket path.
+			if sockPath == "" {
+				sockPath = defaultSockPath()
 			}
-			dbPath, _, err := projectdb.ResolveOrInit(cwd, flagDB)
+			absSock, err := filepath.Abs(sockPath)
 			if err != nil {
-				if errors.Is(err, projectdb.ErrNotFound) {
-					return errors.New("no .autosk/db found; run `autosk init` or a write command first")
-				}
-				return err
+				return fmt.Errorf("resolve --sock: %w", err)
 			}
-			tasks := doltlite.New()
-			if err := tasks.Open(ctx, dbPath); err != nil {
-				return fmt.Errorf("open db: %w", err)
-			}
-			defer tasks.Close()
-			if err := tasks.Migrate(ctx); err != nil {
-				return fmt.Errorf("migrate: %w", err)
-			}
-			// Global packages prefix — source of truth for installed agents.
+			sockPath = absSock
+
+			// Packages registry.
 			reg, err := openPackagesRegistry()
 			if err != nil {
 				return fmt.Errorf("pkgregistry: %w", err)
@@ -103,79 +99,59 @@ func newDaemonServeCmd() *cobra.Command {
 			if err := reg.EnsurePrefix(); err != nil {
 				return fmt.Errorf("pkgregistry ensure prefix: %w", err)
 			}
-			runs := runstore.New(tasks.DB())
-			ag := agent.New(tasks.DB()).WithResolver(reg)
-			wfs := workflow.New(tasks.DB(), ag)
-			cs := comments.New(tasks.DB())
-			sigs := step.New(tasks.DB())
 
-			// Resolve token.
-			var token string
-			if tokenFile != "" {
-				b, err := os.ReadFile(tokenFile)
-				if err != nil {
-					return fmt.Errorf("read token file: %w", err)
+			// One global scheduler + one project manager per daemon. The
+			// scheduler closure captures the manager by reference (the
+			// closure runs at dispatch time, after mgr is assigned).
+			var mgr *projectmgr.Manager
+			sched := scheduler.New(scheduler.ExecutorFunc(func(ctx context.Context, job scheduler.Job) error {
+				proj, ok := mgr.Get(projectmgr.Key(job.Project))
+				if !ok {
+					return fmt.Errorf("project not loaded: %s", job.Project)
 				}
-				token = strings.TrimSpace(string(b))
-			}
-
-			// Executor wires the new (v0.2) deps.
-			exec := executor.New(executor.Deps{
-				Runs:      runs,
-				Tasks:     tasks,
-				Agents:    ag,
-				Workflows: wfs,
-				Comments:  cs,
-				Signals:   sigs,
-				Packages:  reg,
-			}, executor.DefaultFactory, executor.Config{
-				PIBin:          piBin,
-				SessionDirRoot: sessionDir,
-				ProjectRoot:    cwd,
-				Grace:          grace,
-				IdleTimeout:    idleTimeout,
-			})
-			sched := scheduler.New(runs, scheduler.ExecutorFunc(func(ctx context.Context, jobID string) error {
-				return exec.Run(ctx, jobID)
+				return proj.Executor.Run(ctx, job.ID)
 			}), scheduler.Config{Workers: workers})
+			mgr = projectmgr.New(projectmgr.Deps{
+				Sched:        sched,
+				Packages:     reg,
+				PollInterval: pollInterval,
+				ExecCfg: executor.Config{
+					PIBin:          piBin,
+					SessionDirRoot: sessionDirRoot,
+					Grace:          grace,
+					IdleTimeout:    idleTimeout,
+				},
+			})
+
 			if err := sched.Start(ctx); err != nil {
 				return fmt.Errorf("scheduler start: %w", err)
 			}
 
-			// Poller surfaces in_workflow tasks into the scheduler.
-			poll := poller.New(tasks.DB(), runs, sched, poller.Config{Interval: pollInterval})
-			if err := poll.Start(ctx); err != nil {
-				return fmt.Errorf("poller start: %w", err)
-			}
-
 			srv := server.New(server.Deps{
-				Runs:       runs,
-				Tasks:      tasks,
-				Sched:      sched,
-				Workers:    workers,
-				Token:      token,
-				DefaultCwd: cwd,
-				DBPath:     dbPath,
+				Projects: mgr,
+				Sched:    sched,
+				Workers:  workers,
 			})
+
+			ln, err := uds.Listen(sockPath)
+			if err != nil {
+				return err
+			}
 			httpSrv := &http.Server{
-				Addr:              bind,
 				Handler:           srv.Handler(),
 				ReadHeaderTimeout: 10 * time.Second,
 			}
 
-			// Signal trapping for graceful shutdown.
 			sigCh := make(chan os.Signal, 2)
 			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-			fmt.Fprintf(os.Stderr, "autosk daemon: listening on %s\n", bind)
-			fmt.Fprintf(os.Stderr, "autosk daemon: db=%s cwd=%s workers=%d\n", dbPath, cwd, workers)
-			if token != "" {
-				fmt.Fprintln(os.Stderr, "autosk daemon: bearer token required (from --token-file)")
-			}
+			fmt.Fprintf(os.Stderr, "autosk daemon: listening on %s\n", sockPath)
+			fmt.Fprintf(os.Stderr, "autosk daemon: workers=%d poll=%s grace=%s\n",
+				workers, pollInterval, grace)
 
 			serveErr := make(chan error, 1)
 			go func() {
-				if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					serveErr <- err
 				}
 				close(serveErr)
@@ -193,44 +169,123 @@ func newDaemonServeCmd() *cobra.Command {
 
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
+			// Shutdown order (per docs/plans/20260518-Daemon-UDS-Plan.md §6.2):
+			//   1. httpSrv.Shutdown  — stop accepting new requests.
+			//   2. mgr.StopPollers   — quiesce per-project pollers so no new
+			//                          daemon_runs rows are enqueued.
+			//   3. sched.Stop        — cancel in-flight workers and wait for
+			//                          them to flush MarkCancelled/MarkFailed.
+			//   4. mgr.CloseDBs      — only now is it safe to close the
+			//                          per-project doltlite stores.
+			//   5. uds.Cleanup       — unlink the socket.
 			if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 				fmt.Fprintf(os.Stderr, "autosk daemon: http shutdown: %v\n", err)
 			}
-			if err := poll.Stop(shutdownCtx); err != nil {
-				fmt.Fprintf(os.Stderr, "autosk daemon: poller stop: %v\n", err)
+			if err := mgr.StopPollers(shutdownCtx); err != nil {
+				fmt.Fprintf(os.Stderr, "autosk daemon: stop pollers: %v\n", err)
 			}
 			if err := sched.Stop(shutdownCtx); err != nil {
 				fmt.Fprintf(os.Stderr, "autosk daemon: scheduler stop: %v\n", err)
 			}
+			if err := mgr.CloseDBs(shutdownCtx); err != nil {
+				fmt.Fprintf(os.Stderr, "autosk daemon: close dbs: %v\n", err)
+			}
+			if err := uds.Cleanup(sockPath); err != nil {
+				fmt.Fprintf(os.Stderr, "autosk daemon: cleanup socket: %v\n", err)
+			}
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&bind, "bind", "127.0.0.1:7878", "listen address")
-	cmd.Flags().StringVar(&tokenFile, "token-file", "", "if set, contents are required as Bearer token")
-	cmd.Flags().IntVar(&workers, "workers", 2, "max concurrent pi processes")
-	cmd.Flags().StringVar(&cwd, "cwd", "", "default cwd for jobs (default: current dir)")
+	cmd.Flags().StringVar(&sockPath, "sock", "", "unix socket path (default: $AUTOSK_SOCK or ~/.autosk/daemon.sock)")
+	cmd.Flags().IntVar(&workers, "workers", 2, "max concurrent agent processes across all projects")
 	cmd.Flags().DurationVar(&grace, "grace", 10*time.Second, "SIGTERM grace before SIGKILL")
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 30*time.Minute, "per-turn idle timeout")
-	cmd.Flags().DurationVar(&pollInterval, "poll-interval", poller.DefaultInterval, "how often to scan in_workflow tasks")
+	cmd.Flags().DurationVar(&pollInterval, "poll-interval", poller.DefaultInterval, "how often each project scans in_workflow tasks")
 	cmd.Flags().StringVar(&piBin, "pi-bin", "", "pi binary (default: 'pi' on PATH)")
-	cmd.Flags().StringVar(&sessionDir, "session-dir", "", "parent dir for per-job session subdirs (default: <cwd>/.autosk/sessions)")
+	cmd.Flags().StringVar(&sessionDirRoot, "session-dir-root", "", "literal parent dir for per-job session subdirs, shared across projects (default: <projectRoot>/.autosk/sessions)")
 	return cmd
 }
 
 // ---- client commands -----------------------------------------------------
 
-// daemonClient is the shared --daemon-url / --daemon-token-file plumbing.
+// daemonClient encapsulates the http.Client that talks to the daemon
+// over UDS and the per-request X-Autosk-Cwd / X-Autosk-DB headers.
 type daemonClient struct {
-	url   string
-	token string
+	sock string
+	cwd  string
+	cli  *http.Client
 }
 
+// addClientFlags wires the per-subcommand --sock / --cwd flags. The
+// global --db flag (cmd/autosk/main.go) is reused as the X-Autosk-DB
+// override.
 func addClientFlags(cmd *cobra.Command, c *daemonClient) {
-	cmd.Flags().StringVar(&c.url, "daemon-url", "http://127.0.0.1:7878", "daemon base URL")
-	cmd.Flags().StringVar(&c.token, "daemon-token-file", "", "Bearer token file (matches daemon --token-file)")
+	cmd.Flags().StringVar(&c.sock, "sock", "", "unix socket path (default: $AUTOSK_SOCK or ~/.autosk/daemon.sock)")
+	cmd.Flags().StringVar(&c.cwd, "cwd", "", "project root for X-Autosk-Cwd (default: current dir)")
 }
 
-func (c daemonClient) request(ctx context.Context, method, path string, body any) (*http.Response, error) {
+// resolve fills in defaults and constructs the underlying http.Client.
+func (c *daemonClient) resolve() error {
+	if c.sock == "" {
+		c.sock = defaultSockPath()
+	}
+	abs, err := filepath.Abs(c.sock)
+	if err != nil {
+		return fmt.Errorf("resolve --sock: %w", err)
+	}
+	c.sock = abs
+	if c.cwd == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("getwd: %w", err)
+		}
+		c.cwd = wd
+	}
+	absCwd, err := filepath.Abs(c.cwd)
+	if err != nil {
+		return fmt.Errorf("resolve --cwd: %w", err)
+	}
+	c.cwd = absCwd
+	sock := c.sock
+	c.cli = &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", sock)
+			},
+		},
+		// Long timeout: SSE streams may hold the connection open.
+		Timeout: 0,
+	}
+	return nil
+}
+
+// dbOverride returns the X-Autosk-DB value (or empty). Order:
+// global --db flag, then AUTOSK_DB env.
+func (c *daemonClient) dbOverride() string {
+	if flagDB != "" {
+		if abs, err := filepath.Abs(flagDB); err == nil {
+			return abs
+		}
+		return flagDB
+	}
+	if env := os.Getenv("AUTOSK_DB"); env != "" {
+		if abs, err := filepath.Abs(env); err == nil {
+			return abs
+		}
+		return env
+	}
+	return ""
+}
+
+// request fires one HTTP request with the project headers attached.
+// Body is JSON-marshalled when non-nil.
+func (c *daemonClient) request(ctx context.Context, method, path string, body any) (*http.Response, error) {
+	if c.cli == nil {
+		if err := c.resolve(); err != nil {
+			return nil, err
+		}
+	}
 	var br io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -239,21 +294,44 @@ func (c daemonClient) request(ctx context.Context, method, path string, body any
 		}
 		br = strings.NewReader(string(buf))
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.url+path, br)
+	req, err := http.NewRequestWithContext(ctx, method, "http://autosk"+path, br)
 	if err != nil {
 		return nil, err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if c.token != "" {
-		b, err := os.ReadFile(c.token)
-		if err != nil {
-			return nil, fmt.Errorf("read token file: %w", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(b)))
+	req.Header.Set("X-Autosk-Cwd", c.cwd)
+	if db := c.dbOverride(); db != "" {
+		req.Header.Set("X-Autosk-DB", db)
 	}
-	return http.DefaultClient.Do(req)
+	return c.cli.Do(req)
+}
+
+// requestNoCwd is for endpoints that explicitly opt into the daemon-
+// level (cross-project) view, like /v1/healthz?all=true.
+func (c *daemonClient) requestNoCwd(ctx context.Context, method, path string, body any) (*http.Response, error) {
+	if c.cli == nil {
+		if err := c.resolve(); err != nil {
+			return nil, err
+		}
+	}
+	var br io.Reader
+	if body != nil {
+		buf, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		br = strings.NewReader(string(buf))
+	}
+	req, err := http.NewRequestWithContext(ctx, method, "http://autosk"+path, br)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return c.cli.Do(req)
 }
 
 // decodeResponse parses a 2xx JSON body into out; otherwise returns a
@@ -275,7 +353,7 @@ func decodeResponse(resp *http.Response, out any) error {
 }
 
 // formatDetails renders an ErrorResponse.Details map as "\n  key: value"
-// lines so the user sees diagnostic context (e.g. daemon_db_path, hint).
+// lines so the user sees diagnostic context (e.g. cwd, hint).
 func formatDetails(d map[string]any) string {
 	if len(d) == 0 {
 		return ""
@@ -320,45 +398,6 @@ func trimError(s string) string {
 		return s[:47] + "…"
 	}
 	return s
-}
-
-// ---- submit --------------------------------------------------------------
-
-func newDaemonSubmitCmd() *cobra.Command {
-	var (
-		client         daemonClient
-		maxCorrections int
-	)
-	cmd := &cobra.Command{
-		Use:   "submit <as-id>",
-		Short: "Submit a task to the daemon (workflow engine lands in W6)",
-		Long: "Submit an autosk task for the daemon to execute. v0.2 transitions " +
-			"the daemon into a workflow engine; until W6 lands the server returns 501 " +
-			"for this endpoint. The client still validates the request shape.",
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			req := api.SubmitRequest{TaskID: args[0]}
-			if cmd.Flags().Changed("max-corrections") {
-				req.MaxCorrections = &maxCorrections
-			}
-			resp, err := client.request(cmd.Context(), "POST", "/v1/jobs", req)
-			if err != nil {
-				return err
-			}
-			var job api.JobResponse
-			if err := decodeResponse(resp, &job); err != nil {
-				return err
-			}
-			if flagJSON {
-				return json.NewEncoder(os.Stdout).Encode(job)
-			}
-			fmt.Println(job.JobID)
-			return nil
-		},
-	}
-	addClientFlags(cmd, &client)
-	cmd.Flags().IntVar(&maxCorrections, "max-corrections", 3, "kickback attempts before failing")
-	return cmd
 }
 
 // ---- status --------------------------------------------------------------
@@ -523,16 +562,47 @@ func newDaemonCancelCmd() *cobra.Command {
 
 func newDaemonListCmd() *cobra.Command {
 	var (
-		client   daemonClient
-		statuses string
-		taskID   string
-		limit    int
+		client      daemonClient
+		statuses    string
+		taskID      string
+		limit       int
+		allProjects bool
 	)
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List jobs",
+		Short: "List jobs (scoped to the current project unless --all-projects)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if allProjects {
+				// Aggregated view: hit /v1/healthz?all=true and print
+				// the per-project summary. (Until we add a true
+				// cross-project listing, this gives the operator a
+				// clear "who's loaded, who's busy" view.)
+				resp, err := client.requestNoCwd(cmd.Context(), "GET", "/v1/healthz?all=true", nil)
+				if err != nil {
+					return err
+				}
+				var h api.HealthResponse
+				if err := decodeResponse(resp, &h); err != nil {
+					return err
+				}
+				if flagJSON {
+					return json.NewEncoder(os.Stdout).Encode(h)
+				}
+				if len(h.Projects) == 0 {
+					fmt.Fprintln(os.Stderr, "(no projects loaded)")
+					return nil
+				}
+				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+				fmt.Fprintln(w, "ROOT\tDB\tQUEUED\tRUNNING\tOPENED")
+				for _, p := range h.Projects {
+					fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\n",
+						p.Root, p.DBPath, p.Queued, p.Running,
+						p.OpenedAt.Format("15:04:05"))
+				}
+				_ = w.Flush()
+				return nil
+			}
 			q := []string{}
 			if statuses != "" {
 				q = append(q, "status="+statuses)
@@ -570,5 +640,6 @@ func newDaemonListCmd() *cobra.Command {
 	cmd.Flags().StringVar(&statuses, "status", "", "comma-separated list (queued,running,done,failed,cancelled) or 'all'")
 	cmd.Flags().StringVar(&taskID, "task-id", "", "filter by autosk task id")
 	cmd.Flags().IntVar(&limit, "limit", 0, "max rows (0 = unlimited)")
+	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "show every loaded project (aggregated health), not the scoped job list")
 	return cmd
 }

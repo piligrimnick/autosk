@@ -5,6 +5,23 @@
 **Predecessors:** [`20260513-Init-Plan.md`](20260513-Init-Plan.md),
 [`20260513-Impl-Plan.md`](20260513-Impl-Plan.md).
 
+> **Partially superseded by [`20260518-Daemon-UDS-Plan.md`](20260518-Daemon-UDS-Plan.md).**
+>
+> The sections of this plan that cover the **transport** (TCP `--bind`,
+> Bearer auth, `--token-file`), the **scope** (`--cwd`-pinned process),
+> and the **submit endpoint** (`POST /v1/jobs`, `autosk daemon submit`)
+> have been replaced wholesale: the daemon now listens on a single
+> per-host unix-domain socket, serves any number of projects via the
+> `X-Autosk-Cwd` / `X-Autosk-DB` request headers, and lets the per-
+> project poller surface workflow steps. Auth is reduced to filesystem
+> permissions on the socket.
+>
+> What is still current here: the `daemon_runs` schema, the executor
+> pipeline (queued → running → closure check → terminal), the closure-
+> verification semantics, and the v0 surface conventions outside of the
+> bullets above. Use the UDS plan as the source of truth where the two
+> disagree.
+
 ---
 
 ## 1. Purpose

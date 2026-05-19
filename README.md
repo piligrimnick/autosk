@@ -142,8 +142,9 @@ Admin
   autosk history <id>                  # stub
 
 Daemon
-  autosk daemon serve [--bind ADDR] [--workers N] [--poll-interval 2s] ...
-  autosk daemon list / status <job-id> / messages <job-id> / cancel <job-id>
+  autosk daemon serve [--sock PATH] [--workers N] [--poll-interval 2s] ...
+  autosk daemon list [--all-projects]
+  autosk daemon status <job-id> / messages <job-id> / cancel <job-id>
 ```
 
 Every read command accepts `--json`. Every write command produces a
@@ -162,21 +163,33 @@ doltlite commit so future `autosk history` can recover field history.
 
 ## Daemon / pi orchestrator
 
-`autosk daemon serve` exposes an HTTP API that spawns `pi --mode rpc`
-against autosk tasks, verifies the agent closes the task per protocol,
-and kicks back when it doesn't.
+`autosk daemon serve` is a per-host service that listens on a unix-
+domain socket and runs autosk workflow steps. **One process per host
+serves any number of projects**; the project for each request is
+selected by the `X-Autosk-Cwd` header that the `autosk daemon ...`
+client commands attach for you.
 
 ```bash
+# 1. Start the daemon (defaults to ~/.autosk/daemon.sock, workers=2).
 autosk daemon serve &
+
+# 2. From any project root, enroll a task into a workflow. The per-
+#    project poller picks it up automatically; no submit step.
 id=$(autosk create "do thing" -p 1 --json | jq -r .id)
-autosk daemon submit "$id" --model sonnet:medium --thinking high
+autosk enroll "$id" --workflow feature-dev
+
+# 3. Inspect.
+autosk daemon list                  # this project only
+autosk daemon list --all-projects   # every loaded project
 autosk daemon status   <job-id>
 autosk daemon messages <job-id> --limit 20
 ```
 
-See [`docs/daemon.md`](docs/daemon.md) for the API surface, configuration
-flags, closure verification rules, and security caveats. The contract for
-the `pi --mode rpc` wire format is summarised in
+See [`docs/daemon.md`](docs/daemon.md) for the full API surface
+(socket layout, single-instance semantics, headers, SSE, security
+model) and [`docs/plans/20260518-Daemon-UDS-Plan.md`](docs/plans/20260518-Daemon-UDS-Plan.md)
+for the design notes. The contract for the `pi --mode rpc` wire
+format is summarised in
 [`docs/notes/pi-rpc-contract.md`](docs/notes/pi-rpc-contract.md).
 
 ## Roadmap (post v0.2)

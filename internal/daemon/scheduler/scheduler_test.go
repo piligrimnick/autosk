@@ -14,6 +14,8 @@ import (
 	"autosk/internal/store/doltlite"
 )
 
+const projKey = "proj-A"
+
 type schedFixture struct {
 	runs   *runstore.Store
 	taskID string
@@ -77,32 +79,6 @@ func makeQueuedRun(t *testing.T, fx *schedFixture) string {
 	return r.JobID
 }
 
-func TestScheduler_StartSweepsRunning(t *testing.T) {
-	ctx := context.Background()
-	fx := newFixture(t)
-	defer fx.close()
-	a, _ := fx.runs.CreateRun(ctx, runstore.NewRun{TaskID: fx.taskID, StepID: fx.stepID})
-	_, _ = fx.runs.MarkRunning(ctx, a.JobID, 1)
-
-	exec := scheduler.ExecutorFunc(func(ctx context.Context, jobID string) error {
-		return nil
-	})
-	s := scheduler.New(fx.runs, exec, scheduler.Config{Workers: 1})
-	if err := s.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer func() {
-		gctx, gc := context.WithTimeout(context.Background(), time.Second)
-		defer gc()
-		_ = s.Stop(gctx)
-	}()
-
-	got, _ := fx.runs.GetRun(ctx, a.JobID)
-	if got.Status != runstore.StatusFailed || got.Error != "daemon_restart" {
-		t.Fatalf("expected sweep-to-failed, got %+v", got)
-	}
-}
-
 func TestScheduler_DispatchesJobsConcurrently(t *testing.T) {
 	ctx := context.Background()
 	fx := newFixture(t)
@@ -122,7 +98,7 @@ func TestScheduler_DispatchesJobsConcurrently(t *testing.T) {
 	)
 	wg.Add(n)
 
-	exec := scheduler.ExecutorFunc(func(ctx context.Context, jobID string) error {
+	exec := scheduler.ExecutorFunc(func(ctx context.Context, job scheduler.Job) error {
 		defer wg.Done()
 		cur := running.Add(1)
 		defer running.Add(-1)
@@ -132,19 +108,19 @@ func TestScheduler_DispatchesJobsConcurrently(t *testing.T) {
 				break
 			}
 		}
-		_, _ = fx.runs.MarkRunning(ctx, jobID, 0)
+		_, _ = fx.runs.MarkRunning(ctx, job.ID, 0)
 		time.Sleep(80 * time.Millisecond)
-		_, _ = fx.runs.MarkDone(ctx, jobID, 0, nil)
+		_, _ = fx.runs.MarkDone(ctx, job.ID, 0, nil)
 		ran.Add(1)
 		return nil
 	})
 
-	s := scheduler.New(fx.runs, exec, scheduler.Config{Workers: 3, QueueDepth: n})
+	s := scheduler.New(exec, scheduler.Config{Workers: 3, QueueDepth: n})
 	if err := s.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range ids {
-		if err := s.Enqueue(id); err != nil {
+		if err := s.Enqueue(scheduler.Job{Project: projKey, ID: id}); err != nil {
 			t.Fatalf("Enqueue %s: %v", id, err)
 		}
 	}
@@ -175,16 +151,16 @@ func TestScheduler_CancelInterruptsExecutor(t *testing.T) {
 
 	started := make(chan struct{})
 	var observedDone atomic.Bool
-	exec := scheduler.ExecutorFunc(func(ctx context.Context, jobID string) error {
-		_, _ = fx.runs.MarkRunning(ctx, jobID, 0)
+	exec := scheduler.ExecutorFunc(func(ctx context.Context, job scheduler.Job) error {
+		_, _ = fx.runs.MarkRunning(ctx, job.ID, 0)
 		close(started)
 		<-ctx.Done()
 		observedDone.Store(true)
-		_, _ = fx.runs.MarkCancelled(context.Background(), jobID, nil)
+		_, _ = fx.runs.MarkCancelled(context.Background(), job.ID, nil)
 		return ctx.Err()
 	})
 
-	s := scheduler.New(fx.runs, exec, scheduler.Config{Workers: 1})
+	s := scheduler.New(exec, scheduler.Config{Workers: 1})
 	if err := s.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -194,14 +170,15 @@ func TestScheduler_CancelInterruptsExecutor(t *testing.T) {
 		_ = s.Stop(gctx)
 	}()
 
-	if err := s.Enqueue(id); err != nil {
+	job := scheduler.Job{Project: projKey, ID: id}
+	if err := s.Enqueue(job); err != nil {
 		t.Fatal(err)
 	}
 	<-started
-	if !s.IsActive(id) {
+	if !s.IsActive(job) {
 		t.Fatal("expected job to be active")
 	}
-	if err := s.Cancel(id); err != nil {
+	if err := s.Cancel(job); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
 
@@ -223,9 +200,9 @@ func TestScheduler_EnqueueBeforeStartIsRejected(t *testing.T) {
 	fx := newFixture(t)
 	defer fx.close()
 	id := makeQueuedRun(t, fx)
-	exec := scheduler.ExecutorFunc(func(ctx context.Context, jobID string) error { return nil })
-	s := scheduler.New(fx.runs, exec, scheduler.Config{Workers: 1})
-	if err := s.Enqueue(id); err == nil {
+	exec := scheduler.ExecutorFunc(func(ctx context.Context, job scheduler.Job) error { return nil })
+	s := scheduler.New(exec, scheduler.Config{Workers: 1})
+	if err := s.Enqueue(scheduler.Job{Project: projKey, ID: id}); err == nil {
 		t.Fatal("expected ErrNotStarted")
 	}
 }
@@ -236,16 +213,16 @@ func TestScheduler_StopWithGraceTimeoutErrors(t *testing.T) {
 	defer fx.close()
 	id := makeQueuedRun(t, fx)
 
-	exec := scheduler.ExecutorFunc(func(ctx context.Context, jobID string) error {
+	exec := scheduler.ExecutorFunc(func(ctx context.Context, job scheduler.Job) error {
 		time.Sleep(300 * time.Millisecond)
-		_, _ = fx.runs.MarkDone(ctx, jobID, 0, nil)
+		_, _ = fx.runs.MarkDone(ctx, job.ID, 0, nil)
 		return nil
 	})
-	s := scheduler.New(fx.runs, exec, scheduler.Config{Workers: 1})
+	s := scheduler.New(exec, scheduler.Config{Workers: 1})
 	if err := s.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	_ = s.Enqueue(id)
+	_ = s.Enqueue(scheduler.Job{Project: projKey, ID: id})
 	time.Sleep(50 * time.Millisecond)
 
 	gctx, gc := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -255,4 +232,48 @@ func TestScheduler_StopWithGraceTimeoutErrors(t *testing.T) {
 		t.Fatal("expected grace-timeout error")
 	}
 	time.Sleep(400 * time.Millisecond)
+}
+
+func TestScheduler_JobsAreScopedByProject(t *testing.T) {
+	ctx := context.Background()
+	fx := newFixture(t)
+	defer fx.close()
+	id := makeQueuedRun(t, fx)
+
+	started := make(chan struct{})
+	exec := scheduler.ExecutorFunc(func(ctx context.Context, job scheduler.Job) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	s := scheduler.New(exec, scheduler.Config{Workers: 1})
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		gctx, gc := context.WithTimeout(context.Background(), time.Second)
+		defer gc()
+		_ = s.Stop(gctx)
+	}()
+	jobA := scheduler.Job{Project: "proj-A", ID: id}
+	jobB := scheduler.Job{Project: "proj-B", ID: id} // same id, different project
+	if err := s.Enqueue(jobA); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	// Cancel for proj-B (a different qualified job) must not affect proj-A.
+	if err := s.Cancel(jobB); err == nil {
+		t.Fatal("expected ErrJobNotActive for cross-project cancel")
+	}
+	if !s.IsActive(jobA) {
+		t.Fatal("expected proj-A job to still be active")
+	}
+	counts := s.ActiveCountByProject()
+	if counts["proj-A"] != 1 {
+		t.Fatalf("expected 1 active job for proj-A, got %d", counts["proj-A"])
+	}
+	if counts["proj-B"] != 0 {
+		t.Fatalf("expected 0 active jobs for proj-B, got %d", counts["proj-B"])
+	}
+	_ = s.Cancel(jobA)
 }
