@@ -33,6 +33,7 @@ func newEnrollCmd() *cobra.Command {
 	var (
 		workflowArg string
 		agentArg    string
+		stepArg     string
 	)
 	cmd := &cobra.Command{
 		Use:   "enroll <id>",
@@ -49,11 +50,18 @@ into a workflow without recreating it. Exactly one of --workflow /
 --agent is required; they are mutually exclusive.
 
   --workflow NAME   enroll into the named workflow at its first step
-                    (status becomes 'in_workflow').
+                    (status becomes 'in_workflow'). Pair with --step
+                    NAME to enter at a specific step instead of
+                    first_step.
 
   --agent    NAME   shorthand for --workflow single:<NAME>; the
                     synthetic single:<NAME> workflow is auto-created
                     on first use (matches 'create --agent').
+
+  --step     NAME   enroll at this step inside --workflow instead of
+                    the workflow's first step. Requires --workflow;
+                    incompatible with --agent (single:<agent> flows
+                    only have one step).
 
 Only tasks in status='new' can be enrolled:
   - in_workflow      → the daemon will advance this task; to put it
@@ -63,9 +71,10 @@ Only tasks in status='new' can be enrolled:
                        within its current workflow.
   - done / cancelled → use 'autosk reopen <id>' first.
 
-Example:
+Examples:
 
-  autosk enroll as-bea9 --workflow feature-dev-generic`,
+  autosk enroll as-bea9 --workflow feature-dev-generic
+  autosk enroll as-bea9 --workflow feature-dev-generic --step review`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if workflowArg != "" && agentArg != "" {
@@ -73,6 +82,9 @@ Example:
 			}
 			if workflowArg == "" && agentArg == "" {
 				return errors.New("--workflow NAME or --agent NAME is required")
+			}
+			if stepArg != "" && agentArg != "" {
+				return errors.New("--step only applies with --workflow (single:<agent> workflows have a single step)")
 			}
 			taskID := args[0]
 
@@ -100,7 +112,7 @@ Example:
 				return err
 			}
 
-			w, st, err := resolveWorkflowEntry(cmd.Context(), wfs, ag, workflowArg, agentArg)
+			w, st, err := resolveWorkflowEntry(cmd.Context(), wfs, ag, workflowArg, agentArg, stepArg)
 			if err != nil {
 				return err
 			}
@@ -128,6 +140,7 @@ Example:
 	}
 	cmd.Flags().StringVar(&workflowArg, "workflow", "", "enroll the task into this named workflow at its first step")
 	cmd.Flags().StringVar(&agentArg, "agent", "", "shorthand for --workflow single:<name>; ensures the synthetic workflow exists")
+	cmd.Flags().StringVar(&stepArg, "step", "", "enroll at this step name instead of the workflow's first step (requires --workflow)")
 	return cmd
 }
 

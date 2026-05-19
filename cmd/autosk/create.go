@@ -26,6 +26,7 @@ func newCreateCmd() *cobra.Command {
 		blockedBy   []string
 		workflowArg string
 		agentArg    string
+		stepArg     string
 	)
 	cmd := &cobra.Command{
 		Use:   "create [title]",
@@ -36,10 +37,14 @@ The task starts in status='new' unless --workflow or --agent (mutually
 exclusive) is given:
 
   --workflow NAME   join an existing workflow at its first_step (status
-                    becomes 'in_workflow').
+                    becomes 'in_workflow'). Pair with --step NAME to
+                    enter at a specific step instead of first_step.
 
   --agent    NAME   shorthand for joining the auto-generated workflow
                     single:<NAME> (status becomes 'in_workflow').
+
+  --step     NAME   start the workflow at this step (requires --workflow;
+                    incompatible with --agent).
 
 For tasks that already exist (status='new'), use 'autosk enroll <id>
 --workflow NAME' / '--agent NAME' to attach them to a workflow without
@@ -100,13 +105,18 @@ If --description is "-", the description is read from stdin.`,
 
 			// Workflow assignment, if any.
 			if workflowArg != "" || agentArg != "" {
-				wf, firstStep, err := resolveWorkflowEntry(cmd.Context(), wfStore, ag, workflowArg, agentArg)
+				if stepArg != "" && agentArg != "" {
+					return errors.New("--step only applies with --workflow (single:<agent> workflows have a single step)")
+				}
+				wf, entryStep, err := resolveWorkflowEntry(cmd.Context(), wfStore, ag, workflowArg, agentArg, stepArg)
 				if err != nil {
 					return err
 				}
 				task.Status = store.StatusInWorkflow
 				task.WorkflowID = wf.ID
-				task.CurrentStepID = firstStep.ID
+				task.CurrentStepID = entryStep.ID
+			} else if stepArg != "" {
+				return errors.New("--step requires --workflow")
 			}
 
 			t, err := s.CreateTask(cmd.Context(), task)
@@ -145,13 +155,20 @@ If --description is "-", the description is read from stdin.`,
 	cmd.Flags().StringSliceVar(&blockedBy, "blocked-by", nil, "ids of tasks that block this task")
 	cmd.Flags().StringVar(&workflowArg, "workflow", "", "join this named workflow at its first step")
 	cmd.Flags().StringVar(&agentArg, "agent", "", "shorthand for --workflow single:<name>; ensures the synthetic workflow exists")
+	cmd.Flags().StringVar(&stepArg, "step", "", "start at this step name instead of the workflow's first step (requires --workflow)")
 	return cmd
 }
 
 // resolveWorkflowEntry returns the workflow + entry step the task should
 // land on, given either --workflow NAME or --agent NAME. Exactly one of
 // the two must be non-empty (caller verifies that).
-func resolveWorkflowEntry(ctx context.Context, wfs *workflow.Store, ag *agent.Store, wfName, agentName string) (workflow.Workflow, workflow.Step, error) {
+//
+// If stepName is non-empty, the task enters at that step instead of the
+// workflow's first_step. stepName is only meaningful with --workflow;
+// callers must reject --agent + --step before getting here (single:<agent>
+// workflows have one step by construction, so the flag would be at best
+// redundant and at worst lie about an alternate entry point).
+func resolveWorkflowEntry(ctx context.Context, wfs *workflow.Store, ag *agent.Store, wfName, agentName, stepName string) (workflow.Workflow, workflow.Step, error) {
 	if wfName != "" {
 		w, err := wfs.GetByName(ctx, wfName)
 		if err != nil {
@@ -160,6 +177,13 @@ func resolveWorkflowEntry(ctx context.Context, wfs *workflow.Store, ag *agent.St
 			}
 			return workflow.Workflow{}, workflow.Step{}, err
 		}
+		if stepName != "" {
+			st, err := stepByName(w, stepName)
+			if err != nil {
+				return workflow.Workflow{}, workflow.Step{}, err
+			}
+			return w, st, nil
+		}
 		st, err := stepByID(w, w.FirstStepID)
 		if err != nil {
 			return workflow.Workflow{}, workflow.Step{}, fmt.Errorf("first step missing in %s: %w", wfName, err)
@@ -167,6 +191,8 @@ func resolveWorkflowEntry(ctx context.Context, wfs *workflow.Store, ag *agent.St
 		return w, st, nil
 	}
 	// --agent NAME: ensure the agent exists, then ensure single:<name>.
+	// stepName must be empty here (caller-enforced); the single:<agent>
+	// workflow exposes exactly one step ("do") and there's nothing to pick.
 	if _, err := ag.EnsureByName(ctx, agentName); err != nil {
 		return workflow.Workflow{}, workflow.Step{}, fmt.Errorf("ensure agent %s: %w", agentName, err)
 	}
@@ -189,6 +215,20 @@ func stepByID(w workflow.Workflow, stepID string) (workflow.Step, error) {
 		}
 	}
 	return workflow.Step{}, fmt.Errorf("step %s not found in workflow %s", stepID, w.Name)
+}
+
+// stepByName returns the step with the given name from a loaded Workflow.
+// The error message lists the available step names so a typo on the CLI
+// surfaces the right alternatives without forcing a second `workflow show`.
+func stepByName(w workflow.Workflow, name string) (workflow.Step, error) {
+	names := make([]string, 0, len(w.Steps))
+	for _, s := range w.Steps {
+		if s.Name == name {
+			return s, nil
+		}
+		names = append(names, s.Name)
+	}
+	return workflow.Step{}, fmt.Errorf("step %q not found in workflow %s (available: %s)", name, w.Name, strings.Join(names, ", "))
 }
 
 // renderOptsForTask is a thin alias for taskRenderOpts so the older

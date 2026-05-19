@@ -363,6 +363,140 @@ func TestEnroll_RejectsUninstalledAgent(t *testing.T) {
 	}
 }
 
+// TestEnroll_AtSpecificStep_Workflow verifies the --step flag lands the
+// task on the named step instead of the workflow's first_step. The
+// fixture workflow above has `dev` as first_step and `review` as a
+// second step; we enroll directly into `review` and check both the
+// status and the resolved step name.
+func TestEnroll_AtSpecificStep_Workflow(t *testing.T) {
+	withIsolatedPackagesPrefix(t)
+	dir := t.TempDir()
+	if _, err := runRoot(t, dir, "init"); err != nil {
+		t.Fatal(err)
+	}
+	wfPath := writeFeatureDevWorkflow(t, dir)
+	if out, err := runRoot(t, dir, "workflow", "create", "--file", wfPath); err != nil {
+		t.Fatalf("workflow create: %v\n%s", err, out)
+	}
+	id := createBareTask(t, dir, "Land at review")
+
+	if out, err := runRoot(t, dir, "enroll", id, "--workflow", "feature-dev-generic", "--step", "review"); err != nil {
+		t.Fatalf("enroll --step: %v\n%s", err, out)
+	}
+	got := statusOf(t, dir, id)
+	if got["status"] != "in_workflow" {
+		t.Errorf("status: want in_workflow, got %v", got["status"])
+	}
+	if got["current_step"] != "review" {
+		t.Errorf("current_step: want review (not first_step `dev`), got %v", got["current_step"])
+	}
+}
+
+// TestEnroll_AtSpecificStep_Unknown surfaces a clean, helpful error
+// when --step names a step that doesn't exist in the chosen workflow.
+// The error must include the available step names so the user can fix
+// the typo without a separate `workflow show`.
+func TestEnroll_AtSpecificStep_Unknown(t *testing.T) {
+	withIsolatedPackagesPrefix(t)
+	dir := t.TempDir()
+	if _, err := runRoot(t, dir, "init"); err != nil {
+		t.Fatal(err)
+	}
+	wfPath := writeFeatureDevWorkflow(t, dir)
+	if _, err := runRoot(t, dir, "workflow", "create", "--file", wfPath); err != nil {
+		t.Fatal(err)
+	}
+	id := createBareTask(t, dir, "X")
+
+	_, err := runRoot(t, dir, "enroll", id, "--workflow", "feature-dev-generic", "--step", "docs")
+	if err == nil {
+		t.Fatal("expected enroll to fail for unknown step name")
+	}
+	if !strings.Contains(err.Error(), "step") || !strings.Contains(err.Error(), "docs") {
+		t.Errorf("error should mention the bad step name: %v", err)
+	}
+	if !strings.Contains(err.Error(), "dev") || !strings.Contains(err.Error(), "review") {
+		t.Errorf("error should list available step names (dev, review): %v", err)
+	}
+	// Task must be untouched on failure.
+	if s := statusOf(t, dir, id); s["status"] != "new" {
+		t.Errorf("task should remain `new` after failed enroll, got: %v", s["status"])
+	}
+}
+
+// TestEnroll_StepIncompatibleWithAgent guards the rejection rule for
+// --step + --agent. single:<agent> workflows have one step by
+// construction, so combining --agent with --step is nonsensical and
+// the CLI must say so up front.
+func TestEnroll_StepIncompatibleWithAgent(t *testing.T) {
+	withIsolatedPackagesPrefix(t)
+	dir := t.TempDir()
+	if _, err := runRoot(t, dir, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runRoot(t, dir, "agent", "install", "@autosk/dev-fixture"); err != nil {
+		t.Fatal(err)
+	}
+	id := createBareTask(t, dir, "X")
+
+	_, err := runRoot(t, dir, "enroll", id, "--agent", "@autosk/dev-fixture", "--step", "do")
+	if err == nil {
+		t.Fatal("expected enroll to reject --agent + --step")
+	}
+	if !strings.Contains(err.Error(), "--step") || !strings.Contains(err.Error(), "--workflow") {
+		t.Errorf("error should explain --step requires --workflow, got: %v", err)
+	}
+}
+
+// TestCreate_AtSpecificStep_Workflow is the create-side mirror of
+// TestEnroll_AtSpecificStep_Workflow: create + --workflow + --step must
+// land the brand-new task on the named step rather than first_step.
+func TestCreate_AtSpecificStep_Workflow(t *testing.T) {
+	withIsolatedPackagesPrefix(t)
+	dir := t.TempDir()
+	if _, err := runRoot(t, dir, "init"); err != nil {
+		t.Fatal(err)
+	}
+	wfPath := writeFeatureDevWorkflow(t, dir)
+	if _, err := runRoot(t, dir, "workflow", "create", "--file", wfPath); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runRoot(t, dir, "create", "Land at review on create", "--workflow", "feature-dev-generic", "--step", "review")
+	if err != nil {
+		t.Fatalf("create --step: %v\n%s", err, out)
+	}
+	id := strings.TrimSpace(out)
+	if i := strings.LastIndex(id, "\n"); i >= 0 {
+		id = id[i+1:]
+	}
+	got := statusOf(t, dir, id)
+	if got["status"] != "in_workflow" {
+		t.Errorf("status: want in_workflow, got %v", got["status"])
+	}
+	if got["current_step"] != "review" {
+		t.Errorf("current_step: want review, got %v", got["current_step"])
+	}
+}
+
+// TestCreate_StepWithoutWorkflow rejects `create --step` when there's
+// no --workflow / --agent to anchor it; `--step` is meaningless without
+// a target workflow.
+func TestCreate_StepWithoutWorkflow(t *testing.T) {
+	withIsolatedPackagesPrefix(t)
+	dir := t.TempDir()
+	if _, err := runRoot(t, dir, "init"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runRoot(t, dir, "create", "X", "--step", "review")
+	if err == nil {
+		t.Fatal("expected create --step (without --workflow) to fail")
+	}
+	if !strings.Contains(err.Error(), "--step") || !strings.Contains(err.Error(), "--workflow") {
+		t.Errorf("error should explain --step requires --workflow, got: %v", err)
+	}
+}
+
 // TestEnroll_JSONOutput verifies --json round-trips through enroll and
 // emits the expected shape (matches `show --json`), INCLUDING the
 // derived `blocked` / `blocked_by` / `blocks` fields — the plan's
