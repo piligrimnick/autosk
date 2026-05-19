@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jesseduffield/gocui"
@@ -49,6 +50,13 @@ type Gui struct {
 	ctx   context.Context
 	cancel context.CancelFunc
 	stopRefresh chan struct{}
+
+	// refreshInFlight coalesces redundant refresh requests. j-spam
+	// (cursor moves that call applyScope → refresh) used to enqueue
+	// one OnWorker job per keypress; now intermediate requests are
+	// dropped when one is already running. Lazygit's RefreshHelper
+	// uses a similar 'pending' flag.
+	refreshInFlight atomic.Bool
 }
 
 // Run constructs the gui, opens the alt-screen, and blocks on the
@@ -95,7 +103,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	// Kick an initial refresh + 2s ticker. Both go via g.OnWorker /
 	// g.Update — no goroutine-per-panel.
-	g.OnWorker(func(_ gocui.Task) error { gu.refreshAll(); return nil })
+	gu.scheduleRefresh()
 	go gu.tickLoop(opts.Refresh)
 
 	// --job <id> deep-link.
@@ -140,12 +148,24 @@ func (gu *Gui) tickLoop(d time.Duration) {
 		case <-gu.ctx.Done():
 			return
 		case <-t.C:
-			gu.g.OnWorker(func(_ gocui.Task) error {
-				gu.refreshAll()
-				return nil
-			})
+			gu.scheduleRefresh()
 		}
 	}
+}
+
+// scheduleRefresh enqueues a refresh via the gocui worker. If one is
+// already in flight it's a no-op — the running refresh will pick up
+// any state changes when it samples scope+filter under the lock.
+func (gu *Gui) scheduleRefresh() {
+	if !gu.refreshInFlight.CompareAndSwap(false, true) {
+		dlog("scheduleRefresh: coalesced (in-flight)")
+		return
+	}
+	gu.g.OnWorker(func(_ gocui.Task) error {
+		defer gu.refreshInFlight.Store(false)
+		gu.refreshAll()
+		return nil
+	})
 }
 
 // quit is the standard handler for q / Ctrl-C.

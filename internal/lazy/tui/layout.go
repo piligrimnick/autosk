@@ -23,9 +23,24 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 	}
 	_ = g.DeleteView("tiny")
 
-	gu.st.withRLock(func() {})
-	state := gu.st.view
-	focused := gu.st.focused.window()
+	// Snapshot every state field we touch in this layout pass under
+	// the RLock. After the snapshot we don't read st.* directly:
+	// concurrent g.Update closures + worker-side mutations (inspector
+	// SSE) would otherwise race against these reads under -race.
+	var (
+		state       ViewState
+		focused     string
+		logHidden   bool
+		currentTab  inspectorTab
+		focusedWin  string
+	)
+	gu.st.withRLock(func() {
+		state = gu.st.view
+		focusedWin = gu.st.focused.window()
+		logHidden = gu.st.logHide
+		currentTab = gu.st.insp.Tab
+	})
+	focused = focusedWin
 	if state == StateInspector {
 		focused = ""
 	}
@@ -34,9 +49,9 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 		height:      h,
 		focusedSide: focused,
 		state:       state,
-		logHidden:   gu.st.logHide,
+		logHidden:   logHidden,
 	}
-	showLiveInput := state == StateInspector && gu.st.insp.Tab == tabLive
+	showLiveInput := state == StateInspector && currentTab == tabLive
 	dims := arrange(args, showLiveInput)
 
 	// In dashboard state, hide inspector views; in inspector state,
@@ -77,7 +92,7 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 			v.Frame = true
 		}
 		// Highlight the focused side panel's frame.
-		if state == StateDashboard && win == gu.st.focused.window() {
+		if state == StateDashboard && win == focusedWin {
 			v.FrameColor = gocui.ColorCyan
 		}
 		if win == winInspectorIn {
@@ -99,7 +114,7 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 			}
 		}
 	default:
-		if _, err := g.SetCurrentView(gu.st.focused.window()); err != nil && !isUnknownView(err) {
+		if _, err := g.SetCurrentView(focusedWin); err != nil && !isUnknownView(err) {
 			// best-effort; views may not exist yet on first frame
 		}
 	}

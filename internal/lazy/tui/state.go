@@ -76,12 +76,35 @@ func (t inspectorTab) String() string {
 	return "?"
 }
 
+// agentRel selects which agent relation an agent-scope chip refers
+// to. Design plan §3.4 forces the Agents-panel Enter popup so the
+// operator picks one explicitly (the relation is ambiguous —
+// author_id and current_step.agent_id are different concepts).
+type agentRel int
+
+const (
+	agentRelNone   agentRel = iota
+	agentRelAuthor          // narrow on tasks.author_id
+	agentRelStep            // narrow on current_step.agent_id
+)
+
+func (r agentRel) String() string {
+	switch r {
+	case agentRelAuthor:
+		return "author"
+	case agentRelStep:
+		return "step"
+	}
+	return ""
+}
+
 // scope describes the cross-link scope chips active on the dashboard.
 type scope struct {
-	TaskID       string // narrows Jobs
-	WorkflowID   string // narrows Tasks + Jobs
+	TaskID       string   // narrows Jobs
+	WorkflowID   string   // narrows Tasks + Jobs
 	WorkflowName string
-	Agent        string // narrows Tasks (opt-in via Enter)
+	Agent        string   // narrows Tasks (opt-in via Enter)
+	AgentRel     agentRel // which agent relation Agent refers to
 }
 
 // IsEmpty reports whether no scope chip is active.
@@ -105,8 +128,6 @@ const (
 	popupMenu
 	popupConfirm
 	popupPrompt
-	popupSearch
-	popupHelp
 )
 
 // popupState is the runtime state of the current popup.
@@ -132,6 +153,7 @@ type inspectorState struct {
 	live          *datasource.LiveHandle
 	liveCancel    context.CancelFunc
 	liveBuf       []string  // pre-rendered transcript lines (oldest→newest)
+	liveTruncated bool      // true once liveBuf hit its cap and was trimmed
 	liveInput     string    // textarea contents (single-line in v1 — risk #3)
 	// Archive tab plumbing.
 	archive       []datasource.MessageEvent
@@ -150,11 +172,15 @@ type flashState struct {
 	CreatedAt time.Time
 }
 
-// state is the entire mutable model of the TUI. Guarded by mu; the
-// gocui main thread is the only writer (everything that mutates state
-// goes through g.Update so we never need a goroutine-side mutex), but
-// the read side is concurrent (e.g. status-bar render off the layout
-// goroutine), so we keep the lock for safety.
+// state is the entire mutable model of the TUI. Guarded by mu.
+//
+// Most writes are funnelled through g.Update closures (which run on
+// the gocui main thread), but a handful of OnWorker-spawned
+// goroutines also mutate state directly — see inspector.go's
+// startLiveStream / stopLiveStream, which write to st.insp.live and
+// st.insp.liveCancel from a worker goroutine. The RWMutex is what
+// makes that safe; do NOT drop it without untangling the worker
+// writes first.
 type state struct {
 	mu sync.RWMutex
 
@@ -186,15 +212,22 @@ type state struct {
 	logHide bool
 
 	health datasource.Health
+
+	// comments is a per-task last-N comment cache, hydrated by
+	// refreshAll on cursor change (RefreshHelper pattern). The
+	// rendered Tasks-detail pane reads it; the comment count is
+	// authoritative on the Task struct.
+	comments map[string][]datasource.Comment
 }
 
 // newState seeds an empty model with sensible defaults.
 func newState() *state {
 	return &state{
-		focused: panelTasks,
-		view:    StateDashboard,
-		logBuf:  []string{"lazy started"},
-		health:  datasource.Health{Daemon: "down"},
+		focused:  panelTasks,
+		view:     StateDashboard,
+		logBuf:   []string{"lazy started"},
+		health:   datasource.Health{Daemon: "down"},
+		comments: map[string][]datasource.Comment{},
 	}
 }
 
@@ -255,6 +288,42 @@ func (s *state) selectedAgent() (datasource.Agent, bool) {
 		return datasource.Agent{}, false
 	}
 	return s.agents[s.agentCursor], true
+}
+
+// ---- locked accessor variants -------------------------------------------
+//
+// These wrap the bare selected* calls under the model's RLock; they
+// are the safe entry points for handlers that don't already hold the
+// lock. The bare selected* methods exist for callers that already
+// hold the lock (e.g. inside a withRLock closure).
+
+func (s *state) selectedTaskLocked() (datasource.Task, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.selectedTask()
+}
+func (s *state) selectedJobLocked() (datasource.Job, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.selectedJob()
+}
+func (s *state) selectedWorkflowLocked() (datasource.Workflow, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.selectedWorkflow()
+}
+func (s *state) selectedAgentLocked() (datasource.Agent, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.selectedAgent()
+}
+
+// commentsFor returns the cached last-N comments for taskID, or nil.
+// Hydrated by refreshAll; reads need the RLock.
+func (s *state) commentsFor(taskID string) []datasource.Comment {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.comments[taskID]
 }
 
 // appendLog adds a one-line entry to the command log with a relative

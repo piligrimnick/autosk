@@ -3,10 +3,9 @@ package datasource
 import (
 	"context"
 	"errors"
-	"fmt"
+	"sync/atomic"
 	"time"
 
-	"autosk/internal/daemon/api"
 	"autosk/internal/daemon/client"
 )
 
@@ -22,6 +21,12 @@ import (
 type Live struct {
 	*Offline
 	cli *client.Client
+
+	// fallbacks counts how many times a daemon-preferred read fell
+	// back to the offline base (because the daemon errored). The
+	// status bar reads it via Fallbacks() so a daemon that's
+	// technically reachable but flaky becomes visible.
+	fallbacks atomic.Uint64
 }
 
 // NewLive wires a Live datasource on top of an Offline base.
@@ -29,23 +34,38 @@ func NewLive(base *Offline, cli *client.Client) *Live {
 	return &Live{Offline: base, cli: cli}
 }
 
+// Fallbacks returns the cumulative count of daemon-read errors that
+// fell back to the DB. Status-bar consumers can compare against a
+// previous reading to render a 'daemon flaky' chip.
+func (l *Live) Fallbacks() uint64 { return l.fallbacks.Load() }
+
 // Jobs prefers the daemon's view so Streaming/AttachCount are live.
+//
+// Step labels (workflow:step:agent names) are batched through the
+// offline layer's lookupStepLabels — one SQL per refresh tick, not
+// 3*N. Without that batch this verb was a N+1 hot spot during every
+// 2s refresh.
 func (l *Live) Jobs(ctx context.Context, f JobFilter) ([]Job, error) {
 	resp, err := l.cli.ListJobs(ctx, f.TaskID, f.Statuses, f.Limit)
 	if err != nil {
-		// Daemon hiccup — fall back to the DB.
+		l.fallbacks.Add(1)
 		return l.Offline.Jobs(ctx, f)
 	}
+	stepIDs := make([]string, 0, len(resp.Jobs))
+	for _, j := range resp.Jobs {
+		if j.StepID != "" {
+			stepIDs = append(stepIDs, j.StepID)
+		}
+	}
+	decor := l.Offline.lookupStepLabels(ctx, stepIDs)
 	out := make([]Job, 0, len(resp.Jobs))
 	for _, j := range resp.Jobs {
 		dj := Job{JobResponse: j}
-		// Pull workflow/step labels via the DB (the API doesn't carry them).
 		if j.StepID != "" {
-			off := l.Offline
-			if dj2, derr := off.GetJob(ctx, j.JobID); derr == nil {
-				dj.StepName = dj2.StepName
-				dj.AgentName = dj2.AgentName
-				dj.WorkflowName = dj2.WorkflowName
+			if d, ok := decor[j.StepID]; ok {
+				dj.StepName = d.StepName
+				dj.AgentName = d.AgentName
+				dj.WorkflowName = d.WorkflowName
 			}
 		}
 		if f.WorkflowID != "" && dj.WorkflowName == "" {
@@ -57,16 +77,21 @@ func (l *Live) Jobs(ctx context.Context, f JobFilter) ([]Job, error) {
 }
 
 // GetJob hits the daemon's GET /v1/jobs/{id} for the live shape.
+// Workflow/step/agent labels come from the offline base (one query,
+// not three) so the inspector header decoration is cheap.
 func (l *Live) GetJob(ctx context.Context, id string) (Job, error) {
 	resp, err := l.cli.GetJob(ctx, id)
 	if err != nil {
+		l.fallbacks.Add(1)
 		return l.Offline.GetJob(ctx, id)
 	}
 	j := Job{JobResponse: resp}
-	if dj, derr := l.Offline.GetJob(ctx, id); derr == nil {
-		j.StepName = dj.StepName
-		j.AgentName = dj.AgentName
-		j.WorkflowName = dj.WorkflowName
+	if resp.StepID != "" {
+		if d, ok := l.Offline.lookupStepLabels(ctx, []string{resp.StepID})[resp.StepID]; ok {
+			j.StepName = d.StepName
+			j.AgentName = d.AgentName
+			j.WorkflowName = d.WorkflowName
+		}
 	}
 	return j, nil
 }
@@ -76,6 +101,7 @@ func (l *Live) GetJob(ctx context.Context, id string) (Job, error) {
 func (l *Live) Messages(ctx context.Context, jobID string, full bool, limit int) ([]MessageEvent, error) {
 	resp, err := l.cli.GetMessages(ctx, jobID, full, limit)
 	if err != nil {
+		l.fallbacks.Add(1)
 		return l.Offline.Messages(ctx, jobID, full, limit)
 	}
 	out := make([]MessageEvent, 0, len(resp.Events))
@@ -179,39 +205,6 @@ func (l *Live) UninstallAgent(ctx context.Context, name string) error {
 	return errors.New("agent uninstall: run `autosk agent uninstall` outside lazy (TUI shell-out is out of scope)")
 }
 
-// jobMatchesFilter is the in-memory filter we apply after fetching
-// because the daemon API doesn't support workflow scoping on the
-// /jobs endpoint.
-func jobMatchesFilter(j Job, f JobFilter) bool {
-	if f.WorkflowID != "" && j.WorkflowName == "" {
-		return false
-	}
-	return true
-}
-
-// statusesArg mirrors the client's status-set encoding for tests.
-func statusesArg(s []string) string {
-	if len(s) == 0 {
-		return ""
-	}
-	return fmt.Sprintf("status=%s", apiCSV(s))
-}
-
-func apiCSV(s []string) string {
-	out := ""
-	for i, v := range s {
-		if i > 0 {
-			out += ","
-		}
-		out += v
-	}
-	return out
-}
-
 // Compile-time interface check.
 var _ Datasource = (*Live)(nil)
 var _ Datasource = (*Offline)(nil)
-
-// jobResponseFlat exists so test fixtures can build a wire-shape Job
-// without importing api.
-type jobResponseFlat = api.JobResponse

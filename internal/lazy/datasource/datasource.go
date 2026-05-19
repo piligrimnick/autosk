@@ -124,16 +124,20 @@ type Comment struct {
 // Signal is one step_signals row (the rows agents insert via
 // `autosk step next`). Decoded inline because the workflow store
 // doesn't expose them.
+//
+// step_signals has no synthetic id column (PK = run_id), so Signal
+// has no ID either. The transition_id is decoded into Target via
+// the step_transitions row’s NextStepName / TaskStatus.
 type Signal struct {
-	ID         int64
-	TaskID     string
-	JobID      string
-	StepID     string
-	StepName   string
-	Target     string // sibling step name OR done|cancelled|human_feedback
-	AgentID    string
-	AgentName  string
-	CreatedAt  time.Time
+	TransitionID int64
+	TaskID       string
+	JobID        string
+	StepID       string
+	StepName     string
+	Target       string // sibling step name OR done|cancelled|human_feedback
+	AgentID      string
+	AgentName    string
+	CreatedAt    time.Time
 }
 
 // Health describes the datasource's view of the daemon.
@@ -194,7 +198,7 @@ type Datasource interface {
 	Workflows(ctx context.Context, includeSynthetic bool) ([]Workflow, error)
 	Agents(ctx context.Context) ([]Agent, error)
 	Comments(ctx context.Context, taskID string) ([]Comment, error)
-	Signals(ctx context.Context, taskID string) ([]Signal, error)
+	Signals(ctx context.Context, jobID string) ([]Signal, error)
 	Messages(ctx context.Context, jobID string, full bool, limit int) ([]MessageEvent, error)
 	Healthz(ctx context.Context) (Health, error)
 
@@ -229,12 +233,26 @@ type Datasource interface {
 }
 
 // TaskFilter narrows Tasks results. Empty struct == "default open work".
+//
+// Agent scoping has three flavours because the design plan §3.4
+// explicitly distinguishes them:
+//   - AgentName       – broad: match either AuthorName OR StepAgentName.
+//                       Used by the agent: facet for backwards
+//                       compatibility with the help text.
+//   - AuthorName      – narrow: filter on tasks.author_id only.
+//                       Used when the Agents-panel popup chooses
+//                       "by author".
+//   - StepAgentName   – narrow: filter on current_step.agent_id only.
+//                       Used when the Agents-panel popup chooses
+//                       "by current step".
 type TaskFilter struct {
-	Statuses   []store.Status
-	Priority   *int
-	WorkflowID string
-	AgentName  string
-	Search     string // substring match on id / title (case-insensitive)
+	Statuses      []store.Status
+	Priority      *int
+	WorkflowID    string
+	AgentName     string // broad match (author OR current step's agent)
+	AuthorName    string // narrow: author_id only
+	StepAgentName string // narrow: current_step.agent_id only
+	Search        string // substring match on id / title (case-insensitive)
 }
 
 // DefaultTaskFilter returns the filter that mirrors `autosk list`

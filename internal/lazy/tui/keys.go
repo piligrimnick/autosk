@@ -84,7 +84,9 @@ func (gu *Gui) bindKeys() error {
 		{winTasks, 'm', gocui.ModNone, gu.taskComment},
 		{winTasks, 'p', gocui.ModNone, gu.taskPriority},
 		{winTasks, 'o', gocui.ModNone, gu.taskReopen},
-		{winTasks, 'c', gocui.ModNone, gu.taskClaim},
+		// Note: there is no 'c claim' binding. The v0.2 schema has no
+		// claim verb — tasks self-advance via workflow steps. Use 'e'
+		// to enroll, or assign an agent. The help screen reflects this.
 
 		// Workflows write verbs.
 		{winWorkflows, 'n', gocui.ModNone, gu.workflowNew},
@@ -109,6 +111,21 @@ func (gu *Gui) bindKeys() error {
 		{winInspector, '4', gocui.ModNone, gu.inspectorJumpTab(tabSignals)},
 		{winInspector, gocui.KeyEsc, gocui.ModNone, gu.inspectorClose},
 		{winInspector, gocui.KeyCtrlO, gocui.ModNone, gu.inspectorClose},
+
+		// Inspector scroll bindings (design plan §6.2): j/k single line,
+		// Ctrl-F/Ctrl-B page, g/G start/end. Hooked on the body view.
+		{winInspector, 'j', gocui.ModNone, gu.inspectorScroll(+1)},
+		{winInspector, 'k', gocui.ModNone, gu.inspectorScroll(-1)},
+		{winInspector, gocui.KeyArrowDown, gocui.ModNone, gu.inspectorScroll(+1)},
+		{winInspector, gocui.KeyArrowUp, gocui.ModNone, gu.inspectorScroll(-1)},
+		{winInspector, gocui.KeyCtrlF, gocui.ModNone, gu.inspectorScrollPage(+1)},
+		{winInspector, gocui.KeyCtrlB, gocui.ModNone, gu.inspectorScrollPage(-1)},
+		{winInspector, 'g', gocui.ModNone, gu.inspectorScrollTo(false)},
+		{winInspector, 'G', gocui.ModNone, gu.inspectorScrollTo(true)},
+
+		// J/K on the detail pane scroll the Tasks detail viewport.
+		{winDetail, 'j', gocui.ModNone, gu.detailScroll(+1)},
+		{winDetail, 'k', gocui.ModNone, gu.detailScroll(-1)},
 
 		// Live tab dispatch — bound on the input view.
 		{winInspectorIn, gocui.KeyCtrlD, gocui.ModNone, gu.liveSend},
@@ -230,20 +247,20 @@ func (gu *Gui) applyScope() {
 			}
 		}
 	})
-	gu.g.OnWorker(func(_ gocui.Task) error { gu.refreshAll(); return nil })
+	gu.scheduleRefresh()
 }
 
 // handleClearScope clears every scope chip.
 func (gu *Gui) handleClearScope(*gocui.Gui, *gocui.View) error {
 	gu.st.withLock(func() { gu.st.scope = scope{} })
 	gu.flashf("info", "scope cleared")
-	gu.g.OnWorker(func(_ gocui.Task) error { gu.refreshAll(); return nil })
+	gu.scheduleRefresh()
 	return nil
 }
 
 // handleRefresh re-fetches every panel on demand.
 func (gu *Gui) handleRefresh(*gocui.Gui, *gocui.View) error {
-	gu.g.OnWorker(func(_ gocui.Task) error { gu.refreshAll(); return nil })
+	gu.scheduleRefresh()
 	gu.flashf("info", "refresh")
 	return nil
 }
@@ -251,11 +268,20 @@ func (gu *Gui) handleRefresh(*gocui.Gui, *gocui.View) error {
 // handleEsc closes the active popup or inspector; falls back to
 // clearing filter chips.
 func (gu *Gui) handleEsc(g *gocui.Gui, v *gocui.View) error {
-	gu.st.withLock(func() {})
-	if gu.st.popup.Kind != popupNone {
+	// Snapshot popup.Kind + view under the lock so concurrent
+	// mutations from g.Update closures don't race against these reads.
+	var (
+		popupKind popupKind
+		view      ViewState
+	)
+	gu.st.withRLock(func() {
+		popupKind = gu.st.popup.Kind
+		view = gu.st.view
+	})
+	if popupKind != popupNone {
 		return gu.popupClose(g, v)
 	}
-	if gu.st.view == StateInspector {
+	if view == StateInspector {
 		return gu.inspectorClose(g, v)
 	}
 	// Otherwise: clear the focused panel's filter.
@@ -271,7 +297,7 @@ func (gu *Gui) handleEsc(g *gocui.Gui, v *gocui.View) error {
 			gu.st.filter.Agents = ""
 		}
 	})
-	gu.g.OnWorker(func(_ gocui.Task) error { gu.refreshAll(); return nil })
+	gu.scheduleRefresh()
 	return nil
 }
 
@@ -296,6 +322,11 @@ func (gu *Gui) workflowsEnter(*gocui.Gui, *gocui.View) error {
 }
 
 // agentsEnter prompts the user to opt into the agent scope.
+//
+// Design plan §3.4: the relation is ambiguous (author vs.
+// current_step.agent are different concepts), so we force the
+// operator to pick ONE. The choice flows into scope.AgentRel and is
+// surfaced both on the Tasks-panel scope chip and in the status bar.
 func (gu *Gui) agentsEnter(*gocui.Gui, *gocui.View) error {
 	a, ok := gu.st.selectedAgentLocked()
 	if !ok {
@@ -306,13 +337,21 @@ func (gu *Gui) agentsEnter(*gocui.Gui, *gocui.View) error {
 		"by current step (current_step.agent == " + a.Name + ")",
 		"cancel",
 	}, func(i int) error {
+		var rel agentRel
+		switch i {
+		case 0:
+			rel = agentRelAuthor
+		case 1:
+			rel = agentRelStep
+		default:
+			return nil
+		}
 		gu.st.withLock(func() {
-			if i < 2 {
-				gu.st.scope.Agent = a.Name
-				gu.st.focused = panelTasks
-			}
+			gu.st.scope.Agent = a.Name
+			gu.st.scope.AgentRel = rel
+			gu.st.focused = panelTasks
 		})
-		gu.g.OnWorker(func(_ gocui.Task) error { gu.refreshAll(); return nil })
+		gu.scheduleRefresh()
 		return nil
 	})
 	return nil
@@ -328,32 +367,11 @@ func (gu *Gui) jobsEnter(*gocui.Gui, *gocui.View) error {
 	return nil
 }
 
-// selectedTaskLocked is the read-side variant of state.selectedTask
-// that wraps acquisition of the RLock.
-func (s *state) selectedTaskLocked() (datasource.Task, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.selectedTask()
-}
-func (s *state) selectedJobLocked() (datasource.Job, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.selectedJob()
-}
-func (s *state) selectedWorkflowLocked() (datasource.Workflow, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.selectedWorkflow()
-}
-func (s *state) selectedAgentLocked() (datasource.Agent, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.selectedAgent()
-}
-
 // openFilter opens the per-panel filter prompt.
 func (gu *Gui) openFilter(*gocui.Gui, *gocui.View) error {
-	if gu.st.view == StateInspector {
+	var view ViewState
+	gu.st.withRLock(func() { view = gu.st.view })
+	if view == StateInspector {
 		return nil
 	}
 	gu.openPrompt("filter: facets like p:1 status:done wf:name agent:name + free text", "", func(value string) error {
@@ -369,7 +387,7 @@ func (gu *Gui) openFilter(*gocui.Gui, *gocui.View) error {
 				gu.st.filter.Agents = value
 			}
 		})
-		gu.g.OnWorker(func(_ gocui.Task) error { gu.refreshAll(); return nil })
+		gu.scheduleRefresh()
 		return nil
 	})
 	return nil
@@ -448,8 +466,8 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"  q Ctrl-C     quit                Esc back/close",
 		"",
 		"tasks:",
-		"  n new    c claim   d done    x cancel   o reopen",
-		"  e enroll r resume  b block   u unblock  m comment",
+		"  n new    d done     x cancel   o reopen",
+		"  e enroll r resume   b block    u unblock  m comment",
 		"  p priority",
 		"",
 		"jobs:",
@@ -547,24 +565,8 @@ func (gu *Gui) taskReopen(*gocui.Gui, *gocui.View) error {
 	return nil
 }
 
-func (gu *Gui) taskClaim(*gocui.Gui, *gocui.View) error {
-	t, ok := gu.st.selectedTaskLocked()
-	if !ok {
-		return nil
-	}
-	// In the v0.2 schema there is no claim verb; mark as in_workflow
-	// only makes sense with a workflow. Fall back to enroll if the
-	// task has no workflow.
-	if t.WorkflowID == "" {
-		return gu.taskEnroll(nil, nil)
-	}
-	gu.g.OnWorker(func(_ gocui.Task) error {
-		// No-op: with the v0.2 store there's no claim. Flash a hint.
-		gu.flashf("warn", "claim: tasks self-advance via workflow steps; use e to enroll")
-		return nil
-	})
-	return nil
-}
+// taskClaim was removed: the v0.2 schema has no claim verb. See the
+// design plan + the help screen — 'e' enrolls, 'a' (palette) assigns.
 
 func (gu *Gui) taskEnroll(*gocui.Gui, *gocui.View) error {
 	t, ok := gu.st.selectedTaskLocked()
@@ -830,3 +832,4 @@ func (gu *Gui) confirmThen(prompt string, f func()) {
 
 // silence unused import
 var _ = context.Background
+var _ = datasource.Task{} // referenced via state.selected*Locked

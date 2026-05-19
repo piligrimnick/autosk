@@ -18,7 +18,7 @@ func (gu *Gui) openMenu(title string, lines []string, onSelect func(int) error) 
 			OnSelect: onSelect,
 		}
 	})
-	gu.g.Update(func(_ *gocui.Gui) error { return nil })
+	gu.requestRedraw()
 }
 
 // openConfirm pushes a Confirm popup; onAccept runs on y/Enter.
@@ -30,7 +30,7 @@ func (gu *Gui) openConfirm(prompt string, onAccept func() error) {
 			OnAccept: func(string) error { return onAccept() },
 		}
 	})
-	gu.g.Update(func(_ *gocui.Gui) error { return nil })
+	gu.requestRedraw()
 }
 
 // openPrompt pushes a Prompt popup; onAccept gets the typed value.
@@ -43,6 +43,15 @@ func (gu *Gui) openPrompt(prompt, initial string, onAccept func(string) error) {
 			OnAccept: onAccept,
 		}
 	})
+	gu.requestRedraw()
+}
+
+// requestRedraw pokes the gocui main loop. Tolerates a nil gui (unit
+// tests that drive the state machine without a real screen).
+func (gu *Gui) requestRedraw() {
+	if gu.g == nil {
+		return
+	}
 	gu.g.Update(func(_ *gocui.Gui) error { return nil })
 }
 
@@ -145,7 +154,7 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 		_ = g.DeleteView(w)
 	}
 	switch kind {
-	case popupMenu, popupHelp:
+	case popupMenu:
 		gu.drawPopup(g, winPopupMenu, w, h, title, renderMenuBody(lines, cur))
 		if _, err := g.SetCurrentView(winPopupMenu); err != nil && !isUnknownView(err) {
 			return

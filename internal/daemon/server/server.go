@@ -72,6 +72,15 @@ func (s *Server) Handler() http.Handler {
 	return s.projectMiddleware(s.mux)
 }
 
+// AttachEnabled reports whether both attach hubs (Runners + Attachments)
+// were wired into Deps. When this returns false, /input + /abort fail
+// with 503 and Streaming/AttachCount on JobResponse are always zero.
+//
+// Exposed for production-wiring tests; ordinary callers shouldn't need it.
+func (s *Server) AttachEnabled() bool {
+	return s.deps.Runners != nil && s.deps.Attachments != nil
+}
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/jobs", s.handleList)
 	s.mux.HandleFunc("GET /v1/jobs/{job_id}", s.handleGet)

@@ -21,11 +21,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"autosk/internal/daemon/api"
-	"autosk/internal/daemon/executor"
 	"autosk/internal/daemon/poller"
-	"autosk/internal/daemon/projectmgr"
-	"autosk/internal/daemon/scheduler"
-	"autosk/internal/daemon/server"
 	"autosk/internal/daemon/uds"
 )
 
@@ -100,38 +96,20 @@ func newDaemonServeCmd() *cobra.Command {
 				return fmt.Errorf("pkgregistry ensure prefix: %w", err)
 			}
 
-			// One global scheduler + one project manager per daemon. The
-			// scheduler closure captures the manager by reference (the
-			// closure runs at dispatch time, after mgr is assigned).
-			var mgr *projectmgr.Manager
-			sched := scheduler.New(scheduler.ExecutorFunc(func(ctx context.Context, job scheduler.Job) error {
-				proj, ok := mgr.Get(projectmgr.Key(job.Project))
-				if !ok {
-					return fmt.Errorf("project not loaded: %s", job.Project)
-				}
-				return proj.Executor.Run(ctx, job.ID)
-			}), scheduler.Config{Workers: workers})
-			mgr = projectmgr.New(projectmgr.Deps{
-				Sched:        sched,
-				Packages:     reg,
-				PollInterval: pollInterval,
-				ExecCfg: executor.Config{
-					PIBin:          piBin,
-					SessionDirRoot: sessionDirRoot,
-					Grace:          grace,
-					IdleTimeout:    idleTimeout,
-				},
+			core := buildDaemonCore(daemonCoreConfig{
+				Reg:            reg,
+				Workers:        workers,
+				PIBin:          piBin,
+				SessionDirRoot: sessionDirRoot,
+				Grace:          grace,
+				IdleTimeout:    idleTimeout,
+				PollInterval:   pollInterval,
 			})
+			mgr, sched, srv := core.Mgr, core.Sched, core.Srv
 
 			if err := sched.Start(ctx); err != nil {
 				return fmt.Errorf("scheduler start: %w", err)
 			}
-
-			srv := server.New(server.Deps{
-				Projects: mgr,
-				Sched:    sched,
-				Workers:  workers,
-			})
 
 			ln, err := uds.Listen(sockPath)
 			if err != nil {

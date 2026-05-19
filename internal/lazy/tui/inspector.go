@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jesseduffield/gocui"
 
@@ -84,9 +85,22 @@ func (gu *Gui) hydrateInspectorTab(tab inspectorTab) {
 				return nil
 			})
 		case tabSignals:
-			t, _ := gu.ds.GetJob(gu.ctx, jobID)
-			sigs, _ := gu.ds.Signals(gu.ctx, t.TaskID)
-			cms, _ := gu.ds.Comments(gu.ctx, t.TaskID)
+			t, err := gu.ds.GetJob(gu.ctx, jobID)
+			if err != nil {
+				gu.flashf("err", "signals: get job %s: %v", jobID, err)
+				return nil
+			}
+			// Design plan §5.5: Signals are scoped to THIS run; passing
+			// jobID (not taskID) ensures rows from earlier kickback runs
+			// of the same task don't bleed in.
+			sigs, serr := gu.ds.Signals(gu.ctx, jobID)
+			if serr != nil {
+				gu.flashf("warn", "signals: %v", serr)
+			}
+			cms, cerr := gu.ds.Comments(gu.ctx, t.TaskID)
+			if cerr != nil {
+				gu.flashf("warn", "comments: %v", cerr)
+			}
 			gu.g.Update(func(_ *gocui.Gui) error {
 				gu.st.withLock(func() {
 					gu.st.insp.signals = sigs
@@ -141,34 +155,91 @@ func (gu *Gui) stopLiveStream() {
 }
 
 // pumpLive consumes SSE events and appends rendered blocks to the
-// inspector's live buffer. Throttles UI updates to 30ms to keep fast
-// streams from flickering — same knob lazygit uses for tasks.go.
+// inspector's live buffer.
+//
+// Risk #4 mitigation: coalesce sub-30ms bursts into a single
+// g.Update. A chatty pi run can emit 20+ events per turn boundary;
+// without throttling the layout fires 20+ times in a row and the
+// terminal flickers. Same knob lazygit's pkg/tasks/tasks.go uses.
+//
+// Ring-buffer cap (remark C): liveBuf is capped at liveBufCap so a
+// long pi run doesn't grow the slice without bound. When the cap is
+// hit we drop the oldest 25% in one allocation instead of re-slicing
+// per event.
 func (gu *Gui) pumpLive(ctx context.Context, h *datasource.LiveHandle) {
-	for {
-		select {
-		case <-ctx.Done():
+	const throttle = 30 * time.Millisecond
+	var (
+		pending []datasource.LiveEvent
+		timer   *time.Timer
+	)
+	flush := func() {
+		if len(pending) == 0 {
 			return
-		case ev, ok := <-h.Events:
-			if !ok {
-				return
-			}
-			line := renderLiveEvent(ev)
-			gu.g.Update(func(_ *gocui.Gui) error {
-				gu.st.withLock(func() {
+		}
+		batch := pending
+		pending = nil
+		gu.g.Update(func(_ *gocui.Gui) error {
+			gu.st.withLock(func() {
+				for _, ev := range batch {
+					line := renderLiveEvent(ev)
 					gu.st.insp.liveBuf = append(gu.st.insp.liveBuf, line)
-					if len(gu.st.insp.liveBuf) > 2000 {
-						gu.st.insp.liveBuf = gu.st.insp.liveBuf[len(gu.st.insp.liveBuf)-2000:]
-					}
 					if ev.Kind == "status" || ev.Kind == "done" {
 						gu.st.insp.Streaming = ev.Status.Streaming
 						gu.st.insp.Job.JobResponse = ev.Status
 					}
-				})
-				return nil
+				}
+				if n := len(gu.st.insp.liveBuf); n > liveBufCap {
+					keep := liveBufCap - liveBufCap/4 // drop oldest 25%
+					newBuf := make([]string, keep)
+					copy(newBuf, gu.st.insp.liveBuf[n-keep:])
+					gu.st.insp.liveBuf = newBuf
+					gu.st.insp.liveTruncated = true
+				}
 			})
+			return nil
+		})
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			flush()
+			return
+		case ev, ok := <-h.Events:
+			if !ok {
+				flush()
+				return
+			}
+			pending = append(pending, ev)
+			dlog("pumpLive: queued %s (pending=%d)", ev.Kind, len(pending))
+			if timer == nil {
+				timer = time.NewTimer(throttle)
+			} else {
+				select {
+				case <-timer.C:
+				default:
+				}
+				timer.Reset(throttle)
+			}
+		case <-timerC(timer):
+			flush()
 		}
 	}
 }
+
+// timerC returns t.C, or a nil channel when t is nil so the select
+// case never fires. Lets us start the timer lazily on the first
+// queued event.
+func timerC(t *time.Timer) <-chan time.Time {
+	if t == nil {
+		return nil
+	}
+	return t.C
+}
+
+// liveBufCap is the soft cap on the inspector Live tab's pre-rendered
+// transcript. ~2000 events is enough for an hour of pi traffic; over
+// the cap we drop oldest 25% in one allocation.
+const liveBufCap = 2000
 
 func renderLiveEvent(ev datasource.LiveEvent) string {
 	switch ev.Kind {
@@ -226,6 +297,90 @@ func (gu *Gui) inspectorJumpTab(t inspectorTab) func(*gocui.Gui, *gocui.View) er
 	}
 }
 
+// inspectorScroll moves the inspector body view's origin by step
+// lines. Lazygit's pattern: use the view's own origin so gocui draws
+// the right window of the underlying content buffer.
+func (gu *Gui) inspectorScroll(step int) func(*gocui.Gui, *gocui.View) error {
+	return func(_ *gocui.Gui, _ *gocui.View) error {
+		v, err := gu.g.View(winInspector)
+		if err != nil || v == nil {
+			return nil
+		}
+		ox, oy := v.Origin()
+		ny := oy + step
+		if ny < 0 {
+			ny = 0
+		}
+		v.SetOrigin(ox, ny)
+		return nil
+	}
+}
+
+// inspectorScrollPage scrolls by one screen of the body view.
+func (gu *Gui) inspectorScrollPage(dir int) func(*gocui.Gui, *gocui.View) error {
+	return func(_ *gocui.Gui, _ *gocui.View) error {
+		v, err := gu.g.View(winInspector)
+		if err != nil || v == nil {
+			return nil
+		}
+		_, h := v.Size()
+		if h < 1 {
+			h = 1
+		}
+		ox, oy := v.Origin()
+		ny := oy + dir*h
+		if ny < 0 {
+			ny = 0
+		}
+		v.SetOrigin(ox, ny)
+		return nil
+	}
+}
+
+// inspectorScrollTo jumps to the top (g) or bottom (G) of the body.
+func (gu *Gui) inspectorScrollTo(bottom bool) func(*gocui.Gui, *gocui.View) error {
+	return func(_ *gocui.Gui, _ *gocui.View) error {
+		v, err := gu.g.View(winInspector)
+		if err != nil || v == nil {
+			return nil
+		}
+		ox, _ := v.Origin()
+		if !bottom {
+			v.SetOrigin(ox, 0)
+			return nil
+		}
+		lines := strings.Count(v.Buffer(), "\n")
+		_, h := v.Size()
+		if h < 1 {
+			h = 1
+		}
+		target := lines - h
+		if target < 0 {
+			target = 0
+		}
+		v.SetOrigin(ox, target)
+		return nil
+	}
+}
+
+// detailScroll moves the Tasks-detail viewport up/down one line at a
+// time. Design plan: J/K on the detail pane.
+func (gu *Gui) detailScroll(step int) func(*gocui.Gui, *gocui.View) error {
+	return func(_ *gocui.Gui, _ *gocui.View) error {
+		v, err := gu.g.View(winDetail)
+		if err != nil || v == nil {
+			return nil
+		}
+		ox, oy := v.Origin()
+		ny := oy + step
+		if ny < 0 {
+			ny = 0
+		}
+		v.SetOrigin(ox, ny)
+		return nil
+	}
+}
+
 // renderInspectorBody renders the body for the active tab.
 func (gu *Gui) renderInspectorBody() string {
 	var (
@@ -241,6 +396,9 @@ func (gu *Gui) renderInspectorBody() string {
 		body := strings.Join(insp.liveBuf, "")
 		if body == "" {
 			body = styleMuted.Render("(waiting for events…  Ctrl-D send · Ctrl-F follow_up · Ctrl-A abort · Esc back)")
+		}
+		if insp.liveTruncated {
+			body = styleMuted.Render("(transcript truncated; older events dropped to cap memory)") + "\n" + body
 		}
 		return body
 	case tabArchive:

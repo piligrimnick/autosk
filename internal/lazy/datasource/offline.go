@@ -72,8 +72,18 @@ func (o *Offline) Tasks(ctx context.Context, f TaskFilter) ([]Task, error) {
 			continue
 		}
 		if f.AgentName != "" {
-			// Match author OR current step agent.
+			// Broad match: author OR current step agent.
 			if !strings.EqualFold(t.AuthorName, f.AgentName) && !strings.EqualFold(t.AgentName, f.AgentName) {
+				continue
+			}
+		}
+		if f.AuthorName != "" {
+			if !strings.EqualFold(t.AuthorName, f.AuthorName) {
+				continue
+			}
+		}
+		if f.StepAgentName != "" {
+			if !strings.EqualFold(t.AgentName, f.StepAgentName) {
 				continue
 			}
 		}
@@ -157,28 +167,81 @@ func (o *Offline) Jobs(ctx context.Context, f JobFilter) ([]Job, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list runs: %w", err)
 	}
+	// Batch-decorate: one SQL pulls workflow:step:agent labels for
+	// every step_id we just saw. Avoids the N+1 per-run lookup that
+	// the previous implementation incurred (and that hit the project
+	// DB ~3x per Job on every 2s refresh tick).
+	stepIDs := make([]string, 0, len(raw))
+	for _, r := range raw {
+		if r.StepID != "" {
+			stepIDs = append(stepIDs, r.StepID)
+		}
+	}
+	decor := o.lookupStepLabels(ctx, stepIDs)
 	out := make([]Job, 0, len(raw))
 	for _, r := range raw {
 		j := Job{JobResponse: api.FromRun(r)}
-		if f.WorkflowID != "" {
-			st, err := workflow.New(o.s.DB(), agent.New(o.s.DB())).FindStepByID(ctx, r.StepID)
-			if err != nil || st.WorkflowID != f.WorkflowID {
+		if r.StepID != "" {
+			if d, ok := decor[r.StepID]; ok {
+				j.StepName = d.StepName
+				j.AgentName = d.AgentName
+				j.WorkflowName = d.WorkflowName
+				if f.WorkflowID != "" && d.WorkflowID != f.WorkflowID {
+					continue
+				}
+			} else if f.WorkflowID != "" {
 				continue
 			}
-			j.StepName = st.Name
-			j.AgentName = st.AgentName
-			j.WorkflowName = wfName(o.s.DB(), st.WorkflowID)
-		} else if r.StepID != "" {
-			st, err := workflow.New(o.s.DB(), agent.New(o.s.DB())).FindStepByID(ctx, r.StepID)
-			if err == nil {
-				j.StepName = st.Name
-				j.AgentName = st.AgentName
-				j.WorkflowName = wfName(o.s.DB(), st.WorkflowID)
-			}
+		} else if f.WorkflowID != "" {
+			continue
 		}
 		out = append(out, j)
 	}
 	return out, nil
+}
+
+// stepLabel is one row of the batch-decorate query.
+type stepLabel struct {
+	WorkflowID   string
+	WorkflowName string
+	StepName     string
+	AgentName    string
+}
+
+// lookupStepLabels resolves wf:step:agent names for many step_ids in
+// one SQL round-trip. Used by Jobs() and GetJob() so a Jobs-panel
+// refresh against a project with N in-flight jobs costs ~1 query, not
+// 3N.
+func (o *Offline) lookupStepLabels(ctx context.Context, stepIDs []string) map[string]stepLabel {
+	if len(stepIDs) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(stepIDs))
+	args := make([]any, len(stepIDs))
+	for i, id := range stepIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := `SELECT s.id, s.name, COALESCE(a.name, ''), s.workflow_id, COALESCE(w.name, '')
+	            FROM steps s
+	            LEFT JOIN agents a ON a.id = s.agent_id
+	            LEFT JOIN workflows w ON w.id = s.workflow_id
+	           WHERE s.id IN (` + strings.Join(placeholders, ",") + `)`
+	rows, err := o.s.DB().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := make(map[string]stepLabel, len(stepIDs))
+	for rows.Next() {
+		var id string
+		var l stepLabel
+		if err := rows.Scan(&id, &l.StepName, &l.AgentName, &l.WorkflowID, &l.WorkflowName); err != nil {
+			return out
+		}
+		out[id] = l
+	}
+	return out
 }
 
 // GetJob returns one job (DB-backed; Streaming/AttachCount stay 0).
@@ -190,22 +253,21 @@ func (o *Offline) GetJob(ctx context.Context, id string) (Job, error) {
 	}
 	j := Job{JobResponse: api.FromRun(r)}
 	if r.StepID != "" {
-		st, err := workflow.New(o.s.DB(), agent.New(o.s.DB())).FindStepByID(ctx, r.StepID)
-		if err == nil {
-			j.StepName = st.Name
-			j.AgentName = st.AgentName
-			j.WorkflowName = wfName(o.s.DB(), st.WorkflowID)
+		if d, ok := o.lookupStepLabels(ctx, []string{r.StepID})[r.StepID]; ok {
+			j.StepName = d.StepName
+			j.AgentName = d.AgentName
+			j.WorkflowName = d.WorkflowName
 		}
 	}
 	return j, nil
 }
 
-func wfName(db *sql.DB, wfID string) string {
+func wfName(ctx context.Context, db *sql.DB, wfID string) string {
 	if wfID == "" {
 		return ""
 	}
 	var name string
-	_ = db.QueryRowContext(context.Background(),
+	_ = db.QueryRowContext(ctx,
 		`SELECT name FROM workflows WHERE id = ?`, wfID).Scan(&name)
 	return name
 }
@@ -223,12 +285,12 @@ func (o *Offline) Workflows(ctx context.Context, includeSynthetic bool) ([]Workf
 		if err != nil {
 			continue
 		}
-		out = append(out, projectWorkflow(o.s.DB(), full))
+		out = append(out, projectWorkflow(ctx, o.s.DB(), full))
 	}
 	return out, nil
 }
 
-func projectWorkflow(db *sql.DB, w workflow.Workflow) Workflow {
+func projectWorkflow(ctx context.Context, db *sql.DB, w workflow.Workflow) Workflow {
 	out := Workflow{
 		ID: w.ID, Name: w.Name, Description: w.Description, IsSynthetic: w.IsSynthetic,
 	}
@@ -250,7 +312,7 @@ func projectWorkflow(db *sql.DB, w workflow.Workflow) Workflow {
 			}
 		}
 		var n int
-		_ = db.QueryRowContext(context.Background(),
+		_ = db.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM tasks WHERE current_step_id = ?`, s.ID).Scan(&n)
 		ws.TaskCount = n
 		out.Steps = append(out.Steps, ws)
@@ -329,11 +391,20 @@ func (o *Offline) Comments(ctx context.Context, taskID string) ([]Comment, error
 	return out, nil
 }
 
-// Signals returns step_signals rows attached to taskID across all
-// runs, newest first.
-func (o *Offline) Signals(ctx context.Context, taskID string) ([]Signal, error) {
-	rows, err := o.s.DB().QueryContext(ctx, `
-		SELECT ss.id, ss.task_id, ss.run_id, ss.created_at,
+// Signals returns step_signals rows attached to a single run
+// (jobID), newest first. Design plan §5.5: the Inspector "Signals"
+// tab is scoped to ONE run, so the operator can tell rows emitted by
+// the current run apart from rows emitted by earlier runs of the
+// same task (kickback loops can leave many).
+//
+// Pass an empty string to fall back to task-id scoping (rendering
+// every signal ever attached to the task) — the Tasks-detail pane
+// in the dashboard uses that.
+func (o *Offline) Signals(ctx context.Context, jobID string) ([]Signal, error) {
+	// step_signals has no synthetic id; PK is run_id. Order on
+	// created_at desc and tie-break on run_id (deterministic).
+	baseQuery := `
+		SELECT ss.transition_id, ss.task_id, ss.run_id, ss.created_at,
 		       dr.step_id, st.name,
 		       COALESCE(t.next_step_id, ''), COALESCE(t.task_status, ''),
 		       COALESCE(ns.name, ''),
@@ -343,10 +414,18 @@ func (o *Offline) Signals(ctx context.Context, taskID string) ([]Signal, error) 
 		  JOIN steps st            ON st.id = dr.step_id
 		  JOIN agents a            ON a.id = st.agent_id
 		  LEFT JOIN step_transitions t  ON t.id = ss.transition_id
-		  LEFT JOIN steps ns       ON ns.id = t.next_step_id
-		 WHERE ss.task_id = ?
-		 ORDER BY ss.created_at DESC, ss.id DESC
-	`, taskID)
+		  LEFT JOIN steps ns       ON ns.id = t.next_step_id`
+	var query string
+	if strings.HasPrefix(jobID, "as-") {
+		// Caller passed a task id (back-compat for the dashboard's
+		// Tasks-detail comments / signals widgets that want every
+		// signal ever attached to the task).
+		query = baseQuery + ` WHERE ss.task_id = ? ORDER BY ss.created_at DESC, ss.run_id DESC`
+	} else {
+		// Caller passed a job id — design plan §5.5 default.
+		query = baseQuery + ` WHERE ss.run_id = ? ORDER BY ss.created_at DESC, ss.run_id DESC`
+	}
+	rows, err := o.s.DB().QueryContext(ctx, query, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("list signals: %w", err)
 	}
@@ -360,7 +439,7 @@ func (o *Offline) Signals(ctx context.Context, taskID string) ([]Signal, error) 
 			status   string
 			nextName string
 		)
-		if err := rows.Scan(&s.ID, &s.TaskID, &s.JobID, &created,
+		if err := rows.Scan(&s.TransitionID, &s.TaskID, &s.JobID, &created,
 			&s.StepID, &s.StepName, &nextID, &status, &nextName,
 			&s.AgentID, &s.AgentName); err != nil {
 			return nil, err

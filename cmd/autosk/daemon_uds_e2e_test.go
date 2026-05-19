@@ -16,6 +16,7 @@ import (
 	"autosk/internal/agent/pkgregistry"
 	"autosk/internal/daemon/api"
 	"autosk/internal/daemon/executor"
+	"autosk/internal/daemon/pirunners"
 	"autosk/internal/daemon/projectmgr"
 	"autosk/internal/daemon/scheduler"
 	"autosk/internal/daemon/server"
@@ -72,13 +73,15 @@ func initFixtureProject(t *testing.T) string {
 // daemon wiring (projectmgr + scheduler + server). It mirrors what
 // `autosk daemon serve` does but lets the test poke at the live state.
 type e2eDaemon struct {
-	sockPath string
-	mgr      *projectmgr.Manager
-	sched    *scheduler.Scheduler
-	httpSrv  *http.Server
-	cli      *http.Client
-	wg       sync.WaitGroup
-	stopFns  []func()
+	sockPath    string
+	mgr         *projectmgr.Manager
+	sched       *scheduler.Scheduler
+	runners     *pirunners.Registry
+	attachments *pirunners.Attachments
+	httpSrv     *http.Server
+	cli         *http.Client
+	wg          sync.WaitGroup
+	stopFns     []func()
 }
 
 func startE2EDaemon(t *testing.T) *e2eDaemon {
@@ -107,16 +110,26 @@ func startE2EDaemon(t *testing.T) *e2eDaemon {
 	if err := sched.Start(context.Background()); err != nil {
 		t.Fatalf("sched start: %v", err)
 	}
+	runners := pirunners.NewRegistry()
+	attachments := pirunners.NewAttachments()
 	mgr = projectmgr.New(projectmgr.Deps{
 		Sched:        sched,
 		Packages:     reg,
 		PollInterval: time.Hour, // disable scans for this test
+		Runners:      runners,
+		Attachments:  attachments,
 		ExecCfg: executor.Config{
 			Grace:       100 * time.Millisecond,
 			IdleTimeout: 5 * time.Second,
 		},
 	})
-	srv := server.New(server.Deps{Projects: mgr, Sched: sched, Workers: 1})
+	srv := server.New(server.Deps{
+		Projects:    mgr,
+		Sched:       sched,
+		Workers:     1,
+		Runners:     runners,
+		Attachments: attachments,
+	})
 
 	ln, err := uds.Listen(sockPath)
 	if err != nil {
@@ -124,10 +137,12 @@ func startE2EDaemon(t *testing.T) *e2eDaemon {
 	}
 	httpSrv := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}
 	d := &e2eDaemon{
-		sockPath: sockPath,
-		mgr:      mgr,
-		sched:    sched,
-		httpSrv:  httpSrv,
+		sockPath:    sockPath,
+		mgr:         mgr,
+		sched:       sched,
+		runners:     runners,
+		attachments: attachments,
+		httpSrv:     httpSrv,
 		cli: &http.Client{
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {

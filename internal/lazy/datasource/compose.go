@@ -46,8 +46,13 @@ func NewCompose(off *Offline, cli *client.Client, interval time.Duration) *Compo
 		stop:   make(chan struct{}),
 	}
 	// Initial probe synchronously so the first frame has the right
-	// `daemon=...` chip and the right Jobs source.
-	c.probeOnce(context.Background())
+	// `daemon=...` chip and the right Jobs source. Bounded at 500ms
+	// so a hung daemon (socket file present but never replies) can't
+	// wedge the TUI before its first frame — the loop's ticker probe
+	// uses the same bound for the same reason.
+	ctx0, cancel0 := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	c.probeOnce(ctx0)
+	cancel0()
 	go c.loop(interval)
 	return c
 }

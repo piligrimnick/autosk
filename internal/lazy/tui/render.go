@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -70,7 +71,12 @@ func renderTasksPanel(tasks []datasource.Task, cursor int, scope scope, filter s
 		fmt.Fprintf(&b, "%s\n", styleMuted.Render(fmt.Sprintf("(scoped by wf=%s)", scope.WorkflowName)))
 	}
 	if scope.Agent != "" {
-		fmt.Fprintf(&b, "%s\n", styleMuted.Render(fmt.Sprintf("(scoped by agent=%s)", scope.Agent)))
+		rel := scope.AgentRel.String()
+		if rel != "" {
+			fmt.Fprintf(&b, "%s\n", styleMuted.Render(fmt.Sprintf("(scoped by agent=%s as %s)", scope.Agent, rel)))
+		} else {
+			fmt.Fprintf(&b, "%s\n", styleMuted.Render(fmt.Sprintf("(scoped by agent=%s)", scope.Agent)))
+		}
 	}
 	if filter != "" {
 		fmt.Fprintf(&b, "%s\n", styleFilter.Render("/ "+filter))
@@ -84,10 +90,7 @@ func renderTasksPanel(tasks []datasource.Task, cursor int, scope scope, filter s
 		if i == cursor {
 			marker = "▶ "
 		}
-		title := t.Title
-		if len(title) > 30 {
-			title = title[:27] + "…"
-		}
+		title := truncate(t.Title, 30)
 		stepStr := ""
 		if t.StepName != "" {
 			stepStr = " ▶" + t.StepName
@@ -208,11 +211,14 @@ func renderAgentsPanel(ags []datasource.Agent, cursor int, filter string) string
 }
 
 // renderDetail renders the right detail pane for whatever is focused.
+//
+// The caller already holds the model's RLock; s.comments[t.ID] is
+// read directly here (not through commentsFor) to avoid re-locking.
 func renderDetail(s *state) string {
 	switch s.focused {
 	case panelTasks:
 		if t, ok := s.selectedTask(); ok {
-			return renderTaskDetail(t, s.comments(s, t.ID))
+			return renderTaskDetail(t, s.comments[t.ID])
 		}
 	case panelJobs:
 		if j, ok := s.selectedJob(); ok {
@@ -230,12 +236,7 @@ func renderDetail(s *state) string {
 	return styleMuted.Render("(nothing selected)")
 }
 
-// state.comments uses the local cache that helpers.refresh hydrates.
-// Implemented as a method on *state-by-value here so the renderer
-// doesn't have to know about the cache shape.
-func (s *state) comments(_ *state, _ string) []datasource.Comment { return nil }
-
-func renderTaskDetail(t datasource.Task, _ []datasource.Comment) string {
+func renderTaskDetail(t datasource.Task, comments []datasource.Comment) string {
 	var b strings.Builder
 	fmt.Fprintln(&b, styleHeader.Render(fmt.Sprintf("task %s  %s  P%d", t.ID, t.Status, t.Priority)))
 	if t.WorkflowName != "" {
@@ -262,6 +263,19 @@ func renderTaskDetail(t datasource.Task, _ []datasource.Comment) string {
 		b.WriteString("\n" + styleMuted.Render(fmt.Sprintf("─ blocks (%d) ─", len(t.Blocks))) + "\n")
 		for _, id := range t.Blocks {
 			fmt.Fprintf(&b, "  ↓ %s\n", id)
+		}
+	}
+	// Design plan §4: Tasks detail pane includes the last ≤5 comments.
+	if len(comments) > 0 {
+		n := len(comments)
+		start := 0
+		if n > 5 {
+			start = n - 5
+		}
+		b.WriteString("\n" + styleMuted.Render(fmt.Sprintf("─ comments (%d) ─", n)) + "\n")
+		for _, c := range comments[start:] {
+			fmt.Fprintf(&b, "  %s %s: %s\n",
+				c.CreatedAt.Format("15:04"), c.AuthorName, truncate(c.Text, 70))
 		}
 	}
 	return b.String()
@@ -372,7 +386,12 @@ func renderStatusBar(s *state, projectRoot string) string {
 			bits = append(bits, "wf="+s.scope.WorkflowName)
 		}
 		if s.scope.Agent != "" {
-			bits = append(bits, "agent="+s.scope.Agent)
+			rel := s.scope.AgentRel.String()
+			if rel != "" {
+				bits = append(bits, "agent="+s.scope.Agent+" ("+rel+")")
+			} else {
+				bits = append(bits, "agent="+s.scope.Agent)
+			}
 		}
 		scopeStr = strings.Join(bits, " ")
 	}
@@ -404,15 +423,20 @@ func renderCommandLog(lines []string, flash flashState) string {
 	return b.String()
 }
 
-// truncate returns s, cropped to n with an ellipsis.
+// truncate crops s to at most n runes, appending an ellipsis. Counts
+// runes, not bytes, so multibyte titles (e.g. Cyrillic) don't get
+// sliced inside a codepoint. Doesn't account for east-asian wide
+// glyphs that occupy 2 cells — acceptable for v1; revisit with
+// golang.org/x/text/width if column alignment goes off.
 func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
 	if n < 1 {
 		return ""
 	}
-	return s[:n-1] + "…"
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	rs := []rune(s)
+	return string(rs[:n-1]) + "…"
 }
 
 // humanAge returns "3m", "1h", "2d" etc.
