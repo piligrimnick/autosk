@@ -30,6 +30,7 @@ import (
 
 	"autosk/internal/buildinfo"
 	"autosk/internal/daemon/api"
+	"autosk/internal/daemon/pirunners"
 	"autosk/internal/daemon/projectmgr"
 	"autosk/internal/daemon/runstore"
 	"autosk/internal/daemon/scheduler"
@@ -39,10 +40,18 @@ import (
 // Deps is the set of collaborators a Server needs. The multi-project
 // daemon wires Projects + Sched at startup; per-request handlers fish
 // their per-project stores out of the resolved *projectmgr.Project.
+//
+// Runners and Attachments are the daemon-wide in-memory hubs that the
+// attach surface needs: Runners maps jobID→live pi runner handles (so
+// /input and /abort can talk to the right pi process), Attachments
+// counts attached SSE clients per job. Both default to nil — when
+// either is nil, the attach routes return 503 ("attach disabled").
 type Deps struct {
-	Projects *projectmgr.Manager
-	Sched    *scheduler.Scheduler
-	Workers  int
+	Projects    *projectmgr.Manager
+	Sched       *scheduler.Scheduler
+	Workers     int
+	Runners     *pirunners.Registry
+	Attachments *pirunners.Attachments
 }
 
 // Server wraps an *http.ServeMux with our routes + project middleware.
@@ -69,6 +78,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /v1/jobs/{job_id}", s.handleCancel)
 	s.mux.HandleFunc("GET /v1/jobs/{job_id}/messages", s.handleMessages)
 	s.mux.HandleFunc("GET /v1/jobs/{job_id}/stream", s.handleStream)
+	s.mux.HandleFunc("POST /v1/jobs/{job_id}/input", s.handleInput)
+	s.mux.HandleFunc("POST /v1/jobs/{job_id}/abort", s.handleAbort)
 	s.mux.HandleFunc("GET /v1/healthz", s.handleHealth)
 	s.mux.HandleFunc("GET /v1/version", s.handleVersion)
 }
@@ -110,7 +121,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	out := api.ListResponse{Jobs: make([]api.JobResponse, 0, len(runs))}
 	for _, r := range runs {
-		out.Jobs = append(out.Jobs, api.FromRun(r))
+		out.Jobs = append(out.Jobs, s.decorateRun(r))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -131,7 +142,24 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error(), nil)
 		return
 	}
-	writeJSON(w, http.StatusOK, api.FromRun(run))
+	writeJSON(w, http.StatusOK, s.decorateRun(run))
+}
+
+// decorateRun populates AttachCount and Streaming on a JobResponse
+// from the live pirunners hubs. Safe to call with nil Runners or
+// nil Attachments — both fields collapse to their zero values, which
+// matches "no live runner / no attached clients".
+func (s *Server) decorateRun(r runstore.Run) api.JobResponse {
+	out := api.FromRun(r)
+	if s.deps.Attachments != nil {
+		out.AttachCount = s.deps.Attachments.Count(r.JobID)
+	}
+	if s.deps.Runners != nil {
+		if h, err := s.deps.Runners.Get(r.JobID); err == nil && h != nil {
+			out.Streaming = h.IsStreaming()
+		}
+	}
+	return out
 }
 
 func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +180,7 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	if run.Status.IsTerminal() {
 		// Idempotent: already done; return current state.
-		writeJSON(w, http.StatusOK, api.FromRun(run))
+		writeJSON(w, http.StatusOK, s.decorateRun(run))
 		return
 	}
 	job := scheduler.Job{Project: proj.Root, ID: jobID}
@@ -170,7 +198,7 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	// Re-read for the response.
 	run, _ = proj.Runs.GetRun(r.Context(), jobID)
-	writeJSON(w, http.StatusAccepted, api.FromRun(run))
+	writeJSON(w, http.StatusAccepted, s.decorateRun(run))
 }
 
 func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {

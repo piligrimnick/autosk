@@ -62,6 +62,12 @@ type Runner struct {
 	// turnEnds receives a token every time agent_end is observed.
 	turnEnds chan struct{}
 
+	// streaming flips true on agent_start and false on agent_end.
+	// Read by the daemon's input handler (server.handleInput) to decide
+	// between dispatching the operator's text as `prompt` (idle) or
+	// `steer`/`follow_up` (streaming).
+	streaming atomic.Bool
+
 	// nextID is incremented for every outgoing command lacking an explicit id.
 	nextID atomic.Uint64
 
@@ -253,6 +259,13 @@ func (r *Runner) Abort(ctx context.Context) error {
 	return nil
 }
 
+// IsStreaming reports whether pi is currently between an agent_start
+// and the matching agent_end. Used by the daemon to pick between
+// `prompt` and `steer`/`follow_up` when dispatching operator input.
+func (r *Runner) IsStreaming() bool {
+	return r.streaming.Load()
+}
+
 // WaitForAgentEnd blocks until the reader observes the next agent_end
 // event, or ctx is done, or the reader exits.
 func (r *Runner) WaitForAgentEnd(ctx context.Context) error {
@@ -389,7 +402,11 @@ func (r *Runner) handle(msg inboundMessage, raw []byte) {
 		// hangs in headless mode. Fire-and-forget methods need no reply.
 		r.replyToExtensionUI(msg, raw)
 		r.emit(Event{Kind: kind, Raw: raw, ReceivedAt: now})
+	case KindAgentStart:
+		r.streaming.Store(true)
+		r.emit(Event{Kind: kind, Raw: raw, ReceivedAt: now})
 	case KindAgentEnd:
+		r.streaming.Store(false)
 		// Push the event, then notify any waiter.
 		r.emit(Event{Kind: kind, Raw: raw, ReceivedAt: now})
 		select {

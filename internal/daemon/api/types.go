@@ -34,6 +34,41 @@ type JobResponse struct {
 	StartedAt       *time.Time `json:"started_at,omitempty"`
 	FinishedAt      *time.Time `json:"finished_at,omitempty"`
 	DurationMS      int64      `json:"duration_ms"`
+	// AttachCount is the number of clients currently attached to the
+	// SSE stream with ?attach=true. Surfaced via /healthz and status
+	// frames so attach clients can render an authoritative count.
+	AttachCount int `json:"attach_count"`
+	// Streaming is the daemon's live view of whether pi is currently
+	// between agent_start and agent_end. Mirrors *pi.Runner.IsStreaming()
+	// for the registered runner; false when there is no live runner.
+	Streaming bool `json:"streaming"`
+}
+
+// InputRequest is the body of POST /v1/jobs/{id}/input.
+//
+// Message is the operator-typed text. StreamingBehavior is optional and
+// only consulted when pi is currently streaming: empty/"steer" sends a
+// mid-turn steer message; "follow_up" queues the message after the
+// current turn chain ends.
+type InputRequest struct {
+	Message           string `json:"message"`
+	StreamingBehavior string `json:"streamingBehavior,omitempty"`
+}
+
+// InputResponse is the success body of POST /v1/jobs/{id}/input.
+//
+// Dispatched is the pi command shape the daemon actually used:
+// "prompt" | "steer" | "follow_up". Clients use this to render an
+// accurate confirmation flash.
+type InputResponse struct {
+	JobID      string `json:"job_id"`
+	Dispatched string `json:"dispatched"`
+}
+
+// AbortResponse is the success body of POST /v1/jobs/{id}/abort.
+type AbortResponse struct {
+	JobID string `json:"job_id"`
+	OK    bool   `json:"ok"`
 }
 
 // MessagesResponse is GET /v1/jobs/{id}/messages.
@@ -97,7 +132,9 @@ type ListResponse struct {
 	Jobs []JobResponse `json:"jobs"`
 }
 
-// FromRun projects a runstore.Run to its API shape.
+// FromRun projects a runstore.Run to its API shape. AttachCount and
+// Streaming are zero-valued; callers (the server) populate them from
+// the live pirunners.Attachments / pirunners.Registry before sending.
 func FromRun(r runstore.Run) JobResponse {
 	return JobResponse{
 		JobID:           r.JobID,

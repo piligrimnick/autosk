@@ -23,9 +23,11 @@ import (
 	"autosk/internal/agent/pkgregistry"
 	"autosk/internal/comments"
 	"autosk/internal/daemon/executor"
+	"autosk/internal/daemon/pirunners"
 	"autosk/internal/daemon/poller"
 	"autosk/internal/daemon/runstore"
 	"autosk/internal/daemon/scheduler"
+
 	"autosk/internal/projectdb"
 	"autosk/internal/step"
 	"autosk/internal/store/doltlite"
@@ -48,12 +50,20 @@ var (
 
 // Deps bundles the cross-project collaborators the manager needs to
 // construct each Project's executor and poller.
+//
+// Runners and Attachments are the daemon-wide attach hubs (see
+// internal/daemon/pirunners). The manager threads them into the
+// per-project executor so live pi runners register / unregister and
+// the executor can consult the attach counter on turn boundaries.
+// Both fields default to nil (= attach features disabled).
 type Deps struct {
 	Sched        *scheduler.Scheduler
 	Packages     *pkgregistry.Registry
 	ExecCfg      executor.Config // PIBin, Grace, IdleTimeout, SessionDirRoot (no ProjectRoot)
 	PollInterval time.Duration
 	Logger       *slog.Logger
+	Runners      *pirunners.Registry
+	Attachments  *pirunners.Attachments
 }
 
 // Project is a single opened autosk project. All fields are immutable
@@ -406,13 +416,15 @@ func (m *Manager) openProject(ctx context.Context, key Key, dbPath string) (*Pro
 	execCfg := m.deps.ExecCfg
 	execCfg.ProjectRoot = root
 	ex := executor.New(executor.Deps{
-		Runs:      runs,
-		Tasks:     tasks,
-		Agents:    ag,
-		Workflows: wfs,
-		Comments:  cs,
-		Signals:   sigs,
-		Packages:  m.deps.Packages,
+		Runs:        runs,
+		Tasks:       tasks,
+		Agents:      ag,
+		Workflows:   wfs,
+		Comments:    cs,
+		Signals:     sigs,
+		Packages:    m.deps.Packages,
+		Runners:     m.deps.Runners,
+		Attachments: m.deps.Attachments,
 	}, executor.DefaultFactory, execCfg)
 
 	pl := poller.New(tasks.DB(), runs, m.deps.Sched, poller.Config{

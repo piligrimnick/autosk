@@ -36,7 +36,9 @@ import (
 	"autosk/internal/comments"
 	"autosk/internal/daemon/agentnode"
 	"autosk/internal/daemon/pi"
+	"autosk/internal/daemon/pirunners"
 	"autosk/internal/daemon/runstore"
+
 	"autosk/internal/step"
 	"autosk/internal/store"
 	"autosk/internal/workflow"
@@ -92,7 +94,15 @@ type Deps struct {
 	Signals   *step.Store
 	// Packages resolves agent names to installed npm package configs.
 	// Required; nil means "no agents available" and every spawn fails.
-	Packages  *pkgregistry.Registry
+	Packages *pkgregistry.Registry
+	// Runners is the daemon-wide in-memory map of live pi runner
+	// handles. The executor registers the spawned RunnerHandle on Run
+	// and unregisters in deferred cleanup; nil disables the hook.
+	Runners *pirunners.Registry
+	// Attachments is the daemon-wide attach counter. The executor
+	// consults Attached(jobID) on turn boundaries to skip correction
+	// prompts while a client is attached; nil disables the hook.
+	Attachments *pirunners.Attachments
 }
 
 // Config tunes the executor.
@@ -236,6 +246,17 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 	}
 	defer e.cleanup(runner, bg)
 
+	// Register the runner for the attach surface. The handle interface is
+	// the narrow pirunners.RunnerHandle subset; *pi.Runner satisfies it.
+	// Custom Node runners do not (no IsStreaming today) — skip registration
+	// rather than panicking on a runtime type assertion.
+	if e.deps.Runners != nil {
+		if h, ok := runner.(pirunners.RunnerHandle); ok {
+			e.deps.Runners.Register(jobID, h)
+			defer e.deps.Runners.Unregister(jobID)
+		}
+	}
+
 	if pid := runner.PID(); pid > 0 {
 		_ = e.deps.Runs.SetPID(ctx, jobID, pid)
 	}
@@ -251,9 +272,24 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 	}
 
 	// 6. Turn loop: WaitForAgentEnd, then check step_signals; kickback on miss.
+	//
+	// While at least one client is attached we disable both the idle
+	// timeout and the kickback consumption: an operator typing into the
+	// attach TUI is the authoritative driver, and we don't want the
+	// executor to either time them out or burn correction budget on
+	// turn boundaries that aren't terminal.
 	var signaled step.Emitted
 	for {
-		turnCtx, turnCancel := context.WithTimeout(ctx, e.cfg.IdleTimeout)
+		attached := e.deps.Attachments != nil && e.deps.Attachments.Attached(jobID)
+		var (
+			turnCtx    context.Context
+			turnCancel context.CancelFunc
+		)
+		if attached {
+			turnCtx, turnCancel = context.WithCancel(ctx)
+		} else {
+			turnCtx, turnCancel = context.WithTimeout(ctx, e.cfg.IdleTimeout)
+		}
 		werr := runner.WaitForAgentEnd(turnCtx)
 		turnCancel()
 		if werr != nil {
@@ -266,6 +302,12 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 		}
 		if !errors.Is(gerr, step.ErrNoActiveRun) {
 			return e.handleRunError(ctx, bg, jobID, runner, gerr)
+		}
+		// While attached, a missing signal at agent_end is NOT a closure
+		// miss — it just means the operator is mid-conversation. Loop
+		// back to WaitForAgentEnd without burning a correction.
+		if e.deps.Attachments != nil && e.deps.Attachments.Attached(jobID) {
+			continue
 		}
 		// Invalid closure: kick back if budget remains, else fail.
 		if run.CorrectionsUsed >= run.MaxCorrections {

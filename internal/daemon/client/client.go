@@ -1,6 +1,6 @@
 // Package client is a small, typed Go client for the autosk daemon's
 // HTTP-over-UDS API. It is the transport layer of the in-process
-// `autosk attach` TUI (internal/attach/tui) and is suitable for any
+// `autosk lazy` TUI (internal/lazy/tui) and is suitable for any
 // other Go program that needs to read SSE / POST input / abort runs
 // without re-deriving the wire shapes.
 //
@@ -31,6 +31,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"autosk/internal/daemon/api"
@@ -181,6 +183,80 @@ func (c *Client) Abort(ctx context.Context, jobID string) (api.AbortResponse, er
 	var out api.AbortResponse
 	if err := c.doJSON(ctx, http.MethodPost, "/v1/jobs/"+jobID+"/abort", nil, &out); err != nil {
 		return api.AbortResponse{}, err
+	}
+	return out, nil
+}
+
+// ListJobs returns the daemon's view of jobs for this project.
+// taskID is optional; statuses is comma-joined per the API contract.
+func (c *Client) ListJobs(ctx context.Context, taskID string, statuses []string, limit int) (api.ListResponse, error) {
+	var out api.ListResponse
+	path := "/v1/jobs"
+	var params []string
+	if taskID != "" {
+		params = append(params, "task_id="+taskID)
+	}
+	if len(statuses) > 0 {
+		params = append(params, "status="+strings.Join(statuses, ","))
+	}
+	if limit > 0 {
+		params = append(params, "limit="+strconv.Itoa(limit))
+	}
+	if len(params) > 0 {
+		path += "?" + strings.Join(params, "&")
+	}
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return api.ListResponse{}, err
+	}
+	return out, nil
+}
+
+// GetMessages reads a job's transcript. full=true returns the entire
+// session.jsonl; otherwise the last `limit` events (server-side
+// default 20, max 500).
+func (c *Client) GetMessages(ctx context.Context, jobID string, full bool, limit int) (api.MessagesResponse, error) {
+	var out api.MessagesResponse
+	path := "/v1/jobs/" + jobID + "/messages"
+	var params []string
+	if full {
+		params = append(params, "full=true")
+	}
+	if limit > 0 {
+		params = append(params, "limit="+strconv.Itoa(limit))
+	}
+	if len(params) > 0 {
+		path += "?" + strings.Join(params, "&")
+	}
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return api.MessagesResponse{}, err
+	}
+	return out, nil
+}
+
+// CancelJob asks the daemon to cancel a run (DELETE /v1/jobs/{id}).
+// Returns the run's post-cancellation snapshot.
+func (c *Client) CancelJob(ctx context.Context, jobID string) (api.JobResponse, error) {
+	var out api.JobResponse
+	if err := c.doJSON(ctx, http.MethodDelete, "/v1/jobs/"+jobID, nil, &out); err != nil {
+		return api.JobResponse{}, err
+	}
+	return out, nil
+}
+
+// Healthz pings GET /v1/healthz for this project.
+func (c *Client) Healthz(ctx context.Context) (api.HealthResponse, error) {
+	var out api.HealthResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/healthz", nil, &out); err != nil {
+		return api.HealthResponse{}, err
+	}
+	return out, nil
+}
+
+// Version pings GET /v1/version.
+func (c *Client) Version(ctx context.Context) (api.VersionResponse, error) {
+	var out api.VersionResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/version", nil, &out); err != nil {
+		return api.VersionResponse{}, err
 	}
 	return out, nil
 }
