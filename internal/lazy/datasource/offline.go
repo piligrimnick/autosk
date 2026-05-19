@@ -391,41 +391,50 @@ func (o *Offline) Comments(ctx context.Context, taskID string) ([]Comment, error
 	return out, nil
 }
 
+// signalsBaseQuery is the shared projection for the two Signals
+// verbs. step_signals has no synthetic id column (PK = run_id), so
+// Signal carries TransitionID + JobID instead.
+const signalsBaseQuery = `
+	SELECT ss.transition_id, ss.task_id, ss.run_id, ss.created_at,
+	       dr.step_id, st.name,
+	       COALESCE(t.next_step_id, ''), COALESCE(t.task_status, ''),
+	       COALESCE(ns.name, ''),
+	       st.agent_id, a.name
+	  FROM step_signals ss
+	  JOIN daemon_runs dr      ON dr.job_id = ss.run_id
+	  JOIN steps st            ON st.id = dr.step_id
+	  JOIN agents a            ON a.id = st.agent_id
+	  LEFT JOIN step_transitions t  ON t.id = ss.transition_id
+	  LEFT JOIN steps ns       ON ns.id = t.next_step_id`
+
 // Signals returns step_signals rows attached to a single run
 // (jobID), newest first. Design plan §5.5: the Inspector "Signals"
 // tab is scoped to ONE run, so the operator can tell rows emitted by
 // the current run apart from rows emitted by earlier runs of the
 // same task (kickback loops can leave many).
 //
-// Pass an empty string to fall back to task-id scoping (rendering
-// every signal ever attached to the task) — the Tasks-detail pane
-// in the dashboard uses that.
+// For task-scoped lookups (the dashboard's Tasks-detail widgets) use
+// SignalsForTask instead. The prior implementation overloaded one
+// verb based on a `strings.HasPrefix(id, "as-")` sniff; that's
+// brittle (silently breaks if id prefixes ever change) and dead
+// (the task-scoped branch had no callers). Splitting them gives each
+// call site a statically chosen semantic.
 func (o *Offline) Signals(ctx context.Context, jobID string) ([]Signal, error) {
-	// step_signals has no synthetic id; PK is run_id. Order on
-	// created_at desc and tie-break on run_id (deterministic).
-	baseQuery := `
-		SELECT ss.transition_id, ss.task_id, ss.run_id, ss.created_at,
-		       dr.step_id, st.name,
-		       COALESCE(t.next_step_id, ''), COALESCE(t.task_status, ''),
-		       COALESCE(ns.name, ''),
-		       st.agent_id, a.name
-		  FROM step_signals ss
-		  JOIN daemon_runs dr      ON dr.job_id = ss.run_id
-		  JOIN steps st            ON st.id = dr.step_id
-		  JOIN agents a            ON a.id = st.agent_id
-		  LEFT JOIN step_transitions t  ON t.id = ss.transition_id
-		  LEFT JOIN steps ns       ON ns.id = t.next_step_id`
-	var query string
-	if strings.HasPrefix(jobID, "as-") {
-		// Caller passed a task id (back-compat for the dashboard's
-		// Tasks-detail comments / signals widgets that want every
-		// signal ever attached to the task).
-		query = baseQuery + ` WHERE ss.task_id = ? ORDER BY ss.created_at DESC, ss.run_id DESC`
-	} else {
-		// Caller passed a job id — design plan §5.5 default.
-		query = baseQuery + ` WHERE ss.run_id = ? ORDER BY ss.created_at DESC, ss.run_id DESC`
-	}
-	rows, err := o.s.DB().QueryContext(ctx, query, jobID)
+	query := signalsBaseQuery + ` WHERE ss.run_id = ? ORDER BY ss.created_at DESC, ss.run_id DESC`
+	return o.scanSignals(ctx, query, jobID)
+}
+
+// SignalsForTask returns every step_signals row attached to a task,
+// across all of its runs, newest first. Used by the dashboard's
+// Tasks-detail widgets (a kickback loop is one task with many runs;
+// the dashboard cares about all of them).
+func (o *Offline) SignalsForTask(ctx context.Context, taskID string) ([]Signal, error) {
+	query := signalsBaseQuery + ` WHERE ss.task_id = ? ORDER BY ss.created_at DESC, ss.run_id DESC`
+	return o.scanSignals(ctx, query, taskID)
+}
+
+func (o *Offline) scanSignals(ctx context.Context, query, arg string) ([]Signal, error) {
+	rows, err := o.s.DB().QueryContext(ctx, query, arg)
 	if err != nil {
 		return nil, fmt.Errorf("list signals: %w", err)
 	}

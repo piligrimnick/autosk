@@ -216,9 +216,14 @@ type state struct {
 	// comments is a per-task last-N comment cache, hydrated by
 	// refreshAll on cursor change (RefreshHelper pattern). The
 	// rendered Tasks-detail pane reads it; the comment count is
-	// authoritative on the Task struct.
+	// authoritative on the Task struct. Bounded at commentsCacheMax
+	// entries (refresh.go evicts on overflow).
 	comments map[string][]datasource.Comment
 }
+
+// commentsCacheMax bounds state.comments so a long lazy session
+// that visits many tasks doesn't grow it unbounded.
+const commentsCacheMax = 64
 
 // newState seeds an empty model with sensible defaults.
 func newState() *state {
@@ -316,14 +321,6 @@ func (s *state) selectedAgentLocked() (datasource.Agent, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.selectedAgent()
-}
-
-// commentsFor returns the cached last-N comments for taskID, or nil.
-// Hydrated by refreshAll; reads need the RLock.
-func (s *state) commentsFor(taskID string) []datasource.Comment {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.comments[taskID]
 }
 
 // appendLog adds a one-line entry to the command log with a relative

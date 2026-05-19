@@ -54,9 +54,11 @@ type Gui struct {
 	// refreshInFlight coalesces redundant refresh requests. j-spam
 	// (cursor moves that call applyScope → refresh) used to enqueue
 	// one OnWorker job per keypress; now intermediate requests are
-	// dropped when one is already running. Lazygit's RefreshHelper
-	// uses a similar 'pending' flag.
+	// folded into a single trailing refresh via refreshPending so the
+	// latest scope eventually drives the UI (lazygit's RefreshHelper
+	// uses the same pattern).
 	refreshInFlight atomic.Bool
+	refreshPending  atomic.Bool
 }
 
 // Run constructs the gui, opens the alt-screen, and blocks on the
@@ -154,17 +156,32 @@ func (gu *Gui) tickLoop(d time.Duration) {
 }
 
 // scheduleRefresh enqueues a refresh via the gocui worker. If one is
-// already in flight it's a no-op — the running refresh will pick up
-// any state changes when it samples scope+filter under the lock.
+// already in flight we set refreshPending; the running worker will
+// loop until pending is clear, so the LATEST scope change always
+// drives a trailing refresh. (The previous implementation dropped
+// the latest request, which could leave the Jobs panel showing
+// results filtered by a stale cursor row after j-spam.)
 func (gu *Gui) scheduleRefresh() {
 	if !gu.refreshInFlight.CompareAndSwap(false, true) {
-		dlog("scheduleRefresh: coalesced (in-flight)")
+		gu.refreshPending.Store(true)
+		dlog("scheduleRefresh: coalesced (pending set)")
 		return
 	}
 	gu.g.OnWorker(func(_ gocui.Task) error {
-		defer gu.refreshInFlight.Store(false)
-		gu.refreshAll()
-		return nil
+		for {
+			gu.refreshAll()
+			gu.refreshInFlight.Store(false)
+			// If a request arrived during refreshAll, run it now. The
+			// CAS reclaims the in-flight slot so a concurrent
+			// scheduleRefresh either parks in pending or wins the race
+			// (in which case we exit here).
+			if !gu.refreshPending.CompareAndSwap(true, false) {
+				return nil
+			}
+			if !gu.refreshInFlight.CompareAndSwap(false, true) {
+				return nil
+			}
+		}
 	})
 }
 

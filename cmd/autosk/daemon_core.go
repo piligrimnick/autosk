@@ -92,6 +92,3 @@ func buildDaemonCore(cfg daemonCoreConfig) daemonCore {
 		Attachments: attachments,
 	}
 }
-
-// silence unused (context only needed via the closure body).
-var _ = context.Background

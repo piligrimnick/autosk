@@ -1,6 +1,9 @@
 package tui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestPopupKindNoneByDefault verifies state starts with no popup so
 // the layout function doesn't try to draw a stale one.
@@ -16,7 +19,7 @@ func TestPopupKindNoneByDefault(t *testing.T) {
 func TestRenderMenuBodyCursorMarker(t *testing.T) {
 	body := renderMenuBody([]string{"a", "b", "c"}, 1)
 	wantSub := "▶ "
-	if !contains(body, wantSub) {
+	if !strings.Contains(body, wantSub) {
 		t.Fatalf("body missing %q:\n%s", wantSub, body)
 	}
 }
@@ -43,15 +46,4 @@ func TestMinPopupClampsToTerminal(t *testing.T) {
 	}
 }
 
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && strContains(s, sub)
-}
 
-func strContains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}

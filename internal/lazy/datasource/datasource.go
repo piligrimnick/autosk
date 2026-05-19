@@ -198,7 +198,14 @@ type Datasource interface {
 	Workflows(ctx context.Context, includeSynthetic bool) ([]Workflow, error)
 	Agents(ctx context.Context) ([]Agent, error)
 	Comments(ctx context.Context, taskID string) ([]Comment, error)
+	// Signals returns step_signals rows attached to a single run
+	// (jobID), newest first. Design plan §5.5: the Inspector "Signals"
+	// tab is scoped to ONE run.
 	Signals(ctx context.Context, jobID string) ([]Signal, error)
+	// SignalsForTask returns every step_signals row attached to a task
+	// across all of its runs. Used by the dashboard's Tasks-detail
+	// widgets where the operator wants the full kickback history.
+	SignalsForTask(ctx context.Context, taskID string) ([]Signal, error)
 	Messages(ctx context.Context, jobID string, full bool, limit int) ([]MessageEvent, error)
 	Healthz(ctx context.Context) (Health, error)
 

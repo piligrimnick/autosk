@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"autosk/internal/lazy/datasource"
@@ -78,12 +79,12 @@ func TestScope_AgentRelDistinct(t *testing.T) {
 	st := newState()
 	st.scope = scope{Agent: "dev", AgentRel: agentRelAuthor}
 	bar := renderStatusBar(st, "/proj")
-	if !contains(bar, "agent=dev (author)") {
+	if !strings.Contains(bar, "agent=dev (author)") {
 		t.Errorf("status bar missing (author) tag: %q", bar)
 	}
 	st.scope = scope{Agent: "dev", AgentRel: agentRelStep}
 	bar = renderStatusBar(st, "/proj")
-	if !contains(bar, "agent=dev (step)") {
+	if !strings.Contains(bar, "agent=dev (step)") {
 		t.Errorf("status bar missing (step) tag: %q", bar)
 	}
 }

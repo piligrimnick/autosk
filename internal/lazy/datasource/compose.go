@@ -122,8 +122,11 @@ func (c *Compose) Agents(ctx context.Context) ([]Agent, error) { return c.off.Ag
 func (c *Compose) Comments(ctx context.Context, id string) ([]Comment, error) {
 	return c.off.Comments(ctx, id)
 }
-func (c *Compose) Signals(ctx context.Context, id string) ([]Signal, error) {
-	return c.off.Signals(ctx, id)
+func (c *Compose) Signals(ctx context.Context, jobID string) ([]Signal, error) {
+	return c.off.Signals(ctx, jobID)
+}
+func (c *Compose) SignalsForTask(ctx context.Context, taskID string) ([]Signal, error) {
+	return c.off.SignalsForTask(ctx, taskID)
 }
 func (c *Compose) Messages(ctx context.Context, jobID string, full bool, limit int) ([]MessageEvent, error) {
 	if c.usingLive() {

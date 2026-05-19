@@ -2,7 +2,6 @@ package datasource_test
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -97,18 +96,24 @@ func TestOffline_SignalsScopedByJobID(t *testing.T) {
 		t.Fatalf("Signals(r2)[0].JobID=%q want %q", sigs2[0].JobID, r2.JobID)
 	}
 
-	// Back-compat: Signals(taskID) → both rows.
-	all, err := ds.Signals(ctx, taskID)
+	// SignalsForTask is the dashboard's task-scoped lookup; it returns
+	// every signal across all runs of the task.
+	all, err := ds.SignalsForTask(ctx, taskID)
 	if err != nil {
-		t.Fatalf("Signals(taskID): %v", err)
+		t.Fatalf("SignalsForTask(taskID): %v", err)
 	}
 	if len(all) != 2 {
-		t.Fatalf("Signals(taskID) returned %d, want 2 (jobs=%s,%s)",
+		t.Fatalf("SignalsForTask(taskID) returned %d, want 2 (jobs=%s,%s)",
 			len(all), r1.JobID, r2.JobID)
 	}
 
-	// Sanity: the taskID variant works because it starts with as-.
-	if !strings.HasPrefix(taskID, "as-") {
-		t.Fatalf("test assumption violated: task id %q lacks as- prefix", taskID)
+	// And calling Signals(taskID) returns nothing — the prefix-sniff
+	// back-compat branch is gone; ss.run_id = '<taskID>' matches no rows.
+	none, err := ds.Signals(ctx, taskID)
+	if err != nil {
+		t.Fatalf("Signals(taskID): %v", err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("Signals(taskID) returned %d rows, want 0 (task-scoped lookups now use SignalsForTask)", len(none))
 	}
 }

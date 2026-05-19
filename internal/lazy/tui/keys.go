@@ -1,13 +1,11 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
 	"github.com/jesseduffield/gocui"
 
-	"autosk/internal/lazy/datasource"
 	"autosk/internal/store"
 )
 
@@ -120,6 +118,8 @@ func (gu *Gui) bindKeys() error {
 		{winInspector, gocui.KeyArrowUp, gocui.ModNone, gu.inspectorScroll(-1)},
 		{winInspector, gocui.KeyCtrlF, gocui.ModNone, gu.inspectorScrollPage(+1)},
 		{winInspector, gocui.KeyCtrlB, gocui.ModNone, gu.inspectorScrollPage(-1)},
+		{winInspector, gocui.KeyPgdn, gocui.ModNone, gu.inspectorScrollPage(+1)},
+		{winInspector, gocui.KeyPgup, gocui.ModNone, gu.inspectorScrollPage(-1)},
 		{winInspector, 'g', gocui.ModNone, gu.inspectorScrollTo(false)},
 		{winInspector, 'G', gocui.ModNone, gu.inspectorScrollTo(true)},
 
@@ -133,6 +133,13 @@ func (gu *Gui) bindKeys() error {
 		{winInspectorIn, gocui.KeyCtrlA, gocui.ModNone, gu.liveAbort},
 		{winInspectorIn, gocui.KeyEsc, gocui.ModNone, gu.inspectorClose},
 		{winInspectorIn, gocui.KeyCtrlC, gocui.ModNone, gu.quit},
+		// Live tab scroll-back: the body view (winInspector) isn't
+		// current while the textarea has focus, so Ctrl-B / PageUp /
+		// PageDown have to bind on the input view too. (j / k / g / G
+		// would collide with text input and stay body-only.)
+		{winInspectorIn, gocui.KeyCtrlB, gocui.ModNone, gu.inspectorScrollPage(-1)},
+		{winInspectorIn, gocui.KeyPgup, gocui.ModNone, gu.inspectorScrollPage(-1)},
+		{winInspectorIn, gocui.KeyPgdn, gocui.ModNone, gu.inspectorScrollPage(+1)},
 
 		// Popup keys.
 		{winPopupMenu, 'j', gocui.ModNone, gu.popupCursor(+1)},
@@ -483,7 +490,8 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"inspector:",
 		"  [ / ]   1..4   tab cycle/jump",
 		"  Esc / Ctrl-O   back to dashboard",
-		"  Live: Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort",
+		"  body: j/k Ctrl-F/Ctrl-B PgUp/PgDn g/G",
+		"  Live: Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort  Ctrl-B/PgUp scroll-back",
 	}
 	gu.openMenu("help", lines, func(_ int) error { return gu.popupClose(nil, nil) })
 	return nil
@@ -743,41 +751,38 @@ func (gu *Gui) workflowDelete(*gocui.Gui, *gocui.View) error {
 	return nil
 }
 
+// agentInstall and agentUninstall are intentionally informational in
+// v1: the daemon has no /v1/agents endpoint so live mode returns the
+// same error as offline. Rather than ask the user to type a name and
+// THEN show an error, we surface up-front that the verb shells out
+// outside the TUI. The hotkeys stay bound so the help screen line
+// 'i install / u uninstall' is honest (it points to the workaround).
 func (gu *Gui) agentInstall(*gocui.Gui, *gocui.View) error {
-	gu.openPrompt("npm package to install:", "", func(name string) error {
-		if strings.TrimSpace(name) == "" {
-			return nil
-		}
-		gu.g.OnWorker(func(_ gocui.Task) error {
-			if err := gu.ds.InstallAgent(gu.ctx, name, ""); err != nil {
-				gu.flashf("err", "install: %v", err)
-				return nil
-			}
-			gu.flashf("info", "installed %s", name)
-			gu.refreshAll()
-			return nil
-		})
-		return nil
-	})
+	gu.openMenu(
+		"agent install isn't supported from lazy yet",
+		[]string{
+			"quit lazy and run: autosk agent install <pkg>",
+			"close",
+		},
+		func(_ int) error { return nil },
+	)
 	return nil
 }
 
 func (gu *Gui) agentUninstall(*gocui.Gui, *gocui.View) error {
-	a, ok := gu.st.selectedAgentLocked()
-	if !ok {
-		return nil
+	a, _ := gu.st.selectedAgentLocked()
+	name := a.Name
+	if name == "" {
+		name = "<pkg>"
 	}
-	gu.confirmThen("uninstall "+a.Name+"?", func() {
-		gu.g.OnWorker(func(_ gocui.Task) error {
-			if err := gu.ds.UninstallAgent(gu.ctx, a.Name); err != nil {
-				gu.flashf("err", "uninstall: %v", err)
-				return nil
-			}
-			gu.flashf("info", "uninstalled %s", a.Name)
-			gu.refreshAll()
-			return nil
-		})
-	})
+	gu.openMenu(
+		"agent uninstall isn't supported from lazy yet",
+		[]string{
+			"quit lazy and run: autosk agent uninstall " + name,
+			"close",
+		},
+		func(_ int) error { return nil },
+	)
 	return nil
 }
 
@@ -830,6 +835,4 @@ func (gu *Gui) confirmThen(prompt string, f func()) {
 	gu.openConfirm(prompt, func() error { f(); return nil })
 }
 
-// silence unused import
-var _ = context.Background
-var _ = datasource.Task{} // referenced via state.selected*Locked
+

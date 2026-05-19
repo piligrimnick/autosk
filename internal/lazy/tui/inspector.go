@@ -155,7 +155,8 @@ func (gu *Gui) stopLiveStream() {
 }
 
 // pumpLive consumes SSE events and appends rendered blocks to the
-// inspector's live buffer.
+// inspector's live buffer. Delegates to pumpLiveLoop so the throttle
+// behaviour is testable without a real gocui.Gui.
 //
 // Risk #4 mitigation: coalesce sub-30ms bursts into a single
 // g.Update. A chatty pi run can emit 20+ events per turn boundary;
@@ -167,17 +168,7 @@ func (gu *Gui) stopLiveStream() {
 // hit we drop the oldest 25% in one allocation instead of re-slicing
 // per event.
 func (gu *Gui) pumpLive(ctx context.Context, h *datasource.LiveHandle) {
-	const throttle = 30 * time.Millisecond
-	var (
-		pending []datasource.LiveEvent
-		timer   *time.Timer
-	)
-	flush := func() {
-		if len(pending) == 0 {
-			return
-		}
-		batch := pending
-		pending = nil
+	pumpLiveLoop(ctx, h.Events, livePumpThrottle, func(batch []datasource.LiveEvent) {
 		gu.g.Update(func(_ *gocui.Gui) error {
 			gu.st.withLock(func() {
 				for _, ev := range batch {
@@ -198,15 +189,40 @@ func (gu *Gui) pumpLive(ctx context.Context, h *datasource.LiveHandle) {
 			})
 			return nil
 		})
+	})
+}
+
+// livePumpThrottle is the coalescing window. ~30ms is what lazygit
+// uses; small enough that the user never sees the lag, large enough
+// that a burst of 20+ events collapses into a single redraw.
+const livePumpThrottle = 30 * time.Millisecond
+
+// pumpLiveLoop is the pure-Go throttle loop. Accepts the event
+// channel, the throttle window, and a flush callback that's invoked
+// with each non-empty batch. Tested directly so a future change to
+// the coalesce logic can't silently regress the 'one g.Update per
+// burst' invariant. Returns when ctx is done OR events is closed.
+func pumpLiveLoop(ctx context.Context, events <-chan datasource.LiveEvent, throttle time.Duration, flush func([]datasource.LiveEvent)) {
+	var (
+		pending []datasource.LiveEvent
+		timer   *time.Timer
+	)
+	doFlush := func() {
+		if len(pending) == 0 {
+			return
+		}
+		batch := pending
+		pending = nil
+		flush(batch)
 	}
 	for {
 		select {
 		case <-ctx.Done():
-			flush()
+			doFlush()
 			return
-		case ev, ok := <-h.Events:
+		case ev, ok := <-events:
 			if !ok {
-				flush()
+				doFlush()
 				return
 			}
 			pending = append(pending, ev)
@@ -221,7 +237,7 @@ func (gu *Gui) pumpLive(ctx context.Context, h *datasource.LiveHandle) {
 				timer.Reset(throttle)
 			}
 		case <-timerC(timer):
-			flush()
+			doFlush()
 		}
 	}
 }
@@ -299,20 +315,13 @@ func (gu *Gui) inspectorJumpTab(t inspectorTab) func(*gocui.Gui, *gocui.View) er
 
 // inspectorScroll moves the inspector body view's origin by step
 // lines. Lazygit's pattern: use the view's own origin so gocui draws
-// the right window of the underlying content buffer.
+// the right window of the underlying content buffer. Clamped at
+// both ends so j-spam past the last line doesn't push content off
+// the top of an empty screen (the previous implementation only
+// guarded ny < 0).
 func (gu *Gui) inspectorScroll(step int) func(*gocui.Gui, *gocui.View) error {
 	return func(_ *gocui.Gui, _ *gocui.View) error {
-		v, err := gu.g.View(winInspector)
-		if err != nil || v == nil {
-			return nil
-		}
-		ox, oy := v.Origin()
-		ny := oy + step
-		if ny < 0 {
-			ny = 0
-		}
-		v.SetOrigin(ox, ny)
-		return nil
+		return gu.scrollViewByLines(winInspector, step)
 	}
 }
 
@@ -327,14 +336,37 @@ func (gu *Gui) inspectorScrollPage(dir int) func(*gocui.Gui, *gocui.View) error 
 		if h < 1 {
 			h = 1
 		}
-		ox, oy := v.Origin()
-		ny := oy + dir*h
-		if ny < 0 {
-			ny = 0
-		}
-		v.SetOrigin(ox, ny)
+		return gu.scrollViewByLines(winInspector, dir*h)
+	}
+}
+
+// scrollViewByLines moves the named view's origin by step lines,
+// clamping to [0, max(0, totalLines-height)]. Shared by inspectorScroll
+// and inspectorScrollPage so the upper-bound clamp lives in one place.
+func (gu *Gui) scrollViewByLines(name string, step int) error {
+	v, err := gu.g.View(name)
+	if err != nil || v == nil {
 		return nil
 	}
+	ox, oy := v.Origin()
+	ny := oy + step
+	if ny < 0 {
+		ny = 0
+	}
+	_, h := v.Size()
+	if h < 1 {
+		h = 1
+	}
+	lines := strings.Count(v.Buffer(), "\n")
+	max := lines - h
+	if max < 0 {
+		max = 0
+	}
+	if ny > max {
+		ny = max
+	}
+	v.SetOrigin(ox, ny)
+	return nil
 }
 
 // inspectorScrollTo jumps to the top (g) or bottom (G) of the body.
@@ -425,8 +457,11 @@ func renderInspectorSignals(sigs []datasource.Signal, comments []datasource.Comm
 		b.WriteString(styleMuted.Render("(no signals)") + "\n")
 	} else {
 		for _, s := range sigs {
+			// RFC3339 carries the date so a kickback loop straddling
+			// midnight (or a run from yesterday opened today) is
+			// readable. 15:04:05-only timestamps lose that context.
 			fmt.Fprintf(&b, "  %s  %s → %s  (%s)\n",
-				s.CreatedAt.Format("15:04:05"), s.StepName, s.Target, s.AgentName)
+				s.CreatedAt.Format(time.RFC3339), s.StepName, s.Target, s.AgentName)
 		}
 	}
 	b.WriteString("\n" + styleHeader.Render("comments") + "\n")
@@ -435,7 +470,7 @@ func renderInspectorSignals(sigs []datasource.Signal, comments []datasource.Comm
 	} else {
 		for _, c := range comments {
 			fmt.Fprintf(&b, "  %s  %s: %s\n",
-				c.CreatedAt.Format("15:04:05"), c.AuthorName, truncate(c.Text, 80))
+				c.CreatedAt.Format(time.RFC3339), c.AuthorName, truncate(c.Text, 80))
 		}
 	}
 	return b.String()

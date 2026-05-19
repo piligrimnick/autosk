@@ -128,6 +128,20 @@ func (gu *Gui) refreshAll() {
 			}
 			gu.st.health = health
 			if selectedTaskID != "" && selectedComments != nil {
+				// Bound the cache: a long lazy session that visits many
+				// tasks would otherwise grow it without limit. 64 entries
+				// is enough for the operator's working set; on overflow we
+				// evict an arbitrary entry (cheaper than a real LRU and
+				// the cost of a miss is one DB round-trip on next visit).
+				if len(gu.st.comments) >= commentsCacheMax {
+					for k := range gu.st.comments {
+						if k == selectedTaskID {
+							continue
+						}
+						delete(gu.st.comments, k)
+						break
+					}
+				}
 				gu.st.comments[selectedTaskID] = selectedComments
 			}
 		})

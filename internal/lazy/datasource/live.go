@@ -62,13 +62,18 @@ func (l *Live) Jobs(ctx context.Context, f JobFilter) ([]Job, error) {
 	for _, j := range resp.Jobs {
 		dj := Job{JobResponse: j}
 		if j.StepID != "" {
-			if d, ok := decor[j.StepID]; ok {
+			d, ok := decor[j.StepID]
+			if ok {
 				dj.StepName = d.StepName
 				dj.AgentName = d.AgentName
 				dj.WorkflowName = d.WorkflowName
+				if f.WorkflowID != "" && d.WorkflowID != f.WorkflowID {
+					continue
+				}
+			} else if f.WorkflowID != "" {
+				continue
 			}
-		}
-		if f.WorkflowID != "" && dj.WorkflowName == "" {
+		} else if f.WorkflowID != "" {
 			continue
 		}
 		out = append(out, dj)
