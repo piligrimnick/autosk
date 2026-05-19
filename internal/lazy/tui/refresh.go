@@ -12,6 +12,34 @@ import (
 	"autosk/internal/store"
 )
 
+// refreshResult is the snapshot computed by fetchRefresh and applied
+// by applyRefreshLocked. Splitting compute from apply lets unit
+// tests drive the cache-preservation / fallback-counter invariants
+// without spinning up a real gocui.Gui.
+type refreshResult struct {
+	tasks         []datasource.Task
+	taskSearch    string // post-facet free text remainder
+	terr          error
+	jobs          []datasource.Job
+	jerr          error
+	visibleWorkflows []datasource.Workflow
+	workflowSearch   string
+	werr          error
+	agents        []datasource.Agent
+	agentSearch   string
+	aerr          error
+	health        datasource.Health
+	jobsSearch    string
+
+	selectedTaskID    string
+	selectedComments  []datasource.Comment
+	hasCommentsErr    bool
+	selectedSignals   []datasource.Signal
+	hasSignalsErr     bool
+
+	fallbacksNow uint64
+}
+
 // refreshAll re-fetches every panel from the datasource, applies the
 // active scope/filter chips, and posts the result back to the UI
 // thread via g.Update.
@@ -25,6 +53,18 @@ func (gu *Gui) refreshAll() {
 	ctx, cancel := context.WithTimeout(gu.ctx, timeout)
 	defer cancel()
 
+	r := gu.fetchRefresh(ctx)
+	gu.g.Update(func(_ *gocui.Gui) error {
+		gu.applyRefreshLocked(r)
+		return nil
+	})
+}
+
+// fetchRefresh is the pure-data half of refreshAll: it reads from
+// the datasource and returns a snapshot. Safe to call from tests
+// (no gocui dependency). The caller is expected to hand the result
+// to applyRefreshLocked, typically inside a g.Update closure.
+func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 	// Snapshot scope + filters so we don't hold the lock across IO.
 	var sc scope
 	var ft filterState
@@ -88,10 +128,6 @@ func (gu *Gui) refreshAll() {
 	agents, aerr := gu.ds.Agents(ctx)
 	health, _ := gu.ds.Healthz(ctx)
 
-	// Hydrate the comments cache for the currently-selected task so
-	// the Tasks-detail pane in the dashboard can show the last ≤5
-	// comments per design plan §4. Cheap: one DB round-trip per
-	// cursor move + per refresh tick.
 	var selectedTaskID string
 	gu.st.withRLock(func() {
 		if t, ok := gu.st.selectedTask(); ok {
@@ -99,54 +135,110 @@ func (gu *Gui) refreshAll() {
 		}
 	})
 	var selectedComments []datasource.Comment
+	var selectedSignals []datasource.Signal
+	hasCommentsErr := false
+	hasSignalsErr := false
 	if selectedTaskID != "" {
-		selectedComments, _ = gu.ds.Comments(ctx, selectedTaskID)
+		var cerr error
+		selectedComments, cerr = gu.ds.Comments(ctx, selectedTaskID)
+		if cerr != nil {
+			dlog("refresh: ds.Comments(%s): %v", selectedTaskID, cerr)
+			// Intentionally do NOT overwrite an existing cache entry on
+			// error: stale-but-shown is better than empty-and-flickering.
+			// The hasCommentsErr flag guards the write in applyRefreshLocked.
+			hasCommentsErr = true
+			selectedComments = nil
+		}
+		var serr error
+		selectedSignals, serr = gu.ds.SignalsForTask(ctx, selectedTaskID)
+		if serr != nil {
+			dlog("refresh: ds.SignalsForTask(%s): %v", selectedTaskID, serr)
+			hasSignalsErr = true
+			selectedSignals = nil
+		}
 	}
 
-	gu.g.Update(func(_ *gocui.Gui) error {
-		gu.st.withLock(func() {
-			if terr == nil {
-				// The datasource already applied tasksFilter.Search
-				// (post-facet free-text). Do NOT re-filter with the raw
-				// expression here: that would re-apply 'p:1' or 'wf:foo'
-				// as substring matches against id+title and empty the
-				// panel. Use the parsed Search remainder only.
-				gu.st.tasks = applyTaskSearch(tasks, tasksFilter.Search)
-				gu.st.taskCursor = clampCursor(gu.st.taskCursor, len(gu.st.tasks))
-			}
-			if jerr == nil {
-				gu.st.jobs = applyJobSearch(jobs, ft.Jobs)
-				gu.st.jobCursor = clampCursor(gu.st.jobCursor, len(gu.st.jobs))
-			}
-			if werr == nil {
-				gu.st.workflows = applyWfSearch(visibleWorkflows, ft.Workflows)
-				gu.st.workflowCursor = clampCursor(gu.st.workflowCursor, len(gu.st.workflows))
-			}
-			if aerr == nil {
-				gu.st.agents = applyAgentSearch(agents, ft.Agents)
-				gu.st.agentCursor = clampCursor(gu.st.agentCursor, len(gu.st.agents))
-			}
-			gu.st.health = health
-			if selectedTaskID != "" && selectedComments != nil {
-				// Bound the cache: a long lazy session that visits many
-				// tasks would otherwise grow it without limit. 64 entries
-				// is enough for the operator's working set; on overflow we
-				// evict an arbitrary entry (cheaper than a real LRU and
-				// the cost of a miss is one DB round-trip on next visit).
-				if len(gu.st.comments) >= commentsCacheMax {
-					for k := range gu.st.comments {
-						if k == selectedTaskID {
-							continue
-						}
-						delete(gu.st.comments, k)
-						break
-					}
-				}
-				gu.st.comments[selectedTaskID] = selectedComments
-			}
-		})
-		return nil
+	// Pick up the live datasource's fallback counter so renderStatusBar
+	// can surface a 'flaky' chip when reads silently switched to the
+	// offline base. The interface is optional: pure offline mode has
+	// nothing to count.
+	var fallbacksNow uint64
+	if f, ok := gu.ds.(interface{ Fallbacks() uint64 }); ok {
+		fallbacksNow = f.Fallbacks()
+	}
+
+	return refreshResult{
+		tasks: tasks, taskSearch: tasksFilter.Search, terr: terr,
+		jobs: jobs, jobsSearch: ft.Jobs, jerr: jerr,
+		visibleWorkflows: visibleWorkflows, workflowSearch: ft.Workflows, werr: werr,
+		agents: agents, agentSearch: ft.Agents, aerr: aerr,
+		health: health,
+		selectedTaskID:   selectedTaskID,
+		selectedComments: selectedComments, hasCommentsErr: hasCommentsErr,
+		selectedSignals:  selectedSignals, hasSignalsErr: hasSignalsErr,
+		fallbacksNow: fallbacksNow,
+	}
+}
+
+// applyRefreshLocked mutates the model from a refreshResult. Must be
+// called inside a g.Update closure (which is the only place gocui
+// allows touching view state). Held under st.mu.Lock.
+func (gu *Gui) applyRefreshLocked(r refreshResult) {
+	gu.st.withLock(func() {
+		if r.terr == nil {
+			// The datasource already applied tasksFilter.Search
+			// (post-facet free-text). Do NOT re-filter with the raw
+			// expression here: that would re-apply 'p:1' or 'wf:foo'
+			// as substring matches against id+title and empty the
+			// panel. Use the parsed Search remainder only.
+			gu.st.tasks = applyTaskSearch(r.tasks, r.taskSearch)
+			gu.st.taskCursor = clampCursor(gu.st.taskCursor, len(gu.st.tasks))
+		}
+		if r.jerr == nil {
+			gu.st.jobs = applyJobSearch(r.jobs, r.jobsSearch)
+			gu.st.jobCursor = clampCursor(gu.st.jobCursor, len(gu.st.jobs))
+		}
+		if r.werr == nil {
+			gu.st.workflows = applyWfSearch(r.visibleWorkflows, r.workflowSearch)
+			gu.st.workflowCursor = clampCursor(gu.st.workflowCursor, len(gu.st.workflows))
+		}
+		if r.aerr == nil {
+			gu.st.agents = applyAgentSearch(r.agents, r.agentSearch)
+			gu.st.agentCursor = clampCursor(gu.st.agentCursor, len(gu.st.agents))
+		}
+		gu.st.health = r.health
+		gu.st.fallbacksLast = gu.st.fallbacksNow
+		gu.st.fallbacksNow = r.fallbacksNow
+		if r.selectedTaskID != "" && !r.hasCommentsErr && r.selectedComments != nil {
+			evictCacheIfNeeded(gu.st.comments, r.selectedTaskID, commentsCacheMax)
+			gu.st.comments[r.selectedTaskID] = r.selectedComments
+		}
+		if r.selectedTaskID != "" && !r.hasSignalsErr && r.selectedSignals != nil {
+			evictCacheIfNeeded(gu.st.signals, r.selectedTaskID, commentsCacheMax)
+			gu.st.signals[r.selectedTaskID] = r.selectedSignals
+		}
 	})
+}
+
+// evictCacheIfNeeded drops one arbitrary non-key entry from m if the
+// map is at the cap AND key isn't already present. (When key is
+// already in the map we're replacing it, not growing, so no eviction
+// is needed.) Generic over the cache's value type so the comments
+// and signals caches share the policy.
+func evictCacheIfNeeded[V any](m map[string]V, key string, cap int) {
+	if _, exists := m[key]; exists {
+		return
+	}
+	if len(m) < cap {
+		return
+	}
+	for k := range m {
+		if k == key {
+			continue
+		}
+		delete(m, k)
+		return
+	}
 }
 
 func clampCursor(cur, n int) int {

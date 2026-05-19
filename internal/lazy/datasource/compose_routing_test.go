@@ -3,7 +3,6 @@ package datasource_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -213,5 +212,3 @@ func TestCompose_BoundedInitialProbe(t *testing.T) {
 	}
 }
 
-// silence unused
-var _ = fmt.Sprintf

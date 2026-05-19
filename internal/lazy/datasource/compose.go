@@ -70,6 +70,15 @@ func (c *Compose) Health() Health {
 	return c.health
 }
 
+// Fallbacks returns the live datasource's cumulative count of
+// daemon-preferred reads that errored and fell back to the offline
+// base. The TUI status bar reads this on every refresh and renders a
+// chip when the counter advances since the last reading, so a daemon
+// that's technically reachable but flaky (e.g. timing out on /v1/jobs
+// while /v1/healthz still 200s) becomes visible. Zero in pure
+// offline mode (Live is never invoked).
+func (c *Compose) Fallbacks() uint64 { return c.live.Fallbacks() }
+
 func (c *Compose) loop(d time.Duration) {
 	t := time.NewTicker(d)
 	defer t.Stop()

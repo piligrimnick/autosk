@@ -6,9 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"autosk/internal/daemon/api"
 	"autosk/internal/lazy/datasource"
-	"autosk/internal/store"
 )
 
 // TestDatasourceVerbsTimeout (risk #7 from the impl plan) wraps an
@@ -118,9 +116,4 @@ func (w *timeoutWrapper) Healthz(ctx context.Context) (datasource.Health, error)
 	return out, err
 }
 
-// Tiny silencer for unused-import warnings since the file lives in
-// the same _test package as the existing tests.
-var (
-	_ = store.Status("")
-	_ = api.JobResponse{}
-)
+

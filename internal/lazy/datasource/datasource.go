@@ -125,9 +125,11 @@ type Comment struct {
 // `autosk step next`). Decoded inline because the workflow store
 // doesn't expose them.
 //
-// step_signals has no synthetic id column (PK = run_id), so Signal
-// has no ID either. The transition_id is decoded into Target via
-// the step_transitions row’s NextStepName / TaskStatus.
+// step_signals exposes a (run_id, transition_id) tuple but no
+// synthetic id; we project TransitionID alongside JobID so the
+// inspector can render "step_next via transition #N" if anyone needs
+// it. The transition_id is also decoded into Target via the
+// step_transitions row's NextStepName / TaskStatus.
 type Signal struct {
 	TransitionID int64
 	TaskID       string

@@ -7,50 +7,35 @@ import (
 	"autosk/internal/lazy/datasource"
 )
 
-// inspectorTestGui wires a Gui shell that drives the inspector
-// handlers WITHOUT a real gocui.Gui. inspectorCycleTab calls
-// hydrateInspectorTab, which dispatches via gu.g.OnWorker; we can't
-// supply that without spinning up a real Gui. For the cycle test we
-// only care about the state mutation under the lock that precedes
-// the OnWorker dispatch.
-//
-// To exercise the real function we run the mutation inline,
-// matching what inspectorCycleTab does before its hydrate call.
-// The alternative (mocking gu.g) is more code than the test guards.
-func cycleTabBare(st *state, step int) inspectorTab {
-	var next inspectorTab
-	st.withLock(func() {
-		n := 4
-		cur := int(st.insp.Tab)
-		cur = (cur + step + n) % n
-		st.insp.Tab = inspectorTab(cur)
-		next = st.insp.Tab
-	})
-	return next
-}
-
-// TestInspectorTabCycle drives the actual mutation that
-// inspectorCycleTab performs (the OnWorker hydrate dispatch is the
-// only thing not exercised; it's a thin wrapper around tab-specific
-// fetches that have their own coverage). The pure-modulo math is
-// also pinned via cycleTabBare so future restructures can't break
-// the wrap-around.
+// TestInspectorTabCycle drives the real nextTab helper that
+// inspectorCycleTab calls (the OnWorker hydrate dispatch is the only
+// thing not exercised; it's a thin wrapper around tab-specific
+// fetches that have their own coverage). Pinning the wrap-around
+// here means a future restructure of the cycle math can't silently
+// break it.
 func TestInspectorTabCycle(t *testing.T) {
-	st := newState()
-	st.view = StateInspector
-	st.insp.Tab = tabLive
-	want := []inspectorTab{tabArchive, tabMeta, tabSignals, tabLive}
-	for i, w := range want {
-		if got := cycleTabBare(st, +1); got != w {
-			t.Errorf("cycle %d: got %v want %v", i, got, w)
-		}
+	// +1 walks Live → Archive → Meta → Signals → Live.
+	cases := []struct {
+		from inspectorTab
+		step int
+		want inspectorTab
+	}{
+		{tabLive, +1, tabArchive},
+		{tabArchive, +1, tabMeta},
+		{tabMeta, +1, tabSignals},
+		{tabSignals, +1, tabLive},
+		// -1 walks the other way.
+		{tabLive, -1, tabSignals},
+		{tabSignals, -1, tabMeta},
+		{tabMeta, -1, tabArchive},
+		{tabArchive, -1, tabLive},
+		// Steps larger than one full cycle still land correctly.
+		{tabLive, +5, tabArchive},
+		{tabLive, -5, tabSignals},
 	}
-	// And step -1 walks the other way.
-	st.insp.Tab = tabLive
-	wantBack := []inspectorTab{tabSignals, tabMeta, tabArchive, tabLive}
-	for i, w := range wantBack {
-		if got := cycleTabBare(st, -1); got != w {
-			t.Errorf("cycle -%d: got %v want %v", i, got, w)
+	for _, tc := range cases {
+		if got := nextTab(tc.from, tc.step); got != tc.want {
+			t.Errorf("nextTab(%v, %+d)=%v want %v", tc.from, tc.step, got, tc.want)
 		}
 	}
 }

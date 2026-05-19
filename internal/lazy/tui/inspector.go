@@ -289,15 +289,27 @@ func (gu *Gui) inspectorClose(*gocui.Gui, *gocui.View) error {
 	return nil
 }
 
+// nextTab returns the inspector tab arrived at by walking `step`
+// positions from `cur` (wraps modulo the number of tabs). Extracted
+// from inspectorCycleTab so the modulo math is reachable from a
+// test that doesn't need a real gocui.Gui.
+//
+// Step is normalised to (-n, n) before the wrap-add so values with
+// |step| > n (e.g. someone passing a multi-page jump) still land in
+// the right slot — Go's % preserves the sign of the dividend, so a
+// naive (cur+step+n)%n loses for step <= -n.
+func nextTab(cur inspectorTab, step int) inspectorTab {
+	const n = 4
+	s := step % n
+	return inspectorTab((int(cur) + s + n) % n)
+}
+
 // inspectorCycleTab cycles inspector tab by step (±1).
 func (gu *Gui) inspectorCycleTab(step int) func(*gocui.Gui, *gocui.View) error {
 	return func(*gocui.Gui, *gocui.View) error {
 		var newTab inspectorTab
 		gu.st.withLock(func() {
-			n := 4
-			cur := int(gu.st.insp.Tab)
-			cur = (cur + step + n) % n
-			gu.st.insp.Tab = inspectorTab(cur)
+			gu.st.insp.Tab = nextTab(gu.st.insp.Tab, step)
 			newTab = gu.st.insp.Tab
 		})
 		gu.hydrateInspectorTab(newTab)

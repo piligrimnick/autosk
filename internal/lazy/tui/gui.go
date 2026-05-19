@@ -59,6 +59,12 @@ type Gui struct {
 	// uses the same pattern).
 	refreshInFlight atomic.Bool
 	refreshPending  atomic.Bool
+
+	// dispatch routes a body onto the gocui worker pool. Defaults to
+	// gu.g.OnWorker(...) in production; tests replace it with a plain
+	// goroutine spawn so scheduleRefresh's CAS dance can be exercised
+	// without a real gocui.Gui.
+	dispatch func(func())
 }
 
 // Run constructs the gui, opens the alt-screen, and blocks on the
@@ -167,7 +173,7 @@ func (gu *Gui) scheduleRefresh() {
 		dlog("scheduleRefresh: coalesced (pending set)")
 		return
 	}
-	gu.g.OnWorker(func(_ gocui.Task) error {
+	gu.runDispatch(func() {
 		for {
 			gu.refreshAll()
 			gu.refreshInFlight.Store(false)
@@ -176,13 +182,24 @@ func (gu *Gui) scheduleRefresh() {
 			// scheduleRefresh either parks in pending or wins the race
 			// (in which case we exit here).
 			if !gu.refreshPending.CompareAndSwap(true, false) {
-				return nil
+				return
 			}
 			if !gu.refreshInFlight.CompareAndSwap(false, true) {
-				return nil
+				return
 			}
 		}
 	})
+}
+
+// runDispatch dispatches f onto the gocui worker pool (or, in tests,
+// whatever gu.dispatch was set to). The indirection is so
+// scheduleRefresh's CAS loop can be exercised without a real gocui.
+func (gu *Gui) runDispatch(f func()) {
+	if gu.dispatch != nil {
+		gu.dispatch(f)
+		return
+	}
+	gu.g.OnWorker(func(_ gocui.Task) error { f(); return nil })
 }
 
 // quit is the standard handler for q / Ctrl-C.

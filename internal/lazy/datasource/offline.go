@@ -419,8 +419,13 @@ const signalsBaseQuery = `
 // brittle (silently breaks if id prefixes ever change) and dead
 // (the task-scoped branch had no callers). Splitting them gives each
 // call site a statically chosen semantic.
+//
+// Tie-break order: (created_at, transition_id). Within one run
+// run_id is constant, so ordering by it doesn't disambiguate
+// anything; transition_id is monotonic per (step_id, target) and is
+// what step_signals's effective unique tuple is keyed by.
 func (o *Offline) Signals(ctx context.Context, jobID string) ([]Signal, error) {
-	query := signalsBaseQuery + ` WHERE ss.run_id = ? ORDER BY ss.created_at DESC, ss.run_id DESC`
+	query := signalsBaseQuery + ` WHERE ss.run_id = ? ORDER BY ss.created_at DESC, ss.transition_id DESC`
 	return o.scanSignals(ctx, query, jobID)
 }
 
@@ -429,7 +434,7 @@ func (o *Offline) Signals(ctx context.Context, jobID string) ([]Signal, error) {
 // Tasks-detail widgets (a kickback loop is one task with many runs;
 // the dashboard cares about all of them).
 func (o *Offline) SignalsForTask(ctx context.Context, taskID string) ([]Signal, error) {
-	query := signalsBaseQuery + ` WHERE ss.task_id = ? ORDER BY ss.created_at DESC, ss.run_id DESC`
+	query := signalsBaseQuery + ` WHERE ss.task_id = ? ORDER BY ss.created_at DESC, ss.transition_id DESC`
 	return o.scanSignals(ctx, query, taskID)
 }
 

@@ -212,13 +212,13 @@ func renderAgentsPanel(ags []datasource.Agent, cursor int, filter string) string
 
 // renderDetail renders the right detail pane for whatever is focused.
 //
-// The caller already holds the model's RLock; s.comments[t.ID] is
-// read directly here (not through commentsFor) to avoid re-locking.
+// The caller already holds the model's RLock; s.comments[t.ID] and
+// s.signals[t.ID] are read directly here to avoid re-locking.
 func renderDetail(s *state) string {
 	switch s.focused {
 	case panelTasks:
 		if t, ok := s.selectedTask(); ok {
-			return renderTaskDetail(t, s.comments[t.ID])
+			return renderTaskDetail(t, s.comments[t.ID], s.signals[t.ID])
 		}
 	case panelJobs:
 		if j, ok := s.selectedJob(); ok {
@@ -236,7 +236,7 @@ func renderDetail(s *state) string {
 	return styleMuted.Render("(nothing selected)")
 }
 
-func renderTaskDetail(t datasource.Task, comments []datasource.Comment) string {
+func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals []datasource.Signal) string {
 	var b strings.Builder
 	fmt.Fprintln(&b, styleHeader.Render(fmt.Sprintf("task %s  %s  P%d", t.ID, t.Status, t.Priority)))
 	if t.WorkflowName != "" {
@@ -276,6 +276,22 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment) string {
 		for _, c := range comments[start:] {
 			fmt.Fprintf(&b, "  %s %s: %s\n",
 				c.CreatedAt.Format("15:04"), c.AuthorName, truncate(c.Text, 70))
+		}
+	}
+	// Design plan §4: Tasks detail pane includes the tail of the last
+	// open kickback chain. SignalsForTask returns rows newest-first,
+	// so the first ≤3 entries are the freshest signals across all
+	// runs of this task.
+	if len(signals) > 0 {
+		n := len(signals)
+		end := n
+		if end > 3 {
+			end = 3
+		}
+		b.WriteString("\n" + styleMuted.Render(fmt.Sprintf("─ recent signals (%d) ─", n)) + "\n")
+		for _, s := range signals[:end] {
+			fmt.Fprintf(&b, "  %s %s → %s\n",
+				s.CreatedAt.Format("15:04"), s.StepName, s.Target)
 		}
 	}
 	return b.String()
@@ -375,6 +391,15 @@ func renderStatusBar(s *state, projectRoot string) string {
 	parts = append(parts, daemonStr)
 	if s.health.Daemon == "ok" {
 		parts = append(parts, fmt.Sprintf("workers=%d q=%d r=%d", s.health.Workers, s.health.Queued, s.health.Running))
+	}
+	// Surface live-datasource hiccups (daemon was reachable but a
+	// read errored and silently fell back to the DB). Compose tracks a
+	// cumulative counter; we show a chip when it advances between
+	// refresh ticks. The compare is guarded against underflow even
+	// though the counter is monotonic; future refactors that reset it
+	// (e.g. on reconnect) shouldn't make the chip blow up.
+	if s.fallbacksNow > s.fallbacksLast {
+		parts = append(parts, styleWarn.Render(fmt.Sprintf("flaky+%d", s.fallbacksNow-s.fallbacksLast)))
 	}
 	scopeStr := "—"
 	if !s.scope.IsEmpty() {

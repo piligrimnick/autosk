@@ -34,9 +34,23 @@ func NewLive(base *Offline, cli *client.Client) *Live {
 	return &Live{Offline: base, cli: cli}
 }
 
+// recordFallback bumps the counter and pushes a debug-log line so
+// the (test-installed) dlog hook surfaces daemon hiccups during a
+// run. Production callers see this only via Compose.Fallbacks().
+func (l *Live) recordFallback(verb string, err error) {
+	l.fallbacks.Add(1)
+	if dbg := DebugLog(); dbg != nil {
+		dbg("live %s fell back: %v", verb, err)
+	}
+}
+
 // Fallbacks returns the cumulative count of daemon-read errors that
-// fell back to the DB. Status-bar consumers can compare against a
-// previous reading to render a 'daemon flaky' chip.
+// fell back to the DB. Status-bar consumers (Compose.Fallbacks)
+// compare against a previous reading to render a 'daemon flaky' chip
+// when the counter advances. Note that the offline fallback is
+// silent at the TUI layer (the operator still sees data — just
+// stale-by-tick) so this counter is the only mechanism that surfaces
+// the hiccup.
 func (l *Live) Fallbacks() uint64 { return l.fallbacks.Load() }
 
 // Jobs prefers the daemon's view so Streaming/AttachCount are live.
@@ -48,7 +62,7 @@ func (l *Live) Fallbacks() uint64 { return l.fallbacks.Load() }
 func (l *Live) Jobs(ctx context.Context, f JobFilter) ([]Job, error) {
 	resp, err := l.cli.ListJobs(ctx, f.TaskID, f.Statuses, f.Limit)
 	if err != nil {
-		l.fallbacks.Add(1)
+		l.recordFallback("Jobs", err)
 		return l.Offline.Jobs(ctx, f)
 	}
 	stepIDs := make([]string, 0, len(resp.Jobs))
@@ -87,7 +101,7 @@ func (l *Live) Jobs(ctx context.Context, f JobFilter) ([]Job, error) {
 func (l *Live) GetJob(ctx context.Context, id string) (Job, error) {
 	resp, err := l.cli.GetJob(ctx, id)
 	if err != nil {
-		l.fallbacks.Add(1)
+		l.recordFallback("GetJob", err)
 		return l.Offline.GetJob(ctx, id)
 	}
 	j := Job{JobResponse: resp}
@@ -106,7 +120,7 @@ func (l *Live) GetJob(ctx context.Context, id string) (Job, error) {
 func (l *Live) Messages(ctx context.Context, jobID string, full bool, limit int) ([]MessageEvent, error) {
 	resp, err := l.cli.GetMessages(ctx, jobID, full, limit)
 	if err != nil {
-		l.fallbacks.Add(1)
+		l.recordFallback("Messages", err)
 		return l.Offline.Messages(ctx, jobID, full, limit)
 	}
 	out := make([]MessageEvent, 0, len(resp.Events))

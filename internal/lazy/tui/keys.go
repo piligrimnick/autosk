@@ -490,8 +490,9 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"inspector:",
 		"  [ / ]   1..4   tab cycle/jump",
 		"  Esc / Ctrl-O   back to dashboard",
-		"  body: j/k Ctrl-F/Ctrl-B PgUp/PgDn g/G",
-		"  Live: Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort  Ctrl-B/PgUp scroll-back",
+		"  body (no text input focus): j/k  Ctrl-F page-fwd  Ctrl-B page-back  PgUp/PgDn  g/G",
+		"  Live input (textarea focus): Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort",
+		"  Live input: Ctrl-B / PgUp / PgDn scroll-back the transcript above",
 	}
 	gu.openMenu("help", lines, func(_ int) error { return gu.popupClose(nil, nil) })
 	return nil
@@ -753,36 +754,23 @@ func (gu *Gui) workflowDelete(*gocui.Gui, *gocui.View) error {
 
 // agentInstall and agentUninstall are intentionally informational in
 // v1: the daemon has no /v1/agents endpoint so live mode returns the
-// same error as offline. Rather than ask the user to type a name and
-// THEN show an error, we surface up-front that the verb shells out
-// outside the TUI. The hotkeys stay bound so the help screen line
-// 'i install / u uninstall' is honest (it points to the workaround).
+// same error as offline. A popup with two no-op options is a fake
+// choice; flashf is the right verb — one piece of info, no demand
+// for an action that doesn't exist. The hotkeys stay bound so the
+// help screen line 'i install / u uninstall' is honest (it points
+// to the CLI workaround).
 func (gu *Gui) agentInstall(*gocui.Gui, *gocui.View) error {
-	gu.openMenu(
-		"agent install isn't supported from lazy yet",
-		[]string{
-			"quit lazy and run: autosk agent install <pkg>",
-			"close",
-		},
-		func(_ int) error { return nil },
-	)
+	gu.flashf("info", "agent install: quit lazy and run 'autosk agent install <pkg>'")
 	return nil
 }
 
 func (gu *Gui) agentUninstall(*gocui.Gui, *gocui.View) error {
-	a, _ := gu.st.selectedAgentLocked()
-	name := a.Name
-	if name == "" {
-		name = "<pkg>"
+	a, ok := gu.st.selectedAgentLocked()
+	name := "<pkg>"
+	if ok && a.Name != "" {
+		name = a.Name
 	}
-	gu.openMenu(
-		"agent uninstall isn't supported from lazy yet",
-		[]string{
-			"quit lazy and run: autosk agent uninstall " + name,
-			"close",
-		},
-		func(_ int) error { return nil },
-	)
+	gu.flashf("info", "agent uninstall: quit lazy and run 'autosk agent uninstall %s'", name)
 	return nil
 }
 

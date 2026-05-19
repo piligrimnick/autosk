@@ -213,12 +213,25 @@ type state struct {
 
 	health datasource.Health
 
+	// fallbacksLast / fallbacksNow track the live datasource's
+	// cumulative daemon-fallback counter so renderStatusBar can show
+	// a 'flaky' chip when the counter advances since the last refresh
+	// tick. Zero in pure offline mode (no Compose, no Live).
+	fallbacksLast uint64
+	fallbacksNow  uint64
+
 	// comments is a per-task last-N comment cache, hydrated by
 	// refreshAll on cursor change (RefreshHelper pattern). The
 	// rendered Tasks-detail pane reads it; the comment count is
 	// authoritative on the Task struct. Bounded at commentsCacheMax
 	// entries (refresh.go evicts on overflow).
 	comments map[string][]datasource.Comment
+
+	// signals is a per-task signals cache: "tail of last open
+	// kickback chain" per design plan §4 for the Tasks-detail widget.
+	// Hydrated by refreshAll on cursor change. Same bounding rule as
+	// the comments cache.
+	signals map[string][]datasource.Signal
 }
 
 // commentsCacheMax bounds state.comments so a long lazy session
@@ -233,6 +246,7 @@ func newState() *state {
 		logBuf:   []string{"lazy started"},
 		health:   datasource.Health{Daemon: "down"},
 		comments: map[string][]datasource.Comment{},
+		signals:  map[string][]datasource.Signal{},
 	}
 }
 
