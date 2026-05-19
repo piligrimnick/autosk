@@ -54,6 +54,7 @@ func newRootCmd() *cobra.Command {
 		newResumeCmd(),
 		newCommentCmd(),
 		newStepCmd(),
+		newLazyCmd(),
 	)
 	return root
 }
