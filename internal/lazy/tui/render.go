@@ -144,7 +144,13 @@ func renderTasksPanel(tasks []datasource.Task, _ int, scope scope, filter string
 // renderJobsPanel renders the Jobs panel. See renderTasksPanel for
 // the per-column colour rationale; jobs use:
 //
-//	 [jobid-Accent] [glyph-Muted] [wf:step-Warn] [age-Muted] [attached-Muted] [*live*-OK]
+//	 [age-Muted] [jobid-Accent] [glyph-Muted] [wf:step-Warn] [attached-Muted] [*live*-OK]
+//
+// Age sits leftmost (lazygit-commits layout) so glance-scanning a
+// long Jobs list answers "when did this run start?" without horizontal
+// eye motion. The 4-char column accommodates humanAge's longest output
+// (e.g. "23h", "7d", or the rare "100d") without misaligning the rest
+// of the row.
 func renderJobsPanel(jobs []datasource.Job, _ int, scope scope, filter string) (string, int) {
 	var b strings.Builder
 	header := 0
@@ -161,6 +167,7 @@ func renderJobsPanel(jobs []datasource.Job, _ int, scope scope, filter string) (
 		return b.String(), header
 	}
 	for _, j := range jobs {
+		age := styleMuted.Render(fmt.Sprintf("%-4s", humanAge(j.CreatedAt)))
 		id := styleAccent.Render(fmt.Sprintf("%-9s", j.JobID))
 		glyph := styleMuted.Render(fmt.Sprintf("%-9s", glyphForJobStatus(j)))
 		wfstep := j.WorkflowName + ":" + j.StepName
@@ -168,7 +175,6 @@ func renderJobsPanel(jobs []datasource.Job, _ int, scope scope, filter string) (
 			wfstep = "(no-wf)"
 		}
 		wfstepStyled := styleWarn.Render(fmt.Sprintf("%-20s", wfstep))
-		age := styleMuted.Render(fmt.Sprintf("%-5s", humanAge(j.CreatedAt)))
 		attached := ""
 		if j.AttachCount > 0 {
 			attached = styleMuted.Render(fmt.Sprintf(" (%d)", j.AttachCount))
@@ -177,7 +183,7 @@ func renderJobsPanel(jobs []datasource.Job, _ int, scope scope, filter string) (
 		if j.Streaming {
 			live = " " + styleOK.Render("*live*")
 		}
-		fmt.Fprintf(&b, "%s %s %s %s%s%s\n", id, glyph, wfstepStyled, age, attached, live)
+		fmt.Fprintf(&b, "%s %s %s %s%s%s\n", age, id, glyph, wfstepStyled, attached, live)
 	}
 	return b.String(), header
 }
