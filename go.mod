@@ -4,7 +4,8 @@ go 1.25
 
 require (
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/jesseduffield/gocui v0.0.0-00010101000000-000000000000
+	github.com/gdamore/tcell/v2 v2.13.5
+	github.com/jesseduffield/gocui v0.3.1-0.20260331125330-c81715e95462
 	github.com/jesseduffield/lazycore v0.0.0-20221023210126-718a4caea996
 	github.com/mattn/go-sqlite3 v1.14.37
 	github.com/spf13/cobra v1.10.1
@@ -17,7 +18,6 @@ require (
 	github.com/charmbracelet/x/cellbuf v0.0.13-0.20250311204145-2c3ea96c31dd // indirect
 	github.com/charmbracelet/x/term v0.2.1 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
-	github.com/gdamore/tcell/v2 v2.13.5 // indirect
 	github.com/go-errors/errors v1.0.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
@@ -33,8 +33,3 @@ require (
 	golang.org/x/term v0.38.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
 )
-
-// Local dev: pin gocui to the working tree at ~/me/dev/gocui. CI will
-// see the pseudo-version above; before merge, the replace line is
-// removed and the gocui dep is bumped to the tagged commit it pinned.
-replace github.com/jesseduffield/gocui => ../gocui
