@@ -150,7 +150,12 @@ func Run(ctx context.Context, opts Options) error {
 
 	g.InputEsc = true
 	g.SupportOverlaps = true
-	g.Mouse = false
+	// Mouse=true unlocks wheel-scroll bindings (MouseWheelUp/Down).
+	// Without this gocui swallows wheel events at the tcell layer and
+	// the per-view scroll handlers never fire — which is exactly the
+	// bug operators hit on the Detail pane and inspector transcript:
+	// content overflowed the viewport, j/k worked, the wheel didn't.
+	g.Mouse = true
 
 	cctx, cancel := context.WithCancel(ctx)
 	gu := &Gui{

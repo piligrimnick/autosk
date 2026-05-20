@@ -127,6 +127,41 @@ func (gu *Gui) bindKeys() error {
 		{winDetail, 'j', gocui.ModNone, gu.detailScroll(+1)},
 		{winDetail, 'k', gocui.ModNone, gu.detailScroll(-1)},
 
+		// Mouse-wheel scroll bindings. gocui surfaces wheel events as
+		// MouseWheelUp/Down keys per-view; without these bindings the
+		// terminal's wheel forwarding is dropped on the floor and
+		// overflowing content (Tasks detail, inspector transcript) is
+		// only reachable via j/k or PgUp/PgDn. lazygit binds wheel on
+		// the body / list views; we do the same.
+		//
+		// Side panels: wheel maps to cursor up/down so the selection
+		// follows the wheel — scrollOffAdjust then drags the viewport
+		// along (see commit 600a4cc).
+		{winTasks, gocui.MouseWheelDown, gocui.ModNone, gu.cursorDown(panelTasks)},
+		{winTasks, gocui.MouseWheelUp, gocui.ModNone, gu.cursorUp(panelTasks)},
+		{winJobs, gocui.MouseWheelDown, gocui.ModNone, gu.cursorDown(panelJobs)},
+		{winJobs, gocui.MouseWheelUp, gocui.ModNone, gu.cursorUp(panelJobs)},
+		{winWorkflows, gocui.MouseWheelDown, gocui.ModNone, gu.cursorDown(panelWorkflows)},
+		{winWorkflows, gocui.MouseWheelUp, gocui.ModNone, gu.cursorUp(panelWorkflows)},
+		{winAgents, gocui.MouseWheelDown, gocui.ModNone, gu.cursorDown(panelAgents)},
+		{winAgents, gocui.MouseWheelUp, gocui.ModNone, gu.cursorUp(panelAgents)},
+
+		// Detail pane + inspector transcript: wheel scrolls the
+		// viewport (no cursor concept on these views). Inspector input
+		// also forwards the wheel to the body so the user can scroll
+		// the transcript without leaving the textarea — same affordance
+		// the Ctrl-B / PageUp bindings above already provide.
+		{winDetail, gocui.MouseWheelDown, gocui.ModNone, gu.detailScroll(+1)},
+		{winDetail, gocui.MouseWheelUp, gocui.ModNone, gu.detailScroll(-1)},
+		{winInspector, gocui.MouseWheelDown, gocui.ModNone, gu.inspectorScroll(+1)},
+		{winInspector, gocui.MouseWheelUp, gocui.ModNone, gu.inspectorScroll(-1)},
+		{winInspectorIn, gocui.MouseWheelDown, gocui.ModNone, gu.inspectorScroll(+1)},
+		{winInspectorIn, gocui.MouseWheelUp, gocui.ModNone, gu.inspectorScroll(-1)},
+
+		// Popup menus also benefit from wheel-driven cursor motion.
+		{winPopupMenu, gocui.MouseWheelDown, gocui.ModNone, gu.popupCursor(+1)},
+		{winPopupMenu, gocui.MouseWheelUp, gocui.ModNone, gu.popupCursor(-1)},
+
 		// Live tab dispatch — bound on the input view.
 		{winInspectorIn, gocui.KeyCtrlD, gocui.ModNone, gu.liveSend},
 		{winInspectorIn, gocui.KeyCtrlF, gocui.ModNone, gu.liveFollowUp},
