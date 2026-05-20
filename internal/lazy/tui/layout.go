@@ -91,16 +91,25 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 		default:
 			v.Frame = true
 		}
-		// Highlight the focused side panel's frame. gocui retains the
-		// last-set FrameColor on the View object across layout passes
-		// (SetView returns the same view, it doesn't reset attrs), so the
-		// else branch is load-bearing: without it a panel that lost focus
-		// would stay cyan forever — same goes for any panel that was
-		// focused before the inspector opened and then dashboard came back.
+		// Highlight the focused side panel's frame AND title. gocui
+		// retains the last-set FrameColor/TitleColor on the View object
+		// across layout passes (SetView returns the same view, it doesn't
+		// reset attrs), so the else branches are load-bearing: without
+		// them a panel that lost focus would stay cyan forever — same
+		// goes for any panel that was focused before the inspector
+		// opened and then dashboard came back.
+		//
+		// Title color is kept in sync with the frame on purpose: the
+		// "[N] Title" string is the visual marker for which panel owns
+		// the cursor right now. Per-panel tab labels rendered INSIDE the
+		// body (when we add them) live in the view buffer and are not
+		// touched by TitleColor — they stay default-coloured by design.
 		if state == StateDashboard && win == focusedWin {
 			v.FrameColor = gocui.ColorCyan
+			v.TitleColor = gocui.ColorCyan
 		} else {
 			v.FrameColor = gocui.ColorDefault
+			v.TitleColor = gocui.ColorDefault
 		}
 		if win == winInspectorIn {
 			v.Editable = true
