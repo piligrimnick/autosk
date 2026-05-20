@@ -1,187 +1,44 @@
-# autosk for AI agents
 
-Use `autosk` as your durable task list during coding work. It is designed
-for `ready → claim → done` loops.
+# autosk - task manager and workflow manager for coding agents
 
-## The 30-second rules
+This file provides guidance when working with code in this repository.
 
-1. **Never edit `./.autosk/db` directly.** Always go through `autosk` CLI.
-2. **Pick work via `autosk ready --json`**, not `list`. `ready` filters out
-   blocked and in-progress tasks for you.
-3. **`autosk claim <id>` is idempotent.** Calling it twice in a row is fine.
-   It's how you mark "I'm working on this".
-4. **Close tasks with `autosk done <id>`.** Use `cancel` for abandoned work.
-5. **Express blockers with `autosk block <id> <blocker-id>`**, not by
-   writing prose into the description.
+## Build, test, lint
 
-## Canonical agent loop
+Use the `Makefile` targets — they set the required CGO flags and the `libsqlite3` build tag. Plain `go build`/`go test` won't link correctly.
 
-```bash
-while true; do
-  next_json=$(autosk ready --json)
-  id=$(echo "$next_json" | jq -r '.[0].id // empty')
-  [ -z "$id" ] && break
+- `make build` — compiles `bin/autosk` (entrypoint: `cmd/autosk`)
+- `make test` — runs `go test -tags libsqlite3 ./...`
+- `make test-short` — same with `-short`
+- `make vet` — `go vet` with the build tag
+- `make fmt` — `gofmt`
+- `make lint` — `golangci-lint run --build-tags libsqlite3` (requires `golangci-lint` installed)
+- `make doctor` — verifies the doltlite library is present at `$DOLTLITE_DIR` (default `$HOME/me/dev/doltlite/build`)
 
-  autosk claim "$id"
-  # ... do the work ...
-  autosk done "$id"
-done
-```
+Every build/test target depends on `doctor`. If it fails, doltlite hasn't been built — surface the doctor message to the user; don't try to build doltlite yourself.
 
-## Creating decomposed work
+The `libsqlite3` build tag is mandatory: it routes `mattn/go-sqlite3` through the doltlite-provided libsqlite3 instead of the embedded amalgamation. Any direct `go` invocation Claude runs must pass `-tags libsqlite3`.
 
-When a task is too big, decompose it before claiming. Each subtask is a real
-task with a blocker edge:
+## Repo layout
 
-```bash
-parent=$(autosk create "Refactor auth module" -p 1)
-a=$(autosk create "Extract token validation" --blocks "$parent")
-b=$(autosk create "Move JWT signing to its own pkg" --blocks "$parent")
-```
+- `cmd/autosk/` — Cobra CLI entrypoint
+- `internal/lazy/` — lazygit-style TUI (`autosk lazy`), built on `jesseduffield/gocui`
+- `internal/daemon/` — Unix-domain-socket daemon + job executor
+- `internal/workflow/` — workflow step graph, transitions, executor
+- `internal/projectdb/`, `internal/store/`, `internal/migrations/` — doltlite-backed task/workflow/agent store
+- `extension/` — TypeScript SDK + agent runtime (`pi --mode rpc`)
+- `agents/` — reference agent implementations (TS/JS)
 
-`parent` will not appear in `autosk ready` until both `a` and `b` are done.
+## Additionsl docs
 
-## When you discover a blocker mid-task
+- `docs/palns/yyyymmdd-*.md` - pans for feature development
+- `docs/daemon.md` - autosk daemon — multi-project pi orchestrator
+- `docs/lazy.md` - autosk lazy interactive TUI
+- `docs/workflows.md` - autosk workflow management engine
 
-```bash
-new_blocker=$(autosk create "External service spec is missing")
-autosk block <task-you-claimed> "$new_blocker"
-```
 
-Your in-progress task stays `claimed`; `ready` will not surface it again, and
-`show` will report `blocked: true`.
+## Conventions
 
-## JSON shape (`autosk show --json`)
-
-```json
-{
-  "id": "as-a1b2",
-  "title": "Wire up the auth flow",
-  "description": "...",
-  "status": "claimed",
-  "priority": 1,
-  "created_at": "2026-05-13T10:00:00Z",
-  "updated_at": "2026-05-13T11:42:13Z",
-  "blocked": false,
-  "blocked_by": [],
-  "blocks": ["as-3c4d"]
-}
-```
-
-`list` and `ready` return arrays of these. The shape is stable across patch
-releases; renames / removals are breaking changes.
-
-## When you're running inside a workflow step (v0.2)
-
-If the daemon spawned you to work on an autosk task, you are operating
-**inside a workflow step**. Before you stop your turn, you MUST call
-`autosk step next` exactly once with one of the targets listed at the
-top of your prompt:
-
-```bash
-autosk step next <as-id> --to <sibling-step-name>
-autosk step next <as-id> --to done
-autosk step next <as-id> --to cancelled
-autosk step next <as-id> --to human_feedback
-```
-
-Valid targets are spelled out per step in your initial prompt (one bullet
-per outgoing transition). The autosk pi-extension exposes this as the
-`step_next` action; either form works.
-
-If you stop without recording a transition, the daemon sends you a
-corrective message and reruns the step. After `max_corrections` (default
-3) attempts the run is marked `failed`.
-
-**Do not** call `autosk done`/`cancel`/`update --status` while you're
-inside a step — those are owned by the workflow engine. Use `step next`.
-
-## When a daemon is running
-
-The autosk daemon is **per host, not per project**: one
-`autosk daemon serve` process listens on a single unix-domain socket
-(`~/.autosk/daemon.sock` by default, override with `--sock` or
-`AUTOSK_SOCK`) and serves any project whose `.autosk/db` the requesting
-client points it at.
-
-Prefer **creating** your next task in a workflow (or with `--agent`)
-so the engine picks it up automatically:
-
-```bash
-autosk create "Implement auth module" --workflow feature-dev
-autosk create "Bump version" --agent @autosk/developer  # single:@autosk/developer
-```
-
-If the task already exists in `status=new`, use `enroll` instead of
-recreating it:
-
-```bash
-autosk enroll as-bea9 --workflow feature-dev
-autosk enroll as-bea9 --workflow feature-dev --step review  # land mid-flow
-autosk enroll as-bea9 --agent    @autosk/developer
-```
-
-`enroll` is the post-creation mirror of `create --workflow` /
-`create --agent`: it moves the task into `status=in_workflow` at the
-workflow's first step (or at `--step NAME`, if given). Both `create` and
-`enroll` accept `--step NAME` with `--workflow` to enter at a specific
-step instead of `first_step`; `--step` is incompatible with `--agent`
-(single:<agent> workflows only have one step). `enroll` only accepts
-tasks in `status=new` — for `human_feedback` use `autosk resume`, for
-`done`/`cancelled` use `autosk reopen` first.
-
-The poller (default cadence 2s, per project) surfaces `in_workflow`
-tasks whose current step's agent is non-human. The executor resolves
-the agent's config from the installed npm package at
-`~/.autosk/packages/node_modules/<pkg>/package.json` (managed via
-`autosk agent install/uninstall`) and dispatches to one of two
-branches:
-
-- standard → spawn `pi --mode rpc` with the package's settings
-  (model, thinking, first-turn message, pi_extensions, pi_skills).
-- custom → spawn `@autosk/agent-runtime` to run the package's
-  TS/JS runner module.
-
-Referencing an agent name that isn't installed produces
-`agent_not_installed: <name>` at task-create / workflow-create time
-(and at executor spawn time as a fail-fast).
-
-### Talking to the daemon
-
-All `autosk daemon ...` client commands speak HTTP over the unix
-socket and attach a per-request `X-Autosk-Cwd` header (set from
-`--cwd` or `os.Getwd()`). If you have an explicit project DB, set
-`AUTOSK_DB` (or pass the global `--db`) and the client will forward it
-as `X-Autosk-DB`. The daemon itself **ignores** its own `AUTOSK_DB`.
-
-```bash
-autosk daemon list                       # jobs in *this* project (cwd-scoped)
-autosk daemon list --all-projects        # every project the daemon has loaded
-autosk daemon status   <job-id>          # one job (cwd-scoped)
-autosk daemon messages <job-id> --limit  # transcript (cwd-scoped)
-autosk daemon cancel   <job-id>          # idempotent cancel
-```
-
-There is no `autosk daemon submit` command; work enters the daemon
-through `autosk create --workflow|--agent` or `autosk enroll`.
-
-For a deep dive (socket layout, single-instance semantics, headers,
-the SSE endpoint, security model) see
-[`docs/daemon.md`](docs/daemon.md). For workflow plumbing see
-[`docs/workflows.md`](docs/workflows.md).
-
-## What autosk is NOT
-
-- Not a comment thread. Use commit messages or PR descriptions for that.
-- Not a workflow engine (yet). Any status can transition to any status.
-- Not multi-writer (yet). Concurrent agents serialize on a file lock; if
-  you see `database is locked`, your process is being asked to wait.
-- Not federated. `autosk` lives entirely inside `./.autosk/`.
-
-## Useful flags
-
-| Flag | Effect |
-|---|---|
-| `--json` | Machine-readable output (works on every read command). |
-| `--quiet` / `-q` | Suppress non-essential prints (good for scripted use). |
-| `--db <path>` | Override database discovery. |
+- Commits follow Conventional Commits: `feat:`, `fix:`, `chore:`, `refactor:`, `docs:`, `test:`, etc.
+- Go 1.25 toolchain (`go.mod`).
+- The TUI uses the `jesseduffield/gocui` fork (the lazygit one), not `awesome-gocui`.
