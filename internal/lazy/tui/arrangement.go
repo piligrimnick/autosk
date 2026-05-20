@@ -21,7 +21,23 @@ const (
 	winPopupMenu  = "popupMenu"
 	winPopupConfirm = "popupConfirm"
 	winPopupPrompt = "popupPrompt"
+	// Task-compose popup (lazygit-style two-pane commit editor).
+	winTaskComposeSummary     = "taskComposeSummary"
+	winTaskComposeDescription = "taskComposeDescription"
 )
+
+// allPopupWindows is every window name that belongs to a popup. The
+// layout pass uses it to garbage-collect any popup view that doesn't
+// belong to the currently-active popup kind, so closed popups leave
+// no stale frame behind. Keep new popup views listed here or they'll
+// linger after the popup that owns them is dismissed.
+var allPopupWindows = []string{
+	winPopupMenu,
+	winPopupConfirm,
+	winPopupPrompt,
+	winTaskComposeSummary,
+	winTaskComposeDescription,
+}
 
 // ViewState distinguishes the two top-level arrangements.
 type ViewState int

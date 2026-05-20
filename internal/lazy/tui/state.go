@@ -128,6 +128,23 @@ const (
 	popupMenu
 	popupConfirm
 	popupPrompt
+	// popupTaskCompose is the lazygit-style two-pane editor used to
+	// create a task: a single-line summary on top, a multi-line
+	// description below. Mirrors lazygit's commit-message panel
+	// (pkg/gui/controllers/helpers/confirmation_helper.go
+	// ResizeCommitMessagePanels). Owns two views
+	// (winTaskComposeSummary / winTaskComposeDescription); the
+	// popupState's ComposeFocus picks which one currentView lands on.
+	popupTaskCompose
+)
+
+// composePane identifies one of the two panes in the task-compose
+// popup. The state machine flips between them on Tab.
+type composePane int
+
+const (
+	composeSummary composePane = iota
+	composeDescription
 )
 
 // popupState is the runtime state of the current popup.
@@ -140,6 +157,19 @@ type popupState struct {
 	OnAccept func(value string) error
 	OnSelect func(index int) error
 	OnCancel func() error
+
+	// Compose-specific fields (popupTaskCompose).
+	//
+	// Summary / Description are the INITIAL values seeded into the
+	// view's TextArea on first layout; once the views exist their
+	// TextArea is the source of truth (just like the single-pane
+	// prompt's Buffer()). ComposeFocus is the only field the toggle
+	// handler mutates after open — layout reads it to pick which view
+	// gets SetCurrentView each frame.
+	Summary         string
+	Description     string
+	ComposeFocus    composePane
+	OnComposeAccept func(summary, description string) error
 }
 
 // inspectorState carries everything the inspector view needs.

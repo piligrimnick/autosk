@@ -161,6 +161,26 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 	// Popups, when active, sit on top with overlap.
 	gu.layoutPopup(g, w, h)
 
+	// Sync the terminal-cursor visibility with whatever view ended
+	// up current after all the SetCurrentView calls above. lazygit
+	// does the same in pkg/gui/context.go (Activate):
+	//
+	//	g.Cursor = v.Editable && v.Mask == ""
+	//
+	// gocui's drawing function only paints a terminal cursor when
+	// g.Cursor=true (gocui/gui.go::draw), and it defaults to false.
+	// Without this sync the text-input fields — compose summary /
+	// description, prompt popup, inspector live input — all looked
+	// like static panes; the user typed and saw text appear but no
+	// blinking cursor, no caret position. Re-syncing here (instead
+	// of at every SetCurrentView site) makes it impossible for a
+	// future Editable view to forget the cursor.
+	if cv := g.CurrentView(); cv != nil {
+		g.Cursor = cv.Editable && cv.Mask == ""
+	} else {
+		g.Cursor = false
+	}
+
 	gu.renderViews()
 	return nil
 }

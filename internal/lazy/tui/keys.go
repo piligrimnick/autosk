@@ -201,6 +201,27 @@ func (gu *Gui) bindKeys() error {
 		{winPopupConfirm, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
 		{winPopupPrompt, gocui.KeyEnter, gocui.ModNone, gu.popupAccept},
 		{winPopupPrompt, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
+
+		// Task-compose popup keys (lazygit commit-message editor parity).
+		//
+		// Summary pane: Enter submits (so the editor never sees the
+		// keystroke and can't insert "\n" into a single-line title),
+		// Tab toggles to Description, Esc closes, Ctrl+S also submits
+		// for symmetry with the description pane.
+		//
+		// Description pane: Enter is INTENTIONALLY NOT bound here —
+		// gocui falls through to SimpleEditor which inserts "\n", which
+		// is the whole point of having a description pane. Submitting
+		// requires Ctrl+S or Alt+Enter (the user picked both). Tab
+		// toggles back to Summary, Esc closes.
+		{winTaskComposeSummary, gocui.KeyEnter, gocui.ModNone, gu.taskComposeConfirm},
+		{winTaskComposeSummary, gocui.KeyCtrlS, gocui.ModNone, gu.taskComposeConfirm},
+		{winTaskComposeSummary, gocui.KeyTab, gocui.ModNone, gu.taskComposeToggle},
+		{winTaskComposeSummary, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
+		{winTaskComposeDescription, gocui.KeyCtrlS, gocui.ModNone, gu.taskComposeConfirm},
+		{winTaskComposeDescription, gocui.KeyEnter, gocui.ModAlt, gu.taskComposeConfirm},
+		{winTaskComposeDescription, gocui.KeyTab, gocui.ModNone, gu.taskComposeToggle},
+		{winTaskComposeDescription, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
 	}
 	for _, b := range bs {
 		if err := gu.g.SetKeybinding(b.view, b.key, b.mod, b.h); err != nil {
@@ -636,19 +657,28 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"  body (no text input focus): j/k  Ctrl-F page-fwd  Ctrl-B page-back  PgUp/PgDn  g/G",
 		"  Live input (textarea focus): Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort",
 		"  Live input: Ctrl-B / PgUp / PgDn scroll-back the transcript above",
+		"",
+		"new task compose:",
+		"  summary: Enter / Ctrl-S submit  Tab → description  Esc cancel",
+		"  description: Ctrl-S / Alt-Enter submit  Tab → summary  Esc cancel",
 	}
 	gu.openMenu("help", lines, func(_ int) error { return gu.popupClose(nil, nil) })
 	return nil
 }
 
-// taskNew opens the prompt and creates a task.
+// taskNew opens the lazygit-style two-pane compose editor and
+// creates a task on submit. The summary pane carries the task title
+// (required); the description pane carries an optional multi-line
+// body that goes straight into the tasks.description column. Empty
+// summary is treated as a silent cancel (matches the previous
+// single-line prompt's behaviour).
 func (gu *Gui) taskNew(*gocui.Gui, *gocui.View) error {
-	gu.openPrompt("new task title:", "", func(title string) error {
-		if strings.TrimSpace(title) == "" {
+	gu.openTaskCompose("New task", "", "", func(summary, description string) error {
+		if strings.TrimSpace(summary) == "" {
 			return nil
 		}
 		gu.g.OnWorker(func(_ gocui.Task) error {
-			id, err := gu.ds.CreateTask(gu.ctx, title, "", store.DefaultPriority)
+			id, err := gu.ds.CreateTask(gu.ctx, summary, description, store.DefaultPriority)
 			if err != nil {
 				gu.flashf("err", "task new: %v", err)
 				return nil

@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jesseduffield/gocui"
 
@@ -13,10 +15,10 @@ import (
 func (gu *Gui) openMenu(title string, lines []string, onSelect func(int) error) {
 	gu.st.withLock(func() {
 		gu.st.popup = popupState{
-			Kind:    popupMenu,
-			Title:   title,
-			Lines:   lines,
-			Cursor:  0,
+			Kind:     popupMenu,
+			Title:    title,
+			Lines:    lines,
+			Cursor:   0,
 			OnSelect: onSelect,
 		}
 	})
@@ -27,8 +29,8 @@ func (gu *Gui) openMenu(title string, lines []string, onSelect func(int) error) 
 func (gu *Gui) openConfirm(prompt string, onAccept func() error) {
 	gu.st.withLock(func() {
 		gu.st.popup = popupState{
-			Kind:    popupConfirm,
-			Title:   prompt,
+			Kind:     popupConfirm,
+			Title:    prompt,
 			OnAccept: func(string) error { return onAccept() },
 		}
 	})
@@ -39,13 +41,86 @@ func (gu *Gui) openConfirm(prompt string, onAccept func() error) {
 func (gu *Gui) openPrompt(prompt, initial string, onAccept func(string) error) {
 	gu.st.withLock(func() {
 		gu.st.popup = popupState{
-			Kind:    popupPrompt,
-			Title:   prompt,
-			Input:   initial,
+			Kind:     popupPrompt,
+			Title:    prompt,
+			Input:    initial,
 			OnAccept: onAccept,
 		}
 	})
 	gu.requestRedraw()
+}
+
+// openTaskCompose pushes the two-pane lazygit-style commit editor
+// used to create a task. The accept callback fires with the summary
+// (single line) and the multi-line description; either may be empty
+// (the caller decides whether an empty summary is a no-op or an
+// error). Esc / popupClose dismisses the popup.
+func (gu *Gui) openTaskCompose(title, initialSummary, initialDescription string, onAccept func(summary, description string) error) {
+	if title == "" {
+		title = "New task"
+	}
+	gu.st.withLock(func() {
+		gu.st.popup = popupState{
+			Kind:            popupTaskCompose,
+			Title:           title,
+			Summary:         initialSummary,
+			Description:     initialDescription,
+			ComposeFocus:    composeSummary,
+			OnComposeAccept: onAccept,
+		}
+	})
+	gu.requestRedraw()
+}
+
+// taskComposeToggle flips focus between the summary and description
+// panes of the active compose popup. No-op when the active popup is
+// something else. Bound on Tab in both compose views (lazygit
+// parity — Universal.TogglePanel).
+func (gu *Gui) taskComposeToggle(*gocui.Gui, *gocui.View) error {
+	gu.st.withLock(func() {
+		if gu.st.popup.Kind != popupTaskCompose {
+			return
+		}
+		if gu.st.popup.ComposeFocus == composeSummary {
+			gu.st.popup.ComposeFocus = composeDescription
+		} else {
+			gu.st.popup.ComposeFocus = composeSummary
+		}
+	})
+	gu.requestRedraw()
+	return nil
+}
+
+// taskComposeConfirm reads the typed text out of both compose views
+// and fires the OnComposeAccept callback registered at openTaskCompose
+// time. Bound on Enter (summary only — Enter on description inserts a
+// newline via the editor) and on Ctrl+S / Alt+Enter (both views).
+//
+// The view's TextArea is the source of truth, not popupState.Summary /
+// Description: those fields only seed the initial text on first
+// layout. Reading from the live TextArea is what lazygit does too
+// (Commits.HandleCommitConfirm reads via getCommitSummary /
+// getCommitDescription, which proxy to the view).
+func (gu *Gui) taskComposeConfirm(*gocui.Gui, *gocui.View) error {
+	var accept func(string, string) error
+	var summary, description string
+	if v, err := gu.g.View(winTaskComposeSummary); err == nil && v != nil {
+		summary = strings.TrimRight(v.TextArea.GetContent(), "\n")
+	}
+	if v, err := gu.g.View(winTaskComposeDescription); err == nil && v != nil {
+		description = strings.TrimRight(v.TextArea.GetContent(), "\n")
+	}
+	gu.st.withLock(func() {
+		if gu.st.popup.Kind != popupTaskCompose {
+			return
+		}
+		accept = gu.st.popup.OnComposeAccept
+		gu.st.popup = popupState{}
+	})
+	if accept != nil {
+		return accept(summary, description)
+	}
+	return nil
 }
 
 // requestRedraw pokes the gocui main loop. Tolerates a nil gui (unit
@@ -137,6 +212,16 @@ func (gu *Gui) popupCursor(step int) func(*gocui.Gui, *gocui.View) error {
 
 // layoutPopup draws whatever popup is active. Centered, with overlap
 // over the dashboard / inspector underneath.
+//
+// Popup-view lifetime is load-bearing for the prompt: the typed text
+// lives in the view's TextArea, and gocui's NewView constructor
+// reinitialises that TextArea every time SetView has to create a
+// fresh view. layout runs on every flush — i.e. once per keypress —
+// so deleting + re-creating the popup view on every pass throws away
+// the character the editor just inserted. (Symptom: "new task title"
+// popup never accumulates text; every keystroke shows as a no-op.)
+// Fix: clean up only the popup views that are NOT the active one.
+// The active one is preserved across passes so its TextArea survives.
 func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 	var (
 		kind  popupKind
@@ -152,8 +237,23 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 		cur = gu.st.popup.Cursor
 		input = gu.st.popup.Input
 	})
-	for _, w := range []string{winPopupMenu, winPopupConfirm, winPopupPrompt} {
-		_ = g.DeleteView(w)
+	activeSet := map[string]bool{}
+	switch kind {
+	case popupMenu:
+		activeSet[winPopupMenu] = true
+	case popupConfirm:
+		activeSet[winPopupConfirm] = true
+	case popupPrompt:
+		activeSet[winPopupPrompt] = true
+	case popupTaskCompose:
+		activeSet[winTaskComposeSummary] = true
+		activeSet[winTaskComposeDescription] = true
+	}
+	for _, name := range allPopupWindows {
+		if activeSet[name] {
+			continue
+		}
+		_ = g.DeleteView(name)
 	}
 	switch kind {
 	case popupMenu:
@@ -180,7 +280,263 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 		if _, err := g.SetCurrentView(winPopupPrompt); err != nil && !isUnknownView(err) {
 			return
 		}
+	case popupTaskCompose:
+		gu.layoutTaskCompose(g, w, h, title)
 	}
+}
+
+// composePanelMaxWidth is the cap on the compose popup's outer
+// width. Lazygit uses 100 for the commit-message panel (or wrap
+// width + 25 when auto-wrap is on); autosk has no equivalent of
+// auto-wrap so we use the plain 100-cell ceiling.
+const composePanelMaxWidth = 100
+
+// composeSummaryViewHeight is the OUTER height (including frame) of
+// the summary pane. 3 = top frame + 1 content line + bottom frame.
+// Same magic number lazygit hard-codes as summaryViewHeight.
+const composeSummaryViewHeight = 3
+
+// composeMinDescriptionContent is the minimum content-height (rows,
+// EXCLUDING frame) the description pane allocates even when empty,
+// so the popup doesn't visually shrink to a sliver before the user
+// has typed anything. Lazygit uses minHeight=7 for the same reason.
+const composeMinDescriptionContent = 7
+
+// layoutTaskCompose draws the two-pane compose popup at the
+// dimensions lazygit uses for the commit-message panel
+// (pkg/gui/controllers/helpers/confirmation_helper.go::
+// ResizeCommitMessagePanels):
+//
+//   - width = min(4*w/7, 100), floored to min(w-2, 80)
+//   - description content height = max(7, line-count of typed body)
+//   - panelHeight = contentHeight + 2 (frame), capped at 3*h/4
+//   - centred horizontally and vertically
+//   - summary: top, OUTER height 3 (1 content line + 2 frame rows)
+//   - description: stacked below, expanding past the centred box
+//     by composeSummaryViewHeight rows (lazygit's exact placement)
+//
+// Both views are editable and use SimpleEditor. The summary view's
+// Enter is intercepted by a view-scoped keybinding (taskComposeConfirm)
+// so the editor never sees Enter and can't insert a \n. The
+// description view has NO Enter binding — the keystroke falls
+// through to SimpleEditor which inserts "\n" verbatim. Submitting
+// from the description requires Ctrl+S or Alt+Enter (both bound
+// view-scoped).
+//
+// Like the single-pane prompt, view lifetime is load-bearing: the
+// typed text lives in the view's TextArea, which gocui's NewView
+// constructor reinitialises every time SetView creates a fresh
+// view. layoutPopup keeps both compose views alive across layout
+// passes (see the activeSet logic) so keystrokes don't get eaten.
+func (gu *Gui) layoutTaskCompose(g *gocui.Gui, w, h int, title string) {
+	var (
+		initialSummary string
+		initialDesc    string
+		focus          composePane
+	)
+	gu.st.withRLock(func() {
+		initialSummary = gu.st.popup.Summary
+		initialDesc = gu.st.popup.Description
+		focus = gu.st.popup.ComposeFocus
+	})
+
+	// Read the live description text to size the panel — lazygit
+	// resizes on every keystroke so the popup grows with the body.
+	descContent := ""
+	if v, err := g.View(winTaskComposeDescription); err == nil && v != nil {
+		descContent = v.TextArea.GetContent()
+	}
+	summaryContent := initialSummary
+	if v, err := g.View(winTaskComposeSummary); err == nil && v != nil {
+		// Once the view exists, its TextArea is the source of truth.
+		summaryContent = v.TextArea.GetContent()
+	}
+
+	_, _, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1 := composeRects(w, h, descContent)
+
+	// Border-color rule mirrors the dashboard's focused-panel
+	// affordance (layout.go): the pane with input focus gets the
+	// PopupBox accent on both frame and title; the inactive pane
+	// drops back to the default fg so the user can see at a glance
+	// which pane will receive their keystrokes. Without this both
+	// panes were tinted purple unconditionally and the cursor was
+	// the only visual focus cue — invisible on terminals that don't
+	// show one for editable views.
+	activeColor := theme.Active().PopupBox.Gocui()
+	inactiveColor := gocui.ColorDefault
+
+	var summFrameColor, descFrameColor gocui.Attribute
+	if focus == composeSummary {
+		summFrameColor = activeColor
+		descFrameColor = inactiveColor
+	} else {
+		summFrameColor = inactiveColor
+		descFrameColor = activeColor
+	}
+
+	// Summary view (top).
+	summV, err := g.SetView(winTaskComposeSummary, sx0, sy0, sx1, sy1, 0)
+	if err != nil && !isUnknownView(err) {
+		return
+	}
+	if summV != nil {
+		summV.Title = title
+		summV.Frame = true
+		summV.FrameRunes = roundedFrameRunes
+		summV.FrameColor = summFrameColor
+		summV.TitleColor = summFrameColor
+		summV.Editable = true
+		summV.Wrap = false
+		summV.Editor = gocui.DefaultEditor
+		// Seed the initial value only on the very first layout pass
+		// (TextArea is empty). After that the user owns it.
+		if summV.Buffer() == "" && initialSummary != "" {
+			_, _ = summV.Write([]byte(initialSummary))
+			summaryContent = initialSummary
+		}
+		// Lazygit-style character counter in the subtitle slot.
+		summV.Subtitle = composeSummarySubtitle(summaryContent)
+	}
+
+	// Description view (below summary).
+	descV, err := g.SetView(winTaskComposeDescription, dx0, dy0, dx1, dy1, 0)
+	if err != nil && !isUnknownView(err) {
+		return
+	}
+	if descV != nil {
+		descV.Title = "Description"
+		descV.Frame = true
+		descV.FrameRunes = roundedFrameRunes
+		descV.FrameColor = descFrameColor
+		descV.TitleColor = descFrameColor
+		descV.Editable = true
+		descV.Wrap = false
+		descV.Editor = gocui.DefaultEditor
+
+		// Hint rendering note: gocui's drawListFooter no-ops when
+		// v.lines is empty (see /Users/mentor/me/dev/gocui/gui.go
+		// drawListFooter), and an editable view with an empty
+		// TextArea has v.lines == nil. So a freshly-opened compose
+		// popup with an empty description would silently swallow
+		// v.Footer until the user typed one character — which is
+		// exactly when the user MOST needs the hint, before they
+		// type. drawSubtitle has no such guard (it's drawn straight
+		// onto the top-frame row), so we render BOTH hints in the
+		// subtitle slot. The toggle hint is always-on (the user's
+		// "отображается всегда" requirement). The submit hint
+		// appends only while the description pane has focus, the
+		// equivalent of lazygit's CommitDescriptionFooter — just
+		// rendered above the box instead of below it, because that's
+		// the only slot gocui actually paints on empty content.
+		descV.Subtitle = composeDescriptionSubtitle(focus == composeDescription)
+
+		if descV.Buffer() == "" && initialDesc != "" {
+			_, _ = descV.Write([]byte(initialDesc))
+		}
+	}
+
+	// Route focus.
+	var focusName string
+	if focus == composeDescription {
+		focusName = winTaskComposeDescription
+	} else {
+		focusName = winTaskComposeSummary
+	}
+	if _, err := g.SetCurrentView(focusName); err != nil && !isUnknownView(err) {
+		return
+	}
+}
+
+// composePanelWidth implements lazygit's getPopupPanelWidth (with
+// maxWidth = composePanelMaxWidth): start at 4/7 of the terminal,
+// cap at maxWidth, then floor to min(termWidth-2, 80) so the popup
+// stays usable on narrow terminals.
+func composePanelWidth(termWidth int) int {
+	pw := 4 * termWidth / 7
+	if pw > composePanelMaxWidth {
+		pw = composePanelMaxWidth
+	}
+	const minWidth = 80
+	if pw < minWidth {
+		pw = minWidth
+		if pw > termWidth-2 {
+			pw = termWidth - 2
+		}
+	}
+	if pw < 1 {
+		pw = 1
+	}
+	return pw
+}
+
+// composeContentHeight returns the description content height in
+// rows, given the typed body. min composeMinDescriptionContent.
+func composeContentHeight(desc string) int {
+	lines := 1
+	if desc != "" {
+		lines = strings.Count(desc, "\n") + 1
+	}
+	if lines < composeMinDescriptionContent {
+		lines = composeMinDescriptionContent
+	}
+	return lines
+}
+
+// composeRects returns the panel size + the two child-view
+// rectangles for the compose popup. Pure function so the layout
+// math is testable without a gocui screen.
+//
+// Returns: panelWidth, panelHeight, summary(x0,y0,x1,y1),
+// description(x0,y0,x1,y1). The panel is centred horizontally and
+// vertically (lazygit getPopupPanelDimensionsAux). The description
+// view extends past the centred box by composeSummaryViewHeight
+// rows on its bottom edge — the same trick lazygit uses to keep
+// the description's content area sized purely by
+// composeContentHeight without bleeding into the summary.
+func composeRects(termW, termH int, desc string) (pw, ph, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1 int) {
+	panelWidth := composePanelWidth(termW)
+	contentHeight := composeContentHeight(desc)
+	panelHeight := contentHeight + 2 // outer frame
+	if panelHeight > termH*3/4 {
+		panelHeight = termH * 3 / 4
+	}
+	if panelHeight < 5 {
+		panelHeight = 5
+	}
+
+	x0 := termW/2 - panelWidth/2
+	y0 := termH/2 - panelHeight/2 - panelHeight%2
+	x1 := termW/2 + panelWidth/2 - 1
+	y1 := termH/2 + panelHeight/2 - 1
+
+	sx0, sy0, sx1, sy1 = x0, y0, x1, y0+composeSummaryViewHeight-1
+	dx0, dy0, dx1, dy1 = x0, y0+composeSummaryViewHeight, x1, y1+composeSummaryViewHeight
+	return panelWidth, panelHeight, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1
+}
+
+// composeSummarySubtitle renders lazygit's `" N "` character-count
+// subtitle for the summary pane.
+func composeSummarySubtitle(summary string) string {
+	return " " + strconv.Itoa(utf8.RuneCountInString(summary)) + " "
+}
+
+// composeDescriptionSubtitle renders the help text shown on the
+// description pane's top frame (gocui drawSubtitle slot,
+// right-aligned). Always shows the toggle hint — the focus-toggle
+// is the one binding the user can't discover by trying things,
+// since Tab is otherwise used by the dashboard panel cycler. When
+// the description pane has focus we append the submit-keys hint
+// (Enter inserts a newline there, so the user needs to be told how
+// to actually save).
+func composeDescriptionSubtitle(focused bool) string {
+	if focused {
+		// Submit comes first when the user is actually IN the
+		// description pane — it's the action they're most likely
+		// looking for the keybinding to. Tab-toggle is secondary
+		// once they've already navigated to the right pane.
+		return " <c-s>/<a-enter> submit · <tab> toggle "
+	}
+	return " <tab> toggle "
 }
 
 func (gu *Gui) drawPopup(g *gocui.Gui, name string, w, h int, title, body string) *gocui.View {
