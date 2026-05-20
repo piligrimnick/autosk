@@ -221,8 +221,9 @@ owned by the runner via `step next`.
 - Idle-eviction of projects from memory.
 - Per-project worker limits / priorities between projects.
 - Multi-user / shared-host hardening (SO_PEERCRED).
-- `autosk daemon attach`/`detach` for explicit project registration.
-- Re-attach to surviving pi processes after a daemon restart.
+- Explicit project registration (replaces the lazy walk-up from
+  `X-Autosk-Cwd`; not related to the removed `autosk attach` CLI verb).
+- Reconnect to surviving pi processes after a daemon restart.
 - Worktree-per-job isolation.
 
 See [`docs/plans/20260518-Daemon-UDS-Plan.md`](plans/20260518-Daemon-UDS-Plan.md)

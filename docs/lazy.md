@@ -1,0 +1,337 @@
+# `autosk lazy` — interactive TUI
+
+`autosk lazy` is a lazygit-style terminal dashboard for the autosk
+world: **tasks, jobs, workflows, and agents** in one process, with a
+fullscreen job inspector that fuses a live agent-session mirror
+(SSE) with an offline `session.jsonl` archive view.
+
+```bash
+autosk lazy                    # dashboard
+autosk lazy --job run-9ab1     # deep-link straight into the inspector
+```
+
+It doesn't replace any subcommand — every read and most writes are
+also reachable through the CLI. `lazy` is a denser, faster front
+door.
+
+The design contract lives in
+[`docs/plans/20260519-Lazy-Plan.md`](plans/20260519-Lazy-Plan.md);
+the implementation plan and risk register live in
+[`docs/plans/20260520-Lazy-Impl-Plan.md`](plans/20260520-Lazy-Impl-Plan.md).
+This page is the user-facing recipe.
+
+---
+
+## Quickstart
+
+```bash
+cd ~/your/project
+autosk daemon serve &                     # optional but recommended (Live tab needs it)
+autosk lazy                               # opens the dashboard
+```
+
+Without the daemon the dashboard still works: Tasks / Jobs /
+Workflows / Agents render from `.autosk/db`, write hotkeys still
+mutate the DB, and the inspector's Archive / Meta / Signals tabs
+work against the stored session. The Live tab is the one piece that
+needs `autosk daemon serve` — see [§ Graceful degradation](#graceful-degradation).
+
+---
+
+## Replaces `autosk attach`
+
+The standalone `autosk attach` command is **gone** in this release.
+There is no shim, no alias — running it prints cobra's
+unknown-command error. To open a job's live mirror from the command
+line use:
+
+```bash
+autosk lazy --job <job-id>
+```
+
+`Esc` (or `Ctrl-O`) inside the inspector returns to the dashboard
+with the same job still selected. The Live tab carries the same
+hotkey contract `autosk attach` had: `Ctrl-D` send, `Ctrl-F`
+follow_up, `Ctrl-A` abort.
+
+---
+
+## Layout
+
+```
+┌─[1] Tasks ──────────────────────────────┬─[0] Detail / Inspector ────────────┐
+│ as-a1b2 ●P1 in_workflow ▶dev   Refactor │ task as-a1b2  in_workflow          │
+│ as-c3d4  P1 in_workflow ▶rev   Add CLI  │ wf=feature-dev step=dev (developer)│
+│ as-e5f6  P2 done               Bump ver │ author: @autosk/developer          │
+│ as-7788 ✋P0 human_feedback ▶qa Tune w… │ priority: 1   blocked: false       │
+├─[2] Jobs ───────────────────────────────┤ ─ description ───────────────────  │
+│ ◐ run-9ab1 stream  feature-dev:dev 3m   │ Refactor the auth flow so that …  │
+│ ◯ run-77a2 done    feature-dev:rev 12m  │                                    │
+│ ✗ run-0c12 failed  single:dev      1h   │ ─ recent jobs (3) ──────────────── │
+│   (filtered by task as-a1b2)            │   run-9ab1 running *live*(1)  3m   │
+├─[3] Workflows ──────────────────────────┤   run-77a2 done             12m   │
+│ feature-dev      3 steps                │   run-0c12 failed idle_to    1h   │
+│ qa-loop          4 steps                │                                    │
+│ single:@autosk/developer  1 step        │ ─ comments (≤5) ───────────────── │
+├─[4] Agents ─────────────────────────────┤   2026-05-19 16:02 human: looks…   │
+│ ● human                       builtin   │   2026-05-19 16:31 dev: ok will…  │
+│ ● @autosk/developer  v0.3.1  installed  │                                    │
+│ ● @autosk/reviewer   v0.2.4  installed  │ ─ recent signals (≤3) ─────────── │
+│ ! @autosk/qa          —      db_only    │   2026-05-19T16:31 dev → review   │
+└─────────────────────────────────────────┴────────────────────────────────────┘
+ autosk · /Users/me/proj  daemon=ok  workers=2 q=0 r=1  scope: task=as-a1b2  ?=help
+```
+
+The focused side panel grows accordion-style so the selected row is
+always visible. `@` toggles the command log; the bottom bar shows
+project root, daemon health, worker stats, active scope chips, and a
+`flaky+N` chip when the live datasource has fallen back to the DB
+since the previous tick.
+
+`Enter` on a **Jobs** row hides the dashboard and opens a near-
+fullscreen inspector. `Esc` (or `Ctrl-O`) restores the dashboard
+with the same job still selected.
+
+---
+
+## Keymap
+
+### Global
+
+| Key | Action |
+|---|---|
+| `1` … `4` | Focus left panel by number. |
+| `0` | Focus the right detail (enables `j/k` scroll on Tasks detail). |
+| `Tab` | Cycle left panels. |
+| `Enter` | Drill into the focused row. On Jobs → fullscreen inspector. |
+| `Esc` | Pop one level: inspector → dashboard; popup → close; filter chip → drop. |
+| `?` | Help cheatsheet. |
+| `:` | Command palette (verbs from every panel, e.g. `task new`, `job cancel`, `scope clear`, `quit`). |
+| `/` | Filter the focused panel. See [§ Filter language](#filter-language). |
+| `*` | Clear all scope chips. |
+| `R` | Force-refresh (ignore the 2s tick). |
+| `@` | Toggle command-log visibility. |
+| `q` / `Ctrl-C` | Quit. |
+
+### Tasks `[1]`
+
+| Key | Action |
+|---|---|
+| `n` | New task — prompt for the title. |
+| `d` | Mark **done** (confirms when status was `in_workflow`). |
+| `x` | Cancel (confirms). |
+| `o` | Reopen (`done`/`cancelled` → `new`, preserves `workflow_id`). |
+| `e` | Enroll into a workflow — prompts for the workflow name. |
+| `r` | Resume (`human_feedback` → `in_workflow`); optionally to a named step. |
+| `b` | Add a blocker (prompts for blocker id). |
+| `u` | Remove a blocker (prompts for blocker id). |
+| `m` | Add a comment. |
+| `p` | Set priority (`0..3` picker). |
+| `J` / `K` | Scroll the Tasks detail viewport. |
+
+There is **no `c claim`** binding. The v0.2 schema has no claim verb
+— tasks self-advance via workflow steps. Use `e` to enroll, or
+assign an agent via the `:` palette.
+
+### Jobs `[2]`
+
+| Key | Action |
+|---|---|
+| `Enter` / `a` | Open inspector at the default tab (Live for non-terminal runs, Archive for terminal). `a` always picks Live. |
+| `s` | Open inspector at the Archive tab. |
+| `i` | Open inspector at the Meta tab. |
+| `K` | Cancel job (`DELETE /v1/jobs/{id}`; confirms). |
+
+### Workflows `[3]`
+
+| Key | Action |
+|---|---|
+| `n` | Create from a JSON file — prompts for the path. |
+| `D` | Delete (confirms). |
+
+### Agents `[4]`
+
+| Key | Action |
+|---|---|
+| `i` | Flashes the CLI command (`autosk agent install <pkg>`) — install isn't reachable from inside `lazy`. |
+| `u` | Same for `autosk agent uninstall <pkg>`. |
+
+### Inspector
+
+| Key | Action |
+|---|---|
+| `[` / `]` | Cycle tabs. |
+| `1..4` | Jump to a tab (1 Live · 2 Archive · 3 Meta · 4 Signals). |
+| `Esc` / `Ctrl-O` | Back to dashboard. |
+| `j` / `k` / `↑` / `↓` | Scroll body (when the input view is **not** focused). |
+| `Ctrl-F` / `Ctrl-B` / `PgUp` / `PgDn` | Page-forward / page-back the body. |
+| `g` / `G` | Top / bottom of the body. |
+
+#### Live tab (textarea focus)
+
+| Key | Action |
+|---|---|
+| `Ctrl-D` | Send the textarea contents as a prompt/steer. |
+| `Ctrl-F` | Send the contents as a `follow_up` (queued for the next agent turn). |
+| `Ctrl-A` | Abort the in-flight agent turn. |
+| `Ctrl-B` / `PgUp` / `PgDn` | Scroll back through the transcript above. |
+
+`Ctrl-F` is overloaded by view focus: in the body it pages forward
+through the transcript; in the Live input textarea it dispatches
+`follow_up`. The `?` overlay disambiguates the two by focus context.
+
+---
+
+## Filter language
+
+`/` opens an incremental, case-insensitive filter on the focused
+panel. Tasks accept `key:value` facets; free text after the facets
+is matched as a substring against id + title.
+
+| Facet | Effect |
+|---|---|
+| `p:<n>` | Priority. |
+| `status:<status>` | Task status (`new`, `in_workflow`, `human_feedback`, `done`, `cancelled`). |
+| `wf:<name>` | Workflow name (resolved to wf-id). An unknown name returns zero rows so the chip never silently widens. |
+| `agent:<name>` | Matches author **or** current-step agent (broadest sense). |
+
+Example: `/p:1 wf:feature-dev refactor` selects P1 tasks in
+`feature-dev` whose title or id contains `refactor`. The remaining
+panels (Jobs / Workflows / Agents) take plain substring queries; the
+search is applied to id + status + workflow + step name.
+
+---
+
+## Scope chips (cross-linking)
+
+Moving the cursor in one panel re-renders the right detail and, for
+some panels, narrows the others via a **scope chip**. The active
+chips are listed in the bottom bar.
+
+| Trigger | Effect |
+|---|---|
+| Move cursor in **Tasks** | Right detail re-renders. Jobs panel gets `scope: task=<id>` and filters to that task's runs. |
+| Move cursor in **Workflows** | Right detail re-renders. Tasks **and** Jobs get `scope: wf=<name>` and filter to that workflow. |
+| Move cursor in **Jobs** | Right detail re-renders. No chip propagates back. |
+| `Enter` in **Agents** | Opens an opt-in popup (`by author` / `by current step` / `cancel`) — the author / current_step.agent relation is ambiguous so the operator picks. The chip shows the chosen relation, e.g. `scope: agent=dev (author)`. |
+| `*` (anywhere) | Clears every scope chip. |
+
+Scope is **additive**: `wf=X` + `task=Y` filters to runs of task `Y`
+where the task's workflow is `X`. Conflicts just produce an empty
+panel.
+
+---
+
+## Inspector tabs
+
+`Enter` on a job opens the inspector. The default tab depends on the
+job's terminal status: **Live** for `queued`/`running`, **Archive**
+for `done`/`failed`/`cancelled`. Use `1..4` or `[ ` / `]` to switch.
+
+### Live
+
+SSE replay + tail of the in-flight session. Daemon required. Carries
+the same hotkey contract `autosk attach` had — `Ctrl-D` send,
+`Ctrl-F` follow_up, `Ctrl-A` abort, plus `Ctrl-B` / `PgUp` / `PgDn`
+to scroll back through earlier transcript.
+
+The SSE pump throttles render updates with a 30 ms coalesce window
+(lazygit's `pkg/tasks/tasks.go` pattern) and keeps the last 2000
+events in a ring buffer. When the buffer overflows the Live body
+shows a one-line `(truncated)` indicator at the top.
+
+When `lazy` runs without the daemon, the Live tab is disabled and
+flashes a hint to `Archive` instead.
+
+### Archive
+
+Read-only renderer of the job's `session.jsonl` on disk. Pulled via
+`GET /v1/jobs/{id}/messages?full=true` when the daemon is up; read
+directly when it's down. No SSE, no input. `g`/`G` jump to
+top/bottom, `Ctrl-F`/`Ctrl-B` page, `j`/`k` line scroll.
+
+### Meta
+
+A static key/value sheet rendered from `api.JobResponse`: job_id,
+task, workflow:step, agent, status, streaming, attached count,
+corrections, session path, PID, creation/start/finish timestamps,
+duration, error, exit code.
+
+### Signals
+
+Two stacked sub-regions:
+
+1. **Step signals for this run** (`step_signals` rows whose
+   `run_id` matches the inspected job). The Signals tab is keyed by
+   job-id — rows from earlier kickback runs of the same task do
+   *not* bleed in.
+2. **Comments observed during this run** — task comments filtered
+   to `created_at >= job.StartedAt`. When the run hasn't started yet
+   (queued / dispatched) the cutoff is dropped and all comments
+   render.
+
+Timestamps render as RFC3339 so a kickback chain spanning midnight,
+or a run from yesterday opened today, is unambiguous.
+
+---
+
+## Graceful degradation
+
+`autosk lazy` is useful without the daemon:
+
+| State | Status bar | Effect |
+|---|---|---|
+| **daemon ok** | `daemon=ok workers=N q=N r=N` | Jobs panel from `GET /v1/jobs` (includes `Streaming` / `AttachCount`); Live tab opens SSE; cancel-job works. |
+| **daemon stale** | `daemon=stale` | UDS dials but `/v1/healthz` 5xx. Same surface as `down`. |
+| **daemon down** | `daemon=down` | Jobs panel reads `daemon_runs` from `.autosk/db`. Live tab disabled with a flash hint. Archive still works. Cancel-job returns `ErrDaemonRequired`. |
+
+When the live datasource read errors transiently (timeout, 5xx,
+malformed body) the verb falls back to the offline base for that
+one call and increments a counter. The status bar shows a
+`flaky+N` chip when the counter advanced between refresh ticks so a
+daemon that's technically reachable but flaky is visible at a
+glance.
+
+The dashboard polls every 2s by default (`--refresh` to change).
+Cursor moves re-fetch the focused detail immediately rather than
+waiting for the tick.
+
+---
+
+## Flags
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--job <id>` | unset | Deep-link: open the inspector directly on this job; `Esc` returns to the dashboard. |
+| `--sock <path>` | `$AUTOSK_SOCK` or `~/.autosk/daemon.sock` | Daemon UDS path. |
+| `--refresh <dur>` | `2s` | Panel refresh cadence. |
+
+The global `--db <path>` and `AUTOSK_DB` env var work the same way
+they do for every other write-capable verb (override DB discovery).
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| `daemon=down` but `autosk daemon list` works | Stale socket path. Pass `--sock` or set `AUTOSK_SOCK`. |
+| Live tab flashes `daemon required (try Archive)` | Daemon isn't running or doesn't have the SSE / attach hubs wired. `autosk daemon serve`. |
+| `i` on Agents only flashes a message | By design — `lazy` can't fork npm installs from inside the TUI. Quit and run `autosk agent install <pkg>`. |
+| Help screen lists `Ctrl-F` twice | Same chord, two view-scoped meanings — page-forward on the inspector body, `follow_up` dispatch in the Live textarea. The `?` overlay labels each by focus. |
+| Inspector tab shows `(no signals)` for a run you know emitted one | Confirm you're on the right run — the Signals tab is jobID-scoped, not taskID-scoped. Earlier kickback runs of the same task render in their own inspector. |
+
+---
+
+## Out of scope (v1)
+
+Same as the design plan §10: no `--all-projects`, no mouse, no
+custom keymaps / config file / theming, no demo-mode / GIF capture,
+no reconnect/backoff in the SSE client, no half/full/normal screen
+modes. The flat Dashboard ↔ Inspector switch is enough.
+
+See the design contract
+[`docs/plans/20260519-Lazy-Plan.md`](plans/20260519-Lazy-Plan.md) §10/§12
+and the impl plan
+[`docs/plans/20260520-Lazy-Impl-Plan.md`](plans/20260520-Lazy-Impl-Plan.md) §11
+for the canonical list.

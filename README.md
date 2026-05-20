@@ -23,12 +23,14 @@ priority:    1
 
 **v0.2.** Tasks are now first-class citizens of a small workflow engine:
 agents, workflows, comments, and a daemon poller that drives tasks
-through step transitions. See:
+through step transitions. An interactive TUI (`autosk lazy`) renders
+all four entity kinds plus an SSE-backed job inspector. See:
 
 - Workflows plan: [`docs/plans/20260517-Workflows-Plan.md`](docs/plans/20260517-Workflows-Plan.md).
 - Agent packages plan: [`docs/plans/20260518-Agent-Packages.md`](docs/plans/20260518-Agent-Packages.md).
 - Concept doc + walkthrough: [`docs/workflows.md`](docs/workflows.md).
 - Daemon details: [`docs/daemon.md`](docs/daemon.md).
+- Interactive TUI (`autosk lazy`): [`docs/lazy.md`](docs/lazy.md).
 
 There is **no migration** from v0.1: opening a v0.1 database with v0.2
 binary refuses with `schema_v1_unsupported`. Wipe `.autosk/db` and
@@ -145,6 +147,9 @@ Daemon
   autosk daemon serve [--sock PATH] [--workers N] [--poll-interval 2s] ...
   autosk daemon list [--all-projects]
   autosk daemon status <job-id> / messages <job-id> / cancel <job-id>
+
+Interactive TUI
+  autosk lazy [--job ID] [--sock PATH] [--refresh 2s]
 ```
 
 Every read command accepts `--json`. Every write command produces a
@@ -192,6 +197,25 @@ for the design notes. The contract for the `pi --mode rpc` wire
 format is summarised in
 [`docs/notes/pi-rpc-contract.md`](docs/notes/pi-rpc-contract.md).
 
+## Interactive TUI
+
+`autosk lazy` is a lazygit-style terminal dashboard: tasks, jobs,
+workflows, and agents in one process, with a fullscreen inspector
+for running pi sessions (`Live / Archive / Meta / Signals` tabs).
+It works against `.autosk/db` directly when the daemon isn't
+running; the Live tab is the one piece that needs `autosk daemon
+serve`. See [`docs/lazy.md`](docs/lazy.md) for the layout diagram,
+keymap, filter language, and graceful-degradation contract.
+
+```bash
+autosk lazy                    # dashboard
+autosk lazy --job run-9ab1     # deep-link straight into the inspector
+```
+
+The previous standalone `autosk attach` command is gone in this
+release — use `autosk lazy --job <id>` to open a job's live mirror
+from the command line.
+
 ## Roadmap (post v0.2)
 
 - doltserver backend for multi-writer collaboration
@@ -202,6 +226,7 @@ format is summarised in
 - hooks / plugin events
 - import/export / integrations
 - comment `--since-step` filtering / token-budget trimming in prompt render
+- `autosk lazy`: mouse support, customisable keymaps, theming, multi-project view
 
 ## License
 
