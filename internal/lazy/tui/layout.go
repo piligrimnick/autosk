@@ -6,6 +6,25 @@ import (
 	"autosk/internal/lazy/theme"
 )
 
+// roundedFrameRunes is the lazygit-style "rounded" border preset: the
+// horizontal/vertical edges stay the standard light-box runes, and the
+// four corners are swapped for their rounded variants. The slot order
+// matches gocui's expected layout (see gocui/gui.go:cornerCustomRune):
+//
+//	 0: horizontal '─'
+//	 1: vertical   '│'
+//	 2: top-left   '╭'
+//	 3: top-right  '╮'
+//	 4: bottom-left  '╰'
+//	 5: bottom-right '╯'
+//
+// gocui falls back to its hard-edge defaults for any rune past index 5
+// (the T-junctions used when views meet at edges), which is fine for
+// the lazy dashboard — our panels are placed side by side with their
+// own frames rather than welded into a single grid, so those indices
+// are never consulted.
+var roundedFrameRunes = []rune{'─', '│', '╭', '╮', '╰', '╯'}
+
 // layout is the gocui Manager: it asks boxlayout for window
 // dimensions, calls SetView for every named window, hides those that
 // don't appear in the current arrangement, and finally re-renders
@@ -92,6 +111,7 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 			v.Frame = false
 		default:
 			v.Frame = true
+			v.FrameRunes = roundedFrameRunes
 		}
 		// Highlight the focused side panel's frame AND title. gocui
 		// retains the last-set FrameColor/TitleColor on the View object

@@ -196,6 +196,7 @@ func (gu *Gui) drawPopup(g *gocui.Gui, name string, w, h int, title, body string
 	}
 	v.Title = title
 	v.Frame = true
+	v.FrameRunes = roundedFrameRunes
 	// Popup frame uses the palette's PopupBox slot — picked to be a
 	// neighbour-but-not-twin of Accent so the popup chrome doesn't get
 	// visually confused with the cursor-row highlight underneath it.
