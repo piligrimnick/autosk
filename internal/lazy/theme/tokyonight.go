@@ -4,6 +4,8 @@ package theme
 // same hex values enkia/tokyo-night-vscode-theme exports. Mapping into
 // our semantic slots:
 //
+//	bg_high #292e42 → Selection      (cursor-row bg; TN's bg_highlight, the same
+//	                                   shade lazygit's TN port uses)
 //	blue    #7aa2f7 → Focus + Header (focused frame/title, bold section heads)
 //	magenta #bb9af7 → Accent          (cursor row, active tab, info flash, ▶)
 //	purple  #9d7cd8 → PopupBox        (popup frame, distinct from Accent so
@@ -23,9 +25,10 @@ package theme
 //	                                   background than ANSI bright-black 8)
 func TokyoNight() Palette {
 	return Palette{
-		Name:     "tokyo-night",
-		Focus:    RGB("#7aa2f7"),
-		PopupBox: RGB("#9d7cd8"),
+		Name:      "tokyo-night",
+		Focus:     RGB("#7aa2f7"),
+		PopupBox:  RGB("#9d7cd8"),
+		Selection: RGB("#292e42"),
 		Header:   RGB("#7aa2f7"),
 		Muted:    RGB("#565f89"),
 		Accent:   RGB("#bb9af7"),

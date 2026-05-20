@@ -23,6 +23,7 @@ import (
 	"github.com/jesseduffield/gocui"
 
 	"autosk/internal/lazy/datasource"
+	"autosk/internal/lazy/theme"
 )
 
 // Options is the input to Run.
@@ -318,10 +319,24 @@ func (gu *Gui) flashf(level, format string, args ...interface{}) {
 // "rendered slice" we just project to lines).
 func (gu *Gui) renderViews() {
 	gu.st.withRLock(func() {
-		gu.writeView(winTasks, "[1] Tasks", renderTasksPanel(gu.st.tasks, gu.st.taskCursor, gu.st.scope, gu.st.filter.Tasks))
-		gu.writeView(winJobs, "[2] Jobs", renderJobsPanel(gu.st.jobs, gu.st.jobCursor, gu.st.scope, gu.st.filter.Jobs))
-		gu.writeView(winWorkflows, "[3] Workflows", renderWorkflowsPanel(gu.st.workflows, gu.st.workflowCursor, gu.st.filter.Workflows))
-		gu.writeView(winAgents, "[4] Agents", renderAgentsPanel(gu.st.agents, gu.st.agentCursor, gu.st.filter.Agents))
+		focused := gu.st.focused
+
+		tasksBody, tasksHdr := renderTasksPanel(gu.st.tasks, gu.st.taskCursor, gu.st.scope, gu.st.filter.Tasks)
+		gu.writeView(winTasks, "[1] Tasks", tasksBody)
+		gu.applyRowHighlight(winTasks, tasksHdr+gu.st.taskCursor, len(gu.st.tasks), focused == panelTasks)
+
+		jobsBody, jobsHdr := renderJobsPanel(gu.st.jobs, gu.st.jobCursor, gu.st.scope, gu.st.filter.Jobs)
+		gu.writeView(winJobs, "[2] Jobs", jobsBody)
+		gu.applyRowHighlight(winJobs, jobsHdr+gu.st.jobCursor, len(gu.st.jobs), focused == panelJobs)
+
+		wfBody, wfHdr := renderWorkflowsPanel(gu.st.workflows, gu.st.workflowCursor, gu.st.filter.Workflows)
+		gu.writeView(winWorkflows, "[3] Workflows", wfBody)
+		gu.applyRowHighlight(winWorkflows, wfHdr+gu.st.workflowCursor, len(gu.st.workflows), focused == panelWorkflows)
+
+		agBody, agHdr := renderAgentsPanel(gu.st.agents, gu.st.agentCursor, gu.st.filter.Agents)
+		gu.writeView(winAgents, "[4] Agents", agBody)
+		gu.applyRowHighlight(winAgents, agHdr+gu.st.agentCursor, len(gu.st.agents), focused == panelAgents)
+
 		gu.writeView(winDetail, "[0] Detail", renderDetail(gu.st))
 		gu.writeView(winLog, "log", renderCommandLog(gu.st.logBuf, gu.st.flash))
 		gu.writeView(winStatusBar, "", renderStatusBar(gu.st, gu.opts.ProjectRoot))
@@ -333,6 +348,37 @@ func (gu *Gui) renderViews() {
 			}
 		}
 	})
+}
+
+// applyRowHighlight wires gocui's per-line Highlight to the panel's
+// model cursor: when the panel is focused AND has rows, we set
+// SelBgColor to the palette's Selection swatch and move the view's
+// cy to the cursor row so gocui paints that row's background.
+//
+// Non-focused panels and empty panels get Highlight=false so the
+// cursor row is invisible — matching the lazygit / file-listed-view
+// affordance: "only the active list shows where you are".
+//
+// rowCount lets us suppress the highlight on the "(no tasks)" / etc.
+// placeholder line; without that check the cursor would visibly land
+// on the placeholder and look like the empty state is selectable.
+func (gu *Gui) applyRowHighlight(name string, cy, rowCount int, focused bool) {
+	v, err := gu.g.View(name)
+	if err != nil || v == nil {
+		return
+	}
+	if !focused || rowCount == 0 {
+		v.Highlight = false
+		return
+	}
+	v.Highlight = true
+	v.SelBgColor = theme.Active().Selection.Gocui()
+	// SelFgColor=Default so the per-column foregrounds we set in
+	// renderXxxPanel survive the highlight overlay (gocui only forces
+	// the cell's bg to SelBgColor and bolds the fg; it leaves the fg
+	// hue alone for RGB Attributes).
+	v.SelFgColor = gocui.ColorDefault
+	v.SetCursor(0, cy)
 }
 
 // writeView writes content into a view, clearing first. Tolerates the

@@ -72,8 +72,10 @@ type Palette struct {
 	Name string
 
 	// Chrome (frames + titles, gocui-side).
-	Focus    Color // focused side-panel frame + title
-	PopupBox Color // popup frame (menu / confirm / prompt)
+	Focus     Color // focused side-panel frame + title
+	PopupBox  Color // popup frame (menu / confirm / prompt)
+	Selection Color // background of the cursor row in the focused panel
+	//                  (gocui's v.SelBgColor; only painted when v.Highlight=true)
 
 	// Body text (lipgloss-side).
 	Header Color // bold section headers ("task X", "step signals", inspector "run X", transcript kind)

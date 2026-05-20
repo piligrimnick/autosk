@@ -56,9 +56,10 @@ func TestTokyoNight_AllSlotsFilled(t *testing.T) {
 		t.Fatal("Name is empty")
 	}
 	slots := map[string]Color{
-		"Focus":    p.Focus,
-		"PopupBox": p.PopupBox,
-		"Header":   p.Header,
+		"Focus":     p.Focus,
+		"PopupBox":  p.PopupBox,
+		"Selection": p.Selection,
+		"Header":    p.Header,
 		"Muted":    p.Muted,
 		"Accent":   p.Accent,
 		"Warn":     p.Warn,

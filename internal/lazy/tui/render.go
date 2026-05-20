@@ -88,11 +88,26 @@ func glyphForJobStatus(j datasource.Job) string {
 	return j.Status
 }
 
-// renderTasksPanel returns the rendered text for the Tasks panel.
-func renderTasksPanel(tasks []datasource.Task, cursor int, scope scope, filter string) string {
+// renderTasksPanel returns the rendered text for the Tasks panel
+// and the number of leading header lines (scope / filter notes) so
+// the caller can sync the gocui view's cursor-row index past them —
+// the row-highlight (v.SelBgColor) lives on the data rows, not on
+// the meta header.
+//
+// Per-column colouring matches the lazygit "git log" layout:
+//
+//	 [id-Accent] [glyph-Muted] P[prio]  [status-Warn]  [▶step-Muted]  [title-default]
+//
+// The cursor itself is no longer drawn here — gocui's Highlight +
+// SelBgColor paints the row's background. That keeps per-column
+// foregrounds intact on the selected row (instead of overpainting
+// the whole row with Accent like the old `▶ ` marker did).
+func renderTasksPanel(tasks []datasource.Task, _ int, scope scope, filter string) (string, int) {
 	var b strings.Builder
+	header := 0
 	if scope.WorkflowName != "" {
 		fmt.Fprintf(&b, "%s\n", styleMuted.Render(fmt.Sprintf("(scoped by wf=%s)", scope.WorkflowName)))
+		header++
 	}
 	if scope.Agent != "" {
 		rel := scope.AgentRel.String()
@@ -101,137 +116,132 @@ func renderTasksPanel(tasks []datasource.Task, cursor int, scope scope, filter s
 		} else {
 			fmt.Fprintf(&b, "%s\n", styleMuted.Render(fmt.Sprintf("(scoped by agent=%s)", scope.Agent)))
 		}
+		header++
 	}
 	if filter != "" {
 		fmt.Fprintf(&b, "%s\n", styleFilter.Render("/ "+filter))
+		header++
 	}
 	if len(tasks) == 0 {
 		b.WriteString(styleMuted.Render("(no tasks)") + "\n")
-		return b.String()
+		return b.String(), header
 	}
-	for i, t := range tasks {
-		marker := "  "
-		if i == cursor {
-			marker = "▶ "
+	for _, t := range tasks {
+		id := styleAccent.Render(fmt.Sprintf("%-9s", t.ID))
+		glyph := styleMuted.Render(glyphForTaskStatus(t.Status))
+		prio := fmt.Sprintf("P%d", t.Priority)
+		status := styleWarn.Render(fmt.Sprintf("%-14s", t.Status))
+		step := ""
+		if t.StepName != "" {
+			step = " " + styleMuted.Render("▶"+t.StepName)
 		}
 		title := truncate(t.Title, 30)
-		stepStr := ""
-		if t.StepName != "" {
-			stepStr = " ▶" + t.StepName
-		}
-		line := fmt.Sprintf("%s%-9s %s P%d %-14s%s %s",
-			marker, t.ID, glyphForTaskStatus(t.Status), t.Priority, t.Status, stepStr, title)
-		if i == cursor {
-			line = styleAccent.Render(line)
-		}
-		b.WriteString(line + "\n")
+		fmt.Fprintf(&b, "%s %s %s %s%s %s\n", id, glyph, prio, status, step, title)
 	}
-	return b.String()
+	return b.String(), header
 }
 
-// renderJobsPanel renders the Jobs panel.
-func renderJobsPanel(jobs []datasource.Job, cursor int, scope scope, filter string) string {
+// renderJobsPanel renders the Jobs panel. See renderTasksPanel for
+// the per-column colour rationale; jobs use:
+//
+//	 [jobid-Accent] [glyph-Muted] [wf:step-Warn] [age-Muted] [attached-Muted] [*live*-OK]
+func renderJobsPanel(jobs []datasource.Job, _ int, scope scope, filter string) (string, int) {
 	var b strings.Builder
+	header := 0
 	if scope.TaskID != "" {
 		fmt.Fprintf(&b, "%s\n", styleMuted.Render("(filtered by task "+scope.TaskID+")"))
+		header++
 	}
 	if filter != "" {
 		fmt.Fprintf(&b, "%s\n", styleFilter.Render("/ "+filter))
+		header++
 	}
 	if len(jobs) == 0 {
 		b.WriteString(styleMuted.Render("(no jobs)") + "\n")
-		return b.String()
+		return b.String(), header
 	}
-	for i, j := range jobs {
-		marker := "  "
-		if i == cursor {
-			marker = "▶ "
+	for _, j := range jobs {
+		id := styleAccent.Render(fmt.Sprintf("%-9s", j.JobID))
+		glyph := styleMuted.Render(fmt.Sprintf("%-9s", glyphForJobStatus(j)))
+		wfstep := j.WorkflowName + ":" + j.StepName
+		if j.WorkflowName == "" {
+			wfstep = "(no-wf)"
 		}
-		age := humanAge(j.CreatedAt)
+		wfstepStyled := styleWarn.Render(fmt.Sprintf("%-20s", wfstep))
+		age := styleMuted.Render(fmt.Sprintf("%-5s", humanAge(j.CreatedAt)))
 		attached := ""
 		if j.AttachCount > 0 {
-			attached = fmt.Sprintf(" (%d)", j.AttachCount)
+			attached = styleMuted.Render(fmt.Sprintf(" (%d)", j.AttachCount))
 		}
 		live := ""
 		if j.Streaming {
 			live = " " + styleOK.Render("*live*")
 		}
-		wfstep := j.WorkflowName + ":" + j.StepName
-		if j.WorkflowName == "" {
-			wfstep = "(no-wf)"
-		}
-		line := fmt.Sprintf("%s%-9s %-9s %-20s %-5s%s%s",
-			marker, j.JobID, glyphForJobStatus(j), wfstep, age, attached, live)
-		if i == cursor {
-			line = styleAccent.Render(line)
-		}
-		b.WriteString(line + "\n")
+		fmt.Fprintf(&b, "%s %s %s %s%s%s\n", id, glyph, wfstepStyled, age, attached, live)
 	}
-	return b.String()
+	return b.String(), header
 }
 
-// renderWorkflowsPanel renders the Workflows panel.
-func renderWorkflowsPanel(wfs []datasource.Workflow, cursor int, filter string) string {
+// renderWorkflowsPanel renders the Workflows panel:
+//
+//	 [name-Accent] [N steps-Muted] [first=X-Muted] [(synthetic)-Muted]
+func renderWorkflowsPanel(wfs []datasource.Workflow, _ int, filter string) (string, int) {
 	var b strings.Builder
+	header := 0
 	if filter != "" {
 		fmt.Fprintf(&b, "%s\n", styleFilter.Render("/ "+filter))
+		header++
 	}
 	if len(wfs) == 0 {
 		b.WriteString(styleMuted.Render("(no workflows)") + "\n")
-		return b.String()
+		return b.String(), header
 	}
-	for i, w := range wfs {
-		marker := "  "
-		if i == cursor {
-			marker = "▶ "
-		}
+	for _, w := range wfs {
+		name := styleAccent.Render(fmt.Sprintf("%-24s", w.Name))
+		steps := styleMuted.Render(fmt.Sprintf("%d steps", len(w.Steps)))
+		first := styleMuted.Render("first=" + w.FirstStep)
 		synth := ""
 		if w.IsSynthetic {
 			synth = " " + styleMuted.Render("(synthetic)")
 		}
-		line := fmt.Sprintf("%s%-24s %d steps  first=%s%s",
-			marker, w.Name, len(w.Steps), w.FirstStep, synth)
-		if i == cursor {
-			line = styleAccent.Render(line)
-		}
-		b.WriteString(line + "\n")
+		fmt.Fprintf(&b, "%s %s  %s%s\n", name, steps, first, synth)
 	}
-	return b.String()
+	return b.String(), header
 }
 
-// renderAgentsPanel renders the Agents panel.
-func renderAgentsPanel(ags []datasource.Agent, cursor int, filter string) string {
+// renderAgentsPanel renders the Agents panel:
+//
+//	 [glyph-Muted] [name-Accent] [version-Warn] [source-Muted]
+func renderAgentsPanel(ags []datasource.Agent, _ int, filter string) (string, int) {
 	var b strings.Builder
+	header := 0
 	if filter != "" {
 		fmt.Fprintf(&b, "%s\n", styleFilter.Render("/ "+filter))
+		header++
 	}
 	if len(ags) == 0 {
 		b.WriteString(styleMuted.Render("(no agents)") + "\n")
-		return b.String()
+		return b.String(), header
 	}
-	for i, a := range ags {
-		marker := "  "
-		if i == cursor {
-			marker = "▶ "
-		}
-		glyph := "○"
+	for _, a := range ags {
+		gRune := "○"
 		switch a.Source {
 		case "installed":
-			glyph = "●"
+			gRune = "●"
 		case "db_only":
-			glyph = "!"
+			gRune = "!"
 		}
-		v := a.Version
-		if v == "" {
-			v = "—"
+		glyph := styleMuted.Render(gRune)
+		name := styleAccent.Render(fmt.Sprintf("%-26s", a.Name))
+		ver := a.Version
+		if ver == "" {
+			ver = "—"
 		}
-		line := fmt.Sprintf("%s%s %-26s %-9s %s", marker, glyph, a.Name, v, a.Source)
-		if i == cursor {
-			line = styleAccent.Render(line)
-		}
-		b.WriteString(line + "\n")
+		verStyled := styleWarn.Render(fmt.Sprintf("%-9s", ver))
+		source := styleMuted.Render(a.Source)
+		fmt.Fprintf(&b, "%s %s %s %s\n", glyph, name, verStyled, source)
 	}
-	return b.String()
+	return b.String(), header
 }
 
 // renderDetail renders the right detail pane for whatever is focused.
