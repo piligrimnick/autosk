@@ -131,20 +131,21 @@ func (gu *Gui) bindKeys() error {
 		// MouseWheelUp/Down keys per-view; without these bindings the
 		// terminal's wheel forwarding is dropped on the floor and
 		// overflowing content (Tasks detail, inspector transcript) is
-		// only reachable via j/k or PgUp/PgDn. lazygit binds wheel on
-		// the body / list views; we do the same.
+		// only reachable via j/k or PgUp/PgDn.
 		//
-		// Side panels: wheel maps to cursor up/down so the selection
-		// follows the wheel — scrollOffAdjust then drags the viewport
-		// along (see commit 600a4cc).
-		{winTasks, gocui.MouseWheelDown, gocui.ModNone, gu.cursorDown(panelTasks)},
-		{winTasks, gocui.MouseWheelUp, gocui.ModNone, gu.cursorUp(panelTasks)},
-		{winJobs, gocui.MouseWheelDown, gocui.ModNone, gu.cursorDown(panelJobs)},
-		{winJobs, gocui.MouseWheelUp, gocui.ModNone, gu.cursorUp(panelJobs)},
-		{winWorkflows, gocui.MouseWheelDown, gocui.ModNone, gu.cursorDown(panelWorkflows)},
-		{winWorkflows, gocui.MouseWheelUp, gocui.ModNone, gu.cursorUp(panelWorkflows)},
-		{winAgents, gocui.MouseWheelDown, gocui.ModNone, gu.cursorDown(panelAgents)},
-		{winAgents, gocui.MouseWheelUp, gocui.ModNone, gu.cursorUp(panelAgents)},
+		// Side panels: wheel scrolls the VIEWPORT without moving the
+		// selection — lazygit's convention (see
+		// pkg/gui/controllers/list_controller.go:HandleScrollUp/Down).
+		// j/k after a wheel-scroll snap the viewport back so the
+		// selection is visible again (scrollOffAdjust's centring path).
+		{winTasks, gocui.MouseWheelDown, gocui.ModNone, gu.panelScroll(panelTasks, +panelScrollStep)},
+		{winTasks, gocui.MouseWheelUp, gocui.ModNone, gu.panelScroll(panelTasks, -panelScrollStep)},
+		{winJobs, gocui.MouseWheelDown, gocui.ModNone, gu.panelScroll(panelJobs, +panelScrollStep)},
+		{winJobs, gocui.MouseWheelUp, gocui.ModNone, gu.panelScroll(panelJobs, -panelScrollStep)},
+		{winWorkflows, gocui.MouseWheelDown, gocui.ModNone, gu.panelScroll(panelWorkflows, +panelScrollStep)},
+		{winWorkflows, gocui.MouseWheelUp, gocui.ModNone, gu.panelScroll(panelWorkflows, -panelScrollStep)},
+		{winAgents, gocui.MouseWheelDown, gocui.ModNone, gu.panelScroll(panelAgents, +panelScrollStep)},
+		{winAgents, gocui.MouseWheelUp, gocui.ModNone, gu.panelScroll(panelAgents, -panelScrollStep)},
 
 		// Detail pane + inspector transcript: wheel scrolls the
 		// viewport (no cursor concept on these views). Inspector input
@@ -200,15 +201,26 @@ func (gu *Gui) bindKeys() error {
 	return nil
 }
 
-// focusPanel returns a handler that focuses the named panel.
+// focusPanel returns a handler that focuses the named panel. After
+// focus moves we snap the new panel's viewport so its selected row
+// is visible — the user may have wheel-scrolled it out of view
+// during the previous visit and now expects to see where they were.
+// Matches lazygit's HandleFocus(ScrollSelectionIntoView=true).
 func (gu *Gui) focusPanel(p panelID) func(*gocui.Gui, *gocui.View) error {
 	return func(*gocui.Gui, *gocui.View) error {
+		changed := false
 		gu.st.withLock(func() {
 			if gu.st.view == StateInspector {
 				return
 			}
+			if gu.st.focused != p {
+				changed = true
+			}
 			gu.st.focused = p
 		})
+		if changed {
+			gu.snapViewportToCursor(p)
+		}
 		return nil
 	}
 }
@@ -216,14 +228,23 @@ func (gu *Gui) focusPanel(p panelID) func(*gocui.Gui, *gocui.View) error {
 // cyclePanel cycles through the four side panels by step.
 func (gu *Gui) cyclePanel(step int) func(*gocui.Gui, *gocui.View) error {
 	return func(*gocui.Gui, *gocui.View) error {
+		var landed panelID
+		changed := false
 		gu.st.withLock(func() {
 			if gu.st.view == StateInspector {
 				return
 			}
 			n := 4
 			next := (int(gu.st.focused) + step + n) % n
+			if int(gu.st.focused) != next {
+				changed = true
+			}
 			gu.st.focused = panelID(next)
+			landed = panelID(next)
 		})
+		if changed {
+			gu.snapViewportToCursor(landed)
+		}
 		return nil
 	}
 }

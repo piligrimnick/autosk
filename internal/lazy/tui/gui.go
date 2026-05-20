@@ -393,14 +393,15 @@ func (gu *Gui) applyRowHighlight(name string, headerLines, modelCursor, rowCount
 	cyAbs := headerLines + modelCursor
 	totalLines := headerLines + rowCount
 
-	// If the cursor landed outside the current viewport non-contiguously,
-	// snap origin so it's roughly centred. Keystroke moves never enter
-	// this branch (scrollOffAdjust handled them); this is the fallback
-	// for filter / scope / refresh-induced jumps.
-	if cyAbs < oy || cyAbs >= oy+vpH {
-		oy = cyAbs - vpH/2
-	}
-	// Clamp so we don't expose blank rows past the end of the buffer.
+	// Clamp origin so blank rows past the content are never visible
+	// (e.g. a filter just shrank the list and the old origin overshoots).
+	//
+	// Deliberately NOT snapping the origin to the cursor here: wheel
+	// scrolling needs the viewport to stay where the user put it,
+	// even if that hides the selection. Cursor moves (j/k) and focus
+	// changes (1/2/3/4, Tab) call snapViewportToCursor / scrollOffAdjust
+	// explicitly when they need the cursor back in view — same split
+	// lazygit makes between "navigation" and "scroll" verbs.
 	maxOY := totalLines - vpH
 	if maxOY < 0 {
 		maxOY = 0
@@ -446,13 +447,20 @@ func viewportInnerHeight(v *gocui.View) int {
 // in the direction of motion.
 const scrollOffMargin = 2
 
-// scrollOffAdjust scrolls the named view's origin so the cursor (whose
-// absolute y went from cyAbsBefore to cyAbsAfter via one keystroke)
-// stays inside the viewport with `scrollOffMargin` rows of look-ahead
-// in the direction of motion. Mirrors lazygit's
-// pkg/gui/controllers/scroll_off_margin.go formulas verbatim; the
-// margin is capped to half the viewport so on a 3-row panel the
-// cursor still moves at all.
+// scrollOffAdjust positions the named view's origin so the cursor
+// (whose absolute y went from cyAbsBefore to cyAbsAfter via one
+// keystroke) is visible after the move. Two paths, both handled by
+// the pure-Go scrollOffOrigin helper:
+//
+//  1. `before` was in the viewport — apply lazygit's
+//     scrollOffMargin algorithm so the viewport edges have at least
+//     `scrollOffMargin` rows of look-ahead in the direction of motion.
+//  2. `after` is still outside the viewport (either because the user
+//     wheel-scrolled the selection out of view and is now navigating
+//     with j/k, or because the margin algorithm didn't pull it back
+//     far enough) — centre the viewport on the cursor. Mirrors
+//     gocui's calculateNewOrigin and lazygit's FocusPoint
+//     (scrollIntoView=true) fallback.
 func (gu *Gui) scrollOffAdjust(name string, cyAbsBefore, cyAbsAfter int) {
 	v, err := gu.g.View(name)
 	if err != nil || v == nil {
@@ -460,15 +468,132 @@ func (gu *Gui) scrollOffAdjust(name string, cyAbsBefore, cyAbsAfter int) {
 	}
 	ox, oy := v.Origin()
 	vpH := viewportInnerHeight(v)
-	delta := scrollOffDelta(cyAbsBefore, cyAbsAfter, oy, vpH, scrollOffMargin)
-	if delta == 0 {
+	newOY := scrollOffOrigin(cyAbsBefore, cyAbsAfter, oy, vpH, scrollOffMargin)
+	v.SetOrigin(ox, newOY)
+}
+
+// scrollOffOrigin is the pure-Go core of scrollOffAdjust: returns the
+// viewport origin that should be in effect after a keystroke moved
+// the cursor from `before` to `after`. Extracted so the
+// margin-then-centre composition is testable without a real gocui.View.
+func scrollOffOrigin(before, after, oy, vpH, margin int) int {
+	delta := scrollOffDelta(before, after, oy, vpH, margin)
+	oy += delta
+	if after < oy || after >= oy+vpH {
+		oy = after - vpH/2
+	}
+	if oy < 0 {
+		oy = 0
+	}
+	return oy
+}
+
+// snapViewportToCursor recentres the panel's viewport on its cursor
+// when the cursor isn't currently visible — mirrors lazygit's
+// FocusLine(scrollIntoView=true) behaviour for the case where focus
+// returns to a panel that the user previously wheel-scrolled away
+// from. No-op for the detail pane (no cursor to anchor) and for any
+// panel whose cursor is already in view.
+func (gu *Gui) snapViewportToCursor(p panelID) {
+	if p == panelDetail {
 		return
 	}
-	newOY := oy + delta
+	name := p.window()
+	var header, cursor, rowCount int
+	gu.st.withRLock(func() {
+		header = headerLinesForLocked(p, gu.st)
+		switch p {
+		case panelTasks:
+			cursor = gu.st.taskCursor
+			rowCount = len(gu.st.tasks)
+		case panelJobs:
+			cursor = gu.st.jobCursor
+			rowCount = len(gu.st.jobs)
+		case panelWorkflows:
+			cursor = gu.st.workflowCursor
+			rowCount = len(gu.st.workflows)
+		case panelAgents:
+			cursor = gu.st.agentCursor
+			rowCount = len(gu.st.agents)
+		}
+	})
+	v, err := gu.g.View(name)
+	if err != nil || v == nil || rowCount == 0 {
+		return
+	}
+	ox, oy := v.Origin()
+	vpH := viewportInnerHeight(v)
+	cyAbs := header + cursor
+	if cyAbs >= oy && cyAbs < oy+vpH {
+		return // already visible
+	}
+	newOY := cyAbs - vpH/2
 	if newOY < 0 {
 		newOY = 0
 	}
+	totalLines := header + rowCount
+	maxOY := totalLines - vpH
+	if maxOY < 0 {
+		maxOY = 0
+	}
+	if newOY > maxOY {
+		newOY = maxOY
+	}
 	v.SetOrigin(ox, newOY)
+}
+
+// panelScrollStep is the wheel-tick scroll distance for side panels.
+// lazygit's gui.scrollHeight defaults to 2 lines per wheel tick — same.
+const panelScrollStep = 2
+
+// panelScroll moves the named panel's vertical origin by `step` rows
+// WITHOUT touching the model cursor. lazygit's wheel-on-list
+// affordance: the viewport scrolls free of the selection so the user
+// can peek at surrounding content while the selection stays anchored.
+//
+// Bounds: clamped to [0, max(0, totalLines - vpH)] so wheeling past
+// the end of the list doesn't expose blank rows below the content.
+func (gu *Gui) panelScroll(p panelID, step int) func(*gocui.Gui, *gocui.View) error {
+	return func(*gocui.Gui, *gocui.View) error {
+		name := p.window()
+		v, err := gu.g.View(name)
+		if err != nil || v == nil {
+			return nil
+		}
+		var totalLines int
+		gu.st.withRLock(func() {
+			header := headerLinesForLocked(p, gu.st)
+			var rowCount int
+			switch p {
+			case panelTasks:
+				rowCount = len(gu.st.tasks)
+			case panelJobs:
+				rowCount = len(gu.st.jobs)
+			case panelWorkflows:
+				rowCount = len(gu.st.workflows)
+			case panelAgents:
+				rowCount = len(gu.st.agents)
+			}
+			totalLines = header + rowCount
+		})
+		ox, oy := v.Origin()
+		vpH := viewportInnerHeight(v)
+		newOY := oy + step
+		if newOY < 0 {
+			newOY = 0
+		}
+		maxOY := totalLines - vpH
+		if maxOY < 0 {
+			maxOY = 0
+		}
+		if newOY > maxOY {
+			newOY = maxOY
+		}
+		if newOY != oy {
+			v.SetOrigin(ox, newOY)
+		}
+		return nil
+	}
 }
 
 // scrollOffDelta is the pure-Go core of scrollOffAdjust — returns the

@@ -2,6 +2,38 @@ package tui
 
 import "testing"
 
+// TestScrollOffOrigin_CenteringFallback pins the new behaviour added
+// to support "wheel scrolls the viewport without moving the cursor":
+// when the user wheel-scrolls the selection out of view and then
+// presses j/k, the next render must bring the cursor back into the
+// viewport. scrollOffDelta alone doesn't do this (its `before must be
+// visible` guard makes it return 0 when the cursor was off-screen),
+// so scrollOffOrigin layers a centre-on-cursor pass on top.
+func TestScrollOffOrigin_CenteringFallback(t *testing.T) {
+	// vp = [0..10), cursor at abs 30 (off-screen, e.g. after wheel
+	// scrolled the viewport away from it). j moves cursor 30 → 31
+	// (still off-screen). scrollOffDelta returns 0 (before not in vp),
+	// scrollOffOrigin centres: oy = 31 - 10/2 = 26.
+	if got := scrollOffOrigin(30, 31, 0, 10, 2); got != 26 {
+		t.Fatalf("centring fallback: got oy=%d want 26", got)
+	}
+	// k moves 30 → 29 — same centring: oy = 29 - 5 = 24.
+	if got := scrollOffOrigin(30, 29, 0, 10, 2); got != 24 {
+		t.Fatalf("centring fallback (up): got oy=%d want 24", got)
+	}
+	// Normal in-viewport move still uses the margin algorithm:
+	// oy=0, vpH=10, before=7 (visible), after=8 enters bottom margin.
+	// scrollOffDelta=+1, after the +1 cursor is at 8 still inside
+	// [1..11) — no further centring.
+	if got := scrollOffOrigin(7, 8, 0, 10, 2); got != 1 {
+		t.Fatalf("margin path: got oy=%d want 1", got)
+	}
+	// Negative-clamping: cursor near top, vp already at 0 — oy stays 0.
+	if got := scrollOffOrigin(0, 0, 0, 10, 2); got != 0 {
+		t.Fatalf("no-op at top: got oy=%d want 0", got)
+	}
+}
+
 // TestScrollOffDelta_NoOpWhenInsideViewport pins the baseline: a
 // move that lands well within the viewport (neither edge crossed)
 // doesn't scroll. Without this guard the algorithm would scroll on
