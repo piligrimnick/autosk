@@ -1,10 +1,12 @@
 {
-  "name": "pi-autosk",
+  "name": "@wierdbytes/pi-autosk",
   "version": "0.1.0",
-  "description": "pi extension that exposes the autosk CLI as a single tool for AI agents.",
+  "description": "pi extension that exposes the autosk CLI as three structured tools (task / comment / step) for AI agents.",
   "license": "MIT",
-  "private": true,
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "src/",
     "README.md"
