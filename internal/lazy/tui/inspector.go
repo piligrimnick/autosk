@@ -46,6 +46,13 @@ func (gu *Gui) openInspectorAtTab(jobID string, tab inspectorTab) {
 }
 
 func (gu *Gui) openInspectorAtTabWithJob(j datasource.Job, tab inspectorTab, terminalAtOpen bool) {
+	// Tear down any prior live stream BEFORE we overwrite st.insp.
+	// Without this the old liveCancel reference is lost when the
+	// inspectorState is replaced and the old pumpLive goroutine keeps
+	// running — worse, its g.Update closure reads `gu.st.insp.liveBuf`
+	// fresh on every flush, so events from the previous job end up
+	// appended to the new job's buffer.
+	gu.stopLiveStream()
 	gu.g.Update(func(_ *gocui.Gui) error {
 		gu.st.withLock(func() {
 			gu.st.view = StateInspector
@@ -59,33 +66,53 @@ func (gu *Gui) openInspectorAtTabWithJob(j datasource.Job, tab inspectorTab, ter
 		})
 		return nil
 	})
-	// Hydrate the chosen tab's data.
-	gu.hydrateInspectorTab(tab)
+	// Hydrate the chosen tab's data. Pass j.JobID explicitly: g.Update
+	// above is asynchronous (per gocui docs the userEvents queue order
+	// is not guaranteed wrt OnWorker goroutines), so reading st.insp.JobID
+	// inside the worker races against the inspectorState assignment and
+	// loses often enough in practice that hydration silently bails —
+	// the Live tab never opens its SSE subscription ("(waiting for
+	// events…)" forever) and the Archive tab never flips archiveLoaded
+	// ("(loading…)" forever).
+	gu.hydrateInspectorTab(j.JobID, tab)
 }
 
-// hydrateInspectorTab fetches the data the current tab needs.
-func (gu *Gui) hydrateInspectorTab(tab inspectorTab) {
+// hydrateInspectorTab fetches the data the current tab needs. jobID is
+// passed explicitly so the caller's identity is decoupled from
+// `st.insp.JobID` — see the race note on openInspectorAtTabWithJob.
+func (gu *Gui) hydrateInspectorTab(jobID string, tab inspectorTab) {
+	if jobID == "" {
+		return
+	}
 	gu.g.OnWorker(func(_ gocui.Task) error {
-		jobID := gu.currentJobID()
-		if jobID == "" {
-			return nil
-		}
 		switch tab {
 		case tabArchive:
-			evs, err := gu.ds.Messages(gu.ctx, jobID, true, 0)
+			// Per-request deadline: the daemon's UDS HTTP client has
+			// Timeout=0 (correct for /stream) and gu.ctx has no deadline
+			// either, so a daemon stalled reading a fat session.jsonl
+			// would otherwise wedge the Archive tab in "(loading…)"
+			// indefinitely. Mirror refreshAll's 5×Refresh budget.
+			ctx, cancel := hydrateContext(gu.ctx, gu.opts.Refresh)
+			evs, err := gu.ds.Messages(ctx, jobID, true, 0)
+			cancel()
 			if err != nil {
 				gu.flashf("warn", "archive load: %v", err)
-				return nil
 			}
 			gu.g.Update(func(_ *gocui.Gui) error {
 				gu.st.withLock(func() {
+					if gu.st.insp.JobID != jobID {
+						return // inspector switched out from under us
+					}
 					gu.st.insp.archive = evs
 					gu.st.insp.archiveLoaded = true
+					gu.st.insp.archiveErr = err
 				})
 				return nil
 			})
 		case tabSignals:
-			t, err := gu.ds.GetJob(gu.ctx, jobID)
+			ctx, cancel := hydrateContext(gu.ctx, gu.opts.Refresh)
+			defer cancel()
+			t, err := gu.ds.GetJob(ctx, jobID)
 			if err != nil {
 				gu.flashf("err", "signals: get job %s: %v", jobID, err)
 				return nil
@@ -93,11 +120,11 @@ func (gu *Gui) hydrateInspectorTab(tab inspectorTab) {
 			// Design plan §5.5: Signals are scoped to THIS run; passing
 			// jobID (not taskID) ensures rows from earlier kickback runs
 			// of the same task don't bleed in.
-			sigs, serr := gu.ds.Signals(gu.ctx, jobID)
+			sigs, serr := gu.ds.Signals(ctx, jobID)
 			if serr != nil {
 				gu.flashf("warn", "signals: %v", serr)
 			}
-			cms, cerr := gu.ds.Comments(gu.ctx, t.TaskID)
+			cms, cerr := gu.ds.Comments(ctx, t.TaskID)
 			if cerr != nil {
 				gu.flashf("warn", "comments: %v", cerr)
 			}
@@ -113,6 +140,9 @@ func (gu *Gui) hydrateInspectorTab(tab inspectorTab) {
 			cms = filterCommentsSinceJob(cms, t)
 			gu.g.Update(func(_ *gocui.Gui) error {
 				gu.st.withLock(func() {
+					if gu.st.insp.JobID != jobID {
+						return
+					}
 					gu.st.insp.signals = sigs
 					gu.st.insp.comments = cms
 				})
@@ -127,7 +157,24 @@ func (gu *Gui) hydrateInspectorTab(tab inspectorTab) {
 	})
 }
 
-// startLiveStream opens an SSE subscription against jobID.
+// hydrateContext returns a context derived from parent with a
+// 5×refresh budget (clamped at 5s minimum so a Refresh=0 / very-small
+// Refresh doesn't immediately cancel). Mirrors refreshAll's choice so
+// inspector hydration honours the same deadline as the dashboard.
+func hydrateContext(parent context.Context, refresh time.Duration) (context.Context, context.CancelFunc) {
+	budget := 5 * refresh
+	if budget < 5*time.Second {
+		budget = 5 * time.Second
+	}
+	return context.WithTimeout(parent, budget)
+}
+
+// startLiveStream opens an SSE subscription against jobID. On failure
+// we BOTH flash a toast AND append an error line to liveBuf, because
+// in StateInspector the dashboard's command-log panel is hidden
+// (see arrangement.go:inspectorArrangement) and the flash decays after
+// ~4s — without the in-buffer line the user would see only
+// "(waiting for events…)" forever and have no idea the stream failed.
 func (gu *Gui) startLiveStream(jobID string) {
 	gu.stopLiveStream()
 	ctx, cancel := context.WithCancel(gu.ctx)
@@ -135,13 +182,23 @@ func (gu *Gui) startLiveStream(jobID string) {
 	if err != nil {
 		cancel()
 		gu.flashf("warn", "live: %v (try Archive)", err)
+		line := styleErr.Render(fmt.Sprintf("— stream error: %v (try Archive)", err))
+		gu.g.Update(func(_ *gocui.Gui) error {
+			gu.st.withLock(func() {
+				if gu.st.insp.JobID != jobID {
+					return
+				}
+				gu.st.insp.liveBuf = append(gu.st.insp.liveBuf, line)
+			})
+			return nil
+		})
 		return
 	}
 	gu.st.withLock(func() {
 		gu.st.insp.live = handle
 		gu.st.insp.liveCancel = cancel
 	})
-	go gu.pumpLive(ctx, handle)
+	go gu.pumpLive(ctx, jobID, handle)
 }
 
 // stopLiveStream cancels and clears the SSE subscription.
@@ -177,10 +234,18 @@ func (gu *Gui) stopLiveStream() {
 // long pi run doesn't grow the slice without bound. When the cap is
 // hit we drop the oldest 25% in one allocation instead of re-slicing
 // per event.
-func (gu *Gui) pumpLive(ctx context.Context, h *datasource.LiveHandle) {
+func (gu *Gui) pumpLive(ctx context.Context, ownerJobID string, h *datasource.LiveHandle) {
 	pumpLiveLoop(ctx, h.Events, livePumpThrottle, func(batch []datasource.LiveEvent) {
 		gu.g.Update(func(_ *gocui.Gui) error {
 			gu.st.withLock(func() {
+				// Owner-check: if the inspector switched jobs between the
+				// throttle flush queueing and the main loop applying it,
+				// dropping the batch is safer than appending stale events
+				// into someone else's transcript. Same defense as the
+				// hydrate paths above.
+				if gu.st.insp.JobID != ownerJobID {
+					return
+				}
 				for _, ev := range batch {
 					line := renderLiveEvent(ev)
 					gu.st.insp.liveBuf = append(gu.st.insp.liveBuf, line)
@@ -337,20 +402,28 @@ func nextTab(cur inspectorTab, step int) inspectorTab {
 // inspectorCycleTab cycles inspector tab by step (±1).
 func (gu *Gui) inspectorCycleTab(step int) func(*gocui.Gui, *gocui.View) error {
 	return func(*gocui.Gui, *gocui.View) error {
-		var newTab inspectorTab
+		var (
+			newTab inspectorTab
+			jobID  string
+		)
 		gu.st.withLock(func() {
 			gu.st.insp.Tab = nextTab(gu.st.insp.Tab, step)
 			newTab = gu.st.insp.Tab
+			jobID = gu.st.insp.JobID
 		})
-		gu.hydrateInspectorTab(newTab)
+		gu.hydrateInspectorTab(jobID, newTab)
 		return nil
 	}
 }
 
 func (gu *Gui) inspectorJumpTab(t inspectorTab) func(*gocui.Gui, *gocui.View) error {
 	return func(*gocui.Gui, *gocui.View) error {
-		gu.st.withLock(func() { gu.st.insp.Tab = t })
-		gu.hydrateInspectorTab(t)
+		var jobID string
+		gu.st.withLock(func() {
+			gu.st.insp.Tab = t
+			jobID = gu.st.insp.JobID
+		})
+		gu.hydrateInspectorTab(jobID, t)
 		return nil
 	}
 }
@@ -478,6 +551,9 @@ func (gu *Gui) renderInspectorBody() string {
 	case tabArchive:
 		if !insp.archiveLoaded {
 			return styleMuted.Render("(loading…)")
+		}
+		if insp.archiveErr != nil {
+			return styleErr.Render(fmt.Sprintf("(archive load failed: %v)", insp.archiveErr))
 		}
 		body := renderTranscript(insp.archive)
 		if body == "" {

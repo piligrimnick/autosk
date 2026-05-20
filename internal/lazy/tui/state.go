@@ -158,6 +158,7 @@ type inspectorState struct {
 	// Archive tab plumbing.
 	archive       []datasource.MessageEvent
 	archiveLoaded bool
+	archiveErr    error // non-nil → hydrate failed; UI shows a plashka instead of (loading…)
 	// Meta + Signals.
 	signals       []datasource.Signal
 	comments      []datasource.Comment

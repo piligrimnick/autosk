@@ -2,12 +2,90 @@ package tui
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"autosk/internal/daemon/api"
 	"autosk/internal/lazy/datasource"
 )
+
+// TestRenderInspectorBody_ArchiveStates pins the Archive tab's body
+// rendering across the three states the hydrate path can leave the
+// inspector in:
+//
+//	 archiveLoaded=false                  → "(loading…)"
+//	 archiveLoaded=true, archiveErr!=nil  → "(archive load failed: …)"
+//	 archiveLoaded=true, archiveErr==nil  → transcript / "(no transcript events)"
+//
+// Before the fix the hydrate path on error called only flashf and
+// returned without flipping archiveLoaded, leaving the Archive tab
+// stuck in "(loading…)" forever — the user's reported symptom.
+// Regressing back to that state would now also need to break this test.
+func TestRenderInspectorBody_ArchiveStates(t *testing.T) {
+	gu := &Gui{st: newState()}
+	gu.st.view = StateInspector
+
+	// loading
+	gu.st.insp = inspectorState{JobID: "job-1", Tab: tabArchive}
+	if body := gu.renderInspectorBody(); !strings.Contains(body, "loading") {
+		t.Fatalf("loading: body=%q want substring 'loading'", body)
+	}
+
+	// error — the critical regression: loaded=true + err must NOT show "loading"
+	gu.st.insp = inspectorState{
+		JobID:         "job-1",
+		Tab:           tabArchive,
+		archiveLoaded: true,
+		archiveErr:    errors.New("daemon: 503"),
+	}
+	body := gu.renderInspectorBody()
+	if strings.Contains(body, "loading") {
+		t.Fatalf("error: body still says 'loading': %q", body)
+	}
+	if !strings.Contains(body, "archive load failed") || !strings.Contains(body, "503") {
+		t.Fatalf("error: body=%q want substring 'archive load failed' + '503'", body)
+	}
+
+	// empty success
+	gu.st.insp = inspectorState{JobID: "job-1", Tab: tabArchive, archiveLoaded: true}
+	if body := gu.renderInspectorBody(); !strings.Contains(body, "no transcript events") {
+		t.Fatalf("empty: body=%q want substring 'no transcript events'", body)
+	}
+}
+
+// TestHydrateContext_Budget pins the 5×Refresh / 5s floor budget so a
+// regression that makes hydration deadline-free (the previous
+// behaviour that let the Archive tab hang on a slow daemon) is caught
+// at the unit level.
+func TestHydrateContext_Budget(t *testing.T) {
+	cases := []struct {
+		name    string
+		refresh time.Duration
+		minWant time.Duration
+	}{
+		{"zero_refresh", 0, 5 * time.Second},
+		{"tiny_refresh", 100 * time.Millisecond, 5 * time.Second},
+		{"normal_refresh", 2 * time.Second, 10 * time.Second},
+		{"large_refresh", 30 * time.Second, 2 * time.Minute},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			parent, parentCancel := context.WithCancel(context.Background())
+			defer parentCancel()
+			ctx, cancel := hydrateContext(parent, tc.refresh)
+			defer cancel()
+			dl, ok := ctx.Deadline()
+			if !ok {
+				t.Fatalf("%s: no deadline", tc.name)
+			}
+			if d := time.Until(dl); d < tc.minWant-200*time.Millisecond {
+				t.Fatalf("%s: deadline in %v, want >= %v", tc.name, d, tc.minWant)
+			}
+		})
+	}
+}
 
 // TestInspectorTabCycle drives the real nextTab helper that
 // inspectorCycleTab calls (the OnWorker hydrate dispatch is the only
