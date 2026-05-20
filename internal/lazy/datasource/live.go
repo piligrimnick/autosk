@@ -128,6 +128,13 @@ func (l *Live) Messages(ctx context.Context, jobID string, full bool, limit int)
 	return out, nil
 }
 
+// Reconnect is a no-op for the Live branch: it has no local sql.DB to
+// refresh — every call goes over the daemon's UDS HTTP surface. The
+// implementation exists only to satisfy the Datasource interface;
+// freshness for the composed datasource is driven by the offline
+// base's underlying doltlite store.
+func (l *Live) Reconnect(ctx context.Context) error { return nil }
+
 // Healthz pings the daemon and translates the response.
 func (l *Live) Healthz(ctx context.Context) (Health, error) {
 	resp, err := l.cli.Healthz(ctx)

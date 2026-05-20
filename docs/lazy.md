@@ -110,6 +110,7 @@ with the same job still selected.
 | `/` | Filter the focused panel. See [§ Filter language](#filter-language). |
 | `*` | Clear all scope chips. |
 | `R` | Force-refresh (ignore the 2s tick). |
+| `Ctrl-R` | Hard refresh: drop the pooled doltlite connection and re-open the DB. Use when external writes (`autosk` CLI, daemon, another lazy) still don't appear after pressing `R`. See [§ Cross-process freshness](#cross-process-freshness). |
 | `@` | Toggle command-log visibility. |
 | `q` / `Ctrl-C` | Quit. |
 
@@ -295,6 +296,28 @@ glance.
 The dashboard polls every 2s by default (`--refresh` to change).
 Cursor moves re-fetch the focused detail immediately rather than
 waiting for the tick.
+
+### Cross-process freshness
+
+`.autosk/db` is shared between every `autosk` process (the CLI, the
+daemon, any other lazy instance). Doltlite is single-writer at the
+file-lock level, but a long-lived reader still has to watch out for
+one case: `SELECT dolt_gc()` (run by the daemon's compactor every
+~30 min, or via `autosk gc`) **atomically replaces** the database
+file via write-to-sidecar + rename. Any process holding the file
+open at that moment ends up with its fd on the orphan inode and
+would silently serve the pre-gc snapshot forever.
+
+Lazy defends against this by tying doltlite's `SetConnMaxLifetime`
+to `--refresh` (default 2s). Every tick Go's `database/sql` pool
+retires the underlying `*sqlite3.SQLiteConn`; the next query re-opens
+the file at the current path and picks up the new inode. So normal
+refreshes already "see" the post-gc state within one tick.
+
+`Ctrl-R` is the escape hatch: it forces the pool to drop the conn
+immediately (one quick `Ping` on a fresh conn), then triggers a
+refresh. Useful when you suspect the dashboard is stuck on a stale
+fd and don't want to wait for the next rotation.
 
 ---
 

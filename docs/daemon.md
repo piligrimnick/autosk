@@ -88,6 +88,7 @@ route. Work enters the daemon through workflow enrolment; the poller
 | `--poll-interval` | `2s` | Per-project workflow scan cadence. |
 | `--pi-bin` | `pi` | pi binary to spawn (looked up on PATH unless absolute). |
 | `--session-dir-root` | `<projectRoot>/.autosk/sessions` when unset | Literal parent dir for per-job session subdirs. When set, the same path is shared across **all** projects served by this daemon; when empty (the default) each project gets its own `<projectRoot>/.autosk/sessions`. No template substitution is performed. |
+| `--gc-interval` | `30m` (0 == default, negative disables) | How often each project's compactor runs `SELECT dolt_gc()` against its `.autosk/db`. See [§ Compactor & cross-process freshness](#compactor--cross-process-freshness). |
 
 Project state lives in each project's `.autosk/db`. Projects are
 opened **lazily** on the first request that names them and stay
@@ -107,6 +108,29 @@ autosk: uds: daemon already running at /Users/me/.autosk/daemon.sock
 
 If the socket file is *stale* (no peer accepts connections — typical
 after a crash), the daemon unlinks it and rebinds.
+
+### Compactor & cross-process freshness
+
+Each loaded project runs a background **compactor** that ticks every
+`--gc-interval` (default 30m) and invokes `SELECT dolt_gc()` to
+reclaim stale chunks. GC is what keeps `.autosk/db` queries fast over
+the long haul, but it has one subtlety operators should know about:
+
+Doltlite implements GC via *write-to-sidecar + atomic rename*, so the
+on-disk inode of `.autosk/db` changes on every successful run. Any
+long-lived process (the daemon itself, a parallel CLI invocation, an
+`autosk lazy` dashboard) whose connection was open at gc time keeps
+its file descriptor pointing at the *orphan* inode — and would
+silently serve the pre-gc snapshot if nothing intervened.
+
+The defence lives in `internal/store/doltlite`: every store sets a
+short `SetConnMaxLifetime` (default 2s, see
+`doltlite.DefaultConnLifetime`), so Go's `database/sql` pool retires
+the underlying `*sqlite3.SQLiteConn` periodically. The next query
+re-opens the file at the current path and picks up the new inode
+automatically. `autosk lazy` ties this lifetime to `--refresh` and
+additionally exposes `Ctrl-R` as a manual hard-refresh; see
+[`docs/lazy.md` § Cross-process freshness](lazy.md#cross-process-freshness).
 
 ### The daemon ignores its own AUTOSK_DB
 

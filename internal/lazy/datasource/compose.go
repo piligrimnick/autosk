@@ -145,6 +145,12 @@ func (c *Compose) Messages(ctx context.Context, jobID string, full bool, limit i
 }
 func (c *Compose) Healthz(ctx context.Context) (Health, error) { return c.Health(), nil }
 
+// Reconnect forwards to the offline base so the underlying doltlite
+// store drops its pooled connection. The live (daemon) branch has no
+// connection of its own to refresh — it just goes over UDS — so the
+// composed datasource only needs to forward the offline call.
+func (c *Compose) Reconnect(ctx context.Context) error { return c.off.Reconnect(ctx) }
+
 func (c *Compose) CreateTask(ctx context.Context, title, desc string, p int) (string, error) {
 	return c.off.CreateTask(ctx, title, desc, p)
 }

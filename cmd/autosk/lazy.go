@@ -11,6 +11,7 @@ import (
 	"autosk/internal/daemon/client"
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/lazy/tui"
+	"autosk/internal/store/doltlite"
 )
 
 // newLazyCmd is the cobra entry point for `autosk lazy`.
@@ -46,6 +47,17 @@ func newLazyCmd() *cobra.Command {
 				return err
 			}
 			defer closeFn()
+
+			// Tie the doltlite connection-rotation cadence to the
+			// dashboard refresh interval. Lazy is the canonical
+			// long-lived reader; without rotation it would silently
+			// serve a stale snapshot after a cross-process dolt_gc()
+			// atomic-rewrote .autosk/db out from under our fd. See
+			// docs/lazy.md "cross-process freshness" and
+			// doltlite.DefaultConnLifetime.
+			if dl, ok := store.(*doltlite.Store); ok {
+				dl.SetConnMaxLifetime(refresh)
+			}
 
 			reg, _ := pkgregistry.Default()
 			cwd, err := getCwd()

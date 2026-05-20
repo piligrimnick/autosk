@@ -63,6 +63,7 @@ func (f *refreshFakeDS) Messages(_ context.Context, _ string, _ bool, _ int) ([]
 func (f *refreshFakeDS) Healthz(_ context.Context) (datasource.Health, error) {
 	return f.health, nil
 }
+func (f *refreshFakeDS) Reconnect(_ context.Context) error { return nil }
 func (f *refreshFakeDS) CreateTask(_ context.Context, _, _ string, _ int) (string, error) {
 	return "", datasource.ErrDaemonRequired
 }

@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jesseduffield/gocui"
 
@@ -42,6 +44,13 @@ func (gu *Gui) bindKeys() error {
 		{"", gocui.KeyTab, gocui.ModNone, gu.cyclePanel(+1)},
 		// refresh + scope + filter + palette
 		{"", 'R', gocui.ModNone, gu.handleRefresh},
+		// Ctrl-R is the "hard refresh": force the doltlite store to drop
+		// its pooled connection (recover from a cross-process dolt_gc
+		// that atomic-rewrote .autosk/db). Plain R alone fires the same
+		// adaptive tick the 2s timer uses — useful as a one-shot kick;
+		// Ctrl-R is the escape hatch when the operator suspects the
+		// underlying fd is on an orphan inode.
+		{"", gocui.KeyCtrlR, gocui.ModNone, gu.handleForceReconnect},
 		{"", '*', gocui.ModNone, gu.handleClearScope},
 		{"", '/', gocui.ModNone, gu.openFilter},
 		{"", ':', gocui.ModNone, gu.openPalette},
@@ -434,6 +443,30 @@ func (gu *Gui) handleRefresh(*gocui.Gui, *gocui.View) error {
 	return nil
 }
 
+// handleForceReconnect is the Ctrl-R handler: drop any pooled
+// *sqlite3.SQLiteConn inside the doltlite store and schedule a
+// refresh. The reconnect happens on a worker so the UI thread
+// stays responsive (the Ping inside Reconnect blocks until the
+// fresh conn handshakes). On error we still fall through to
+// scheduleRefresh — a stale read is better than no read.
+func (gu *Gui) handleForceReconnect(*gocui.Gui, *gocui.View) error {
+	gu.flashf("info", "reconnect")
+	gu.g.OnWorker(func(_ gocui.Task) error {
+		ctx, cancel := context.WithTimeout(gu.ctx, 5*time.Second)
+		defer cancel()
+		if err := gu.ds.Reconnect(ctx); err != nil {
+			dlog("reconnect: %v", err)
+			gu.g.Update(func(_ *gocui.Gui) error {
+				gu.flashf("warn", "reconnect failed: %v", err)
+				return nil
+			})
+		}
+		gu.scheduleRefresh()
+		return nil
+	})
+	return nil
+}
+
 // handleEsc closes the active popup or inspector; falls back to
 // clearing filter chips.
 func (gu *Gui) handleEsc(g *gocui.Gui, v *gocui.View) error {
@@ -631,6 +664,7 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"  1..4 Tab     focus side panel    /   filter",
 		"  0            focus detail        :   palette",
 		"  R            refresh             *   clear scope",
+		"  Ctrl-R       hard refresh (reopen db conn; recover from cross-process gc)",
 		"  @            toggle log          ?   help",
 		"  q Ctrl-C     quit                Esc back/close",
 		"",

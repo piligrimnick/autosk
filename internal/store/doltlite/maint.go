@@ -56,11 +56,17 @@ func (r CompactResult) String() string {
 // The call is a single SQL function invocation (`SELECT dolt_gc()`)
 // and runs inside the doltlite single-writer connection — it
 // serialises against any other write in this process. Read queries
-// see the compacted chunk-store on their next BEGIN. Concurrent
-// processes (e.g. the lazy TUI in another terminal) detect the
-// shrunken file on their next refresh and rebuild their chunk-store
-// cache; that rebuild is exactly what makes the dashboard fast again
-// post-GC.
+// see the compacted chunk-store on their next BEGIN. The on-disk
+// representation is rewritten via write-to-sidecar + atomic rename,
+// which means the inode of `.autosk/db` changes; concurrent processes
+// that opened the file before the rewrite keep their fd on the now-
+// orphan inode and silently serve a stale snapshot. The defence is
+// the doltlite store's SetConnMaxLifetime (see DefaultConnLifetime in
+// store.go): every long-lived autosk process rotates its underlying
+// *sqlite3.SQLiteConn periodically, so the next query re-opens the
+// file at the current path and picks up the new inode. Within a
+// rotation period (default 2s) the dashboard refreshes its chunk-
+// store cache and is fast again post-GC.
 //
 // Compact is safe to call repeatedly; on a fresh DB it's a no-op
 // (returns ChunksRemoved=0).

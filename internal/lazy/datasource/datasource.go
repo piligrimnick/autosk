@@ -236,6 +236,15 @@ type Datasource interface {
 	SendInput(ctx context.Context, jobID, message, behavior string) (string, error)
 	AbortJob(ctx context.Context, jobID string) error
 
+	// Reconnect drops any pooled connection inside the underlying
+	// store and forces the next query to acquire a fresh
+	// *sqlite3.SQLiteConn. The lever lazy uses to recover from a
+	// cross-process `dolt_gc()` that atomic-rewrote `.autosk/db` out
+	// from under our fd. Safe to call concurrently with in-flight
+	// reads; idempotent. Offline + Compose forward to the doltlite
+	// store; daemon-only datasources may treat this as a no-op.
+	Reconnect(ctx context.Context) error
+
 	// StreamLive opens an SSE subscription to a job. Caller must call
 	// LiveHandle.Close. Offline datasources return ErrDaemonRequired.
 	StreamLive(ctx context.Context, jobID string) (*LiveHandle, error)

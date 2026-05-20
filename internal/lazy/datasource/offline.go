@@ -525,6 +525,15 @@ func (o *Offline) Healthz(ctx context.Context) (Health, error) {
 	return Health{Daemon: "down", UpdatedAt: time.Now().UTC()}, nil
 }
 
+// Reconnect forces the underlying doltlite store to retire its pooled
+// *sqlite3.SQLiteConn so the next read opens a fresh connection at the
+// current path. See doltlite.Store.Reconnect for the gory details; the
+// short version: this is how lazy recovers from a cross-process
+// `dolt_gc()` that rewrote `.autosk/db` under our fd.
+func (o *Offline) Reconnect(ctx context.Context) error {
+	return o.s.Reconnect(ctx)
+}
+
 // ---- writes -------------------------------------------------------------
 
 // CreateTask inserts a task and returns its id.
