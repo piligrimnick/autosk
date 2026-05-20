@@ -2,6 +2,8 @@ package tui
 
 import (
 	"github.com/jesseduffield/gocui"
+
+	"autosk/internal/lazy/theme"
 )
 
 // layout is the gocui Manager: it asks boxlayout for window
@@ -95,7 +97,7 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 		// retains the last-set FrameColor/TitleColor on the View object
 		// across layout passes (SetView returns the same view, it doesn't
 		// reset attrs), so the else branches are load-bearing: without
-		// them a panel that lost focus would stay cyan forever — same
+		// them a panel that lost focus would stay tinted forever — same
 		// goes for any panel that was focused before the inspector
 		// opened and then dashboard came back.
 		//
@@ -104,9 +106,10 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 		// the cursor right now. Per-panel tab labels rendered INSIDE the
 		// body (when we add them) live in the view buffer and are not
 		// touched by TitleColor — they stay default-coloured by design.
+		focusAttr := theme.Active().Focus.Gocui()
 		if state == StateDashboard && win == focusedWin {
-			v.FrameColor = gocui.ColorCyan
-			v.TitleColor = gocui.ColorCyan
+			v.FrameColor = focusAttr
+			v.TitleColor = focusAttr
 		} else {
 			v.FrameColor = gocui.ColorDefault
 			v.TitleColor = gocui.ColorDefault

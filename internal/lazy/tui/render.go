@@ -10,22 +10,46 @@ import (
 
 	"autosk/internal/daemon/runstore"
 	"autosk/internal/lazy/datasource"
+	"autosk/internal/lazy/theme"
 	"autosk/internal/store"
 )
 
-// Styles are kept in one struct so theme tweaks happen in one place.
-// All colours go through lipgloss's adaptive palette so dark/light
-// terminals both render reasonably.
+// Styles are derived from the active theme.Palette at package-load
+// time. Render code stays palette-agnostic: every literal colour lives
+// in internal/lazy/theme, so swapping palettes is a one-line change
+// there and a RebuildStyles() call here.
+//
+// The slot → style mapping is intentionally narrow (8 styles total) —
+// see internal/lazy/theme/theme.go's Palette doc for which UI element
+// each one feeds.
 var (
-	styleHeader  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	styleMuted   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	styleAccent  = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
-	styleWarn    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	styleErr     = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	styleOK      = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	styleScope   = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
-	styleFilter  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	styleHeader lipgloss.Style
+	styleMuted  lipgloss.Style
+	styleAccent lipgloss.Style
+	styleWarn   lipgloss.Style
+	styleErr    lipgloss.Style
+	styleOK     lipgloss.Style
+	styleScope  lipgloss.Style
+	styleFilter lipgloss.Style
 )
+
+func init() { RebuildStyles() }
+
+// RebuildStyles rebuilds the cached lipgloss styles from the currently
+// active theme.Palette. Call after theme.SetActive(...) so a runtime
+// palette switch picks up on the next frame; tests use it to scope a
+// palette swap to one test case.
+func RebuildStyles() {
+	p := theme.Active()
+	styleHeader = lipgloss.NewStyle().Bold(true).Foreground(p.Header.Lipgloss())
+	styleMuted = lipgloss.NewStyle().Foreground(p.Muted.Lipgloss())
+	styleAccent = lipgloss.NewStyle().Foreground(p.Accent.Lipgloss())
+	styleWarn = lipgloss.NewStyle().Foreground(p.Warn.Lipgloss())
+	styleErr = lipgloss.NewStyle().Foreground(p.Err.Lipgloss())
+	styleOK = lipgloss.NewStyle().Foreground(p.OK.Lipgloss())
+	styleScope = lipgloss.NewStyle().Foreground(p.Scope.Lipgloss()).Bold(true)
+	styleFilter = lipgloss.NewStyle().Foreground(p.Filter.Lipgloss())
+}
 
 // glyphForTaskStatus returns the one-rune status glyph for a task.
 func glyphForTaskStatus(s store.Status) string {

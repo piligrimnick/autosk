@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"github.com/jesseduffield/gocui"
+
+	"autosk/internal/lazy/theme"
 )
 
 // openMenu pushes a Menu popup with the given title, lines, and the
@@ -194,7 +196,10 @@ func (gu *Gui) drawPopup(g *gocui.Gui, name string, w, h int, title, body string
 	}
 	v.Title = title
 	v.Frame = true
-	v.FrameColor = gocui.ColorMagenta
+	// Popup frame uses the palette's PopupBox slot — picked to be a
+	// neighbour-but-not-twin of Accent so the popup chrome doesn't get
+	// visually confused with the cursor-row highlight underneath it.
+	v.FrameColor = theme.Active().PopupBox.Gocui()
 	if body != "" {
 		v.Clear()
 		_, _ = v.Write([]byte(body))

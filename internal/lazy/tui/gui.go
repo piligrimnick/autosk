@@ -126,7 +126,18 @@ func Run(ctx context.Context, opts Options) error {
 		opts.Refresh = 2 * time.Second
 	}
 	g, err := gocui.NewGui(gocui.NewGuiOpts{
-		OutputMode: gocui.OutputNormal,
+		// OutputTrue (24-bit) so the theme.Palette's RGB values render
+		// faithfully on both sides of the rendering pipeline:
+		//
+		//   - View.FrameColor / View.TitleColor go through
+		//     gocui.NewRGBColor → tcell.NewRGBColor without masking.
+		//   - Lipgloss-generated "\x1b[38;2;R;G;Bm" escapes inside view
+		//     buffers are accepted by gocui's escape interpreter
+		//     (escape.go:327 explicitly rejects 38;2;… when mode<OutputTrue).
+		//
+		// Terminals without truecolor support degrade silently — tcell
+		// downsamples to the closest 256-color slot.
+		OutputMode: gocui.OutputTrue,
 		Headless:   opts.Headless,
 		Width:      opts.Width,
 		Height:     opts.Height,
