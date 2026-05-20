@@ -26,7 +26,9 @@ func (gu *Gui) bindKeys() error {
 	}
 
 	bs := []binding{
-		// global quit + help
+		// global quit + help. Space is intentionally NOT global — it
+		// has per-panel semantics (Tasks: commit scope) and a global
+		// space binding would swallow the per-view ones underneath.
 		{"", gocui.KeyCtrlC, gocui.ModNone, gu.quit},
 		{"", 'q', gocui.ModNone, gu.quit},
 		{"", '?', gocui.ModNone, gu.openHelp},
@@ -52,6 +54,13 @@ func (gu *Gui) bindKeys() error {
 		{winTasks, gocui.KeyArrowDown, gocui.ModNone, gu.cursorDown(panelTasks)},
 		{winTasks, gocui.KeyArrowUp, gocui.ModNone, gu.cursorUp(panelTasks)},
 		{winTasks, gocui.KeyEnter, gocui.ModNone, gu.tasksEnter},
+		// Space — commit the cursor row as the Jobs-panel scope chip
+		// without leaving the Tasks panel. The counterpart to Enter
+		// (which commits + jumps). j/k do NOT auto-commit anymore
+		// (operator complaint: cursor-driven re-filtering was noisy),
+		// so this is the only path on Tasks for setting scope.TaskID.
+		// Press * to clear.
+		{winTasks, ' ', gocui.ModNone, gu.tasksScopeFromCursor},
 
 		{winJobs, 'j', gocui.ModNone, gu.cursorDown(panelJobs)},
 		{winJobs, 'k', gocui.ModNone, gu.cursorUp(panelJobs)},
@@ -280,7 +289,7 @@ func (gu *Gui) cursorDown(p panelID) func(*gocui.Gui, *gocui.View) error {
 			header = headerLinesForLocked(p, gu.st)
 		})
 		gu.scrollOffAdjust(p.window(), header+before, header+after)
-		gu.applyScope()
+		gu.afterCursorMove(p)
 		return nil
 	}
 }
@@ -310,14 +319,63 @@ func (gu *Gui) cursorUp(p panelID) func(*gocui.Gui, *gocui.View) error {
 			header = headerLinesForLocked(p, gu.st)
 		})
 		gu.scrollOffAdjust(p.window(), header+before, header+after)
-		gu.applyScope()
+		gu.afterCursorMove(p)
 		return nil
 	}
 }
 
+// afterCursorMove fires the per-panel side-effect that should follow
+// a cursor change. Pulled out of cursorDown/cursorUp so the policy
+// lives in one place — and so we can give Tasks a different
+// behaviour from Workflows (which auto-scopes Tasks) without
+// duplicating the switch in both directions.
+//
+// Per-panel contract:
+//
+//   - panelTasks: schedule a refresh so the detail pane picks up
+//     the highlighted task's comments and signals. Scope is NOT
+//     mutated here; cursor-driven re-filtering was noisy in
+//     practice. Use Space to commit (stay on Tasks) or Enter to
+//     commit + jump to the Jobs panel.
+//   - panelWorkflows: applyScope so the Tasks panel auto-filters
+//     to the highlighted workflow. The lazygit-style cross-link
+//     operators expect; opt out via *.
+//   - panelJobs / panelAgents: scheduleRefresh only — highlighting
+//     a different row paints a different detail pane on the next
+//     layout pass, no scope mutation needed.
+func (gu *Gui) afterCursorMove(p panelID) {
+	switch p {
+	case panelWorkflows:
+		gu.applyScope()
+	default:
+		gu.scheduleRefresh()
+	}
+}
+
+// tasksScopeFromCursor is the Space-key handler on the Tasks panel:
+// commits the current cursor row as scope.TaskID (filtering the
+// Jobs panel) without changing focus. The complement to tasksEnter
+// (which commits + jumps) and the only path j/k navigation leaves
+// open after the cursor-move auto-scope was removed.
+func (gu *Gui) tasksScopeFromCursor(*gocui.Gui, *gocui.View) error {
+	var id string
+	gu.st.withRLock(func() {
+		if t, ok := gu.st.selectedTask(); ok {
+			id = t.ID
+		}
+	})
+	if id == "" {
+		return nil
+	}
+	gu.applyScope()
+	gu.flashf("info", "filter: %s (press * to reset)", id)
+	return nil
+}
+
 // applyScope re-derives the scope chips from the current cursor in
-// Tasks / Workflows. Called after every cursor move so the right
-// detail + Jobs filter reflects what's highlighted.
+// Tasks / Workflows. Workflows call this on every cursor move via
+// afterCursorMove; Tasks call it only from explicit commit paths
+// (Enter / Space) per the cursor-move policy documented above.
 func (gu *Gui) applyScope() {
 	gu.st.withLock(func() {
 		switch gu.st.focused {
@@ -556,6 +614,8 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"  q Ctrl-C     quit                Esc back/close",
 		"",
 		"tasks:",
+		"  Space        filter Jobs by selected task (stay on Tasks)",
+		"  Enter        filter Jobs by selected task and focus Jobs",
 		"  n new    d done     x cancel   o reopen",
 		"  e enroll r resume   b block    u unblock  m comment",
 		"  p priority",

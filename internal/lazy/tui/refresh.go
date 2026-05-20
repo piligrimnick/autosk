@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,6 +23,12 @@ type refreshResult struct {
 	terr          error
 	jobs          []datasource.Job
 	jerr          error
+	// taskJobIdx mirrors the state field of the same name: a
+	// per-task job-presence projection built from the
+	// TaskID-UNFILTERED jobs read so the Tasks-panel ">" marker
+	// doesn't disappear for unrelated tasks when scope.TaskID is
+	// active. See state.taskJobIdx for the rationale.
+	taskJobIdx       taskJobIndex
 	visibleWorkflows []datasource.Workflow
 	workflowSearch   string
 	werr          error
@@ -94,7 +101,14 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 		}
 	}
 
-	tasksFilter := datasource.DefaultTaskFilter()
+	// The dashboard surfaces ALL statuses by default — a non-nil but
+	// empty Statuses slice is the datasource's escape hatch for
+	// "no status WHERE clause" (nil would mean "OpenStatuses", i.e.
+	// what `autosk list` defaults to). The operator needs to see
+	// recently-done / cancelled work alongside the open queue,
+	// and the by-recency sort below keeps stale terminal rows from
+	// drowning out fresh work.
+	tasksFilter := datasource.TaskFilter{Statuses: []store.Status{}}
 	if sc.WorkflowID != "" {
 		tasksFilter.WorkflowID = sc.WorkflowID
 	}
@@ -112,16 +126,26 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 		dlog("refresh: ds.Tasks: %v", terr)
 	}
 
+	// Jobs fetch intentionally OMITS sc.TaskID from the server-side
+	// filter — we need the full set so the Tasks-panel marker column
+	// (taskJobIdx, below) can mark every task with at least one job,
+	// not only the one currently scoped. The TaskID filter is then
+	// re-applied client-side for the Jobs-panel slice. Workflow
+	// scope still rides the wire because it's symmetric with the
+	// Tasks panel — we don't want to mark tasks outside the scoped
+	// workflow either.
 	jobsFilter := datasource.JobFilter{}
-	if sc.TaskID != "" {
-		jobsFilter.TaskID = sc.TaskID
-	}
 	if sc.WorkflowID != "" {
 		jobsFilter.WorkflowID = sc.WorkflowID
 	}
-	jobs, jerr := gu.ds.Jobs(ctx, jobsFilter)
+	allJobs, jerr := gu.ds.Jobs(ctx, jobsFilter)
 	if jerr != nil {
 		dlog("refresh: ds.Jobs: %v", jerr)
+	}
+	taskJobIdx := taskJobIndexFromJobs(allJobs)
+	jobs := allJobs
+	if sc.TaskID != "" {
+		jobs = filterJobsByTaskID(allJobs, sc.TaskID)
 	}
 
 	// Workflows fetched above. Re-filter to drop synthetic ones from
@@ -179,6 +203,7 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 	return refreshResult{
 		tasks: tasks, taskSearch: tasksFilter.Search, terr: terr,
 		jobs: jobs, jobsSearch: ft.Jobs, jerr: jerr,
+		taskJobIdx:       taskJobIdx,
 		visibleWorkflows: visibleWorkflows, workflowSearch: ft.Workflows, werr: werr,
 		agents: agents, agentSearch: ft.Agents, aerr: aerr,
 		health: health,
@@ -194,18 +219,22 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 // allows touching view state). Held under st.mu.Lock.
 func (gu *Gui) applyRefreshLocked(r refreshResult) {
 	gu.st.withLock(func() {
-		if r.terr == nil {
+			if r.terr == nil {
 			// The datasource already applied tasksFilter.Search
 			// (post-facet free-text). Do NOT re-filter with the raw
 			// expression here: that would re-apply 'p:1' or 'wf:foo'
 			// as substring matches against id+title and empty the
 			// panel. Use the parsed Search remainder only.
-			gu.st.tasks = applyTaskSearch(r.tasks, r.taskSearch)
+			gu.st.tasks = sortTasksByRecency(applyTaskSearch(r.tasks, r.taskSearch))
 			gu.st.taskCursor = clampCursor(gu.st.taskCursor, len(gu.st.tasks))
 		}
 		if r.jerr == nil {
 			gu.st.jobs = applyJobSearch(r.jobs, r.jobsSearch)
 			gu.st.jobCursor = clampCursor(gu.st.jobCursor, len(gu.st.jobs))
+			// Index is taken from the TaskID-unfiltered allJobs slice
+			// upstream; it must move alongside gu.st.jobs even when
+			// the panel slice gets narrowed by a search string.
+			gu.st.taskJobIdx = r.taskJobIdx
 		}
 		if r.werr == nil {
 			gu.st.workflows = applyWfSearch(r.visibleWorkflows, r.workflowSearch)
@@ -322,6 +351,37 @@ func applyFacetFilter(f *datasource.TaskFilter, expr string, wfByName map[string
 // footgun. The allocation is cheap (the slices are small — dashboard
 // panels show ≲ 200 rows).
 
+// sortTasksByRecency orders tasks newest-first by their last activity
+// timestamp. UpdatedAt wins when set (the row was touched after
+// creation); otherwise CreatedAt is used as the fallback so brand-new
+// rows still sort sensibly against older edits. Stable sort keeps
+// rows with identical timestamps in the datasource's emit order —
+// the offline ListTasks already breaks ties by created_at ASC, which
+// becomes a deterministic tie-break here.
+func sortTasksByRecency(in []datasource.Task) []datasource.Task {
+	if len(in) < 2 {
+		return in
+	}
+	out := make([]datasource.Task, len(in))
+	copy(out, in)
+	sort.SliceStable(out, func(i, j int) bool {
+		return taskRecency(out[i]).After(taskRecency(out[j]))
+	})
+	return out
+}
+
+// taskRecency picks the freshest timestamp on a task: UpdatedAt
+// when present, falling back to CreatedAt. Pulled out as a named
+// helper so the sort comparator stays one line and the policy is
+// testable in isolation if we ever need to grow it (e.g. factor in
+// the latest comment / signal time).
+func taskRecency(t datasource.Task) time.Time {
+	if !t.UpdatedAt.IsZero() {
+		return t.UpdatedAt
+	}
+	return t.CreatedAt
+}
+
 func applyTaskSearch(in []datasource.Task, expr string) []datasource.Task {
 	needle := strings.ToLower(strings.TrimSpace(expr))
 	if needle == "" {
@@ -332,6 +392,24 @@ func applyTaskSearch(in []datasource.Task, expr string) []datasource.Task {
 		if strings.Contains(strings.ToLower(t.ID), needle) ||
 			strings.Contains(strings.ToLower(t.Title), needle) {
 			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// filterJobsByTaskID returns the subset of jobs whose TaskID matches
+// id. Used by fetchRefresh to apply scope.TaskID client-side after
+// the server-side fetch dropped that filter (so the Tasks-panel
+// marker index can see ALL tasks' jobs, not just the scoped one's).
+// Allocates a fresh slice so the caller's input isn't aliased.
+func filterJobsByTaskID(in []datasource.Job, id string) []datasource.Job {
+	if id == "" {
+		return in
+	}
+	out := make([]datasource.Job, 0, len(in))
+	for i := range in {
+		if in[i].TaskID == id {
+			out = append(out, in[i])
 		}
 	}
 	return out

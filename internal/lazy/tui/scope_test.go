@@ -34,6 +34,94 @@ func TestScope_TasksToJobs(t *testing.T) {
 	}
 }
 
+// TestAfterCursorMove_TasksDoesNotApplyScope pins the new policy:
+// j/k on the Tasks panel must NOT auto-commit the cursor row as
+// scope.TaskID — only the explicit Space (tasksScopeFromCursor) and
+// Enter (tasksEnter) paths do. Operators complained that cursor-
+// driven re-filtering on every j made the Jobs panel flicker, so
+// the policy was inverted: cursor is preview, Space/Enter commit.
+//
+// Stubs gu.dispatch so scheduleRefresh's worker hand-off doesn't
+// need a real gocui.Gui; the dispatcher's body is intentionally a
+// no-op (we're testing the scope invariant, not the refresh).
+func TestAfterCursorMove_TasksDoesNotApplyScope(t *testing.T) {
+	gu := &Gui{st: newState()}
+	gu.dispatch = func(func()) {} // swallow scheduleRefresh's hand-off
+	gu.st.tasks = []datasource.Task{
+		{ID: "as-a", Title: "alpha"},
+		{ID: "as-b", Title: "beta"},
+	}
+	// Setup: cursor lands on as-b but scope was previously committed
+	// to as-a (e.g. via an earlier Space press).
+	gu.st.taskCursor = 1
+	gu.st.focused = panelTasks
+	gu.st.scope.TaskID = "as-a"
+
+	gu.afterCursorMove(panelTasks)
+
+	if gu.st.scope.TaskID != "as-a" {
+		t.Fatalf("cursor-move silently changed scope: TaskID=%q want as-a", gu.st.scope.TaskID)
+	}
+}
+
+// TestAfterCursorMove_WorkflowsDoesApplyScope is the matching
+// positive case: Workflows still cross-link to Tasks on every
+// cursor move, because that's the lazygit-style behaviour
+// operators expect when navigating the workflow list.
+func TestAfterCursorMove_WorkflowsDoesApplyScope(t *testing.T) {
+	gu := &Gui{st: newState()}
+	gu.dispatch = func(func()) {}
+	gu.st.workflows = []datasource.Workflow{
+		{ID: "wf-1", Name: "feature-dev"},
+		{ID: "wf-2", Name: "ops"},
+	}
+	gu.st.workflowCursor = 1
+	gu.st.focused = panelWorkflows
+
+	gu.afterCursorMove(panelWorkflows)
+
+	if gu.st.scope.WorkflowID != "wf-2" || gu.st.scope.WorkflowName != "ops" {
+		t.Fatalf("Workflows cursor-move did not apply scope: %+v", gu.st.scope)
+	}
+}
+
+// TestTasksScopeFromCursor pins the Space-key commit path: read
+// cursor, copy id onto scope.TaskID, leave focus on Tasks (no jump
+// to Jobs). Empty cursor (cursor on the no-tasks placeholder) must
+// be a no-op rather than clearing the existing scope — that would
+// surprise an operator who scrolls into an empty filter result.
+func TestTasksScopeFromCursor(t *testing.T) {
+	gu := &Gui{st: newState()}
+	gu.dispatch = func(func()) {}
+	gu.st.tasks = []datasource.Task{
+		{ID: "as-a", Title: "alpha"},
+		{ID: "as-b", Title: "beta"},
+	}
+	gu.st.taskCursor = 1
+	gu.st.focused = panelTasks
+
+	if err := gu.tasksScopeFromCursor(nil, nil); err != nil {
+		t.Fatalf("tasksScopeFromCursor: %v", err)
+	}
+	if gu.st.scope.TaskID != "as-b" {
+		t.Errorf("after Space: TaskID=%q want as-b", gu.st.scope.TaskID)
+	}
+	if gu.st.focused != panelTasks {
+		t.Errorf("Space must NOT change focus: focused=%v want panelTasks", gu.st.focused)
+	}
+
+	// Empty cursor (e.g. filter produced no rows) must be a no-op:
+	// the existing scope chip stays put.
+	gu.st.tasks = nil
+	gu.st.taskCursor = 0
+	if err := gu.tasksScopeFromCursor(nil, nil); err != nil {
+		t.Fatalf("tasksScopeFromCursor (empty): %v", err)
+	}
+	if gu.st.scope.TaskID != "as-b" {
+		t.Errorf("Space on empty list cleared scope: TaskID=%q want as-b", gu.st.scope.TaskID)
+	}
+}
+
 // TestScope_WorkflowToTasks verifies the cross-link from Workflows
 // to Tasks records both WorkflowID and WorkflowName on the scope.
 func TestScope_WorkflowToTasks(t *testing.T) {

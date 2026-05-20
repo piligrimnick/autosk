@@ -197,6 +197,13 @@ type state struct {
 	// the cursor positions are stable across re-renders.
 	tasks         []datasource.Task
 	jobs          []datasource.Job
+	// taskJobIdx is the per-task job-presence index used by the
+	// Tasks-panel marker column. Always computed from the
+	// TaskID-UNFILTERED jobs read (workflow scope still applies)
+	// so the ">" marker survives when scope.TaskID filters the
+	// Jobs panel down to a single task — otherwise every other row
+	// would lose its marker the moment Space was pressed.
+	taskJobIdx    taskJobIndex
 	workflows     []datasource.Workflow
 	agents        []datasource.Agent
 	taskCursor    int

@@ -10,6 +10,7 @@ import (
 
 	"autosk/internal/daemon/runstore"
 	"autosk/internal/lazy/datasource"
+	"autosk/internal/store"
 )
 
 // openInspector switches viewState to Inspector for the given job.
@@ -578,8 +579,14 @@ func renderInspectorSignals(sigs []datasource.Signal, comments []datasource.Comm
 			// RFC3339 carries the date so a kickback loop straddling
 			// midnight (or a run from yesterday opened today) is
 			// readable. 15:04:05-only timestamps lose that context.
+			// Entity-coloured columns let the operator scan signals by
+			// hue: purple step → purple-or-status target, cyan agent
+			// in parens.
 			fmt.Fprintf(&b, "  %s  %s → %s  (%s)\n",
-				s.CreatedAt.Format(time.RFC3339), s.StepName, s.Target, s.AgentName)
+				s.CreatedAt.Format(time.RFC3339),
+				renderStepName(s.StepName),
+				renderSignalTarget(s.Target),
+				renderAgentName(s.AgentName))
 		}
 	}
 	b.WriteString("\n" + styleHeader.Render("comments") + "\n")
@@ -588,10 +595,28 @@ func renderInspectorSignals(sigs []datasource.Signal, comments []datasource.Comm
 	} else {
 		for _, c := range comments {
 			fmt.Fprintf(&b, "  %s  %s: %s\n",
-				c.CreatedAt.Format(time.RFC3339), c.AuthorName, truncate(c.Text, 80))
+				c.CreatedAt.Format(time.RFC3339),
+				renderAgentName(c.AuthorName),
+				truncate(c.Text, 80))
 		}
 	}
 	return b.String()
+}
+
+// renderSignalTarget colours a step_signals.target value: a target
+// that names a sibling step gets the StepName hue (purple); a
+// lifecycle terminal (done / cancelled / human_feedback) gets its
+// task-status hue so the kickback chain reads as "step → status"
+// with each half visually grounded in its panel counterpart.
+func renderSignalTarget(target string) string {
+	if target == "" {
+		return ""
+	}
+	switch store.Status(target) {
+	case store.StatusDone, store.StatusCancelled, store.StatusHumanFeedback:
+		return styleForTaskStatus(store.Status(target)).Render(target)
+	}
+	return renderStepName(target)
 }
 
 // ---- Live tab textarea --------------------------------------------------

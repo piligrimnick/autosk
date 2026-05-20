@@ -22,6 +22,7 @@ import (
 
 	"github.com/jesseduffield/gocui"
 
+	"autosk/internal/daemon/runstore"
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/lazy/theme"
 )
@@ -76,6 +77,14 @@ type Gui struct {
 	// scheduleRefresh from a user action so the next tick reverts to
 	// the base cadence promptly when the slowdown clears.
 	lastFetchNS atomic.Int64
+
+	// spinnerTick advances once per spinnerLoop iteration (~100ms)
+	// whenever the Tasks panel has at least one row with an active
+	// job. renderTasksPanel reads it mod len(spinnerFrames) to pick
+	// the braille frame for the spinner column. Plain uint64 (not a
+	// time.Time) so the renderer doesn't need to know the cadence —
+	// it just walks the frame list.
+	spinnerTick atomic.Uint64
 }
 
 // adaptiveDelay returns the next ticker delay given a base cadence and
@@ -178,6 +187,7 @@ func Run(ctx context.Context, opts Options) error {
 	// g.OnWorker / g.Update — no goroutine-per-panel.
 	gu.scheduleRefresh()
 	go gu.adaptiveTickLoop(opts.Refresh)
+	go gu.spinnerLoop()
 
 	// --job <id> deep-link.
 	if opts.InitialJob != "" {
@@ -246,6 +256,67 @@ func (gu *Gui) adaptiveTickLoop(base time.Duration) {
 	}
 }
 
+// spinnerInterval is the cadence at which the Tasks panel's per-row
+// spinner advances when at least one task has a live job. 100ms is
+// the sweet spot lazygit uses on its loading indicators: fast enough
+// that the animation reads as motion (not stutter), slow enough that
+// the layout pass it triggers doesn't measurably show up in `top`.
+const spinnerInterval = 100 * time.Millisecond
+
+// spinnerLoop ticks Gui.spinnerTick and triggers a no-op g.Update
+// (which causes gocui to re-run the layout function, which re-runs
+// renderViews, which repaints the Tasks panel with the next braille
+// frame) whenever the state has at least one task with a running
+// job.
+//
+// The loop is deliberately data-aware: when no rows have live jobs,
+// we sleep without advancing the counter and without poking the
+// MainLoop, so a quiet dashboard stays quiet. This is the same
+// pattern lazygit's loading-status helper uses to avoid burning
+// cycles on an idle screen.
+//
+// Runs in its own goroutine started by Run(); exits when the gui
+// context is cancelled or stopRefresh is closed (same shutdown
+// signal adaptiveTickLoop honours).
+func (gu *Gui) spinnerLoop() {
+	t := time.NewTicker(spinnerInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-gu.stopRefresh:
+			return
+		case <-gu.ctx.Done():
+			return
+		case <-t.C:
+			if !gu.hasActiveJob() {
+				continue
+			}
+			gu.spinnerTick.Add(1)
+			// No-op Update: re-runs layout, which re-runs
+			// renderViews and repaints the Tasks panel.
+			gu.g.Update(func(_ *gocui.Gui) error { return nil })
+		}
+	}
+}
+
+// hasActiveJob reports whether the jobs snapshot contains at least
+// one row whose status is "running" (the only state that a spinner
+// can usefully animate; queued jobs are waiting, not working).
+// Held under the model's RLock so it's safe to call from the
+// spinner goroutine without coordination.
+func (gu *Gui) hasActiveJob() bool {
+	var any bool
+	gu.st.withRLock(func() {
+		for i := range gu.st.jobs {
+			if runstore.RunStatus(gu.st.jobs[i].Status) == runstore.StatusRunning {
+				any = true
+				return
+			}
+		}
+	})
+	return any
+}
+
 // scheduleRefresh enqueues a refresh via the gocui worker. If one is
 // already in flight we set refreshPending; the running worker will
 // loop until pending is clear, so the LATEST scope change always
@@ -308,13 +379,27 @@ func (gu *Gui) quit(*gocui.Gui, *gocui.View) error {
 }
 
 // flashf appends to the command log and sets a transient toast.
+//
+// Nil-safe on gu.g: tests that exercise key handlers without a real
+// gocui.Gui (e.g. scope_test.go) would otherwise panic inside
+// g.Update. In that mode we apply the model mutation directly
+// under the model lock — there's no UI to repaint, but the log
+// buffer and flash state still record what happened so the test
+// can assert on them.
 func (gu *Gui) flashf(level, format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	gu.g.Update(func(_ *gocui.Gui) error {
+	apply := func() {
 		gu.st.withLock(func() {
 			gu.st.appendLog(msg)
 			gu.st.setFlash(msg, level)
 		})
+	}
+	if gu.g == nil {
+		apply()
+		return
+	}
+	gu.g.Update(func(_ *gocui.Gui) error {
+		apply()
 		return nil
 	})
 }
@@ -326,7 +411,16 @@ func (gu *Gui) renderViews() {
 	gu.st.withRLock(func() {
 		focused := gu.st.focused
 
-		tasksBody, tasksHdr := renderTasksPanel(gu.st.tasks, gu.st.taskCursor, gu.st.scope, gu.st.filter.Tasks)
+		// taskJobIdx is published by applyRefreshLocked from the
+		// TaskID-unfiltered jobs read; reading it here under the
+		// model's RLock is correct — the spinner ticker only triggers
+		// a layout pass, it doesn't refetch.
+		spinTick := gu.spinnerTick.Load()
+		tasksBody, tasksHdr := renderTasksPanel(
+			gu.st.tasks, gu.st.taskCursor,
+			gu.st.scope, gu.st.filter.Tasks,
+			gu.innerWidth(winTasks), spinTick, gu.st.taskJobIdx,
+		)
 		gu.writeView(winTasks, "[1] Tasks", tasksBody)
 		gu.applyRowHighlight(winTasks, tasksHdr, gu.st.taskCursor, len(gu.st.tasks), focused == panelTasks)
 
@@ -681,6 +775,70 @@ func headerLinesForLocked(p panelID, st *state) int {
 		}
 	}
 	return 0
+}
+
+// taskJobIndex is the per-row projection of the jobs snapshot that
+// the Tasks panel consults for its job-presence markers:
+//
+//   - Active is the set of tasks with at least one running job. It
+//     drives the animated braille spinner (blue, task-id hue).
+//   - Any is the set of tasks with at least one job in ANY status
+//     (queued / running / done / failed / cancelled). It drives the
+//     static ">" marker (magenta, job-id hue) shown when no spinner
+//     is animating.
+//
+// Active ⊆ Any by construction — the renderer picks the spinner
+// first and falls back to the marker only when the row isn't
+// actively running. Pre-sized maps from len(jobs) so the common
+// "one task per job" case avoids a rehash.
+//
+// The index is built at refresh time from the TaskID-UNFILTERED
+// jobs read (see fetchRefresh), NOT from the filtered slice that
+// drives the Jobs panel. Otherwise an active scope.TaskID would
+// shrink the Jobs query down to one task and every other row in
+// Tasks would lose its marker — a regression noticed the first time
+// an operator pressed Space on a row that had jobs.
+type taskJobIndex struct {
+	Active map[string]bool
+	Any    map[string]bool
+}
+
+// taskJobIndexFromJobs builds a taskJobIndex from a jobs slice.
+// Pure function so refresh.go can call it on the unfiltered fetch
+// result (no lock needed; the slice is owned by the calling
+// goroutine until applyRefreshLocked publishes it). Returns empty
+// (but non-nil) maps when there are no jobs so the renderer can do
+// a single map lookup per row without nil-checking.
+func taskJobIndexFromJobs(jobs []datasource.Job) taskJobIndex {
+	idx := taskJobIndex{
+		Active: make(map[string]bool, len(jobs)),
+		Any:    make(map[string]bool, len(jobs)),
+	}
+	for i := range jobs {
+		tid := jobs[i].TaskID
+		if tid == "" {
+			continue
+		}
+		idx.Any[tid] = true
+		if runstore.RunStatus(jobs[i].Status) == runstore.StatusRunning {
+			idx.Active[tid] = true
+		}
+	}
+	return idx
+}
+
+// innerWidth returns the named view's inner (frame-excluded) width
+// in cells, or 0 if the view hasn't been laid out yet. Used by panel
+// renderers that need to size their right-edge columns. Tolerates
+// the view not existing yet (first-frame race against the layout
+// pass) by returning 0 — callers fall back to a sensible default.
+func (gu *Gui) innerWidth(name string) int {
+	v, err := gu.g.View(name)
+	if err != nil || v == nil {
+		return 0
+	}
+	w, _ := v.InnerSize()
+	return w
 }
 
 // writeView writes content into a view, clearing first. Tolerates the
