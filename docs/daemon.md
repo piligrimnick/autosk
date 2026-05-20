@@ -118,19 +118,28 @@ the long haul, but it has one subtlety operators should know about:
 
 Doltlite implements GC via *write-to-sidecar + atomic rename*, so the
 on-disk inode of `.autosk/db` changes on every successful run. Any
-long-lived process (the daemon itself, a parallel CLI invocation, an
-`autosk lazy` dashboard) whose connection was open at gc time keeps
-its file descriptor pointing at the *orphan* inode — and would
-silently serve the pre-gc snapshot if nothing intervened.
+process whose connection was open at gc time keeps its file
+descriptor pointing at the *orphan* inode. Without intervention a
+reader would serve the pre-gc snapshot forever; a writer would route
+its INSERT/COMMIT into the orphan where it disappears the moment the
+conn closes — silent data loss.
 
-The defence lives in `internal/store/doltlite`: every store sets a
-short `SetConnMaxLifetime` (default 2s, see
-`doltlite.DefaultConnLifetime`), so Go's `database/sql` pool retires
-the underlying `*sqlite3.SQLiteConn` periodically. The next query
-re-opens the file at the current path and picks up the new inode
-automatically. `autosk lazy` ties this lifetime to `--refresh` and
-additionally exposes `Ctrl-R` as a manual hard-refresh; see
+The defence lives in `internal/store/doltlite/driver.go`: every
+doltlite store opens through an inode-validating wrapper around
+mattn/go-sqlite3. On every pool checkout the wrapper stats the path
+and compares against the inode the conn was opened against; on a
+mismatch it returns `driver.ErrBadConn` so `database/sql` retires the
+conn and opens a fresh one. `autosk lazy` additionally rotates conns
+on `--refresh` (belt-and-suspenders) and exposes `Ctrl-R` as a manual
+hard-refresh; see
 [`docs/lazy.md` § Cross-process freshness](lazy.md#cross-process-freshness).
+
+Residual race: a gc that completes *mid-statement* or *mid-transaction*
+on a writer's conn can still lose the in-flight bytes because the
+validator runs only between pool checkouts. Per-write probability is
+on the order of 10⁻⁷ with default settings; closing it would require
+a cross-process advisory lock (compactor exclusive, writers shared)
+that both the daemon and ad-hoc CLI invocations respect.
 
 ### The daemon ignores its own AUTOSK_DB
 

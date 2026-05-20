@@ -76,7 +76,12 @@ func (s *Store) Open(ctx context.Context, dbPath string) error {
 		q.Set("_busy_timeout", "30000")
 		dsn = dbPath + "?" + q.Encode()
 	}
-	db, err := sql.Open("sqlite3", dsn)
+	// Use the inode-validating driver (see driver.go) so the pool
+	// retires connections whose underlying fd points at an orphan
+	// inode — the recovery path against a cross-process dolt_gc()
+	// that atomic-renamed the file under us.
+	registerDriver()
+	db, err := sql.Open(driverName, dsn)
 	if err != nil {
 		return fmt.Errorf("doltlite open: %w", err)
 	}

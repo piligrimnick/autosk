@@ -46,16 +46,96 @@ func TestConnRotation_AfterCrossProcessGC(t *testing.T) {
 		t.Skip("subprocess + dolt_gc; not for -short")
 	}
 	t.Run("with_rotation", func(t *testing.T) { runCrossProcGCCase(t, 250*time.Millisecond) })
-	t.Run("without_rotation_demonstrates_bug", func(t *testing.T) {
-		// The whole point: assert the bug exists when rotation is
-		// disabled. Future doltlite changes that fix the file-replace
-		// dance upstream will trip this and we should drop the
-		// SetConnMaxLifetime defence.
-		got := observePostGC(t, 0 /*no rotation*/, 250*time.Millisecond)
-		if got.afterCount != got.baseline {
-			t.Fatalf("without rotation, reader was expected to be stuck on baseline=%d; saw=%d — has doltlite started syncing inode changes across processes?", got.baseline, got.afterCount)
-		}
+	t.Run("with_zero_lifetime_uses_inode_validator", func(t *testing.T) {
+		// SetConnMaxLifetime(0) disables time-based rotation. Recovery
+		// then relies entirely on the inode-validating driver hook
+		// (see driver.go) firing ErrBadConn from ResetSession.
+		runCrossProcGCCase(t, 0)
 	})
+}
+
+// TestPostGCWrite_PersistsAcrossInodeChange pins the write-loss
+// regression: after a cross-process `SELECT dolt_gc()` swaps the file
+// inode under us, a write issued through the still-open conn must NOT
+// silently disappear into the orphan. The driver-level
+// SessionResetter/Validator hook retires the orphan conn on the next
+// pool checkout, so the INSERT runs on a fresh conn against the live
+// file.
+//
+// We confirm persistence with a fresh, third-process reader so the
+// assertion can't be fooled by a stale view inside the writer's own
+// session.
+func TestPostGCWrite_PersistsAcrossInodeChange(t *testing.T) {
+	if testing.Short() {
+		t.Skip("subprocess + dolt_gc; not for -short")
+	}
+	ctx := context.Background()
+	tmp := t.TempDir()
+	dbp := filepath.Join(tmp, "db")
+
+	writer := doltlite.New()
+	if err := writer.Open(ctx, dbp); err != nil {
+		t.Fatalf("writer Open: %v", err)
+	}
+	t.Cleanup(func() { _ = writer.Close() })
+	// Disable time-based rotation so the test exercises the inode
+	// validator in isolation. If it passes here, it passes a fortiori
+	// with rotation enabled.
+	writer.SetConnMaxLifetime(0)
+	if err := writer.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	if _, err := writer.DB().ExecContext(ctx, `CREATE TABLE postgc(id INTEGER PRIMARY KEY, v TEXT)`); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	if _, err := writer.DB().ExecContext(ctx, `INSERT INTO postgc(v) VALUES('pre-gc')`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := writer.DoltCommit(ctx, "pre-gc"); err != nil {
+		t.Fatalf("pre-gc commit: %v", err)
+	}
+	inoBefore := mustInode(t, dbp)
+
+	// Another process compacts; the inode swaps.
+	runHelper(t, dbp, "gc")
+	inoAfter := mustInode(t, dbp)
+	if inoBefore == inoAfter {
+		t.Skipf("gc did not change inode on this filesystem (before=%d after=%d); skip—the regression is fs-specific", inoBefore, inoAfter)
+	}
+
+	// The writer is still alive and its conn was opened pre-gc. Without
+	// the inode validator the next INSERT would route into the orphan
+	// inode and disappear when the conn closes.
+	if _, err := writer.DB().ExecContext(ctx, `INSERT INTO postgc(v) VALUES('post-gc')`); err != nil {
+		t.Fatalf("post-gc INSERT: %v", err)
+	}
+	if err := writer.DoltCommit(ctx, "post-gc"); err != nil {
+		t.Fatalf("post-gc commit: %v", err)
+	}
+
+	// Cross-check from a fresh process so a stale-but-self-consistent
+	// view inside the writer can't fool the assertion.
+	runHelper(t, dbp, "countpostgc")
+}
+
+// observeWriteAfterGCInProcess returns the row count visible to a
+// brand-new in-process reader after the writer's post-gc write. Used
+// by both the helper command and the main test path so the assertion
+// logic is symmetric.
+func countPostGCRows(t *testing.T, dbp string) int {
+	t.Helper()
+	ctx := context.Background()
+	fresh := doltlite.New()
+	if err := fresh.Open(ctx, dbp); err != nil {
+		t.Fatalf("fresh Open: %v", err)
+	}
+	defer fresh.Close()
+	var n int
+	if err := fresh.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM postgc`).Scan(&n); err != nil {
+		t.Fatalf("fresh COUNT: %v", err)
+	}
+	return n
 }
 
 func runCrossProcGCCase(t *testing.T, lifetime time.Duration) {
@@ -185,6 +265,12 @@ func TestConnRotationHelper(t *testing.T) {
 	defer func() { _ = s.Close() }()
 
 	switch op {
+	case "countpostgc":
+		n := countPostGCRows(t, dbp)
+		if n != 2 {
+			t.Fatalf("fresh reader saw %d rows; want 2 (pre-gc + post-gc). The post-gc write was silently lost into the orphan inode.", n)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"op": "countpostgc", "rows": n})
 	case "gc":
 		res, err := s.Compact(ctx)
 		if err != nil {

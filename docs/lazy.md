@@ -299,25 +299,35 @@ waiting for the tick.
 
 ### Cross-process freshness
 
-`.autosk/db` is shared between every `autosk` process (the CLI, the
-daemon, any other lazy instance). Doltlite is single-writer at the
-file-lock level, but a long-lived reader still has to watch out for
-one case: `SELECT dolt_gc()` (run by the daemon's compactor every
-~30 min, or via `autosk gc`) **atomically replaces** the database
-file via write-to-sidecar + rename. Any process holding the file
-open at that moment ends up with its fd on the orphan inode and
-would silently serve the pre-gc snapshot forever.
+`.autosk/db` is shared between every `autosk` process (CLI, daemon,
+lazy). Doltlite is single-writer at the file-lock level, but there's
+one gotcha for long-lived processes: `SELECT dolt_gc()` (the daemon's
+compactor every ~30m, or `autosk gc` on demand) rewrites the database
+via write-to-sidecar + atomic rename, so the on-disk inode changes.
+A process that opened the file before gc keeps its fd on the orphan
+inode and would serve the pre-gc snapshot forever — worse, an unwary
+writer on that conn would silently route its INSERTs into the orphan
+where they vanish when the conn closes.
 
-Lazy defends against this by tying doltlite's `SetConnMaxLifetime`
-to `--refresh` (default 2s). Every tick Go's `database/sql` pool
-retires the underlying `*sqlite3.SQLiteConn`; the next query re-opens
-the file at the current path and picks up the new inode. So normal
-refreshes already "see" the post-gc state within one tick.
+Defence lives in the doltlite driver wrapper
+(`internal/store/doltlite/driver.go`): every pool checkout validates
+the path's current inode against the inode the conn was opened
+against. When they disagree the conn is reported as bad, Go retires
+it, and the next acquisition opens a fresh one against the live
+file. Belt-and-suspenders: lazy also ties `SetConnMaxLifetime` to
+`--refresh` so even an unchanged conn rotates every few seconds.
 
-`Ctrl-R` is the escape hatch: it forces the pool to drop the conn
-immediately (one quick `Ping` on a fresh conn), then triggers a
-refresh. Useful when you suspect the dashboard is stuck on a stale
-fd and don't want to wait for the next rotation.
+`Ctrl-R` is the explicit escape hatch: it drops the pooled conn
+immediately (one fresh `Ping`) and triggers a refresh. Useful when
+you want "give me whatever is on disk RIGHT NOW" instead of waiting
+for the next acquisition.
+
+Known residual race: a gc that finishes mid-statement (or mid-tx)
+can still lose the in-flight write because the validator only fires
+between statements, not inside one. With ~ms statements and a ~30m
+gc cadence the per-write probability is ~10⁻⁷. Closing this would
+require a cross-process advisory lock between the compactor and
+writers; tracked as future work.
 
 ---
 
