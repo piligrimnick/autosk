@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"autosk/internal/daemon/api"
+	"autosk/internal/daemon/compactor"
 	"autosk/internal/daemon/poller"
 	"autosk/internal/daemon/uds"
 )
@@ -67,6 +68,7 @@ func newDaemonServeCmd() *cobra.Command {
 		grace          time.Duration
 		idleTimeout    time.Duration
 		pollInterval   time.Duration
+		gcInterval     time.Duration
 		piBin          string
 		sessionDirRoot string
 	)
@@ -104,6 +106,7 @@ func newDaemonServeCmd() *cobra.Command {
 				Grace:          grace,
 				IdleTimeout:    idleTimeout,
 				PollInterval:   pollInterval,
+				GCInterval:     gcInterval,
 			})
 			mgr, sched, srv := core.Mgr, core.Sched, core.Srv
 
@@ -124,8 +127,15 @@ func newDaemonServeCmd() *cobra.Command {
 			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 			fmt.Fprintf(os.Stderr, "autosk daemon: listening on %s\n", sockPath)
-			fmt.Fprintf(os.Stderr, "autosk daemon: workers=%d poll=%s grace=%s\n",
-				workers, pollInterval, grace)
+			gcLabel := gcInterval.String()
+			switch {
+			case gcInterval == 0:
+				gcLabel = compactor.DefaultInterval.String() + " (default)"
+			case gcInterval < 0:
+				gcLabel = "disabled"
+			}
+			fmt.Fprintf(os.Stderr, "autosk daemon: workers=%d poll=%s gc=%s grace=%s\n",
+				workers, pollInterval, gcLabel, grace)
 
 			serveErr := make(chan error, 1)
 			go func() {
@@ -179,6 +189,7 @@ func newDaemonServeCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&grace, "grace", 10*time.Second, "SIGTERM grace before SIGKILL")
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 30*time.Minute, "per-turn idle timeout")
 	cmd.Flags().DurationVar(&pollInterval, "poll-interval", poller.DefaultInterval, "how often each project scans in_workflow tasks")
+	cmd.Flags().DurationVar(&gcInterval, "gc-interval", 0, "how often each project runs doltlite chunk-store GC (0=default 30m, <0=disabled)")
 	cmd.Flags().StringVar(&piBin, "pi-bin", "", "pi binary (default: 'pi' on PATH)")
 	cmd.Flags().StringVar(&sessionDirRoot, "session-dir-root", "", "literal parent dir for per-job session subdirs, shared across projects (default: <projectRoot>/.autosk/sessions)")
 	return cmd

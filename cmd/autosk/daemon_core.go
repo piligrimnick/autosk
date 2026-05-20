@@ -25,6 +25,10 @@ type daemonCoreConfig struct {
 	Grace          time.Duration
 	IdleTimeout    time.Duration
 	PollInterval   time.Duration
+	// GCInterval is plumbed through to projectmgr.Deps. 0 keeps the
+	// compactor default (30m); <0 disables the scheduled loop. See
+	// internal/daemon/compactor for the rationale.
+	GCInterval time.Duration
 }
 
 // daemonCore is the in-process daemon: one scheduler + one project
@@ -66,6 +70,7 @@ func buildDaemonCore(cfg daemonCoreConfig) daemonCore {
 		Sched:        sched,
 		Packages:     cfg.Reg,
 		PollInterval: cfg.PollInterval,
+		GCInterval:   cfg.GCInterval,
 		Runners:      runners,
 		Attachments:  attachments,
 		ExecCfg: executor.Config{

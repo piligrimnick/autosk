@@ -64,7 +64,16 @@ func (gu *Gui) refreshAll() {
 // the datasource and returns a snapshot. Safe to call from tests
 // (no gocui dependency). The caller is expected to hand the result
 // to applyRefreshLocked, typically inside a g.Update closure.
+//
+// The wall-clock duration of the read burst is recorded in
+// gu.lastFetchNS at the end. adaptiveTickLoop reads that field to
+// throttle itself when the datasource gets slow — see the comment
+// on adaptiveTickLoop for the failure mode this defends against.
 func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
+	fetchStart := time.Now()
+	defer func() {
+		gu.lastFetchNS.Store(int64(time.Since(fetchStart)))
+	}()
 	// Snapshot scope + filters so we don't hold the lock across IO.
 	var sc scope
 	var ft filterState

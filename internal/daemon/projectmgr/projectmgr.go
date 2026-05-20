@@ -22,6 +22,7 @@ import (
 	"autosk/internal/agent"
 	"autosk/internal/agent/pkgregistry"
 	"autosk/internal/comments"
+	"autosk/internal/daemon/compactor"
 	"autosk/internal/daemon/executor"
 	"autosk/internal/daemon/pirunners"
 	"autosk/internal/daemon/poller"
@@ -61,6 +62,11 @@ type Deps struct {
 	Packages     *pkgregistry.Registry
 	ExecCfg      executor.Config // PIBin, Grace, IdleTimeout, SessionDirRoot (no ProjectRoot)
 	PollInterval time.Duration
+	// GCInterval tunes the per-project doltlite chunk-store
+	// compactor. 0 → compactor.DefaultInterval (30m); <0 → disabled
+	// (the operator opts out via `autosk daemon serve --gc-interval=-1`
+	// and runs `autosk gc` on demand instead).
+	GCInterval   time.Duration
 	Logger       *slog.Logger
 	Runners      *pirunners.Registry
 	Attachments  *pirunners.Attachments
@@ -80,13 +86,15 @@ type Project struct {
 	Signals   *step.Store
 	Executor  *executor.Executor
 	Poller    *poller.Poller
+	Compactor *compactor.Compactor
 
 	OpenedAt time.Time
 
-	mu            sync.Mutex
-	closed        bool
-	pollerStopped bool
-	closeFns      []func() error
+	mu                sync.Mutex
+	closed            bool
+	pollerStopped     bool
+	compactorStopped  bool
+	closeFns          []func() error
 }
 
 // Manager is the per-daemon project cache.
@@ -206,6 +214,17 @@ func (m *Manager) Resolve(ctx context.Context, cwd, dbOverride string) (*Project
 				"project", proj.Root, "err", err)
 		}
 	}
+	if proj.Compactor != nil {
+		if err := proj.Compactor.Start(ctx); err != nil && !errors.Is(err, compactor.ErrDisabled) {
+			if m.deps.Logger != nil {
+				m.deps.Logger.Warn("projectmgr: compactor start failed",
+					"project", proj.Root, "err", err)
+			}
+		} else if errors.Is(err, compactor.ErrDisabled) && m.deps.Logger != nil {
+			m.deps.Logger.Info("projectmgr: compactor disabled (--gc-interval<0)",
+				"project", proj.Root)
+		}
+	}
 	if m.deps.Logger != nil {
 		m.deps.Logger.Info("projectmgr: opened project",
 			"project", proj.Root, "db", proj.DBPath)
@@ -274,24 +293,36 @@ func (m *Manager) snapshot() []*projectEntry {
 	return out
 }
 
-// StopPollers stops every per-project poller. Run this *before*
-// scheduler.Stop so no new daemon_runs rows are inserted while the
-// scheduler is draining; otherwise an enqueued job could attempt to
-// MarkRunning/MarkCancelled against a project DB that's already closed.
+// StopPollers stops every per-project poller (and the parallel
+// chunk-store compactor). Run this *before* scheduler.Stop so no new
+// daemon_runs rows are inserted while the scheduler is draining;
+// otherwise an enqueued job could attempt to MarkRunning /
+// MarkCancelled against a project DB that's already closed.
 //
 // Per docs/plans/20260518-Daemon-UDS-Plan.md §6.2.
 func (m *Manager) StopPollers(graceCtx context.Context) error {
 	entries := m.stoppingSnapshot()
 	var errs []error
 	for _, e := range entries {
-		if e.proj == nil || e.proj.Poller == nil {
+		if e.proj == nil {
 			continue
 		}
-		if err := e.proj.stopPoller(graceCtx); err != nil {
-			errs = append(errs, fmt.Errorf("poller stop %s: %w", e.proj.Root, err))
-			if m.deps.Logger != nil {
-				m.deps.Logger.Warn("projectmgr: poller stop",
-					"project", e.proj.Root, "err", err)
+		if e.proj.Poller != nil {
+			if err := e.proj.stopPoller(graceCtx); err != nil {
+				errs = append(errs, fmt.Errorf("poller stop %s: %w", e.proj.Root, err))
+				if m.deps.Logger != nil {
+					m.deps.Logger.Warn("projectmgr: poller stop",
+						"project", e.proj.Root, "err", err)
+				}
+			}
+		}
+		if e.proj.Compactor != nil {
+			if err := e.proj.stopCompactor(graceCtx); err != nil {
+				errs = append(errs, fmt.Errorf("compactor stop %s: %w", e.proj.Root, err))
+				if m.deps.Logger != nil {
+					m.deps.Logger.Warn("projectmgr: compactor stop",
+						"project", e.proj.Root, "err", err)
+				}
 			}
 		}
 	}
@@ -433,6 +464,12 @@ func (m *Manager) openProject(ctx context.Context, key Key, dbPath string) (*Pro
 		Logger:     m.deps.Logger,
 	})
 
+	co := compactor.New(tasks, compactor.Config{
+		Interval:   m.deps.GCInterval,
+		ProjectKey: root,
+		Logger:     m.deps.Logger,
+	})
+
 	proj := &Project{
 		Key:       key,
 		Root:      root,
@@ -445,6 +482,7 @@ func (m *Manager) openProject(ctx context.Context, key Key, dbPath string) (*Pro
 		Signals:   sigs,
 		Executor:  ex,
 		Poller:    pl,
+		Compactor: co,
 		OpenedAt:  time.Now().UTC(),
 		closeFns:  closeFns,
 	}
@@ -467,6 +505,29 @@ func (p *Project) stopPoller(graceCtx context.Context) error {
 	if err := p.Poller.Stop(graceCtx); err != nil {
 		// Already-stopped is fine for shutdown idempotency.
 		if errors.Is(err, poller.ErrNotStarted) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// stopCompactor stops the per-project chunk-store compactor.
+// Idempotent, mirrors stopPoller. Disabled compactors (cfg.Interval<0)
+// never started, so ErrNotStarted is swallowed here.
+func (p *Project) stopCompactor(graceCtx context.Context) error {
+	p.mu.Lock()
+	if p.compactorStopped {
+		p.mu.Unlock()
+		return nil
+	}
+	p.compactorStopped = true
+	p.mu.Unlock()
+	if p.Compactor == nil {
+		return nil
+	}
+	if err := p.Compactor.Stop(graceCtx); err != nil {
+		if errors.Is(err, compactor.ErrNotStarted) {
 			return nil
 		}
 		return err
@@ -502,12 +563,15 @@ func (p *Project) closeDB(_ context.Context) error {
 	return firstErr
 }
 
-// close is the legacy combined operation: stop poller then close DB.
-// Retained for callers that don't separate the two phases (tests,
-// Manager.CloseAll).
+// close is the legacy combined operation: stop poller (+ compactor)
+// then close DB. Retained for callers that don't separate the two
+// phases (tests, Manager.CloseAll).
 func (p *Project) close(graceCtx context.Context) error {
 	var firstErr error
 	if err := p.stopPoller(graceCtx); err != nil {
+		firstErr = err
+	}
+	if err := p.stopCompactor(graceCtx); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	if err := p.closeDB(graceCtx); err != nil && firstErr == nil {

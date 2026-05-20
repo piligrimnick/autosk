@@ -65,7 +65,55 @@ type Gui struct {
 	// goroutine spawn so scheduleRefresh's CAS dance can be exercised
 	// without a real gocui.Gui.
 	dispatch func(func())
+
+	// lastFetchNS is the wall-clock duration of the most recent
+	// fetchRefresh, in nanoseconds. The tick loop reads it to decide
+	// how long to wait before the next refresh — if the datasource is
+	// slow (e.g. doltlite's chunk-store WAL has grown and every query
+	// pays a hundreds-of-milliseconds replay cost) we back off so the
+	// dashboard never pegs a core trying to keep up. Reset to 0 on
+	// scheduleRefresh from a user action so the next tick reverts to
+	// the base cadence promptly when the slowdown clears.
+	lastFetchNS atomic.Int64
 }
+
+// adaptiveDelay returns the next ticker delay given a base cadence and
+// the most recent fetchRefresh duration.
+//
+// The rule is intentionally simple: keep the base cadence when reads
+// finish in well under half the budget, double it when reads exceed
+// half the budget, and cap at maxAdaptiveDelay so a wedged datasource
+// doesn't stall the dashboard for minutes. The thresholds are picked
+// so a healthy DB stays at the base 2s while a doltlite store mid-WAL
+// stretch (each refresh ~500ms-3s) settles at 4-30s instead of
+// firing back-to-back ticks and saturating a core.
+func adaptiveDelay(base, elapsed time.Duration) time.Duration {
+	if base <= 0 {
+		base = 2 * time.Second
+	}
+	if elapsed <= base/2 {
+		return base
+	}
+	// Back off to max(base*2, elapsed*2) so we always give the
+	// datasource at least as much idle time as it just spent working
+	// — otherwise a 4s refresh on a 2s base would still queue
+	// back-to-back.
+	delay := base * 2
+	if elapsed*2 > delay {
+		delay = elapsed * 2
+	}
+	if delay > maxAdaptiveDelay {
+		delay = maxAdaptiveDelay
+	}
+	return delay
+}
+
+// maxAdaptiveDelay caps the adaptive ticker. 30s is long enough that a
+// truly-wedged datasource (e.g. doltlite re-replaying a multi-MB WAL
+// on every query) doesn't burn cycles, short enough that the operator
+// still sees the dashboard reanimate within human-impatience range
+// once compaction kicks in.
+const maxAdaptiveDelay = 30 * time.Second
 
 // Run constructs the gui, opens the alt-screen, and blocks on the
 // main loop. Returns nil on a clean quit (ErrQuit), the underlying
@@ -109,10 +157,10 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("bind keys: %w", err)
 	}
 
-	// Kick an initial refresh + 2s ticker. Both go via g.OnWorker /
-	// g.Update — no goroutine-per-panel.
+	// Kick an initial refresh + adaptive ticker. Both go via
+	// g.OnWorker / g.Update — no goroutine-per-panel.
 	gu.scheduleRefresh()
-	go gu.tickLoop(opts.Refresh)
+	go gu.adaptiveTickLoop(opts.Refresh)
 
 	// --job <id> deep-link.
 	if opts.InitialJob != "" {
@@ -144,18 +192,38 @@ func Run(ctx context.Context, opts Options) error {
 	return nil
 }
 
-// tickLoop ticks the refresh every d. Runs in a goroutine; nothing
-// touches the gocui screen here — Refresh is g.Update-driven.
-func (gu *Gui) tickLoop(d time.Duration) {
-	t := time.NewTicker(d)
-	defer t.Stop()
+// adaptiveTickLoop schedules refreshes on a self-adjusting cadence.
+//
+// The classic time.NewTicker(base) loop has a nasty failure mode
+// against doltlite: when the chunk-store WAL grows long enough that
+// each fetchRefresh takes longer than the 2s tick, the worker queue
+// stays permanently saturated. Each refresh re-reads ~6 panels, each
+// panel cursor-open triggers btreeRefreshFromDisk → csReplayWal, and
+// the whole thing pegs a core indefinitely (see the post-mortem in
+// docs/daemon.md "100%-CPU lazy").
+//
+// The adaptive loop sleeps for max(base, elapsed*2) up to a 30s cap,
+// so a slow datasource self-throttles instead of melting the CPU.
+// Once compaction (autosk gc / the daemon's per-project compactor)
+// shrinks the chunk-store again, the next refresh comes back fast,
+// lastFetchNS drops, and the loop snaps back to the base cadence on
+// the very next iteration.
+//
+// Runs in a goroutine; nothing touches the gocui screen here —
+// Refresh is g.Update-driven.
+func (gu *Gui) adaptiveTickLoop(base time.Duration) {
+	if base <= 0 {
+		base = 2 * time.Second
+	}
 	for {
+		elapsed := time.Duration(gu.lastFetchNS.Load())
+		delay := adaptiveDelay(base, elapsed)
 		select {
 		case <-gu.stopRefresh:
 			return
 		case <-gu.ctx.Done():
 			return
-		case <-t.C:
+		case <-time.After(delay):
 			gu.scheduleRefresh()
 		}
 	}
