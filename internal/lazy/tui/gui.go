@@ -323,19 +323,19 @@ func (gu *Gui) renderViews() {
 
 		tasksBody, tasksHdr := renderTasksPanel(gu.st.tasks, gu.st.taskCursor, gu.st.scope, gu.st.filter.Tasks)
 		gu.writeView(winTasks, "[1] Tasks", tasksBody)
-		gu.applyRowHighlight(winTasks, tasksHdr+gu.st.taskCursor, len(gu.st.tasks), focused == panelTasks)
+		gu.applyRowHighlight(winTasks, tasksHdr, gu.st.taskCursor, len(gu.st.tasks), focused == panelTasks)
 
 		jobsBody, jobsHdr := renderJobsPanel(gu.st.jobs, gu.st.jobCursor, gu.st.scope, gu.st.filter.Jobs)
 		gu.writeView(winJobs, "[2] Jobs", jobsBody)
-		gu.applyRowHighlight(winJobs, jobsHdr+gu.st.jobCursor, len(gu.st.jobs), focused == panelJobs)
+		gu.applyRowHighlight(winJobs, jobsHdr, gu.st.jobCursor, len(gu.st.jobs), focused == panelJobs)
 
 		wfBody, wfHdr := renderWorkflowsPanel(gu.st.workflows, gu.st.workflowCursor, gu.st.filter.Workflows)
 		gu.writeView(winWorkflows, "[3] Workflows", wfBody)
-		gu.applyRowHighlight(winWorkflows, wfHdr+gu.st.workflowCursor, len(gu.st.workflows), focused == panelWorkflows)
+		gu.applyRowHighlight(winWorkflows, wfHdr, gu.st.workflowCursor, len(gu.st.workflows), focused == panelWorkflows)
 
 		agBody, agHdr := renderAgentsPanel(gu.st.agents, gu.st.agentCursor, gu.st.filter.Agents)
 		gu.writeView(winAgents, "[4] Agents", agBody)
-		gu.applyRowHighlight(winAgents, agHdr+gu.st.agentCursor, len(gu.st.agents), focused == panelAgents)
+		gu.applyRowHighlight(winAgents, agHdr, gu.st.agentCursor, len(gu.st.agents), focused == panelAgents)
 
 		gu.writeView(winDetail, "[0] Detail", renderDetail(gu.st))
 		gu.writeView(winLog, "log", renderCommandLog(gu.st.logBuf, gu.st.flash))
@@ -359,10 +359,22 @@ func (gu *Gui) renderViews() {
 // cursor row is invisible — matching the lazygit / file-listed-view
 // affordance: "only the active list shows where you are".
 //
+// cyAbs is the cursor's absolute y-index in the view buffer
+// (headerLines + modelCursor). The viewport origin (v.oy) is updated
+// here to keep cyAbs visible: keystroke-driven moves are handled
+// proactively in scrollOffAdjust (lazygit's scroll-off-margin
+// algorithm with the cursor's expected motion direction), but THIS
+// function is the catch-all that snaps the cursor back into view
+// when it leaves the viewport non-contiguously — a filter / scope
+// change that shrinks the list, a refresh that lands the cursor on
+// a different model index, etc. Without this snap a 100-item list
+// scrolled to oy=80 that suddenly becomes 5 items would render
+// nothing in the visible window.
+//
 // rowCount lets us suppress the highlight on the "(no tasks)" / etc.
 // placeholder line; without that check the cursor would visibly land
 // on the placeholder and look like the empty state is selectable.
-func (gu *Gui) applyRowHighlight(name string, cy, rowCount int, focused bool) {
+func (gu *Gui) applyRowHighlight(name string, headerLines, modelCursor, rowCount int, focused bool) {
 	v, err := gu.g.View(name)
 	if err != nil || v == nil {
 		return
@@ -371,6 +383,31 @@ func (gu *Gui) applyRowHighlight(name string, cy, rowCount int, focused bool) {
 		v.Highlight = false
 		return
 	}
+	ox, oy := v.Origin()
+	vpH := viewportInnerHeight(v)
+	cyAbs := headerLines + modelCursor
+	totalLines := headerLines + rowCount
+
+	// If the cursor landed outside the current viewport non-contiguously,
+	// snap origin so it's roughly centred. Keystroke moves never enter
+	// this branch (scrollOffAdjust handled them); this is the fallback
+	// for filter / scope / refresh-induced jumps.
+	if cyAbs < oy || cyAbs >= oy+vpH {
+		oy = cyAbs - vpH/2
+	}
+	// Clamp so we don't expose blank rows past the end of the buffer.
+	maxOY := totalLines - vpH
+	if maxOY < 0 {
+		maxOY = 0
+	}
+	if oy > maxOY {
+		oy = maxOY
+	}
+	if oy < 0 {
+		oy = 0
+	}
+	v.SetOrigin(ox, oy)
+
 	v.Highlight = true
 	v.SelBgColor = theme.Active().Selection.Gocui()
 	// SelFgColor=Default so the per-column foregrounds we set in
@@ -378,7 +415,142 @@ func (gu *Gui) applyRowHighlight(name string, cy, rowCount int, focused bool) {
 	// the cell's bg to SelBgColor and bolds the fg; it leaves the fg
 	// hue alone for RGB Attributes).
 	v.SelFgColor = gocui.ColorDefault
-	v.SetCursor(0, cy)
+	// v.cy is interpreted by gocui as VISIBLE y (relative to v.oy), so
+	// the absolute index has to be re-relativised here — SetCursor
+	// writes v.cy verbatim and the highlight logic in gocui's
+	// setCharacter compares it against the loop's visible y.
+	v.SetCursor(0, cyAbs-oy)
+}
+
+// viewportInnerHeight returns the number of usable list rows in v
+// (its outer height minus the 2-cell frame, clamped to >=1 so a
+// degenerate height doesn't make divisions blow up).
+func viewportInnerHeight(v *gocui.View) int {
+	_, h := v.Size()
+	vpH := h - 2
+	if vpH < 1 {
+		vpH = 1
+	}
+	return vpH
+}
+
+// scrollOffMargin is the look-ahead distance (in rows) the cursor
+// keeps from the top/bottom of the viewport during keystroke moves.
+// Matches lazygit's `gui.scrollOffMargin` default — the user
+// reported expectation is two extra rows of context past the cursor
+// in the direction of motion.
+const scrollOffMargin = 2
+
+// scrollOffAdjust scrolls the named view's origin so the cursor (whose
+// absolute y went from cyAbsBefore to cyAbsAfter via one keystroke)
+// stays inside the viewport with `scrollOffMargin` rows of look-ahead
+// in the direction of motion. Mirrors lazygit's
+// pkg/gui/controllers/scroll_off_margin.go formulas verbatim; the
+// margin is capped to half the viewport so on a 3-row panel the
+// cursor still moves at all.
+func (gu *Gui) scrollOffAdjust(name string, cyAbsBefore, cyAbsAfter int) {
+	v, err := gu.g.View(name)
+	if err != nil || v == nil {
+		return
+	}
+	ox, oy := v.Origin()
+	vpH := viewportInnerHeight(v)
+	delta := scrollOffDelta(cyAbsBefore, cyAbsAfter, oy, vpH, scrollOffMargin)
+	if delta == 0 {
+		return
+	}
+	newOY := oy + delta
+	if newOY < 0 {
+		newOY = 0
+	}
+	v.SetOrigin(ox, newOY)
+}
+
+// scrollOffDelta is the pure-Go core of scrollOffAdjust — returns the
+// number of lines to add to the viewport origin (signed) so the
+// cursor sits at least `margin` rows from the leading edge after the
+// move. Extracted so the scroll-off math is testable without a real
+// gocui.View.
+//
+// The two branches mirror lazygit's calculateLinesToScroll{Up,Down}:
+//
+//   - The (vpH+1)/2 and (vpH-1)/2 caps ensure that on even-height
+//     viewports the top margin is one row taller than the bottom,
+//     matching lazygit's centring bias on j-spam.
+//   - The `before` visibility guard avoids scrolling when the user
+//     dragged the cursor out-of-view with the mouse (or via a
+//     non-keystroke event) — there's no "before" position inside
+//     the viewport to anchor the scroll to.
+func scrollOffDelta(before, after, oy, vpH, margin int) int {
+	switch {
+	case after < before: // moving up
+		capped := margin
+		if c := (vpH + 1) / 2; capped > c {
+			capped = c
+		}
+		if before >= oy && before < oy+vpH {
+			marginEnd := oy + capped
+			if after < marginEnd {
+				return after - marginEnd // negative
+			}
+		}
+	case after > before: // moving down
+		capped := margin
+		if c := (vpH - 1) / 2; capped > c {
+			capped = c
+		}
+		if before >= oy && before < oy+vpH {
+			marginStart := oy + vpH - capped - 1
+			if after > marginStart {
+				return after - marginStart // positive
+			}
+		}
+	}
+	return 0
+}
+
+// headerLinesForLocked returns the number of leading meta lines
+// (scope notes + filter pill) that renderXxxPanel will emit before
+// the data rows for panel p, given the current state. Must be called
+// with the model lock held — it reads gu.st.scope / gu.st.filter.
+//
+// Kept in lock-step with the matching `header++` paths in
+// renderTasksPanel / renderJobsPanel / renderWorkflowsPanel /
+// renderAgentsPanel. If a render path adds a new meta line, mirror
+// it here or the scroll-off math will be off by that many rows.
+func headerLinesForLocked(p panelID, st *state) int {
+	switch p {
+	case panelTasks:
+		h := 0
+		if st.scope.WorkflowName != "" {
+			h++
+		}
+		if st.scope.Agent != "" {
+			h++
+		}
+		if st.filter.Tasks != "" {
+			h++
+		}
+		return h
+	case panelJobs:
+		h := 0
+		if st.scope.TaskID != "" {
+			h++
+		}
+		if st.filter.Jobs != "" {
+			h++
+		}
+		return h
+	case panelWorkflows:
+		if st.filter.Workflows != "" {
+			return 1
+		}
+	case panelAgents:
+		if st.filter.Agents != "" {
+			return 1
+		}
+	}
+	return 0
 }
 
 // writeView writes content into a view, clearing first. Tolerates the

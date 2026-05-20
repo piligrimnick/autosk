@@ -193,21 +193,37 @@ func (gu *Gui) cyclePanel(step int) func(*gocui.Gui, *gocui.View) error {
 	}
 }
 
-// cursorDown / cursorUp move the cursor for a given list panel.
+// cursorDown / cursorUp move the cursor for a given list panel. After
+// the move we call scrollOffAdjust so the viewport follows the
+// cursor with a 2-row look-ahead in the direction of motion (lazygit
+// scrollOffMargin parity). Without that call j-spam past the bottom
+// of a non-empty viewport leaves the highlight off-screen and the
+// list visually stuck on the top page — the bug this fixes.
 func (gu *Gui) cursorDown(p panelID) func(*gocui.Gui, *gocui.View) error {
 	return func(*gocui.Gui, *gocui.View) error {
+		var before, after, header int
 		gu.st.withLock(func() {
 			switch p {
 			case panelTasks:
+				before = gu.st.taskCursor
 				gu.st.taskCursor = clampCursor(gu.st.taskCursor+1, len(gu.st.tasks))
+				after = gu.st.taskCursor
 			case panelJobs:
+				before = gu.st.jobCursor
 				gu.st.jobCursor = clampCursor(gu.st.jobCursor+1, len(gu.st.jobs))
+				after = gu.st.jobCursor
 			case panelWorkflows:
+				before = gu.st.workflowCursor
 				gu.st.workflowCursor = clampCursor(gu.st.workflowCursor+1, len(gu.st.workflows))
+				after = gu.st.workflowCursor
 			case panelAgents:
+				before = gu.st.agentCursor
 				gu.st.agentCursor = clampCursor(gu.st.agentCursor+1, len(gu.st.agents))
+				after = gu.st.agentCursor
 			}
+			header = headerLinesForLocked(p, gu.st)
 		})
+		gu.scrollOffAdjust(p.window(), header+before, header+after)
 		gu.applyScope()
 		return nil
 	}
@@ -215,18 +231,29 @@ func (gu *Gui) cursorDown(p panelID) func(*gocui.Gui, *gocui.View) error {
 
 func (gu *Gui) cursorUp(p panelID) func(*gocui.Gui, *gocui.View) error {
 	return func(*gocui.Gui, *gocui.View) error {
+		var before, after, header int
 		gu.st.withLock(func() {
 			switch p {
 			case panelTasks:
+				before = gu.st.taskCursor
 				gu.st.taskCursor = clampCursor(gu.st.taskCursor-1, len(gu.st.tasks))
+				after = gu.st.taskCursor
 			case panelJobs:
+				before = gu.st.jobCursor
 				gu.st.jobCursor = clampCursor(gu.st.jobCursor-1, len(gu.st.jobs))
+				after = gu.st.jobCursor
 			case panelWorkflows:
+				before = gu.st.workflowCursor
 				gu.st.workflowCursor = clampCursor(gu.st.workflowCursor-1, len(gu.st.workflows))
+				after = gu.st.workflowCursor
 			case panelAgents:
+				before = gu.st.agentCursor
 				gu.st.agentCursor = clampCursor(gu.st.agentCursor-1, len(gu.st.agents))
+				after = gu.st.agentCursor
 			}
+			header = headerLinesForLocked(p, gu.st)
 		})
+		gu.scrollOffAdjust(p.window(), header+before, header+after)
 		gu.applyScope()
 		return nil
 	}
