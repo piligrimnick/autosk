@@ -391,17 +391,39 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 		werr := runner.WaitForAgentEnd(turnCtx)
 		turnCancel()
 		if werr != nil {
-			// Defensive: if the agent recorded its transition before the
-			// pi pipe died (read error / unexpected EOF / extension-RPC
-			// payload too large for the reader / etc.), honour the
-			// signal rather than parking the task. Without this, a
-			// successful agent run can still end up in human_feedback
-			// just because stdout closed before the executor noticed
-			// agent_end. We skip the lookup when the executor itself is
-			// cancelled — cancellation routes through handleRunError's
+			// Defensive: if the agent recorded its transition before
+			// WaitForAgentEnd returned an error, honour the signal
+			// rather than parking the task. Without this, a successful
+			// agent run can still end up in human_feedback. This guard
+			// covers all non-cancel error sources from WaitForAgentEnd:
+			//
+			//   - read-loop errors: pi pipe died, unexpected EOF,
+			//     extension-RPC payload malformed, etc. (the original
+			//     bufio.ErrTooLong regression that motivated the guard).
+			//   - turnCtx.DeadlineExceeded: the unattached IdleTimeout
+			//     fired between the agent's step_signal write and the
+			//     agent_end event landing on the reader. We deliberately
+			//     advance in this case too: the agent's recorded
+			//     transition is the source of truth, even when the
+			//     subsequent shutdown stalled long enough to trip the
+			//     idle timer. Pinned by
+			//     TestRun_IdleTimeoutWithSignal_HonoursSignal.
+			//
+			// We skip the lookup when the executor itself is cancelled
+			// (ctx.Err() != nil, or werr unwraps to context.Canceled)
+			// — cancellation routes through handleRunError's
 			// cancel-aware cleanup and explicitly does NOT advance.
 			if ctx.Err() == nil && !errors.Is(werr, context.Canceled) {
 				if sig, gerr := e.deps.Signals.GetForRun(ctx, jobID); gerr == nil {
+					// Leave a forensic breadcrumb: the run records
+					// status=done from here on, so the original werr
+					// would otherwise be silently swallowed. The slog
+					// line is the only signal an operator gets that the
+					// pipe / idle-timer misbehaved on this turn.
+					slog.Default().Warn("executor: WaitForAgentEnd errored but step_signal already recorded; honoring signal",
+						"job", jobID,
+						"task", run.TaskID,
+						"err", werr.Error())
 					signaled = sig
 					break
 				}

@@ -9,10 +9,14 @@
 //	FAKEPI_SCENARIO      — "ok" (default), "no_agent_end" (drop agent_end),
 //	                       "prompt_error" (reply success=false to prompt),
 //	                       "dialog" (emit a select extension_ui_request)
-//	FAKEPI_HUGE_PAYLOAD_BYTES — when >0, emit a message_start with a text
-//	                       block of approximately this many bytes before
-//	                       agent_end (used by runner tests to exercise the
-//	                       no-per-line-cap path).
+//	FAKEPI_HUGE_PAYLOAD_BYTES — when >0, emit an extra message_end carrying
+//	                       a text block of approximately this many bytes
+//	                       before agent_end (used by runner tests to
+//	                       exercise the no-per-line-cap path). The exact
+//	                       event type doesn't matter for the reader test;
+//	                       message_end is convenient because the regular
+//	                       turn already emits one and reusing the shape
+//	                       keeps the fakepi switch small.
 //
 // fakepi exits 0 on stdin EOF or SIGTERM.
 package main
