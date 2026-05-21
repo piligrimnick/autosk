@@ -1,38 +1,37 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/spf13/cobra"
 
-	"autosk/internal/agent"
-	"autosk/internal/comments"
 	"autosk/internal/render"
 	"autosk/internal/store"
-	"autosk/internal/store/doltlite"
-	"autosk/internal/workflow"
-	"autosk/internal/worktree"
+	"autosk/internal/tasksvc"
 )
 
-// newDoneCmd / newCancelCmd: direct status setters. They bypass the
-// workflow engine (see plan P9): humans can close their own tasks via
-// these verbs, and they also clear current_step_id so the CHECK in
-// 001_init.sql stays satisfied.
+// newDoneCmd / newCancelCmd / newReopenCmd / newUpdateCmd: thin
+// adapters over the internal/tasksvc package. tasksvc owns the actual
+// store mutations (status patch + current_step_id cleanup + best-effort
+// worktree cleanup); the cobra layer here only wires the CLI surface
+// (args, dolt-commit audit, output rendering).
+//
+// The lazy TUI calls the same tasksvc verbs through
+// internal/lazy/datasource so `autosk done <id>` and `d` in lazy go
+// through identical code paths.
 func newDoneCmd() *cobra.Command {
-	return statusSetterCmd("done", "Mark a task done", store.StatusDone, nil)
+	return statusSetterCmd("done", "Mark a task done", store.StatusDone)
 }
 
 func newCancelCmd() *cobra.Command {
-	return statusSetterCmd("cancel", "Mark a task cancelled", store.StatusCancelled, nil)
+	return statusSetterCmd("cancel", "Mark a task cancelled", store.StatusCancelled)
 }
 
-// newReopenCmd: status → new, but only from done|cancelled. Also clears
-// current_step_id so the task's CHECK constraint stays valid; workflow_id
-// is preserved for audit (plan §7).
+// newReopenCmd: status → new, but only from done|cancelled. tasksvc.Reopen
+// enforces the precondition AND clears current_step_id so the CHECK in
+// 001_init.sql stays satisfied; workflow_id is preserved for audit (plan §7).
 func newReopenCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reopen <id>",
@@ -44,22 +43,7 @@ func newReopenCmd() *cobra.Command {
 				return err
 			}
 			defer closeFn()
-			cur, err := s.GetTask(cmd.Context(), args[0])
-			if err != nil {
-				if errors.Is(err, store.ErrNotFound) {
-					return fmt.Errorf("task not found: %s", args[0])
-				}
-				return err
-			}
-			if cur.Status != store.StatusDone && cur.Status != store.StatusCancelled {
-				return fmt.Errorf("cannot reopen task in status %q (only done|cancelled)", cur.Status)
-			}
-			newStatus := store.StatusNew
-			empty := ""
-			t, err := s.UpdateTask(cmd.Context(), args[0], store.TaskPatch{
-				Status:        &newStatus,
-				CurrentStepID: &empty,
-			})
+			t, err := tasksvc.Reopen(cmd.Context(), s, args[0])
 			if err != nil {
 				return err
 			}
@@ -69,12 +53,10 @@ func newReopenCmd() *cobra.Command {
 	}
 }
 
-// statusSetterCmd builds a `<verb> <id>` command that sets status.
-// If allowedFrom is non-nil, the current status must be a key in the map.
-//
-// Terminal verbs (done/cancelled) also clear current_step_id so the SQL
-// CHECK on `tasks` stays satisfied when the task was in a workflow.
-func statusSetterCmd(use, short string, target store.Status, allowedFrom map[store.Status]bool) *cobra.Command {
+// statusSetterCmd builds a `<verb> <id>` command that sets status via
+// tasksvc. Terminal verbs (done/cancelled) also get the worktree
+// cleanup from tasksvc when the task ran under an isolated workflow.
+func statusSetterCmd(use, short string, target store.Status) *cobra.Command {
 	return &cobra.Command{
 		Use:   use + " <id>",
 		Short: short,
@@ -86,112 +68,42 @@ func statusSetterCmd(use, short string, target store.Status, allowedFrom map[sto
 			}
 			defer closeFn()
 
-			if allowedFrom != nil {
-				cur, err := s.GetTask(cmd.Context(), args[0])
-				if err != nil {
-					if errors.Is(err, store.ErrNotFound) {
-						return fmt.Errorf("task not found: %s", args[0])
-					}
-					return err
-				}
-				if !allowedFrom[cur.Status] {
-					return fmt.Errorf("cannot %s task in status %q (use `autosk update <id> --status ...` to force)", use, cur.Status)
-				}
+			opts := tasksvc.Options{
+				Warn: func(format string, a ...any) {
+					fmt.Fprintf(os.Stderr, "warning: "+format+"\n", a...)
+				},
+			}
+			if root, perr := projectRootFromCwd(); perr == nil {
+				opts.ProjectRoot = root
+			} else {
+				// Symmetric to tasksvc's other skip branches: don't
+				// silently leak the worktree just because cwd
+				// resolution wobbled. Surface the lookup failure on
+				// stderr — the status flip below still proceeds.
+				fmt.Fprintf(os.Stderr, "warning: worktree cleanup for %s skipped: resolve project root: %v\n", args[0], perr)
 			}
 
-			patch := store.TaskPatch{Status: &target}
-			if target == store.StatusDone || target == store.StatusCancelled {
-				empty := ""
-				patch.CurrentStepID = &empty
+			var t store.Task
+			switch target {
+			case store.StatusDone:
+				t, err = tasksvc.Done(cmd.Context(), s, args[0], opts)
+			case store.StatusCancelled:
+				t, err = tasksvc.Cancel(cmd.Context(), s, args[0], opts)
+			default:
+				return fmt.Errorf("statusSetterCmd: unsupported target %q", target)
 			}
-			t, err := s.UpdateTask(cmd.Context(), args[0], patch)
 			if err != nil {
-				if errors.Is(err, store.ErrNotFound) {
-					return fmt.Errorf("task not found: %s", args[0])
-				}
 				return err
 			}
 			commitWrite(cmd.Context(), s, use+" "+args[0])
-			// Cleanup the per-task worktree on terminal status. Best-
-			// effort: failures are surfaced as a warning + agent
-			// comment so the status flip is never masked by a stuck
-			// `git worktree remove`.
-			if target == store.StatusDone || target == store.StatusCancelled {
-				cleanupWorktreeOnTerminal(cmd.Context(), s, t)
-			}
 			return emit(t)
 		},
 	}
 }
 
-// cleanupWorktreeOnTerminal removes the per-task worktree directory
-// when a CLI verb closes a task that was running under an isolated
-// workflow. Branch is preserved. All failures are surfaced as a
-// warning + agent comment — a stuck `git worktree remove` must never
-// mask a successful done/cancel.
-//
-// Every silent-skip branch surfaces a stderr warning: the function's
-// callers (`autosk done` / `cancel`) have already committed the
-// status flip, so a silent bailout here would leak the worktree with
-// no breadcrumb. The user always gets some signal.
-func cleanupWorktreeOnTerminal(ctx context.Context, s store.Store, t store.Task) {
-	if t.WorkflowID == "" {
-		return
-	}
-	dl, ok := s.(*doltlite.Store)
-	if !ok {
-		return
-	}
-	ag := agent.New(dl.DB())
-	wfs := workflow.New(dl.DB(), ag)
-	wf, err := wfs.GetByID(ctx, t.WorkflowID)
-	if err != nil {
-		// We don't know whether the workflow was isolated. Surface the
-		// lookup failure on stderr so a transient DB blip doesn't
-		// silently leak the worktree.
-		fmt.Fprintf(os.Stderr, "warning: worktree cleanup for %s skipped: load workflow %s: %v\n",
-			t.ID, t.WorkflowID, err)
-		return
-	}
-	if wf.Isolation != workflow.IsolationWorktree {
-		return
-	}
-	root, perr := projectRootFromCwd()
-	if perr != nil {
-		// Symmetric to the wfs.GetByID branch: don't silently leak the
-		// worktree just because cwd resolution wobbled (moved cwd,
-		// broken symlink, EACCES on .autosk parent, …).
-		fmt.Fprintf(os.Stderr, "warning: worktree cleanup for %s skipped: resolve project root: %v\n",
-			t.ID, perr)
-		return
-	}
-	wtMgr := worktree.NewManager()
-	_, werr := wtMgr.OnTerminal(ctx, root, t.ID)
-	if werr == nil {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "warning: worktree cleanup for %s failed: %v\n", t.ID, werr)
-	// Surface the failure as an agent comment so it survives
-	// past the CLI invocation. Author the comment under the
-	// seeded `human` agent — we don't want a synthetic
-	// `autosk` agent row (the package resolver would reject
-	// EnsureByName on unknown names).
-	//
-	// The comment write uses a fresh derived ctx in case the
-	// OnTerminal failure was a deadline exceedance under the
-	// caller's ctx — same shape as the executor's breadcrumb
-	// path. cmd.Context() already respects Ctrl+C, so callers
-	// that walk away mid-cleanup still get torn down.
-	crumbCtx, crumbCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer crumbCancel()
-	cs := comments.New(dl.DB())
-	if humanAg, aerr := ag.GetByName(crumbCtx, agent.HumanAgentName); aerr == nil {
-		_, _ = cs.Add(crumbCtx, t.ID, humanAg.ID,
-			fmt.Sprintf("worktree cleanup failed on %s: %v", t.Status, werr))
-	}
-}
-
-// newUpdateCmd is the generic field-update verb.
+// newUpdateCmd is the generic field-update verb. Status edits flow
+// through tasksvc.SetStatus so the same rules (no in_workflow source/target,
+// current_step_id cleanup, worktree cleanup on terminal targets) apply.
 func newUpdateCmd() *cobra.Command {
 	var (
 		title       string
@@ -210,7 +122,10 @@ func newUpdateCmd() *cobra.Command {
 			}
 			defer closeFn()
 
-			var patch store.TaskPatch
+			var (
+				patch       store.TaskPatch
+				statusPatch *store.Status
+			)
 			if cmd.Flags().Changed("title") {
 				patch.Title = &title
 			}
@@ -222,33 +137,40 @@ func newUpdateCmd() *cobra.Command {
 				if !st.Valid() {
 					return fmt.Errorf("invalid status %q (valid: new, in_workflow, human_feedback, done, cancelled)", statusFlag)
 				}
-				// Reject status edits on workflow-tracked tasks: those
-				// transitions belong to the daemon / step engine (§10 risks).
-				cur, gerr := s.GetTask(cmd.Context(), args[0])
-				if gerr != nil {
-					if errors.Is(gerr, store.ErrNotFound) {
-						return fmt.Errorf("task not found: %s", args[0])
-					}
-					return gerr
-				}
-				if cur.Status == store.StatusInWorkflow {
-					return fmt.Errorf("refusing to --status on an `in_workflow` task; use `autosk done|cancel` or let the workflow engine advance it")
-				}
-				patch.Status = &st
+				statusPatch = &st
 			}
 			if cmd.Flags().Changed("priority") {
 				patch.Priority = &priority
 			}
-			if patch.IsEmpty() {
+			if patch.IsEmpty() && statusPatch == nil {
 				return errors.New("nothing to update (pass --title/--description/--status/--priority)")
 			}
 
-			t, err := s.UpdateTask(cmd.Context(), args[0], patch)
-			if err != nil {
-				if errors.Is(err, store.ErrNotFound) {
-					return fmt.Errorf("task not found: %s", args[0])
+			// Apply non-status fields first via the generic store path
+			// so a partial title-only update doesn't go through tasksvc.
+			var t store.Task
+			if !patch.IsEmpty() {
+				t, err = s.UpdateTask(cmd.Context(), args[0], patch)
+				if err != nil {
+					if errors.Is(err, store.ErrNotFound) {
+						return fmt.Errorf("task not found: %s", args[0])
+					}
+					return err
 				}
-				return err
+			}
+			if statusPatch != nil {
+				opts := tasksvc.Options{
+					Warn: func(format string, a ...any) {
+						fmt.Fprintf(os.Stderr, "warning: "+format+"\n", a...)
+					},
+				}
+				if root, perr := projectRootFromCwd(); perr == nil {
+					opts.ProjectRoot = root
+				}
+				t, err = tasksvc.SetStatus(cmd.Context(), s, args[0], *statusPatch, opts)
+				if err != nil {
+					return err
+				}
 			}
 			commitWrite(cmd.Context(), s, "update "+args[0])
 			return emit(t)
@@ -256,7 +178,7 @@ func newUpdateCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&title, "title", "", "new title")
 	cmd.Flags().StringVarP(&description, "description", "d", "", "new description")
-	cmd.Flags().StringVar(&statusFlag, "status", "", "new status (new|in_workflow|human_feedback|done|cancelled)")
+	cmd.Flags().StringVar(&statusFlag, "status", "", "new status (new|human_feedback|done|cancelled)")
 	cmd.Flags().IntVarP(&priority, "priority", "p", 0, "new priority (0..3)")
 	return cmd
 }

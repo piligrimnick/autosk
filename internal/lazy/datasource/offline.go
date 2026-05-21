@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"autosk/internal/daemon/transcript"
 	"autosk/internal/store"
 	"autosk/internal/store/doltlite"
+	"autosk/internal/tasksvc"
 	"autosk/internal/workflow"
 )
 
@@ -30,9 +32,10 @@ import (
 // down. Verbs that fundamentally need a daemon (CancelJob, SendInput,
 // AbortJob, StreamLive) return ErrDaemonRequired.
 type Offline struct {
-	s        *doltlite.Store
-	cwd      string
-	registry *pkgregistry.Registry
+	s           *doltlite.Store
+	cwd         string
+	projectRoot string // resolved <root>/, i.e. parent of .autosk/; used by tasksvc for worktree cleanup
+	registry    *pkgregistry.Registry
 }
 
 // NewOffline wires an Offline datasource on top of an already-open
@@ -41,12 +44,37 @@ type Offline struct {
 //
 // registry is optional; when nil agent metadata is filled in best
 // effort from the DB row alone.
+//
+// The project root (parent of .autosk/) is derived from the store's
+// resolved db path so tasksvc-driven worktree cleanup on done/cancel
+// uses the same root the CLI does, regardless of cwd. Falls back to
+// empty (= skip worktree cleanup) when the store path isn't a
+// well-formed .autosk/db location (e.g. :memory: in tests).
 func NewOffline(s store.Store, cwd string, registry *pkgregistry.Registry) (*Offline, error) {
 	dl, ok := s.(*doltlite.Store)
 	if !ok {
 		return nil, fmt.Errorf("offline datasource: store is not doltlite (%T)", s)
 	}
-	return &Offline{s: dl, cwd: cwd, registry: registry}, nil
+	return &Offline{s: dl, cwd: cwd, projectRoot: projectRootFromDBPath(dl.Path()), registry: registry}, nil
+}
+
+// projectRootFromDBPath maps `<root>/.autosk/db` → `<root>`. Returns
+// "" for paths that don't match the expected layout (":memory:" in
+// tests, bare files outside an .autosk/ dir) — callers must treat ""
+// as "skip worktree cleanup".
+func projectRootFromDBPath(dbPath string) string {
+	if dbPath == "" || dbPath == ":memory:" {
+		return ""
+	}
+	abs, err := filepath.Abs(dbPath)
+	if err != nil {
+		return ""
+	}
+	parent := filepath.Dir(abs)
+	if filepath.Base(parent) != ".autosk" {
+		return ""
+	}
+	return filepath.Dir(parent)
 }
 
 // DB returns the underlying *sql.DB. Exposed for tests / palette ops
@@ -553,12 +581,37 @@ func (o *Offline) CreateTask(ctx context.Context, title, description string, pri
 	return t.ID, nil
 }
 
-// UpdateStatus rewrites tasks.status.
+// UpdateStatus is the lazy-side single entry point for human-driven
+// status flips. It routes through internal/tasksvc so the TUI's `d`
+// (done), `x` (cancel) and `o` (reopen) hotkeys share the CLI's
+// done|cancel|reopen behaviour exactly:
+//
+//   - terminal targets (done|cancelled) clear current_step_id so a
+//     task paused in human_feedback with a non-null step can actually
+//     be closed (CHECK in 001_init.sql);
+//   - terminal targets also do best-effort worktree cleanup when the
+//     task ran under an isolated workflow;
+//   - StatusNew on a done|cancelled task delegates to tasksvc.Reopen
+//     and inherits its precondition (rejects new / in_workflow /
+//     human_feedback sources);
+//   - in_workflow targets are rejected (workflow lifecycle is owned
+//     by the workflow engine).
 func (o *Offline) UpdateStatus(ctx context.Context, id string, status store.Status) error {
-	if !status.Valid() {
-		return fmt.Errorf("invalid status %q", status)
+	opts := tasksvc.Options{ProjectRoot: o.projectRoot}
+	var err error
+	switch status {
+	case store.StatusDone:
+		_, err = tasksvc.Done(ctx, o.s, id, opts)
+	case store.StatusCancelled:
+		_, err = tasksvc.Cancel(ctx, o.s, id, opts)
+	case store.StatusNew:
+		// Mirror the CLI: only valid coming from done|cancelled.
+		// tasksvc.Reopen returns a clear error otherwise.
+		_, err = tasksvc.Reopen(ctx, o.s, id)
+	default:
+		_, err = tasksvc.SetStatus(ctx, o.s, id, status, opts)
 	}
-	if _, err := o.s.UpdateTask(ctx, id, store.TaskPatch{Status: &status}); err != nil {
+	if err != nil {
 		return err
 	}
 	_ = o.s.DoltCommit(ctx, "lazy: status "+id+"="+string(status))

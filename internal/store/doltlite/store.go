@@ -130,6 +130,12 @@ func (s *Store) Close() error {
 // (the `autosk sql` command, doltlite-specific helpers). Returns nil before Open.
 func (s *Store) DB() *sql.DB { return s.db }
 
+// Path returns the on-disk path the Store was opened against (":memory:"
+// for in-memory stores). Empty before Open. Used by callers that need
+// to derive the project root from the resolved .autosk/db location
+// without re-running projectdb.Resolve.
+func (s *Store) Path() string { return s.path }
+
 // SetConnMaxLifetime overrides the default connection-rotation cadence
 // set by Open. Long-lived readers that care about seeing cross-process
 // writes promptly (e.g. the `autosk lazy` dashboard) wire this to their
