@@ -223,6 +223,49 @@ panel.
 
 ---
 
+## Markdown in the Detail pane
+
+The right-hand Detail pane renders user-supplied markdown as
+formatted ANSI rather than raw text. This applies to:
+
+- `Task.Description` (the `─ description ─` block on a Tasks row).
+- Every entry in the `─ comments ─` block of a task. Bodies are no
+  longer clipped to one line — multi-line comments render in full,
+  with the "last 5" cap preserved.
+- `Workflow.Description` (the right pane when a Workflows row is
+  focused).
+
+Supported constructs are stock CommonMark: ATX headings (`#`..`######`),
+`**bold**` / `*italic*`, ordered and unordered lists, blockquotes,
+`inline code`, fenced code blocks, links, horizontal rules. Fenced
+code blocks are syntax-highlighted via [chroma](https://github.com/alecthomas/chroma)
+(bundled with [glamour](https://github.com/charmbracelet/glamour),
+the renderer); the language tag picks the lexer, and unknown / empty
+tags fall back to plain monospace. Raw UTF-8 emoji (🚀) renders
+through the normal text path; `:shortname:` shortcodes are
+intentionally **not** expanded.
+
+Element colours come from the active palette (`theme.Active()`).
+Swapping the palette at runtime (`theme.SetActive` +
+`tui.RebuildStyles`) updates the markdown render in lockstep with
+the rest of the TUI.
+
+The **compose popup** used to edit a description or write a comment
+stays a **raw editor** — markdown is rendered only when reading,
+never while typing.
+
+Wire formats are untouched: `autosk` CLI `--json` output, the daemon
+HTTP API, the `RunContextSeed` handed to agents, and the prompt
+rendering used by `comments.RenderForPrompt` all stay on raw UTF-8
+plain text. Only the TUI display layer interprets markdown.
+
+Fail-open behaviour: if glamour cannot build a renderer, errors
+mid-render, panics, or is handed pathological input (deeply nested
+blockquotes, >64 KiB body), the Detail pane falls back to the raw
+markdown text rather than crashing or blanking the pane.
+
+---
+
 ## Inspector tabs
 
 `Enter` on a job opens the inspector. The default tab depends on the
