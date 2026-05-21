@@ -174,14 +174,39 @@ func (o *Offline) projectTask(ctx context.Context, raw store.Task) (Task, error)
 		t.Blocked = blocked
 	}
 	if in, out, err := o.s.Deps(ctx, raw.ID); err == nil {
-		t.BlockedBy = in
-		t.Blocks = out
+		t.BlockedBy = o.resolveTaskRefs(ctx, in)
+		t.Blocks = o.resolveTaskRefs(ctx, out)
 	}
 	cs := comments.New(o.s.DB())
 	if list, err := cs.ListByTask(ctx, raw.ID); err == nil {
 		t.CommentCount = len(list)
 	}
 	return t, nil
+}
+
+// resolveTaskRefs enriches a list of task ids with each task's current
+// status so the detail pane can paint closed blockers in gray without
+// re-querying the store at render time. Missing ids (a stale Deps row
+// pointing at a deleted task, say) carry an empty Status and the
+// renderer treats them like an active row — we'd rather flag a stale
+// blocker than hide it.
+//
+// O(N) sql calls because Deps lists are typically tiny (single-digit
+// blockers per task). A bulk "WHERE id IN (...)" lookup would be a
+// pure win if blocker counts ever scale up; out of scope for now.
+func (o *Offline) resolveTaskRefs(ctx context.Context, ids []string) []TaskRef {
+	if len(ids) == 0 {
+		return nil
+	}
+	refs := make([]TaskRef, 0, len(ids))
+	for _, id := range ids {
+		ref := TaskRef{ID: id}
+		if raw, err := o.s.GetTask(ctx, id); err == nil {
+			ref.Status = raw.Status
+		}
+		refs = append(refs, ref)
+	}
+	return refs
 }
 
 // Jobs reads daemon_runs and decorates each row with workflow / step

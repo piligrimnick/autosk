@@ -373,7 +373,10 @@ func TestRenderTaskDetail_BlockedRow(t *testing.T) {
 		ID: "as-a261", Status: store.StatusWork, Priority: 1,
 		CreatedAt: fixedTime,
 		Blocked:   true,
-		BlockedBy: []string{"as-0011", "as-0022"},
+		BlockedBy: []datasource.TaskRef{
+			{ID: "as-0011", Status: store.StatusWork},
+			{ID: "as-0022", Status: store.StatusNew},
+		},
 	}
 	out := renderTaskDetail(task, nil, nil, 80)
 	visible := ansiutil.Strip(out)
@@ -394,6 +397,85 @@ func TestRenderTaskDetail_BlockedRow(t *testing.T) {
 	visible = ansiutil.Strip(out)
 	if strings.Contains(visible, "blocked by:") {
 		t.Errorf("blocked-by row leaked when Blocked=false: %q", visible)
+	}
+}
+
+// TestRenderTaskDetail_BlockedRow_Partitioned pins the active-first
+// then closed-last ordering and the gray colour for done/cancel
+// blockers. The two contracts overlap on the same row: a blocker
+// that just went done should slide to the tail AND drop to
+// styleMuted, while the active rows stay at the head in the
+// regular task-id hue.
+func TestRenderTaskDetail_BlockedRow_Partitioned(t *testing.T) {
+	forceTrueColor(t)
+	task := datasource.Task{
+		ID: "as-mix", Status: store.StatusWork, CreatedAt: fixedTime,
+		Blocked: true,
+		BlockedBy: []datasource.TaskRef{
+			{ID: "as-done1", Status: store.StatusDone},
+			{ID: "as-actv1", Status: store.StatusWork},
+			{ID: "as-canc1", Status: store.StatusCancel},
+			{ID: "as-actv2", Status: store.StatusNew},
+			{ID: "as-actv3", Status: store.StatusHuman},
+		},
+	}
+	out := renderTaskDetail(task, nil, nil, 80)
+	visible := ansiutil.Strip(out)
+
+	// Active first (input order), then closed (input order).
+	wantOrder := "blocked by: as-actv1, as-actv2, as-actv3, as-done1, as-canc1"
+	if !strings.Contains(visible, wantOrder) {
+		t.Errorf("blocker order wrong; want substring %q in %q", wantOrder, visible)
+	}
+
+	// Active rows wear the task-id hue (blue).
+	for _, id := range []string{"as-actv1", "as-actv2", "as-actv3"} {
+		if !strings.Contains(out, renderTaskID(id)) {
+			t.Errorf("active blocker %q not styled with task-id hue: %q", id, out)
+		}
+	}
+	// Closed rows drop to muted gray.
+	for _, id := range []string{"as-done1", "as-canc1"} {
+		if !strings.Contains(out, styleMuted.Render(id)) {
+			t.Errorf("closed blocker %q not styled with muted hue: %q", id, out)
+		}
+	}
+}
+
+// TestRenderTaskDetail_StatsRow_Coloring pins the muted/white/green
+// split on the stats row:
+//   - the whole row is gray by default
+//   - when CommentCount > 0, the "comments: " label drops to default
+//     foreground ("white") and the count is OK-green
+//   - when CommentCount == 0, the comments half stays all-gray
+func TestRenderTaskDetail_StatsRow_Coloring(t *testing.T) {
+	forceTrueColor(t)
+
+	// Zero-comment branch: the comments half stays muted.
+	task := datasource.Task{ID: "as-z", Status: store.StatusNew, CreatedAt: fixedTime, CommentCount: 0}
+	out := renderTaskDetail(task, nil, nil, 80)
+	if !strings.Contains(out, styleMuted.Render("comments: 0")) {
+		t.Errorf("zero-comment label not all-muted: %q", out)
+	}
+
+	// Comment-bearing branch: count is OK-green, label is default fg
+	// (no SGR span around "comments:").
+	task.CommentCount = 7
+	out = renderTaskDetail(task, nil, nil, 80)
+	if !strings.Contains(out, styleOK.Render("7")) {
+		t.Errorf("comment count not styled with OK hue (green): %q", out)
+	}
+	// The label should NOT be wrapped in styleMuted when there are
+	// comments — i.e. "comments: " appears in the output without a
+	// leading SGR escape immediately before it.
+	if strings.Contains(out, styleMuted.Render("comments:")) {
+		t.Errorf("comments label wears muted hue when CommentCount>0: %q", out)
+	}
+
+	// And the created half is always muted, regardless of branch.
+	wantCreated := styleMuted.Render("created: " + timeformat.FormatDateTimeSmart(fixedTime) + ",")
+	if !strings.Contains(out, wantCreated) {
+		t.Errorf("created half not all-muted: want %q in %q", wantCreated, out)
 	}
 }
 

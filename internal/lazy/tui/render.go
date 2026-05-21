@@ -166,6 +166,38 @@ func renderStepName(name string) string {
 
 // (renderSignalTarget lives in inspector.go and is reused here.)
 
+// partitionBlockers splits a blocker list into (active, closed),
+// preserving the original order inside each group. Active is anything
+// in new/work/human; closed is done/cancel. An empty Status (a
+// blocker whose target task couldn't be resolved — e.g. a stale Deps
+// row pointing at a deleted task) is treated as active so the
+// operator sees the dangling reference instead of having it silently
+// graveyard'd into the gray tail.
+func partitionBlockers(refs []datasource.TaskRef) (active, closed []datasource.TaskRef) {
+	active = make([]datasource.TaskRef, 0, len(refs))
+	closed = make([]datasource.TaskRef, 0, len(refs))
+	for _, r := range refs {
+		if r.Status == store.StatusDone || r.Status == store.StatusCancel {
+			closed = append(closed, r)
+			continue
+		}
+		active = append(active, r)
+	}
+	return active, closed
+}
+
+// renderBlockerRef paints a blocker's id with a hue tied to its
+// lifecycle state: active blockers (new/work/human) wear the regular
+// task-id hue (blue) so they line up with the same ids in the Tasks
+// panel, while closed blockers (done/cancel) drop to styleMuted
+// (gray) so they fade into the background as historical context.
+func renderBlockerRef(r datasource.TaskRef) string {
+	if r.Status == store.StatusDone || r.Status == store.StatusCancel {
+		return styleMuted.Render(r.ID)
+	}
+	return renderTaskID(r.ID)
+}
+
 // renderWorkflowStep composes a "workflow:step" label with each half
 // in its entity colour and the colon left in the default foreground.
 // Returns a muted "(no-wf)" when wf is empty (legacy daemon rows
@@ -578,23 +610,51 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 	// Optional "blocked by" row: only when the task is actually
 	// blocked AND we have ids to point at. The word "blocked" wears
 	// styleErr (red) so a blocked task screams at the operator from
-	// the top of the pane; the ids themselves stay in the task-id
-	// hue for cross-pane consistency.
+	// the top of the pane.
+	//
+	// The blocker list is reordered so still-active rows
+	// (new/work/human) come first in the regular task-id hue, then
+	// the closed ones (done/cancel) trailing in styleMuted gray so
+	// the operator's eye lands on the rows that are actually
+	// holding up progress and slides past the historical entries.
+	// Order within each group is preserved (Deps already sorts
+	// ascending by id) so the row layout is deterministic across
+	// refreshes.
 	if t.Blocked && len(t.BlockedBy) > 0 {
-		ids := make([]string, 0, len(t.BlockedBy))
-		for _, id := range t.BlockedBy {
-			ids = append(ids, renderTaskID(id))
+		active, closed := partitionBlockers(t.BlockedBy)
+		ordered := append(active, closed...)
+		ids := make([]string, 0, len(ordered))
+		for _, r := range ordered {
+			ids = append(ids, renderBlockerRef(r))
 		}
 		b.WriteString(styleErr.Render("blocked") + " by: " + strings.Join(ids, ", ") + "\n")
 	}
 
-	// Stats row: created + comment count. FormatDateTimeSmart drops
-	// the date for today's events so the common case stays compact
-	// ("created: 14:31:47") and only older tasks render the full
-	// "YYYY-MM-DD HH:MM:SS". Machine-facing wire formats stay on
-	// RFC3339 UTC and intentionally do NOT route through timeformat.
-	fmt.Fprintf(&b, "created: %s, comments: %d\n",
-		timeformat.FormatDateTimeSmart(t.CreatedAt), t.CommentCount)
+	// Stats row: created + comment count. The whole row wears
+	// styleMuted by default — it's meta, not authored content. When
+	// there ARE comments, the "comments:" label drops back to the
+	// terminal's default foreground and the count is painted in
+	// styleOK (green) so a glance at the pane surfaces "yes, a
+	// conversation has happened here" without having to read the
+	// number. Zero-comment tasks stay all-muted.
+	//
+	// FormatDateTimeSmart drops the date for today's events so the
+	// common case stays compact ("created: 14:31:47") and only older
+	// tasks render the full "YYYY-MM-DD HH:MM:SS". Machine-facing
+	// wire formats stay on RFC3339 UTC and intentionally do NOT route
+	// through timeformat.
+	createdHalf := styleMuted.Render(fmt.Sprintf("created: %s,", timeformat.FormatDateTimeSmart(t.CreatedAt)))
+	var commentsHalf string
+	if t.CommentCount > 0 {
+		// White label + green count. The label sits in the default
+		// foreground (no Render call), so it inherits the terminal's
+		// notion of "white" rather than the palette — matches the
+		// Tasks panel's white title column.
+		commentsHalf = "comments: " + styleOK.Render(fmt.Sprintf("%d", t.CommentCount))
+	} else {
+		commentsHalf = styleMuted.Render(fmt.Sprintf("comments: %d", t.CommentCount))
+	}
+	b.WriteString(createdHalf + " " + commentsHalf + "\n")
 	if t.AuthorName != "" {
 		fmt.Fprintf(&b, "author: %s\n", renderAgentName(t.AuthorName))
 	}

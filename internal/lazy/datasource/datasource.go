@@ -40,6 +40,15 @@ import (
 // CancelJob).
 var ErrDaemonRequired = errors.New("daemon required")
 
+// TaskRef is a lightweight reference to a related task carrying just
+// enough metadata for the detail pane to render the id with the right
+// status hue without re-querying the store. Used in Task.BlockedBy
+// and Task.Blocks.
+type TaskRef struct {
+	ID     string
+	Status store.Status
+}
+
 // Task is the lazy TUI's projection of a task row. Derived fields
 // (WorkflowName, StepName, AgentName, Blocked, CommentCount) are
 // resolved by the datasource so the TUI never joins by hand.
@@ -57,8 +66,8 @@ type Task struct {
 	StepName      string
 	AgentName     string // current step's agent
 	Blocked       bool
-	BlockedBy     []string // ids of open blockers
-	Blocks        []string // ids of tasks this task blocks
+	BlockedBy     []TaskRef // every blocker (open and closed), in store-order
+	Blocks        []TaskRef // every task this task blocks (open and closed)
 	CommentCount  int
 	CreatedAt     time.Time
 	UpdatedAt     time.Time

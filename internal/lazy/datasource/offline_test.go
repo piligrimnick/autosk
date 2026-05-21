@@ -100,7 +100,7 @@ func TestOffline_BlockAndUnblock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if !got.Blocked || len(got.BlockedBy) != 1 || got.BlockedBy[0] != b {
+	if !got.Blocked || len(got.BlockedBy) != 1 || got.BlockedBy[0].ID != b {
 		t.Fatalf("expected blocked by %s, got blocked=%v blockedBy=%v", b, got.Blocked, got.BlockedBy)
 	}
 	if err := ds.Unblock(ctx, a, b); err != nil {
