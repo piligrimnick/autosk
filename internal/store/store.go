@@ -60,6 +60,12 @@ const (
 // AuthorID, WorkflowID, CurrentStepID are nullable FKs: empty string
 // means "unset / NULL". The CHECK in 001_init.sql enforces
 // (status='in_workflow' ⇔ current_step_id IS NOT NULL).
+//
+// Metadata is a free-form JSON object (tasks.metadata TEXT column).
+// Nil here means "NULL on disk"; an empty map round-trips back to NULL
+// so empty/absent metadata is indistinguishable to consumers. The
+// engine reserves the top-level key `step_visits` for per-step visit
+// counters — see internal/meta.
 type Task struct {
 	ID            string
 	Title         string
@@ -69,6 +75,7 @@ type Task struct {
 	AuthorID      string
 	WorkflowID    string
 	CurrentStepID string
+	Metadata      map[string]any
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }
@@ -76,6 +83,12 @@ type Task struct {
 // TaskPatch is a partial update. Nil fields are left unchanged. The
 // workflow / step pointers can be cleared by passing a non-nil pointer to
 // an empty string.
+//
+// Metadata uses replace-wholesale semantics: nil = unchanged; non-nil
+// (including a pointer to an empty / nil map) = REPLACE the column.
+// Callers that need a partial edit must load → mutate → patch; the
+// doltlite backend exposes UpdateMetadata for the read-modify-write
+// pattern in a single transaction.
 type TaskPatch struct {
 	Title         *string
 	Description   *string
@@ -83,12 +96,14 @@ type TaskPatch struct {
 	Priority      *int
 	WorkflowID    *string
 	CurrentStepID *string
+	Metadata      *map[string]any
 }
 
 // IsEmpty reports whether the patch would change nothing.
 func (p TaskPatch) IsEmpty() bool {
 	return p.Title == nil && p.Description == nil && p.Status == nil &&
-		p.Priority == nil && p.WorkflowID == nil && p.CurrentStepID == nil
+		p.Priority == nil && p.WorkflowID == nil && p.CurrentStepID == nil &&
+		p.Metadata == nil
 }
 
 // ListFilter narrows ListTasks results.
@@ -120,6 +135,33 @@ type Store interface {
 	GetTask(ctx context.Context, id string) (Task, error)
 	UpdateTask(ctx context.Context, id string, p TaskPatch) (Task, error)
 	ListTasks(ctx context.Context, f ListFilter) ([]Task, error)
+
+	// UpdateMetadata is the read-modify-write helper used by engine and
+	// CLI callers that need to mutate one or two keys in tasks.metadata
+	// without clobbering concurrent writers.
+	//
+	// Contract for backends:
+	//   - fn ALWAYS receives a non-nil map (NULL columns are presented
+	//     as an empty map[string]any{}); fn may mutate it in place.
+	//   - Returning a non-nil error from fn aborts the transaction.
+	//   - When the post-fn marshalled metadata equals the pre-fn state
+	//     (i.e. fn was a no-op for storage purposes), the SQL UPDATE is
+	//     skipped and the returned `changed` flag is false. updated_at
+	//     is NOT bumped in that case; CLI callers use this to skip the
+	//     accompanying dolt-commit audit row.
+	//   - An empty post-fn map is written back as SQL NULL so the
+	//     column round-trips cleanly.
+	UpdateMetadata(ctx context.Context, id string, fn func(m map[string]any) error) (m map[string]any, changed bool, err error)
+
+	// UpdateMetadataAndPatch is the atomic engine-side helper that
+	// performs a metadata read-modify-write AND a TaskPatch in a single
+	// transaction. workflow.EnterStep uses it so the step_visits counter
+	// bump and the task pointer move (workflow_id / current_step_id /
+	// status) land or fail together.
+	//
+	// p.Metadata MUST be nil; route metadata mutations through fn.
+	// Returns the resulting Task as read after commit.
+	UpdateMetadataAndPatch(ctx context.Context, id string, fn func(m map[string]any) error, p TaskPatch) (Task, error)
 
 	// Edges. Variadic; runs in a single transaction; rejects self-block and
 	// cycles. Block is idempotent (re-adding an existing edge is a no-op).

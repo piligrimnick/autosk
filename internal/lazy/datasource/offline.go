@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -577,6 +578,13 @@ func (o *Offline) UpdatePriority(ctx context.Context, id string, p int) error {
 }
 
 // Enroll attaches an existing task to a workflow's first step.
+//
+// Routes through workflow.EnterStep so the step_visits counter on the
+// entry step is bumped and any max_visits cap is enforced — same
+// semantics as `autosk enroll` on the CLI. A cap hit on first enroll
+// is exotic but legitimate (e.g. someone bumped the counter via
+// `metadata set`); we surface it as a clear flash message instead of
+// silently succeeding with a stale counter.
 func (o *Offline) Enroll(ctx context.Context, id, wfName string) error {
 	t, err := o.s.GetTask(ctx, id)
 	if err != nil {
@@ -590,26 +598,63 @@ func (o *Offline) Enroll(ctx context.Context, id, wfName string) error {
 	if err != nil {
 		return fmt.Errorf("workflow %q: %w", wfName, err)
 	}
-	newStatus := store.StatusInWorkflow
-	if _, err := o.s.UpdateTask(ctx, id, store.TaskPatch{
-		Status:        &newStatus,
-		WorkflowID:    &wf.ID,
-		CurrentStepID: &wf.FirstStepID,
+	if err := workflow.EnterStep(ctx, o.s, ws, workflow.EnterStepInput{
+		TaskID:     id,
+		StepID:     wf.FirstStepID,
+		WorkflowID: wf.ID,
 	}); err != nil {
-		return err
+		return workflow.MapEnterStepError(id, err)
 	}
 	_ = o.s.DoltCommit(ctx, fmt.Sprintf("lazy: enroll %s -> %s", id, wfName))
 	return nil
 }
 
 // EnrollAgent attaches an existing task to the synthetic single:<agent>
-// workflow.
+// workflow, creating it (and the agent row) on demand so the call is
+// usable straight off the agents popup.
+//
+// We can't just delegate to Enroll("single:"+name) because lazy's
+// Enroll requires the workflow to already exist (it uses GetByName).
+// EnsureSingle gives us the same single-creation race-safety as the
+// CLI path in cmd/autosk/create.go::resolveWorkflowEntry.
 func (o *Offline) EnrollAgent(ctx context.Context, id, agentName string) error {
-	return o.Enroll(ctx, id, "single:"+agentName)
+	t, err := o.s.GetTask(ctx, id)
+	if err != nil {
+		return err
+	}
+	if t.Status != store.StatusNew {
+		return fmt.Errorf("enroll: task is not 'new' (status=%s)", t.Status)
+	}
+	ag := agent.New(o.s.DB())
+	if _, err := ag.EnsureByName(ctx, agentName); err != nil {
+		return fmt.Errorf("ensure agent %q: %w", agentName, err)
+	}
+	ws := workflow.New(o.s.DB(), ag)
+	wf, err := ws.EnsureSingle(ctx, agentName)
+	if err != nil {
+		return fmt.Errorf("ensure single:%s: %w", agentName, err)
+	}
+	if err := workflow.EnterStep(ctx, o.s, ws, workflow.EnterStepInput{
+		TaskID:     id,
+		StepID:     wf.FirstStepID,
+		WorkflowID: wf.ID,
+	}); err != nil {
+		return workflow.MapEnterStepError(id, err)
+	}
+	_ = o.s.DoltCommit(ctx, fmt.Sprintf("lazy: enroll %s -> single:%s", id, agentName))
+	return nil
 }
 
 // Resume flips a task from human_feedback back to in_workflow,
 // optionally relocating its current step.
+//
+// Visit-counter semantics (docs/plans/20260520-Step-Visit-Limits.md):
+//
+//   - Resume(id, "") does NOT count as a transition; the task stays
+//     on the step it was parked on and step_visits is untouched.
+//   - Resume(id, "STEP") IS a deliberate transition into STEP and is
+//     routed through workflow.EnterStep so step_visits[STEP] bumps and
+//     step.max_visits is enforced.
 func (o *Offline) Resume(ctx context.Context, id, toStep string) error {
 	t, err := o.s.GetTask(ctx, id)
 	if err != nil {
@@ -618,23 +663,42 @@ func (o *Offline) Resume(ctx context.Context, id, toStep string) error {
 	if t.Status != store.StatusHumanFeedback {
 		return fmt.Errorf("resume: task is not 'human_feedback' (status=%s)", t.Status)
 	}
-	patch := store.TaskPatch{Status: ptrStatus(store.StatusInWorkflow)}
-	if toStep != "" {
-		ws := workflow.New(o.s.DB(), agent.New(o.s.DB()))
-		st, err := ws.FindStepByName(ctx, t.WorkflowID, toStep)
-		if err != nil {
-			return fmt.Errorf("resume target step %q: %w", toStep, err)
+	if toStep == "" {
+		// No transition — just flip the status. Do NOT touch
+		// step_visits or current_step_id.
+		//
+		// Refuse if the parked task has no current_step_id (e.g. someone
+		// hand-edited via `autosk sql --write`): without --to we have
+		// nowhere to land, and the schema CHECK in 001_init.sql:55
+		// would reject the in_workflow flip with a cryptic constraint
+		// error in the flash bar. Mirror the CLI guard in
+		// cmd/autosk/resume.go so the operator sees the actionable hint.
+		if t.CurrentStepID == "" {
+			return errors.New("task has no current_step_id; pass --to STEP")
 		}
-		patch.CurrentStepID = &st.ID
+		newStatus := store.StatusInWorkflow
+		if _, err := o.s.UpdateTask(ctx, id, store.TaskPatch{Status: &newStatus}); err != nil {
+			return err
+		}
+		_ = o.s.DoltCommit(ctx, "lazy: resume "+id)
+		return nil
 	}
-	if _, err := o.s.UpdateTask(ctx, id, patch); err != nil {
-		return err
+	// --to STEP: deliberate transition. Resolve and route through
+	// EnterStep so the counter bumps and the cap fires loudly.
+	ws := workflow.New(o.s.DB(), agent.New(o.s.DB()))
+	st, err := ws.FindStepByName(ctx, t.WorkflowID, toStep)
+	if err != nil {
+		return fmt.Errorf("resume target step %q: %w", toStep, err)
 	}
-	_ = o.s.DoltCommit(ctx, "lazy: resume "+id)
+	if err := workflow.EnterStep(ctx, o.s, ws, workflow.EnterStepInput{
+		TaskID: id,
+		StepID: st.ID,
+	}); err != nil {
+		return workflow.MapEnterStepError(id, err)
+	}
+	_ = o.s.DoltCommit(ctx, "lazy: resume "+id+" --to "+toStep)
 	return nil
 }
-
-func ptrStatus(s store.Status) *store.Status { return &s }
 
 // Block adds a blocker edge id ← blocker.
 func (o *Offline) Block(ctx context.Context, id, blocker string) error {

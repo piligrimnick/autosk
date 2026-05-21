@@ -21,10 +21,10 @@ const (
 
 // Sentinel errors.
 var (
-	ErrNotOpen        = errors.New("workflow store: not open")
-	ErrNotFound       = errors.New("workflow not found")
-	ErrAlreadyExist   = errors.New("workflow already exists")
-	ErrInUse          = errors.New("workflow has tasks pointing at it; refuse delete")
+	ErrNotOpen      = errors.New("workflow store: not open")
+	ErrNotFound     = errors.New("workflow not found")
+	ErrAlreadyExist = errors.New("workflow already exists")
+	ErrInUse        = errors.New("workflow has tasks pointing at it; refuse delete")
 )
 
 // Workflow is the materialised view of one `workflows` row.
@@ -46,6 +46,7 @@ type Step struct {
 	AgentID     string
 	AgentName   string       // joined-in for convenience
 	AgentParams *AgentParams // nil = use the package's defaults verbatim
+	MaxVisits   int          // 0 = unlimited; see docs/workflows.md
 	Transitions []Transition // outgoing, in source order
 }
 
@@ -159,8 +160,8 @@ func (s *Store) Create(ctx context.Context, def Definition, isSynthetic bool) (W
 			return Workflow{}, fmt.Errorf("marshal agent_params for step %q: %w", stepName, perr)
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO steps(id, workflow_id, name, agent_id, seq, agent_params) VALUES (?, ?, ?, ?, ?, ?)
-		`, stepIDs[stepName], wfID, stepName, stepAgents[stepName], seq, paramsJSON); err != nil {
+			INSERT INTO steps(id, workflow_id, name, agent_id, seq, agent_params, max_visits) VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, stepIDs[stepName], wfID, stepName, stepAgents[stepName], seq, paramsJSON, sd.MaxVisits); err != nil {
 			return Workflow{}, fmt.Errorf("insert step %q: %w", stepName, err)
 		}
 	}
@@ -281,7 +282,7 @@ func (s *Store) FindStepByID(ctx context.Context, stepID string) (Step, error) {
 		return Step{}, ErrNotOpen
 	}
 	row := s.db.QueryRowContext(ctx, `
-		SELECT s.id, s.workflow_id, s.name, s.agent_id, a.name, s.agent_params
+		SELECT s.id, s.workflow_id, s.name, s.agent_id, a.name, s.agent_params, s.max_visits
 		  FROM steps s JOIN agents a ON s.agent_id = a.id
 		 WHERE s.id = ?`, stepID)
 	st, err := scanStep(row)
@@ -329,7 +330,7 @@ func (s *Store) FindStepByName(ctx context.Context, workflowID, stepName string)
 		return Step{}, ErrNotOpen
 	}
 	row := s.db.QueryRowContext(ctx, `
-		SELECT s.id, s.workflow_id, s.name, s.agent_id, a.name, s.agent_params
+		SELECT s.id, s.workflow_id, s.name, s.agent_id, a.name, s.agent_params, s.max_visits
 		  FROM steps s JOIN agents a ON s.agent_id = a.id
 		 WHERE s.workflow_id = ? AND s.name = ?`,
 		workflowID, stepName)
@@ -370,7 +371,7 @@ func (s *Store) stepIDExists(ctx context.Context, stID string) (bool, error) {
 
 func (s *Store) loadSteps(ctx context.Context, workflowID string) ([]Step, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT s.id, s.workflow_id, s.name, s.agent_id, a.name, s.agent_params
+		SELECT s.id, s.workflow_id, s.name, s.agent_id, a.name, s.agent_params, s.max_visits
 		  FROM steps s JOIN agents a ON s.agent_id = a.id
 		 WHERE s.workflow_id = ?
 		 ORDER BY s.seq ASC`, workflowID)
@@ -413,10 +414,10 @@ func (s *Store) loadTransitions(ctx context.Context, stepID string) ([]Transitio
 	var out []Transition
 	for rows.Next() {
 		var (
-			tr        Transition
-			nextID    sql.NullString
-			status    sql.NullString
-			nextName  sql.NullString
+			tr       Transition
+			nextID   sql.NullString
+			status   sql.NullString
+			nextName sql.NullString
 		)
 		if err := rows.Scan(&tr.ID, &tr.StepID, &nextID, &status, &tr.PromptRule, &nextName); err != nil {
 			return nil, err
@@ -430,13 +431,14 @@ func (s *Store) loadTransitions(ctx context.Context, stepID string) ([]Transitio
 }
 
 // scanStep scans one steps-table row (joined against agents.name) into
-// a Step value, including any non-null agent_params JSON blob.
+// a Step value, including any non-null agent_params JSON blob and the
+// max_visits cap.
 func scanStep(sc interface{ Scan(...any) error }) (Step, error) {
 	var (
 		st        Step
 		paramsRaw sql.NullString
 	)
-	if err := sc.Scan(&st.ID, &st.WorkflowID, &st.Name, &st.AgentID, &st.AgentName, &paramsRaw); err != nil {
+	if err := sc.Scan(&st.ID, &st.WorkflowID, &st.Name, &st.AgentID, &st.AgentName, &paramsRaw, &st.MaxVisits); err != nil {
 		return Step{}, err
 	}
 	if paramsRaw.Valid && strings.TrimSpace(paramsRaw.String) != "" {

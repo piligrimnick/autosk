@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -432,6 +433,153 @@ func TestE2E_SingleAgent_Done(t *testing.T) {
 	if len(rs) != 1 {
 		t.Fatalf("expected 1 run row, got %d", len(rs))
 	}
+}
+
+// TestE2E_MaxVisitsLoop_ParksThenReset drives a dev↔review loop
+// (each capped at max_visits=2). After 4 successful advances the 5th
+// must hit step_max_visits_exceeded and park the task to
+// human_feedback. After `metadata reset-visits` + resume the loop can
+// continue.
+func TestE2E_MaxVisitsLoop_ParksThenReset(t *testing.T) {
+	stack := newE2EStack(t)
+	defer stack.close()
+	ctx := context.Background()
+
+	// dev ↔ review, each capped at 2 visits, transitions force a loop.
+	capped := `{
+		"name": "loop-capped",
+		"first_step": "dev",
+		"steps": {
+			"dev":    {"agent": {"name": "developer"},     "max_visits": 2, "next_steps": [{"step": "review", "prompt_rule": "."}]},
+			"review": {"agent": {"name": "code-reviewer"}, "max_visits": 2, "next_steps": [{"step": "dev",    "prompt_rule": "."}]}
+		}}`
+	def, err := workflow.ParseReader(strings.NewReader(capped))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf, err := stack.wfs.Create(ctx, def, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var devID, reviewID string
+	for _, s := range wf.Steps {
+		if s.Name == "dev" {
+			devID = s.ID
+		}
+		if s.Name == "review" {
+			reviewID = s.ID
+		}
+	}
+
+	// Scripted decision: always loop back.
+	decide := func(taskID, stepName string) string {
+		switch stepName {
+		case "dev":
+			return "review"
+		case "review":
+			return "dev"
+		}
+		return ""
+	}
+	teardown := stack.startEngine(t, scriptedFactory(t, stack, decide))
+	defer teardown()
+
+	// Create on dev. The initial counter for dev is bumped to 1 by the
+	// EnterStep wired into create/enroll — but this fixture uses the
+	// raw doltlite CreateTask, so the counter starts at 0. The first
+	// transition (dev→review) brings review to 1, then review→dev brings
+	// dev to 1 (after the initial state), then dev→review brings review
+	// to 2 (cap), then review→dev brings dev to 2 (cap), then dev→review
+	// at attempt 5 should hit the cap and park.
+	tk, err := stack.ts.CreateTask(ctx, store.Task{
+		Title:         "loop me",
+		Status:        store.StatusInWorkflow,
+		Priority:      1,
+		WorkflowID:    wf.ID,
+		CurrentStepID: devID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for the cap to fire and park the task to human_feedback.
+	stack.waitForTaskStatus(t, tk.ID, store.StatusHumanFeedback, 8*time.Second)
+
+	// Verify the parking shape:
+	//   - current_step_id moves to the TARGET of the failed advance.
+	//     The first cap fires when source=dev, target=review (the
+	//     review EnterStep would cross max_visits=2), so the park
+	//     leaves current_step_id pointing at REVIEW. This is the
+	//     advanceTask-cap rule from docs/plans/20260520-Step-Visit-
+	//     Limits.md §2 and the whole point of as-9ab8 (A): the operator
+	//     resumes onto the step the task was on its way to, not the
+	//     one it just finished.
+	//   - counters land at dev=2, review=2 (both at cap).
+	post, _ := stack.ts.GetTask(ctx, tk.ID)
+	if post.CurrentStepID != reviewID {
+		t.Fatalf("first cap-fire must park on TARGET (review=%s), got %q", reviewID, post.CurrentStepID)
+	}
+	sv := post.Metadata["step_visits"].(map[string]any)
+	if v, _ := sv[devID].(float64); int(v) != 2 {
+		t.Fatalf("dev counter: %v (want 2)", sv[devID])
+	}
+	if v, _ := sv[reviewID].(float64); int(v) != 2 {
+		t.Fatalf("review counter: %v (want 2)", sv[reviewID])
+	}
+
+	// Verify the run row carries the cap-fire error.
+	rs, _ := stack.runs.ListRuns(ctx, runstore.RunFilter{TaskID: tk.ID})
+	var sawCap bool
+	for _, r := range rs {
+		if r.Status == runstore.StatusFailed && strings.HasPrefix(r.Error, "step_max_visits_exceeded:") {
+			sawCap = true
+			break
+		}
+	}
+	if !sawCap {
+		t.Fatalf("no failed run with step_max_visits_exceeded error; rows=%+v", rs)
+	}
+
+	// Now reset visits and resume — via the CLI verbs the test is named
+	// for. This exercises the full mapEnterStepError + commitWrite +
+	// audit-commit path that an operator would actually run. The e2e
+	// stack and the CLI both open the same on-disk DB; the daemon's
+	// task is parked (status='human_feedback') so there's no contention.
+	dbPath := filepath.Join(stack.projDir, "test.db")
+	if out, err := runRoot(t, stack.projDir, "--db", dbPath, "metadata", "reset-visits", tk.ID); err != nil {
+		t.Fatalf("metadata reset-visits via CLI: %v\n%s", err, out)
+	}
+	if out, err := runRoot(t, stack.projDir, "--db", dbPath, "resume", tk.ID); err != nil {
+		t.Fatalf("resume via CLI: %v\n%s", err, out)
+	}
+
+	// Wait for the cap to fire again — the loop must have continued
+	// and re-hit max_visits. After the first park current_step_id =
+	// review, so `autosk resume` (no --to) lands the agent on review;
+	// the next loop bounces review→dev→review→dev and caps at dev. The
+	// second cap fire therefore has source=review, target=dev — and
+	// the new park rule moves current_step_id onto dev. Asserting
+	// devID here pins both halves of the round trip (first park
+	// correctly chose target=review, and the second cap correctly
+	// chooses target=dev).
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		tkNow, _ := stack.ts.GetTask(ctx, tk.ID)
+		if tkNow.Status == store.StatusHumanFeedback {
+			sv := tkNow.Metadata["step_visits"].(map[string]any)
+			devCount, _ := sv[devID].(float64)
+			revCount, _ := sv[reviewID].(float64)
+			if int(devCount) >= 2 && int(revCount) >= 2 {
+				if tkNow.CurrentStepID != devID {
+					t.Fatalf("post-resume cap-fire must park on TARGET (dev=%s), got %q", devID, tkNow.CurrentStepID)
+				}
+				return
+			}
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	postResume, _ := stack.ts.GetTask(ctx, tk.ID)
+	t.Fatalf("loop did not continue after reset+resume; final task=%+v", postResume)
 }
 
 // TestE2E_Kickback_FailsAfterMax verifies the executor's kickback loop

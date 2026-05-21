@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -93,9 +94,11 @@ func newStub() *stubRunner {
 	}
 }
 
-func (r *stubRunner) PID() int                                            { return 4242 }
-func (r *stubRunner) Events() <-chan pi.Event                             { return r.events }
-func (r *stubRunner) GetState(ctx context.Context) (pi.SessionInfo, error) { return pi.SessionInfo{SessionID: "sess-stub", SessionFile: "/tmp/stub.jsonl"}, nil }
+func (r *stubRunner) PID() int                { return 4242 }
+func (r *stubRunner) Events() <-chan pi.Event { return r.events }
+func (r *stubRunner) GetState(ctx context.Context) (pi.SessionInfo, error) {
+	return pi.SessionInfo{SessionID: "sess-stub", SessionFile: "/tmp/stub.jsonl"}, nil
+}
 
 func (r *stubRunner) SendPrompt(ctx context.Context, m string) error {
 	r.mu.Lock()
@@ -143,12 +146,12 @@ func stubFactory(r *stubRunner) executor.Factory {
 // ---- shared fixture ------------------------------------------------------
 
 type execFixture struct {
-	ts      *doltlite.Store
-	reg     *pkgregistry.Registry
-	deps    executor.Deps
-	cfg     executor.Config
-	wf      workflow.Workflow
-	close   func()
+	ts    *doltlite.Store
+	reg   *pkgregistry.Registry
+	deps  executor.Deps
+	cfg   executor.Config
+	wf    workflow.Workflow
+	close func()
 }
 
 func newExecFixture(t *testing.T) *execFixture {
@@ -463,6 +466,455 @@ func TestRun_KickbackThenFail_ParksTask(t *testing.T) {
 	tk, _ := fx.ts.GetTask(ctx, taskID)
 	if tk.Status != store.StatusHumanFeedback {
 		t.Fatalf("task should be parked, got %s", tk.Status)
+	}
+}
+
+// TestAdvanceTask_CapExceeded_ParksOnTargetStep verifies the visit-cap
+// enforcement path. We prime metadata.step_visits[review] at the cap,
+// drive a `dev` run that signals `--to review`, and assert:
+//   - daemon_runs.status='failed'
+//   - daemon_runs.error starts with `step_max_visits_exceeded:`
+//   - tasks.status='human_feedback' (parked)
+//   - tasks.current_step_id is the TARGET step (review), so a bare
+//     `autosk resume <id>` (no --to) lands on the right step once the
+//     human resets visits; the source step is fully done.
+//   - tasks.metadata.step_visits[review] is unchanged (NOT incremented)
+func TestAdvanceTask_CapExceeded_ParksOnTargetStep(t *testing.T) {
+	fx := newExecFixture(t)
+	defer fx.close()
+	ctx := context.Background()
+
+	// Build a 2-step workflow with review capped at 1 visit. We can't
+	// retrofit max_visits onto the fixture workflow, so create a fresh
+	// one here. The executor only reads from the same wfStore so the
+	// new workflow lives alongside `feature-dev`.
+	cappedBody := `{
+		"name": "capped",
+		"first_step": "dev",
+		"steps": {
+			"dev":    {"agent": {"name": "developer"},     "max_visits": 5, "next_steps": [{"step": "review", "prompt_rule": "."}]},
+			"review": {"agent": {"name": "code-reviewer"}, "max_visits": 1, "next_steps": [{"step": "dev",    "prompt_rule": "."}]}
+		}}`
+	def, err := workflow.ParseReader(strings.NewReader(cappedBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cappedWF, err := fx.deps.Workflows.Create(ctx, def, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var devID, reviewID string
+	for _, s := range cappedWF.Steps {
+		switch s.Name {
+		case "dev":
+			devID = s.ID
+		case "review":
+			reviewID = s.ID
+		}
+	}
+
+	// Create a task on dev with step_visits[review] already at the cap.
+	tk, err := fx.ts.CreateTask(ctx, store.Task{
+		Title:         "At the cap",
+		Status:        store.StatusInWorkflow,
+		Priority:      2,
+		WorkflowID:    cappedWF.ID,
+		CurrentStepID: devID,
+		Metadata: map[string]any{
+			"step_visits": map[string]any{reviewID: 1},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := fx.deps.Runs.CreateRun(ctx, runstore.NewRun{
+		TaskID: tk.ID, StepID: devID, MaxCorrections: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stub := newStub()
+	stub.onPrompt = func(prompt string, attempt int) {
+		if attempt == 1 {
+			if _, err := fx.deps.Signals.Emit(ctx, tk.ID, "review"); err != nil {
+				t.Errorf("Emit: %v", err)
+			}
+		}
+	}
+	exec := executor.New(fx.deps, stubFactory(stub), fx.cfg)
+	err = exec.Run(ctx, run.JobID)
+	if err == nil {
+		t.Fatal("expected MaxVisitsExceededError")
+	}
+	var mve workflow.MaxVisitsExceededError
+	if !errors.As(err, &mve) {
+		t.Fatalf("err type %T: %v (want wrapped MaxVisitsExceededError)", err, err)
+	}
+
+	runRow, _ := fx.deps.Runs.GetRun(ctx, run.JobID)
+	if runRow.Status != runstore.StatusFailed {
+		t.Fatalf("run.Status: %s (want failed)", runRow.Status)
+	}
+	if !strings.HasPrefix(runRow.Error, "step_max_visits_exceeded:") {
+		t.Fatalf("run.Error: %q (want step_max_visits_exceeded: prefix)", runRow.Error)
+	}
+	tkAfter, _ := fx.ts.GetTask(ctx, tk.ID)
+	if tkAfter.Status != store.StatusHumanFeedback {
+		t.Fatalf("task parked? got status %s", tkAfter.Status)
+	}
+	if tkAfter.CurrentStepID != reviewID {
+		t.Fatalf("current_step_id should land on the TARGET step (review=%s), got %s (source dev=%s)",
+			reviewID, tkAfter.CurrentStepID, devID)
+	}
+	sv := tkAfter.Metadata["step_visits"].(map[string]any)
+	// JSON round-trip widens int → float64.
+	if v, _ := sv[reviewID].(float64); int(v) != 1 {
+		t.Fatalf("review counter should be UNCHANGED at 1, got %v (md=%+v)", sv[reviewID], tkAfter.Metadata)
+	}
+}
+
+// TestAdvanceTask_GenericAdvanceError_ParksOnTargetStep verifies that
+// the target-step parking applies to ANY error inside EnterStep, not
+// just the cap. We inject a sentinel error from a fake taskStore's
+// UpdateMetadataAndPatch and assert the task lands on the target
+// step — same intent-routing as the cap case.
+func TestAdvanceTask_GenericAdvanceError_ParksOnTargetStep(t *testing.T) {
+	fx := newExecFixture(t)
+	defer fx.close()
+	ctx := context.Background()
+
+	wfBody := `{
+		"name": "genericfail",
+		"first_step": "dev",
+		"steps": {
+			"dev":    {"agent": {"name": "developer"},     "next_steps": [{"step": "review", "prompt_rule": "."}]},
+			"review": {"agent": {"name": "code-reviewer"}, "next_steps": [{"step": "dev",    "prompt_rule": "."}]}
+		}}`
+	def, err := workflow.ParseReader(strings.NewReader(wfBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf, err := fx.deps.Workflows.Create(ctx, def, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var devID, reviewID string
+	for _, s := range wf.Steps {
+		switch s.Name {
+		case "dev":
+			devID = s.ID
+		case "review":
+			reviewID = s.ID
+		}
+	}
+	tk, err := fx.ts.CreateTask(ctx, store.Task{
+		Title:         "Generic advance error",
+		Status:        store.StatusInWorkflow,
+		Priority:      2,
+		WorkflowID:    wf.ID,
+		CurrentStepID: devID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := fx.deps.Runs.CreateRun(ctx, runstore.NewRun{
+		TaskID: tk.ID, StepID: devID, MaxCorrections: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wrap the task store so EnterStep's UpdateMetadataAndPatch fails
+	// with a sentinel; every other call passes through.
+	sentinel := errors.New("sentinel: simulated advance failure")
+	deps := fx.deps
+	deps.Tasks = &failingTaskStore{TaskStore: fx.ts, failOnUpdateMD: sentinel}
+
+	stub := newStub()
+	stub.onPrompt = func(prompt string, attempt int) {
+		if attempt == 1 {
+			if _, err := fx.deps.Signals.Emit(ctx, tk.ID, "review"); err != nil {
+				t.Errorf("Emit: %v", err)
+			}
+		}
+	}
+	exec := executor.New(deps, stubFactory(stub), fx.cfg)
+	err = exec.Run(ctx, run.JobID)
+	if err == nil {
+		t.Fatal("expected a generic advance error")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err %T: %v (want unwraps to sentinel)", err, err)
+	}
+	runRow, _ := fx.deps.Runs.GetRun(ctx, run.JobID)
+	if runRow.Status != runstore.StatusFailed {
+		t.Fatalf("run.Status: %s (want failed)", runRow.Status)
+	}
+	if !strings.HasPrefix(runRow.Error, "advance task: ") {
+		t.Fatalf("run.Error: %q (want `advance task: ...` prefix)", runRow.Error)
+	}
+	tkAfter, _ := fx.ts.GetTask(ctx, tk.ID)
+	if tkAfter.Status != store.StatusHumanFeedback {
+		t.Fatalf("task parked? got status %s", tkAfter.Status)
+	}
+	if tkAfter.CurrentStepID != reviewID {
+		t.Fatalf("current_step_id should land on target (review=%s), got %s (source dev=%s)",
+			reviewID, tkAfter.CurrentStepID, devID)
+	}
+}
+
+// TestAdvanceTask_RunnerCrash_PreservesSourceStep is the regression
+// guard for the other failure modes: when the runner dies BEFORE the
+// agent emits `step next`, the target step is unknown so the task
+// must stay parked on the source step — the only safe landing.
+func TestAdvanceTask_RunnerCrash_PreservesSourceStep(t *testing.T) {
+	fx := newExecFixture(t)
+	defer fx.close()
+	ctx := context.Background()
+	taskID, jobID := fx.makeRun(t, "crash before signal", "dev")
+
+	// Stub fails SendPrompt immediately, triggering handleRunError
+	// BEFORE advanceTask gets a chance to compute a target.
+	stub := &sendPromptFailStub{stubRunner: newStub(), sendErr: errors.New("boom: pi died")}
+	exec := executor.New(fx.deps, sendFailingFactory(stub), fx.cfg)
+	err := exec.Run(ctx, jobID)
+	if err == nil {
+		t.Fatal("expected runner error")
+	}
+	run, _ := fx.deps.Runs.GetRun(ctx, jobID)
+	if run.Status != runstore.StatusFailed {
+		t.Fatalf("run.Status: %s (want failed)", run.Status)
+	}
+	tk, _ := fx.ts.GetTask(ctx, taskID)
+	if tk.Status != store.StatusHumanFeedback {
+		t.Fatalf("task parked? got status %s", tk.Status)
+	}
+	dev, err := fx.deps.Workflows.FindStepByName(ctx, fx.wf.ID, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.CurrentStepID != dev.ID {
+		t.Fatalf("current_step_id should be PRESERVED as source (dev=%s), got %s",
+			dev.ID, tk.CurrentStepID)
+	}
+}
+
+// failingTaskStore wraps a real TaskStore and forces UpdateMetadataAndPatch
+// to return a sentinel error so we can exercise the generic-error
+// branch of advanceTask.
+type failingTaskStore struct {
+	executor.TaskStore
+	failOnUpdateMD error
+}
+
+func (f *failingTaskStore) UpdateMetadataAndPatch(ctx context.Context, id string, fn func(m map[string]any) error, p store.TaskPatch) (store.Task, error) {
+	if f.failOnUpdateMD != nil {
+		return store.Task{}, f.failOnUpdateMD
+	}
+	return f.TaskStore.UpdateMetadataAndPatch(ctx, id, fn, p)
+}
+
+// sendPromptFailStub makes the first SendPrompt return an error, which
+// drops the executor into handleRunError before advanceTask runs.
+type sendPromptFailStub struct {
+	*stubRunner
+	sendErr error
+}
+
+func (s *sendPromptFailStub) SendPrompt(ctx context.Context, m string) error {
+	return s.sendErr
+}
+
+// sendFailingFactory wraps a *sendPromptFailStub into the
+// executor.Factory signature.
+func sendFailingFactory(stub *sendPromptFailStub) executor.Factory {
+	return func(ctx context.Context, opts pi.Opts) (executor.PiRunner, error) {
+		return stub, nil
+	}
+}
+
+// TestRun_AdvanceBumpsVisitCounter verifies the happy-path counter
+// increment on a successful sibling-step transition.
+func TestRun_AdvanceBumpsVisitCounter(t *testing.T) {
+	fx := newExecFixture(t)
+	defer fx.close()
+	ctx := context.Background()
+
+	cappedBody := `{
+		"name": "countme",
+		"first_step": "dev",
+		"steps": {
+			"dev":    {"agent": {"name": "developer"},     "max_visits": 5, "next_steps": [{"step": "review", "prompt_rule": "."}]},
+			"review": {"agent": {"name": "code-reviewer"}, "max_visits": 5, "next_steps": [{"task_status": "done", "prompt_rule": "."}]}
+		}}`
+	def, _ := workflow.ParseReader(strings.NewReader(cappedBody))
+	wf, err := fx.deps.Workflows.Create(ctx, def, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var devID, reviewID string
+	for _, s := range wf.Steps {
+		if s.Name == "dev" {
+			devID = s.ID
+		}
+		if s.Name == "review" {
+			reviewID = s.ID
+		}
+	}
+	tk, err := fx.ts.CreateTask(ctx, store.Task{
+		Title:         "counter",
+		Status:        store.StatusInWorkflow,
+		Priority:      2,
+		WorkflowID:    wf.ID,
+		CurrentStepID: devID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := fx.deps.Runs.CreateRun(ctx, runstore.NewRun{
+		TaskID: tk.ID, StepID: devID, MaxCorrections: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub := newStub()
+	stub.onPrompt = func(prompt string, attempt int) {
+		if attempt == 1 {
+			if _, err := fx.deps.Signals.Emit(ctx, tk.ID, "review"); err != nil {
+				t.Errorf("Emit: %v", err)
+			}
+		}
+	}
+	exec := executor.New(fx.deps, stubFactory(stub), fx.cfg)
+	if err := exec.Run(ctx, run.JobID); err != nil {
+		t.Fatal(err)
+	}
+	tkAfter, _ := fx.ts.GetTask(ctx, tk.ID)
+	if tkAfter.CurrentStepID != reviewID {
+		t.Fatalf("current_step_id: %s (want review %s)", tkAfter.CurrentStepID, reviewID)
+	}
+	sv := tkAfter.Metadata["step_visits"].(map[string]any)
+	if v, _ := sv[reviewID].(float64); int(v) != 1 {
+		t.Fatalf("review counter should be 1, got %v", sv[reviewID])
+	}
+}
+
+// TestRun_AdvanceCapFires_OperatorRaceNoClobber drives the cap path
+// concurrently with a human-side `done` (the operator races the
+// executor while it is failing the run). The expected outcome is that
+// parkTaskOnFailure's "only park if still in_workflow" guard prevents
+// the executor from clobbering the operator's terminal status.
+//
+// We synchronise via the stub's onPrompt callback: emit the cap-fire
+// signal, then flip the task to `done` BEFORE returning. By the time
+// the executor calls advanceTask, the task is already terminal; the
+// subsequent failTerminal path marks the run failed but skips the
+// parking step because the task is no longer in_workflow.
+func TestRun_AdvanceCapFires_OperatorRaceNoClobber(t *testing.T) {
+	fx := newExecFixture(t)
+	defer fx.close()
+	ctx := context.Background()
+
+	cappedBody := `{
+		"name": "raced",
+		"first_step": "dev",
+		"steps": {
+			"dev":    {"agent": {"name": "developer"},     "max_visits": 5, "next_steps": [{"step": "review", "prompt_rule": "."}]},
+			"review": {"agent": {"name": "code-reviewer"}, "max_visits": 1, "next_steps": [{"step": "dev",    "prompt_rule": "."}]}
+		}}`
+	def, err := workflow.ParseReader(strings.NewReader(cappedBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cappedWF, err := fx.deps.Workflows.Create(ctx, def, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var devID, reviewID string
+	for _, s := range cappedWF.Steps {
+		switch s.Name {
+		case "dev":
+			devID = s.ID
+		case "review":
+			reviewID = s.ID
+		}
+	}
+
+	tk, err := fx.ts.CreateTask(ctx, store.Task{
+		Title:         "Operator races executor",
+		Status:        store.StatusInWorkflow,
+		Priority:      2,
+		WorkflowID:    cappedWF.ID,
+		CurrentStepID: devID,
+		Metadata: map[string]any{
+			"step_visits": map[string]any{reviewID: 1},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := fx.deps.Runs.CreateRun(ctx, runstore.NewRun{
+		TaskID: tk.ID, StepID: devID, MaxCorrections: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stub := newStub()
+	stub.onPrompt = func(prompt string, attempt int) {
+		if attempt != 1 {
+			return
+		}
+		if _, err := fx.deps.Signals.Emit(ctx, tk.ID, "review"); err != nil {
+			t.Errorf("Emit: %v", err)
+			return
+		}
+		// Race the executor: while it's still in WaitForAgentEnd /
+		// shutdown, mark the task done from the operator side. The cap
+		// will fire in advanceTask afterwards; parkTaskOnFailure must
+		// then short-circuit because the task is no longer in_workflow.
+		doneStatus := store.StatusDone
+		emptyStep := ""
+		if _, err := fx.ts.UpdateTask(ctx, tk.ID, store.TaskPatch{
+			Status:        &doneStatus,
+			CurrentStepID: &emptyStep,
+		}); err != nil {
+			t.Errorf("operator UpdateTask: %v", err)
+		}
+	}
+
+	exec := executor.New(fx.deps, stubFactory(stub), fx.cfg)
+	err = exec.Run(ctx, run.JobID)
+	if err == nil {
+		t.Fatal("expected cap-fire error")
+	}
+	var mve workflow.MaxVisitsExceededError
+	if !errors.As(err, &mve) {
+		t.Fatalf("err type %T: %v (want wrapped MaxVisitsExceededError)", err, err)
+	}
+
+	// The run is failed, with the expected error...
+	runRow, _ := fx.deps.Runs.GetRun(ctx, run.JobID)
+	if runRow.Status != runstore.StatusFailed {
+		t.Fatalf("run.Status: %s (want failed)", runRow.Status)
+	}
+	if !strings.HasPrefix(runRow.Error, "step_max_visits_exceeded:") {
+		t.Fatalf("run.Error: %q", runRow.Error)
+	}
+	// ...but the task is the operator's terminal status, NOT parked.
+	tkAfter, _ := fx.ts.GetTask(ctx, tk.ID)
+	if tkAfter.Status != store.StatusDone {
+		t.Fatalf("task should be the operator's choice (done), got %s", tkAfter.Status)
+	}
+	if tkAfter.CurrentStepID != "" {
+		t.Errorf("current_step_id should be cleared by the operator's done patch, got %q", tkAfter.CurrentStepID)
+	}
+	// And the cap-side increment must NOT have landed (the EnterStep tx
+	// rolled back when the cap fired).
+	sv := tkAfter.Metadata["step_visits"].(map[string]any)
+	if v, _ := sv[reviewID].(float64); int(v) != 1 {
+		t.Fatalf("review counter mutated despite cap-fire: %v", sv[reviewID])
 	}
 }
 

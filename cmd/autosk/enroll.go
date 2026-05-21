@@ -117,12 +117,19 @@ Examples:
 				return err
 			}
 
-			newStatus := store.StatusInWorkflow
-			t, err := s.UpdateTask(cmd.Context(), taskID, store.TaskPatch{
-				Status:        &newStatus,
-				WorkflowID:    &w.ID,
-				CurrentStepID: &st.ID,
-			})
+			// EnterStep stamps workflow_id + current_step_id + status +
+			// bumps step_visits[<entry step>] in a single tx, enforcing
+			// step.max_visits along the way. Hitting the cap on first
+			// enroll is exotic but legitimate (e.g. someone bumped the
+			// counter via `metadata set`); the helper rejects it loudly.
+			if err := workflow.EnterStep(cmd.Context(), s, wfs, workflow.EnterStepInput{
+				TaskID:     taskID,
+				StepID:     st.ID,
+				WorkflowID: w.ID,
+			}); err != nil {
+				return mapEnterStepError(err, taskID)
+			}
+			t, err := s.GetTask(cmd.Context(), taskID)
 			if err != nil {
 				return err
 			}

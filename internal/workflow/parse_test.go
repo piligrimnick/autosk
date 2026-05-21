@@ -255,3 +255,60 @@ func TestValidate_Structural(t *testing.T) {
 func TestValidate_AgentMissing(t *testing.T) {
 	t.Skip("requires real agent store; covered in store_test.go via Create round-trip")
 }
+
+func TestParse_MaxVisitsRoundTrips(t *testing.T) {
+	body := `{
+		"name": "x", "first_step": "a",
+		"steps": {
+			"a": {
+				"agent": {"name": "dev"},
+				"max_visits": 5,
+				"next_steps": [{"task_status": "done", "prompt_rule": "."}]
+			}
+		}}`
+	def, err := workflow.ParseReader(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := def.Steps["a"].MaxVisits; got != 5 {
+		t.Fatalf("max_visits: %d (want 5)", got)
+	}
+}
+
+func TestParse_MaxVisitsAbsentIsZero(t *testing.T) {
+	body := `{
+		"name": "x", "first_step": "a",
+		"steps": {
+			"a": {
+				"agent": {"name": "dev"},
+				"next_steps": [{"task_status": "done", "prompt_rule": "."}]
+			}
+		}}`
+	def, err := workflow.ParseReader(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := def.Steps["a"].MaxVisits; got != 0 {
+		t.Fatalf("absent max_visits: %d (want 0)", got)
+	}
+}
+
+func TestValidate_RejectsNegativeMaxVisits(t *testing.T) {
+	body := `{
+		"name": "x", "first_step": "a",
+		"steps": {
+			"a": {
+				"agent": {"name": "dev"},
+				"max_visits": -3,
+				"next_steps": [{"task_status": "done", "prompt_rule": "."}]
+			}
+		}}`
+	def, err := workflow.ParseReader(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = workflow.Validate(context.Background(), def, nil, workflow.ValidateOpts{})
+	if err == nil || !strings.Contains(err.Error(), "max_visits") {
+		t.Fatalf("want max_visits validation error, got %v", err)
+	}
+}

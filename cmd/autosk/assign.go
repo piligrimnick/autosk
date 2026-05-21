@@ -68,12 +68,18 @@ func newAssignCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			newStatus := store.StatusInWorkflow
-			t, err := s.UpdateTask(cmd.Context(), taskID, store.TaskPatch{
-				Status:        &newStatus,
-				WorkflowID:    &w.ID,
-				CurrentStepID: &st.ID,
-			})
+			// Synthetic single:<agent> workflows are uncapped
+			// (max_visits=0), but we still go through EnterStep so the
+			// visit counter is recorded uniformly. Hitting the cap is
+			// impossible here today.
+			if err := workflow.EnterStep(cmd.Context(), s, wfs, workflow.EnterStepInput{
+				TaskID:     taskID,
+				StepID:     st.ID,
+				WorkflowID: w.ID,
+			}); err != nil {
+				return mapEnterStepError(err, taskID)
+			}
+			t, err := s.GetTask(cmd.Context(), taskID)
 			if err != nil {
 				return err
 			}

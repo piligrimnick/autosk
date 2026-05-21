@@ -75,6 +75,9 @@ func Validate(ctx context.Context, def Definition, ag *agent.Store, opts Validat
 		if len(s.NextSteps) == 0 {
 			addf("step %q: needs at least one transition in `next_steps`", stepName)
 		}
+		if s.MaxVisits < 0 {
+			addf("step %q: max_visits must be >= 0 (0 = unlimited)", stepName)
+		}
 		if s.AgentParams != nil {
 			if s.AgentParams.Thinking != nil {
 				if _, ok := ValidThinkingLevels[*s.AgentParams.Thinking]; !ok {

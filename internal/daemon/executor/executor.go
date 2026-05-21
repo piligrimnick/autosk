@@ -7,11 +7,11 @@
 //     resolve the npm package config via pkgregistry.
 //  3. Render the prompt from (task, current step, agent config, comments).
 //  4. Spawn the right runner:
-//       - cfg.Runner == "" → spawn pi --mode rpc with the package's
-//         model / thinking / first_message / extra_args /
-//         pi_extensions / pi_skills.
-//       - cfg.Runner != "" → spawn the Node bootstrapper (handled in a
-//         later phase; today this path returns ErrCustomRunnerNotWired).
+//     - cfg.Runner == "" → spawn pi --mode rpc with the package's
+//     model / thinking / first_message / extra_args /
+//     pi_extensions / pi_skills.
+//     - cfg.Runner != "" → spawn the Node bootstrapper (handled in a
+//     later phase; today this path returns ErrCustomRunnerNotWired).
 //  5. SendPrompt; WaitForAgentEnd.
 //  6. Read step_signals for the run. If present, advance the task
 //     atomically and MarkDone with transition_id. If absent, kickback
@@ -82,6 +82,7 @@ var DefaultNodeFactory NodeFactory = func(ctx context.Context, opts agentnode.Op
 type TaskStore interface {
 	GetTask(ctx context.Context, id string) (store.Task, error)
 	UpdateTask(ctx context.Context, id string, p store.TaskPatch) (store.Task, error)
+	UpdateMetadataAndPatch(ctx context.Context, id string, fn func(m map[string]any) error, p store.TaskPatch) (store.Task, error)
 }
 
 // Deps bundles every store/handle the executor needs.
@@ -123,10 +124,10 @@ type Config struct {
 
 // Executor wires everything together. Implements scheduler.Executor.
 type Executor struct {
-	deps    Deps
-	factory Factory
+	deps        Deps
+	factory     Factory
 	nodeFactory NodeFactory
-	cfg     Config
+	cfg         Config
 }
 
 // New constructs the executor with the default Node factory.
@@ -156,6 +157,32 @@ func (e *Executor) WithNodeFactory(nf NodeFactory) *Executor {
 // ErrAgentDidNotEmit is the terminal failure produced when the agent runs
 // out of correction attempts without emitting a `step next` signal.
 var ErrAgentDidNotEmit = errors.New("agent_did_not_emit_transition")
+
+// advanceTargetError wraps any error returned from advanceTask's
+// sibling-step branch (sig.NextStepName != "") together with the id of
+// the step the run was trying to enter. parkTaskOnFailure inspects the
+// error chain for this wrapper and, when present, parks the task on
+// the TARGET step instead of the SOURCE step.
+//
+// The motivation is the cap-exceeded case: once the SOURCE step has
+// emitted a valid `step next --to TARGET` signal it is done, and a
+// human resuming the parked task wants to re-run TARGET, not SOURCE.
+// The same target-routing applies to any failure inside EnterStep
+// (cap, store error, etc.) — the target is the run's intent and
+// preserving it gives `autosk resume <id>` without `--to` the right
+// landing step once visits are reset.
+//
+// Failure modes that are NOT routed through advanceTask (pi crash,
+// runner timeout, SendPrompt error, shutdown error) intentionally do
+// NOT use this wrapper: the target step is unknown there, so the task
+// stays parked on the source step.
+type advanceTargetError struct {
+	TargetStepID string
+	Err          error
+}
+
+func (e *advanceTargetError) Error() string { return e.Err.Error() }
+func (e *advanceTargetError) Unwrap() error { return e.Err }
 
 // Run is the scheduler.Executor entry point.
 func (e *Executor) Run(ctx context.Context, jobID string) error {
@@ -205,7 +232,7 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 		return e.failTerminal(bg, jobID, nil, fmt.Errorf("session dir: %w", err))
 	}
 	var (
-		runner    PiRunner
+		runner     PiRunner
 		initialMsg = prompt
 	)
 	if agentCfg.Runner != "" {
@@ -333,6 +360,15 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 
 	// 8. Advance the task atomically + persist transition_id.
 	if err := e.advanceTask(bg, run.TaskID, signaled); err != nil {
+		// MaxVisitsExceededError already carries the documented
+		// `step_max_visits_exceeded: ...` form; surface it verbatim so
+		// `daemon_runs.error` matches docs/workflows.md exactly. The
+		// error may be wrapped in advanceTargetError; errors.As walks
+		// the Unwrap chain, so this still fires for both forms.
+		var mve workflow.MaxVisitsExceededError
+		if errors.As(err, &mve) {
+			return e.failTerminal(bg, jobID, &exit, err)
+		}
 		return e.failTerminal(bg, jobID, &exit, fmt.Errorf("advance task: %w", err))
 	}
 	tid := signaled.TransitionID
@@ -345,20 +381,16 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 // advanceTask applies the transition's effect to tasks per §5.4.
 //
 //   - next_step_id   → current_step_id = next; status = in_workflow.
+//     The visit counter is bumped + cap enforced via
+//     workflow.EnterStep; a max-visits exceedance
+//     surfaces as MaxVisitsExceededError, which the
+//     caller maps to a failed run + parked task.
 //   - human_feedback → current_step_id preserved (resume rewinds here);
-//                      status = human_feedback.
+//     status = human_feedback.
 //   - done|cancelled → current_step_id = NULL; status flipped.
 func (e *Executor) advanceTask(ctx context.Context, taskID string, sig step.Emitted) error {
-	// Resolve target step / status via the recorded transition id.
-	var (
-		status        store.Status
-		nextStepID    string
-		clearStep     bool
-	)
 	switch {
 	case sig.NextStepName != "":
-		// Look the next step up via the workflow store; we know the task's
-		// workflow_id, so use it.
 		tk, err := e.deps.Tasks.GetTask(ctx, taskID)
 		if err != nil {
 			return err
@@ -370,33 +402,46 @@ func (e *Executor) advanceTask(ctx context.Context, taskID string, sig step.Emit
 		if err != nil {
 			return fmt.Errorf("find next step %q: %w", sig.NextStepName, err)
 		}
-		status = store.StatusInWorkflow
-		nextStepID = st.ID
+		// EnterStep enforces step.max_visits + bumps step_visits +
+		// updates the task pointer atomically. On cap-exceeded the
+		// returned MaxVisitsExceededError propagates up to Run, where
+		// the deferred failure path persists it as the run's error and
+		// parks the task. Any error here is wrapped in advanceTargetError
+		// so parkTaskOnFailure knows which step the run was aiming for
+		// — the task is parked on the TARGET step (the run's intent),
+		// not the SOURCE step (already finished). `autosk resume <id>`
+		// without --to then lands on the right step once visits are
+		// reset.
+		if err := workflow.EnterStep(ctx, e.deps.Tasks, e.deps.Workflows, workflow.EnterStepInput{
+			TaskID: taskID,
+			StepID: st.ID,
+		}); err != nil {
+			return &advanceTargetError{TargetStepID: st.ID, Err: err}
+		}
+		return nil
 	case sig.TaskStatus == "human_feedback":
-		status = store.StatusHumanFeedback
-		// current_step_id preserved; we don't include it in the patch.
+		status := store.StatusHumanFeedback
+		if _, err := e.deps.Tasks.UpdateTask(ctx, taskID, store.TaskPatch{Status: &status}); err != nil {
+			return err
+		}
+		return nil
 	case sig.TaskStatus == "done":
-		status = store.StatusDone
-		clearStep = true
+		status := store.StatusDone
+		empty := ""
+		if _, err := e.deps.Tasks.UpdateTask(ctx, taskID, store.TaskPatch{Status: &status, CurrentStepID: &empty}); err != nil {
+			return err
+		}
+		return nil
 	case sig.TaskStatus == "cancelled":
-		status = store.StatusCancelled
-		clearStep = true
+		status := store.StatusCancelled
+		empty := ""
+		if _, err := e.deps.Tasks.UpdateTask(ctx, taskID, store.TaskPatch{Status: &status, CurrentStepID: &empty}); err != nil {
+			return err
+		}
+		return nil
 	default:
 		return fmt.Errorf("invalid transition signal (neither sibling nor recognised task_status): %+v", sig)
 	}
-
-	patch := store.TaskPatch{Status: &status}
-	if nextStepID != "" {
-		patch.CurrentStepID = &nextStepID
-	}
-	if clearStep {
-		empty := ""
-		patch.CurrentStepID = &empty
-	}
-	if _, err := e.deps.Tasks.UpdateTask(ctx, taskID, patch); err != nil {
-		return err
-	}
-	return nil
 }
 
 // applyAgentParamOverrides merges per-step AgentParams overrides on top
@@ -503,6 +548,8 @@ func RenderPrompt(
 			sb.WriteString(line)
 			sb.WriteString("\n")
 		}
+	} else {
+		sb.WriteString("\nNo comments on this task yet.\n")
 	}
 	return sb.String()
 }
@@ -543,7 +590,7 @@ func (e *Executor) handleRunError(ctx, bg context.Context, jobID string, runner 
 	}
 	exit, _ := e.shutdown(runner, ctx, bg)
 	_, _ = e.deps.Runs.MarkFailed(bg, jobID, &exit, runErr.Error())
-	e.parkTaskOnFailure(bg, jobID)
+	e.parkTaskOnFailure(bg, jobID, runErr)
 	return runErr
 }
 
@@ -563,7 +610,7 @@ func (e *Executor) shutdown(runner PiRunner, ctx, bg context.Context) (int, erro
 
 func (e *Executor) failTerminal(ctx context.Context, jobID string, exit *int, cause error) error {
 	_, _ = e.deps.Runs.MarkFailed(ctx, jobID, exit, cause.Error())
-	e.parkTaskOnFailure(ctx, jobID)
+	e.parkTaskOnFailure(ctx, jobID, cause)
 	return cause
 }
 
@@ -572,14 +619,25 @@ func (e *Executor) failTerminal(ctx context.Context, jobID string, exit *int, ca
 // agent_config_invalid, pi binary missing) spams daemon_runs forever
 // because the task stays in in_workflow with no queued/running row.
 //
-// `current_step_id` is preserved so `autosk resume <id>` returns to the
-// same step once the human has fixed the underlying problem. The
-// failure reason is in daemon_runs.error (visible via `daemon list` /
-// HTTP API).
+// Step-pointer policy:
+//
+//   - advanceTask failures (the only place we know the run's intent)
+//     are surfaced as advanceTargetError; the task is parked on the
+//     TARGET step. This way `autosk resume <id>` without --to lands on
+//     the step the run was trying to enter (e.g. on a
+//     step_max_visits_exceeded park: source step is already done, so
+//     re-running it would burn tokens).
+//   - Every other failure (pi crash, runner timeout, SendPrompt error,
+//     shutdown error, agent_did_not_emit, etc.) leaves current_step_id
+//     untouched — the run died before emitting `step next`, so the
+//     target is unknown and the only safe landing is the source step.
+//
+// The failure reason is in daemon_runs.error (visible via
+// `daemon list` / HTTP API).
 //
 // Best-effort: if Tasks/Runs lookups fail here we swallow the error
 // since we're already on a failure path.
-func (e *Executor) parkTaskOnFailure(ctx context.Context, jobID string) {
+func (e *Executor) parkTaskOnFailure(ctx context.Context, jobID string, cause error) {
 	run, err := e.deps.Runs.GetRun(ctx, jobID)
 	if err != nil || run.TaskID == "" {
 		return
@@ -595,7 +653,12 @@ func (e *Executor) parkTaskOnFailure(ctx context.Context, jobID string) {
 		return
 	}
 	parked := store.StatusHumanFeedback
-	_, _ = e.deps.Tasks.UpdateTask(ctx, run.TaskID, store.TaskPatch{Status: &parked})
+	patch := store.TaskPatch{Status: &parked}
+	var ate *advanceTargetError
+	if errors.As(cause, &ate) && ate.TargetStepID != "" {
+		patch.CurrentStepID = &ate.TargetStepID
+	}
+	_, _ = e.deps.Tasks.UpdateTask(ctx, run.TaskID, patch)
 }
 
 func (e *Executor) cleanup(runner PiRunner, bg context.Context) {

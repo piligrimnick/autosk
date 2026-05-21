@@ -40,6 +40,7 @@ func (s *Store) ListTasks(ctx context.Context, f store.ListFilter) ([]store.Task
 
 	q := `SELECT id, title, description, status, priority,
 		           author_id, workflow_id, current_step_id,
+		           metadata,
 		           created_at, updated_at
 		    FROM tasks`
 	if len(where) > 0 {
@@ -63,6 +64,7 @@ func (s *Store) Ready(ctx context.Context, limit int) ([]store.Task, error) {
 	}
 	q := `SELECT t.id, t.title, t.description, t.status, t.priority,
 		           t.author_id, t.workflow_id, t.current_step_id,
+		           t.metadata,
 		           t.created_at, t.updated_at
 		    FROM tasks t
 		   WHERE t.status = 'new'
@@ -92,37 +94,17 @@ func (s *Store) UpdateTask(ctx context.Context, idStr string, p store.TaskPatch)
 		return store.Task{}, err
 	}
 
-	var (
-		sets []string
-		args []any
-	)
-	if p.Title != nil {
-		title := strings.TrimSpace(*p.Title)
-		if title == "" {
-			return store.Task{}, store.ErrEmptyTitle
+	sets, args, err := patchSetsAndArgs(p)
+	if err != nil {
+		return store.Task{}, err
+	}
+	if p.Metadata != nil {
+		metaArg, merr := marshalMetadata(*p.Metadata)
+		if merr != nil {
+			return store.Task{}, merr
 		}
-		sets = append(sets, "title = ?")
-		args = append(args, title)
-	}
-	if p.Description != nil {
-		sets = append(sets, "description = ?")
-		args = append(args, *p.Description)
-	}
-	if p.Status != nil {
-		sets = append(sets, "status = ?")
-		args = append(args, string(*p.Status))
-	}
-	if p.Priority != nil {
-		sets = append(sets, "priority = ?")
-		args = append(args, *p.Priority)
-	}
-	if p.WorkflowID != nil {
-		sets = append(sets, "workflow_id = ?")
-		args = append(args, nullText(*p.WorkflowID))
-	}
-	if p.CurrentStepID != nil {
-		sets = append(sets, "current_step_id = ?")
-		args = append(args, nullText(*p.CurrentStepID))
+		sets = append(sets, "metadata = ?")
+		args = append(args, metaArg)
 	}
 	sets = append(sets, "updated_at = ?")
 	args = append(args, time.Now().UTC().Unix())
@@ -130,7 +112,7 @@ func (s *Store) UpdateTask(ctx context.Context, idStr string, p store.TaskPatch)
 
 	q := "UPDATE tasks SET " + strings.Join(sets, ", ") + " WHERE id = ?"
 	var res sql.Result
-	err := retryOnBusy(ctx, func() error {
+	err = retryOnBusy(ctx, func() error {
 		var e error
 		res, e = s.db.ExecContext(ctx, q, args...)
 		return e
@@ -178,6 +160,44 @@ func defaultStatuses(in []store.Status) []store.Status {
 		return store.OpenStatuses()
 	}
 	return in
+}
+
+// patchSetsAndArgs translates the non-metadata fields of p into
+// matching SQL SET-clause fragments and the parameter list. The
+// metadata column and the trailing updated_at + WHERE id are appended
+// by the caller (UpdateTask vs UpdateMetadataAndPatch handle metadata
+// differently). Returns an error for inputs that fail per-field
+// validation (today: empty title).
+func patchSetsAndArgs(p store.TaskPatch) (sets []string, args []any, err error) {
+	if p.Title != nil {
+		title := strings.TrimSpace(*p.Title)
+		if title == "" {
+			return nil, nil, store.ErrEmptyTitle
+		}
+		sets = append(sets, "title = ?")
+		args = append(args, title)
+	}
+	if p.Description != nil {
+		sets = append(sets, "description = ?")
+		args = append(args, *p.Description)
+	}
+	if p.Status != nil {
+		sets = append(sets, "status = ?")
+		args = append(args, string(*p.Status))
+	}
+	if p.Priority != nil {
+		sets = append(sets, "priority = ?")
+		args = append(args, *p.Priority)
+	}
+	if p.WorkflowID != nil {
+		sets = append(sets, "workflow_id = ?")
+		args = append(args, nullText(*p.WorkflowID))
+	}
+	if p.CurrentStepID != nil {
+		sets = append(sets, "current_step_id = ?")
+		args = append(args, nullText(*p.CurrentStepID))
+	}
+	return sets, args, nil
 }
 
 func validatePatch(p store.TaskPatch) error {

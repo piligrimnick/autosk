@@ -3,6 +3,7 @@ package doltlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -34,14 +35,20 @@ func (s *Store) CreateTask(ctx context.Context, t store.Task) (store.Task, error
 	t.CreatedAt = now
 	t.UpdatedAt = now
 
-	err := retryOnBusy(ctx, func() error {
+	metaArg, err := marshalMetadata(t.Metadata)
+	if err != nil {
+		return store.Task{}, err
+	}
+	err = retryOnBusy(ctx, func() error {
 		_, e := s.db.ExecContext(ctx, `
 			INSERT INTO tasks(id, title, description, status, priority,
 			                  author_id, workflow_id, current_step_id,
+			                  metadata,
 			                  created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, t.ID, t.Title, t.Description, string(t.Status), t.Priority,
 			nullText(t.AuthorID), nullText(t.WorkflowID), nullText(t.CurrentStepID),
+			metaArg,
 			now.Unix(), now.Unix())
 		return e
 	})
@@ -49,6 +56,33 @@ func (s *Store) CreateTask(ctx context.Context, t store.Task) (store.Task, error
 		return store.Task{}, fmt.Errorf("insert task: %w", err)
 	}
 	return t, nil
+}
+
+// marshalMetadata converts an in-memory metadata map into the SQL
+// argument used for tasks.metadata. nil / empty maps collapse to SQL
+// NULL so the column round-trips cleanly through CreateTask + UpdateTask.
+func marshalMetadata(m map[string]any) (any, error) {
+	if len(m) == 0 {
+		return nil, nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("marshal metadata: %w", err)
+	}
+	return string(b), nil
+}
+
+// unmarshalMetadata is the inverse of marshalMetadata. NULL / empty
+// strings return nil so callers see the zero value uniformly.
+func unmarshalMetadata(raw sql.NullString) (map[string]any, error) {
+	if !raw.Valid || strings.TrimSpace(raw.String) == "" {
+		return nil, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(raw.String), &m); err != nil {
+		return nil, fmt.Errorf("unmarshal metadata: %w", err)
+	}
+	return m, nil
 }
 
 // nullText converts a possibly-empty Go string into a SQL NULL or text
@@ -68,6 +102,7 @@ func (s *Store) GetTask(ctx context.Context, idStr string) (store.Task, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, title, description, status, priority,
 		       author_id, workflow_id, current_step_id,
+		       metadata,
 		       created_at, updated_at
 		  FROM tasks WHERE id = ?
 	`, idStr)
@@ -89,11 +124,13 @@ func scanOneTask(sc interface{ Scan(...any) error }) (store.Task, error) {
 		authorID       sql.NullString
 		workflowID     sql.NullString
 		currentStepID  sql.NullString
+		metadataRaw    sql.NullString
 		createdU, updU int64
 	)
 	if err := sc.Scan(
 		&t.ID, &t.Title, &t.Description, &statusStr, &t.Priority,
 		&authorID, &workflowID, &currentStepID,
+		&metadataRaw,
 		&createdU, &updU,
 	); err != nil {
 		return store.Task{}, err
@@ -102,6 +139,11 @@ func scanOneTask(sc interface{ Scan(...any) error }) (store.Task, error) {
 	t.AuthorID = authorID.String
 	t.WorkflowID = workflowID.String
 	t.CurrentStepID = currentStepID.String
+	md, err := unmarshalMetadata(metadataRaw)
+	if err != nil {
+		return store.Task{}, err
+	}
+	t.Metadata = md
 	t.CreatedAt = time.Unix(createdU, 0).UTC()
 	t.UpdatedAt = time.Unix(updU, 0).UTC()
 	return t, nil

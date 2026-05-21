@@ -167,6 +167,62 @@ func TestCreate_RoundTripsAgentParams(t *testing.T) {
 	}
 }
 
+// TestCreate_RoundTripsMaxVisits verifies that per-step max_visits is
+// persisted through the steps table and read back on every scan path
+// (GetByName, FindStepByID, FindStepByName).
+func TestCreate_RoundTripsMaxVisits(t *testing.T) {
+	wf, _, _, done := newWFFixture(t)
+	defer done()
+	ctx := context.Background()
+	body := `{
+		"name": "caps",
+		"first_step": "dev",
+		"steps": {
+			"dev":    {"agent": {"name": "developer"},    "max_visits": 3, "next_steps": [{"step": "review", "prompt_rule": "."}]},
+			"review": {"agent": {"name": "code-reviewer"}, "max_visits": 2, "next_steps": [{"task_status": "done", "prompt_rule": "."}]}
+		}}`
+	def, err := workflow.ParseReader(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := wf.Create(ctx, def, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Steps[0].MaxVisits != 3 || w.Steps[1].MaxVisits != 2 {
+		t.Fatalf("caps via GetByName: %d/%d", w.Steps[0].MaxVisits, w.Steps[1].MaxVisits)
+	}
+	st, err := wf.FindStepByID(ctx, w.Steps[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.MaxVisits != 3 {
+		t.Fatalf("FindStepByID lost cap: %+v", st.MaxVisits)
+	}
+	st2, err := wf.FindStepByName(ctx, w.ID, "review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st2.MaxVisits != 2 {
+		t.Fatalf("FindStepByName lost cap: %+v", st2.MaxVisits)
+	}
+}
+
+// TestEnsureSingle_MaxVisitsIsZero verifies the synthetic single-agent
+// workflow stays uncapped (cap=0).
+func TestEnsureSingle_MaxVisitsIsZero(t *testing.T) {
+	wf, _, _, done := newWFFixture(t)
+	defer done()
+	ctx := context.Background()
+	w, err := wf.EnsureSingle(ctx, "developer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Steps[0].MaxVisits != 0 {
+		t.Fatalf("synthetic step should be uncapped, got max_visits=%d", w.Steps[0].MaxVisits)
+	}
+}
+
 func TestList_HidesSyntheticByDefault(t *testing.T) {
 	wf, _, _, done := newWFFixture(t)
 	defer done()

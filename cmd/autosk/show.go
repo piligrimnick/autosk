@@ -43,9 +43,12 @@ func newShowCmd() *cobra.Command {
 				return fmt.Errorf("is_blocked: %w", err)
 			}
 			opts := []render.Option{render.WithBlocked(blocked, incoming, outgoing)}
-			// Surface derived current_step / current_agent + author + workflow
-			// names when the underlying store is doltlite. Best-effort:
-			// failures here are ignored (the renderer falls back to bare ids).
+
+			// Best-effort: surface derived current_step / current_agent +
+			// author + workflow names + step_visits summary when the
+			// underlying store is doltlite. Hoisted into one block so we
+			// don't construct the agent / workflow handles twice.
+			var visitsSummary string
 			if dl, ok := s.(*doltlite.Store); ok {
 				ag := agent.New(dl.DB())
 				wfs := workflow.New(dl.DB(), ag)
@@ -64,7 +67,15 @@ func newShowCmd() *cobra.Command {
 						opts = append(opts, render.WithWorkflow(wf.Name))
 					}
 				}
+				// Surface step_visits inline so humans see why a parked
+				// task is stuck on a step. The summary is a single line
+				// under the standard task block; JSON output carries
+				// the raw map under `metadata` instead.
+				if len(t.Metadata) > 0 {
+					visitsSummary = renderVisitsSummary(cmd.Context(), wfs, t)
+				}
 			}
+			opts = append(opts, render.WithMetadata(t.Metadata, visitsSummary))
 
 			if flagJSON {
 				return render.TaskJSONTo(os.Stdout, t, opts...)

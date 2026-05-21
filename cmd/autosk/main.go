@@ -53,6 +53,7 @@ func newRootCmd() *cobra.Command {
 		newEnrollCmd(),
 		newResumeCmd(),
 		newCommentCmd(),
+		newMetadataCmd(),
 		newStepCmd(),
 		newLazyCmd(),
 		newGCCmd(),

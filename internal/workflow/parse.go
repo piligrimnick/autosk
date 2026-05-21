@@ -43,6 +43,10 @@ type StepDef struct {
 	AgentName   string
 	AgentParams *AgentParams
 	NextSteps   []TransitionDef
+	// MaxVisits caps how many times a single task may enter this step
+	// across one workflow run. 0 (the default) means "unlimited". See
+	// docs/plans/20260520-Step-Visit-Limits.md and docs/workflows.md.
+	MaxVisits int
 }
 
 // AgentParams overrides the standard agent-package config fields per
@@ -123,8 +127,9 @@ type rawStep struct {
 	// Agent is the per-step agent object: `{ "name": "...", "params": {...} }`.
 	// The previous string-only form (`"agent": "name"`) is no longer
 	// accepted; see parseAgentRef for the diagnostic.
-	Agent     json.RawMessage  `json:"agent"`
-	NextSteps []rawTransition  `json:"next_steps"`
+	Agent     json.RawMessage `json:"agent"`
+	NextSteps []rawTransition `json:"next_steps"`
+	MaxVisits int             `json:"max_visits,omitempty"`
 }
 
 type rawAgentRef struct {
@@ -193,7 +198,7 @@ func parseReader(r io.Reader, rejectFirstMessageFile bool) (Definition, error) {
 		if rejectFirstMessageFile && params != nil && params.FirstMessageFile != "" {
 			return Definition{}, fmt.Errorf("step %q: agent.params.first_message_file requires a workflow file path; use ParseFile or move the prompt into `first_message`", stepName)
 		}
-		stepDef := StepDef{AgentName: name, AgentParams: params}
+		stepDef := StepDef{AgentName: name, AgentParams: params, MaxVisits: s.MaxVisits}
 		for i, tr := range s.NextSteps {
 			step := strings.TrimSpace(tr.Step)
 			status := strings.TrimSpace(tr.TaskStatus)

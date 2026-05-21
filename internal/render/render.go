@@ -35,17 +35,28 @@ type TaskJSON struct {
 	BlockedBy []string `json:"blocked_by"`
 	Blocks    []string `json:"blocks"`
 
+	// Metadata mirrors the task's free-form tasks.metadata JSON blob.
+	// Always emitted as an object (empty `{}` when the column was NULL
+	// or empty) so callers can rely on its presence in --json output.
+	Metadata map[string]any `json:"metadata"`
+
 	// Display-only joins. Not emitted in JSON (those carry the raw id);
 	// only used by the human renderer to build the `[id]: name` form.
-	authorName   string
-	workflowName string
+	authorName     string
+	workflowName   string
 	currentAgentID string
+	visitsSummary  string
 }
 
 // ToWire converts a store.Task into the wire shape. blocked / arrays /
 // current_step / current_agent default to zero values — callers populate
-// them via Options or a Decorator when relevant.
+// them via Options or a Decorator when relevant. Metadata defaults to
+// an empty object (NULL on disk is indistinguishable from `{}`).
 func ToWire(t store.Task) TaskJSON {
+	md := t.Metadata
+	if md == nil {
+		md = map[string]any{}
+	}
 	return TaskJSON{
 		ID:          t.ID,
 		Title:       t.Title,
@@ -58,6 +69,7 @@ func ToWire(t store.Task) TaskJSON {
 		UpdatedAt:   t.UpdatedAt.UTC(),
 		BlockedBy:   []string{},
 		Blocks:      []string{},
+		Metadata:    md,
 	}
 }
 
@@ -83,6 +95,21 @@ func WithAuthor(name string) Option {
 // workflow_id. Used by the human renderer only.
 func WithWorkflow(name string) Option {
 	return func(t *TaskJSON) { t.workflowName = name }
+}
+
+// WithMetadata supplies the task's metadata blob and an optional one-
+// line summary of step_visits for the human renderer. Passing nil for
+// md is fine — the renderer treats it as an empty object. The summary
+// is human-only; the JSON wire shape always carries the raw map.
+func WithMetadata(md map[string]any, visitsSummary string) Option {
+	return func(t *TaskJSON) {
+		if md != nil {
+			t.Metadata = md
+		} else if t.Metadata == nil {
+			t.Metadata = map[string]any{}
+		}
+		t.visitsSummary = visitsSummary
+	}
 }
 
 // TaskJSONTo writes a single task as JSON (one line, no trailing newline
@@ -145,6 +172,9 @@ func Task(w io.Writer, t store.Task, opts ...Option) error {
 	fmt.Fprintf(w, "blocks:        %s\n", joinOrDash(wire.Blocks))
 	fmt.Fprintf(w, "created_at:    %s\n", wire.CreatedAt.Format(time.RFC3339))
 	fmt.Fprintf(w, "updated_at:    %s\n", wire.UpdatedAt.Format(time.RFC3339))
+	if wire.visitsSummary != "" {
+		fmt.Fprintf(w, "visits:        %s\n", wire.visitsSummary)
+	}
 	if wire.Description != "" {
 		fmt.Fprintf(w, "description:\n%s\n", indent(wire.Description, "  "))
 	} else {

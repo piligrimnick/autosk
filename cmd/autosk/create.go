@@ -103,7 +103,16 @@ If --description is "-", the description is read from stdin.`,
 				AuthorID:    author.ID,
 			}
 
-			// Workflow assignment, if any.
+			// Workflow assignment, if any. We always create the task as
+			// status='new' first and then call workflow.EnterStep so the
+			// workflow_id / current_step_id / status / step_visits land
+			// atomically and the entry-step visit counter goes through
+			// the cap-enforcement path. Note that hitting max_visits on
+			// the very first entry is essentially impossible (counter
+			// starts at 0 by definition for a fresh task), but the
+			// invariant "every entry into a workflow step bumps the
+			// counter" makes the engine's model uniform.
+			var entryWorkflowID, entryStepID string
 			if workflowArg != "" || agentArg != "" {
 				if stepArg != "" && agentArg != "" {
 					return errors.New("--step only applies with --workflow (single:<agent> workflows have a single step)")
@@ -112,9 +121,8 @@ If --description is "-", the description is read from stdin.`,
 				if err != nil {
 					return err
 				}
-				task.Status = store.StatusInWorkflow
-				task.WorkflowID = wf.ID
-				task.CurrentStepID = entryStep.ID
+				entryWorkflowID = wf.ID
+				entryStepID = entryStep.ID
 			} else if stepArg != "" {
 				return errors.New("--step requires --workflow")
 			}
@@ -122,6 +130,28 @@ If --description is "-", the description is read from stdin.`,
 			t, err := s.CreateTask(cmd.Context(), task)
 			if err != nil {
 				return err
+			}
+			if entryStepID != "" {
+				if err := workflow.EnterStep(cmd.Context(), s, wfStore, workflow.EnterStepInput{
+					TaskID:     t.ID,
+					StepID:     entryStepID,
+					WorkflowID: entryWorkflowID,
+				}); err != nil {
+					// CreateTask succeeded; EnterStep failed. The row exists
+					// in status='new' (no workflow_id stamped). Surface the
+					// orphan id in the error so the user can decide whether
+					// to cancel it or retry via `autosk enroll`.
+					return fmt.Errorf(
+						"created task %s but failed to enter the workflow: %w\n"+
+							"the task is in status='new'; you can drop it with `autosk cancel %s` or retry with `autosk enroll %s ...`",
+						t.ID, mapEnterStepError(err, t.ID), t.ID, t.ID,
+					)
+				}
+				// Reload to surface the stamped pointers in --json / show.
+				t, err = s.GetTask(cmd.Context(), t.ID)
+				if err != nil {
+					return err
+				}
 			}
 
 			// Edges.

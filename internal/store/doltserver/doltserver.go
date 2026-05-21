@@ -41,6 +41,12 @@ func (s *Store) GetTask(ctx context.Context, id string) (store.Task, error) {
 func (s *Store) UpdateTask(ctx context.Context, id string, p store.TaskPatch) (store.Task, error) {
 	return store.Task{}, store.ErrNotImplemented
 }
+func (s *Store) UpdateMetadata(ctx context.Context, id string, fn func(m map[string]any) error) (map[string]any, bool, error) {
+	return nil, false, store.ErrNotImplemented
+}
+func (s *Store) UpdateMetadataAndPatch(ctx context.Context, id string, fn func(m map[string]any) error, p store.TaskPatch) (store.Task, error) {
+	return store.Task{}, store.ErrNotImplemented
+}
 func (s *Store) ListTasks(ctx context.Context, f store.ListFilter) ([]store.Task, error) {
 	return nil, store.ErrNotImplemented
 }
