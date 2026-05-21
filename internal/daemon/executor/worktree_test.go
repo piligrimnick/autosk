@@ -95,13 +95,13 @@ func TestRun_Worktree_HappyPath_RemovesDirOnDone(t *testing.T) {
 
 	// Pre-allocate the worktree (CLI normally does this on create/enroll).
 	wtMgr := worktree.NewManager()
-	if _, err := wtMgr.Ensure(ctx, fx.cfg.ProjectRoot, "as-iso01", ""); err != nil {
+	if _, err := wtMgr.Ensure(ctx, fx.cfg.ProjectRoot, "ask-150001", ""); err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
-	wtPath, _ := worktree.PathFor(fx.cfg.ProjectRoot, "as-iso01")
+	wtPath, _ := worktree.PathFor(fx.cfg.ProjectRoot, "ask-150001")
 
 	tk, err := fx.ts.CreateTask(ctx, store.Task{
-		ID:            "as-iso01",
+		ID:            "ask-150001",
 		Title:         "isolated",
 		Status:        store.StatusWork,
 		Priority:      2,
@@ -150,7 +150,7 @@ func TestRun_Worktree_HappyPath_RemovesDirOnDone(t *testing.T) {
 		t.Fatalf("worktree dir should be removed on terminal done, stat err=%v", statErr)
 	}
 	// Branch should survive.
-	if out, err := runOut("git", "-C", fx.cfg.ProjectRoot, "rev-parse", "--verify", "refs/heads/autosk/as-iso01"); err != nil {
+	if out, err := runOut("git", "-C", fx.cfg.ProjectRoot, "rev-parse", "--verify", "refs/heads/autosk/ask-150001"); err != nil {
 		t.Fatalf("branch should survive: %v: %s", err, out)
 	}
 }
@@ -169,9 +169,9 @@ func TestRun_Worktree_Missing_AutoRecover(t *testing.T) {
 	// NO pre-allocation. The worktree will be missing when the
 	// executor's pre-flight runs — but the executor must Ensure it
 	// and proceed instead of failing the run.
-	wtPath, _ := worktree.PathFor(fx.cfg.ProjectRoot, "as-iso02")
+	wtPath, _ := worktree.PathFor(fx.cfg.ProjectRoot, "ask-150002")
 	tk, err := fx.ts.CreateTask(ctx, store.Task{
-		ID:            "as-iso02",
+		ID:            "ask-150002",
 		Title:         "missing wt",
 		Status:        store.StatusWork,
 		Priority:      2,
@@ -210,7 +210,7 @@ func TestRun_Worktree_Missing_AutoRecover(t *testing.T) {
 		t.Fatalf("executor cwd should be the (re-allocated) worktree path: got %q want %q", captured.Cwd, wtPath)
 	}
 	// Branch should exist (Ensure created it from HEAD).
-	if out, err := runOut("git", "-C", fx.cfg.ProjectRoot, "rev-parse", "--verify", "refs/heads/autosk/as-iso02"); err != nil {
+	if out, err := runOut("git", "-C", fx.cfg.ProjectRoot, "rev-parse", "--verify", "refs/heads/autosk/ask-150002"); err != nil {
 		t.Fatalf("branch should have been created by auto-Ensure: %v: %s", err, out)
 	}
 	// After a successful `done` transition the terminal cleanup hook
@@ -241,13 +241,13 @@ func TestRun_Worktree_Stranded_ParksTask(t *testing.T) {
 	// Plant a non-git directory at the expected worktree path. Verify
 	// stat-succeeds, then `git rev-parse --git-common-dir` from inside
 	// fails → ErrWorktreeStranded.
-	wtPath, _ := worktree.PathFor(fx.cfg.ProjectRoot, "as-iso04")
+	wtPath, _ := worktree.PathFor(fx.cfg.ProjectRoot, "ask-150004")
 	if err := os.MkdirAll(wtPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	tk, err := fx.ts.CreateTask(ctx, store.Task{
-		ID:            "as-iso04",
+		ID:            "ask-150004",
 		Title:         "stranded wt",
 		Status:        store.StatusWork,
 		Priority:      2,
@@ -296,10 +296,10 @@ func TestRun_Worktree_Concurrent_TwoTasksNoInterference(t *testing.T) {
 	ctx := context.Background()
 
 	wtMgr := worktree.NewManager()
-	if _, err := wtMgr.Ensure(ctx, fx.cfg.ProjectRoot, "as-cur01", ""); err != nil {
+	if _, err := wtMgr.Ensure(ctx, fx.cfg.ProjectRoot, "ask-c00001", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := wtMgr.Ensure(ctx, fx.cfg.ProjectRoot, "as-cur02", ""); err != nil {
+	if _, err := wtMgr.Ensure(ctx, fx.cfg.ProjectRoot, "ask-c00002", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -322,8 +322,8 @@ func TestRun_Worktree_Concurrent_TwoTasksNoInterference(t *testing.T) {
 		return tk.ID, r.JobID
 	}
 
-	idA, jobA := makeTaskRun("as-cur01")
-	idB, jobB := makeTaskRun("as-cur02")
+	idA, jobA := makeTaskRun("ask-c00001")
+	idB, jobB := makeTaskRun("ask-c00002")
 
 	// Per-job stubs that emit `done` on first prompt. We use a custom
 	// factory that captures the cwd for each job in a map keyed by

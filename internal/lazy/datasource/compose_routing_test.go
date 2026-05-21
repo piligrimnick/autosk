@@ -48,14 +48,14 @@ func newFakeDaemon(t *testing.T) *fakeDaemon {
 		fd.jobsHit.Add(1)
 		_ = json.NewEncoder(w).Encode(api.ListResponse{
 			Jobs: []api.JobResponse{
-				{JobID: "job-1", TaskID: "as-aaaa", Status: "running", Streaming: true, AttachCount: 2},
+				{JobID: "job-1", TaskID: "ask-aaaaaa", Status: "running", Streaming: true, AttachCount: 2},
 			},
 		})
 	})
 	mux.HandleFunc("GET /v1/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		_ = json.NewEncoder(w).Encode(api.JobResponse{
-			JobID: id, TaskID: "as-aaaa", Status: "running", Streaming: true, AttachCount: 1,
+			JobID: id, TaskID: "ask-aaaaaa", Status: "running", Streaming: true, AttachCount: 1,
 		})
 	})
 

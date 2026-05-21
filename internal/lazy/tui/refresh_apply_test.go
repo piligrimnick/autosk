@@ -127,15 +127,15 @@ func (f *refreshFakeDS) StreamLive(_ context.Context, _ string) (*datasource.Liv
 func TestRefreshApply_CommentsErrorPreservesCache(t *testing.T) {
 	gu := &Gui{st: newState()}
 	// Seed the task list so selectedTask() returns something.
-	gu.st.tasks = []datasource.Task{{ID: "as-aaaa", Title: "x"}}
+	gu.st.tasks = []datasource.Task{{ID: "ask-aaaaaa", Title: "x"}}
 	gu.st.taskCursor = 0
 	gu.st.focused = panelTasks
 	// Pre-seed the cache with a "stale" value.
-	gu.st.comments["as-aaaa"] = []datasource.Comment{{Text: "stale-cached"}}
+	gu.st.comments["ask-aaaaaa"] = []datasource.Comment{{Text: "stale-cached"}}
 
 	// First refresh: success path replaces the stale value.
 	fakeOK := &refreshFakeDS{
-		tasks:    []datasource.Task{{ID: "as-aaaa", Title: "x"}},
+		tasks:    []datasource.Task{{ID: "ask-aaaaaa", Title: "x"}},
 		comments: []datasource.Comment{{Text: "fresh"}},
 	}
 	gu.ds = fakeOK
@@ -144,7 +144,7 @@ func TestRefreshApply_CommentsErrorPreservesCache(t *testing.T) {
 		t.Fatalf("ok path produced hasCommentsErr")
 	}
 	gu.applyRefreshLocked(r)
-	if got := gu.st.comments["as-aaaa"]; len(got) != 1 || got[0].Text != "fresh" {
+	if got := gu.st.comments["ask-aaaaaa"]; len(got) != 1 || got[0].Text != "fresh" {
 		t.Fatalf("ok path didn't update cache: %+v", got)
 	}
 
@@ -152,7 +152,7 @@ func TestRefreshApply_CommentsErrorPreservesCache(t *testing.T) {
 	// (not get cleared, not be overwritten with nil).
 	wantErr := errors.New("db lock")
 	fakeErr := &refreshFakeDS{
-		tasks:       []datasource.Task{{ID: "as-aaaa", Title: "x"}},
+		tasks:       []datasource.Task{{ID: "ask-aaaaaa", Title: "x"}},
 		commentsErr: wantErr,
 	}
 	gu.ds = fakeErr
@@ -172,7 +172,7 @@ func TestRefreshApply_CommentsErrorPreservesCache(t *testing.T) {
 		t.Fatalf("err path leaked stale comments into result: %+v", r2.selectedComments)
 	}
 	gu.applyRefreshLocked(r2)
-	if got := gu.st.comments["as-aaaa"]; len(got) != 1 || got[0].Text != "fresh" {
+	if got := gu.st.comments["ask-aaaaaa"]; len(got) != 1 || got[0].Text != "fresh" {
 		t.Fatalf("err path overwrote cache: %+v (want %q)", got, "fresh")
 	}
 	if !strings.Contains(dlogBuf.String(), "ds.Comments") {
@@ -184,13 +184,13 @@ func TestRefreshApply_CommentsErrorPreservesCache(t *testing.T) {
 // test for the signals cache.
 func TestRefreshApply_SignalsErrorPreservesCache(t *testing.T) {
 	gu := &Gui{st: newState()}
-	gu.st.tasks = []datasource.Task{{ID: "as-bbbb", Title: "y"}}
+	gu.st.tasks = []datasource.Task{{ID: "ask-bbbbbb", Title: "y"}}
 	gu.st.taskCursor = 0
 	gu.st.focused = panelTasks
-	gu.st.signals["as-bbbb"] = []datasource.Signal{{StepName: "stale"}}
+	gu.st.signals["ask-bbbbbb"] = []datasource.Signal{{StepName: "stale"}}
 
 	fakeErr := &refreshFakeDS{
-		tasks:      []datasource.Task{{ID: "as-bbbb", Title: "y"}},
+		tasks:      []datasource.Task{{ID: "ask-bbbbbb", Title: "y"}},
 		signalsErr: errors.New("boom"),
 	}
 	gu.ds = fakeErr
@@ -199,7 +199,7 @@ func TestRefreshApply_SignalsErrorPreservesCache(t *testing.T) {
 		t.Fatalf("expected hasSignalsErr")
 	}
 	gu.applyRefreshLocked(r)
-	if got := gu.st.signals["as-bbbb"]; len(got) != 1 || got[0].StepName != "stale" {
+	if got := gu.st.signals["ask-bbbbbb"]; len(got) != 1 || got[0].StepName != "stale" {
 		t.Fatalf("err path overwrote signals cache: %+v", got)
 	}
 }

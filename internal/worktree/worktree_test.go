@@ -64,11 +64,11 @@ func TestPathFor_DeterministicSlug(t *testing.T) {
 	if err != nil {
 		canon = root
 	}
-	a, err := worktree.PathFor(canon, "as-aaaa")
+	a, err := worktree.PathFor(canon, "ask-aaaaaa")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := worktree.PathFor(canon, "as-aaaa")
+	b, err := worktree.PathFor(canon, "ask-aaaaaa")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestPathFor_DeterministicSlug(t *testing.T) {
 	if !strings.Contains(a, ".autosk/worktrees/") {
 		t.Fatalf("path does not live under ~/.autosk/worktrees: %s", a)
 	}
-	if !strings.HasSuffix(a, "/as-aaaa") {
+	if !strings.HasSuffix(a, "/ask-aaaaaa") {
 		t.Fatalf("path does not end with task id: %s", a)
 	}
 }
@@ -87,15 +87,15 @@ func TestPathFor_DifferentRootsDifferentSlugs(t *testing.T) {
 	isolateHome(t)
 	root1 := t.TempDir()
 	root2 := t.TempDir()
-	a, _ := worktree.PathFor(root1, "as-1111")
-	b, _ := worktree.PathFor(root2, "as-1111")
+	a, _ := worktree.PathFor(root1, "ask-111111")
+	b, _ := worktree.PathFor(root2, "ask-111111")
 	if a == b {
 		t.Fatalf("expected different slugs for distinct roots: %s == %s", a, b)
 	}
 }
 
 func TestBranchFor(t *testing.T) {
-	if got := worktree.BranchFor("as-bea9"); got != "autosk/as-bea9" {
+	if got := worktree.BranchFor("ask-bea999"); got != "autosk/ask-bea999" {
 		t.Fatalf("BranchFor: %q", got)
 	}
 }
@@ -106,21 +106,21 @@ func TestEnsure_CreatesBranchAndWorktree(t *testing.T) {
 	mgr := worktree.NewManager()
 	ctx := context.Background()
 
-	res, err := mgr.Ensure(ctx, root, "as-0001", "")
+	res, err := mgr.Ensure(ctx, root, "ask-000001", "")
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
 	if res.Existing || res.BaseRefIgnored {
 		t.Fatalf("unexpected flags on fresh Ensure: %+v", res)
 	}
-	if res.Path == "" || res.Branch != "autosk/as-0001" {
+	if res.Path == "" || res.Branch != "autosk/ask-000001" {
 		t.Fatalf("Result missing path/branch: %+v", res)
 	}
 	if _, err := os.Stat(res.Path); err != nil {
 		t.Fatalf("worktree directory not created: %v", err)
 	}
 	// Branch should now exist.
-	out, err := exec.Command("git", "-C", root, "rev-parse", "--verify", "refs/heads/autosk/as-0001").CombinedOutput()
+	out, err := exec.Command("git", "-C", root, "rev-parse", "--verify", "refs/heads/autosk/ask-000001").CombinedOutput()
 	if err != nil {
 		t.Fatalf("expected branch to exist: %v: %s", err, out)
 	}
@@ -132,10 +132,10 @@ func TestEnsure_IdempotentSecondCall(t *testing.T) {
 	mgr := worktree.NewManager()
 	ctx := context.Background()
 
-	if _, err := mgr.Ensure(ctx, root, "as-0002", ""); err != nil {
+	if _, err := mgr.Ensure(ctx, root, "ask-000002", ""); err != nil {
 		t.Fatalf("Ensure 1: %v", err)
 	}
-	res2, err := mgr.Ensure(ctx, root, "as-0002", "")
+	res2, err := mgr.Ensure(ctx, root, "ask-000002", "")
 	if err != nil {
 		t.Fatalf("Ensure 2: %v", err)
 	}
@@ -152,15 +152,15 @@ func TestEnsure_ReusesExistingBranch_BaseRefIgnored(t *testing.T) {
 
 	// Allocate, then remove the worktree directory (mimicking
 	// `autosk done` cleanup) so the branch survives.
-	if _, err := mgr.Ensure(ctx, root, "as-0003", ""); err != nil {
+	if _, err := mgr.Ensure(ctx, root, "ask-000003", ""); err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
-	if _, err := mgr.OnTerminal(ctx, root, "as-0003"); err != nil {
+	if _, err := mgr.OnTerminal(ctx, root, "ask-000003"); err != nil {
 		t.Fatalf("OnTerminal: %v", err)
 	}
 	// Re-ensure with an explicit base-ref; we should get a warning back
 	// and the existing branch should be reused.
-	res, err := mgr.Ensure(ctx, root, "as-0003", "main")
+	res, err := mgr.Ensure(ctx, root, "ask-000003", "main")
 	if err != nil {
 		t.Fatalf("re-Ensure: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestEnsure_NonGitRepo(t *testing.T) {
 	ctx := context.Background()
 
 	dir := t.TempDir()
-	_, err := mgr.Ensure(ctx, dir, "as-9999", "")
+	_, err := mgr.Ensure(ctx, dir, "ask-999999", "")
 	if !errors.Is(err, worktree.ErrNotGitRepo) {
 		t.Fatalf("want ErrNotGitRepo, got %v", err)
 	}
@@ -194,11 +194,11 @@ func TestEnsure_BaseRefHonouredOnFreshBranch(t *testing.T) {
 	mustRun(t, root, "git", "checkout", "main")
 
 	mgr := worktree.NewManager()
-	if _, err := mgr.Ensure(context.Background(), root, "as-0004", "feature/seed"); err != nil {
+	if _, err := mgr.Ensure(context.Background(), root, "ask-000004", "feature/seed"); err != nil {
 		t.Fatalf("Ensure with base: %v", err)
 	}
 	// The new branch tip should equal feature/seed's tip.
-	got := strings.TrimSpace(mustOutput(t, root, "git", "rev-parse", "refs/heads/autosk/as-0004"))
+	got := strings.TrimSpace(mustOutput(t, root, "git", "rev-parse", "refs/heads/autosk/ask-000004"))
 	if got != seedSHA {
 		t.Fatalf("new branch did not start at base-ref: branch=%s base=%s", got, seedSHA)
 	}
@@ -210,10 +210,10 @@ func TestOnTerminal_Idempotent(t *testing.T) {
 	mgr := worktree.NewManager()
 	ctx := context.Background()
 
-	if _, err := mgr.Ensure(ctx, root, "as-0005", ""); err != nil {
+	if _, err := mgr.Ensure(ctx, root, "ask-000005", ""); err != nil {
 		t.Fatal(err)
 	}
-	r1, err := mgr.OnTerminal(ctx, root, "as-0005")
+	r1, err := mgr.OnTerminal(ctx, root, "ask-000005")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestOnTerminal_Idempotent(t *testing.T) {
 	if _, err := os.Stat(r1.Path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected path removed, stat err=%v", err)
 	}
-	r2, err := mgr.OnTerminal(ctx, root, "as-0005")
+	r2, err := mgr.OnTerminal(ctx, root, "ask-000005")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestOnTerminal_Idempotent(t *testing.T) {
 		t.Fatalf("second OnTerminal should be a no-op, got %+v", r2)
 	}
 	// Branch survives.
-	if _, err := exec.Command("git", "-C", root, "rev-parse", "--verify", "refs/heads/autosk/as-0005").CombinedOutput(); err != nil {
+	if _, err := exec.Command("git", "-C", root, "rev-parse", "--verify", "refs/heads/autosk/ask-000005").CombinedOutput(); err != nil {
 		t.Fatalf("branch should survive OnTerminal, lookup err=%v", err)
 	}
 }
@@ -242,10 +242,10 @@ func TestVerify_OK(t *testing.T) {
 	mgr := worktree.NewManager()
 	ctx := context.Background()
 
-	if _, err := mgr.Ensure(ctx, root, "as-0006", ""); err != nil {
+	if _, err := mgr.Ensure(ctx, root, "ask-000006", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.Verify(ctx, root, "as-0006"); err != nil {
+	if err := mgr.Verify(ctx, root, "ask-000006"); err != nil {
 		t.Fatalf("Verify after Ensure should succeed: %v", err)
 	}
 }
@@ -256,14 +256,14 @@ func TestVerify_MissingDirectory(t *testing.T) {
 	mgr := worktree.NewManager()
 	ctx := context.Background()
 
-	if _, err := mgr.Ensure(ctx, root, "as-0007", ""); err != nil {
+	if _, err := mgr.Ensure(ctx, root, "ask-000007", ""); err != nil {
 		t.Fatal(err)
 	}
-	path, _ := worktree.PathFor(root, "as-0007")
+	path, _ := worktree.PathFor(root, "ask-000007")
 	if err := os.RemoveAll(path); err != nil {
 		t.Fatal(err)
 	}
-	err := mgr.Verify(ctx, root, "as-0007")
+	err := mgr.Verify(ctx, root, "ask-000007")
 	if !errors.Is(err, worktree.ErrWorktreeMissing) {
 		t.Fatalf("want ErrWorktreeMissing, got %v", err)
 	}
@@ -290,7 +290,7 @@ func TestEnsure_PerTaskMutex_Serialises(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res, err := mgr.Ensure(ctx, root, "as-0010", "")
+			res, err := mgr.Ensure(ctx, root, "ask-000010", "")
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -325,10 +325,10 @@ func TestOnTerminal_RemovesDirEvenWhenGitBroken(t *testing.T) {
 	mgr := worktree.NewManager()
 	ctx := context.Background()
 
-	if _, err := mgr.Ensure(ctx, root, "as-0020", ""); err != nil {
+	if _, err := mgr.Ensure(ctx, root, "ask-000020", ""); err != nil {
 		t.Fatal(err)
 	}
-	path, _ := worktree.PathFor(root, "as-0020")
+	path, _ := worktree.PathFor(root, "ask-000020")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("pre-condition: worktree dir should exist: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestOnTerminal_RemovesDirEvenWhenGitBroken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := mgr.OnTerminal(ctx, root, "as-0020")
+	res, err := mgr.OnTerminal(ctx, root, "ask-000020")
 	if err != nil {
 		t.Fatalf("OnTerminal should succeed best-effort when git is broken: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestOnTerminal_NeverAllocated_GitBroken_ReportsExistedFalse(t *testing.T) {
 	}
 
 	// Task was never allocated; OnTerminal must report Existed=false.
-	res, err := mgr.OnTerminal(ctx, root, "as-0022")
+	res, err := mgr.OnTerminal(ctx, root, "ask-000022")
 	if err != nil {
 		t.Fatalf("OnTerminal: %v", err)
 	}
@@ -397,10 +397,10 @@ func TestVerify_StatErrorMapsToStranded(t *testing.T) {
 	mgr := worktree.NewManager()
 	ctx := context.Background()
 
-	if _, err := mgr.Ensure(ctx, root, "as-0021", ""); err != nil {
+	if _, err := mgr.Ensure(ctx, root, "ask-000021", ""); err != nil {
 		t.Fatal(err)
 	}
-	path, _ := worktree.PathFor(root, "as-0021")
+	path, _ := worktree.PathFor(root, "ask-000021")
 	parent := filepath.Dir(path)
 	// Drop search bit on the parent so stat(path) returns EACCES.
 	if err := os.Chmod(parent, 0o000); err != nil {
@@ -408,7 +408,7 @@ func TestVerify_StatErrorMapsToStranded(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
 
-	err := mgr.Verify(ctx, root, "as-0021")
+	err := mgr.Verify(ctx, root, "ask-000021")
 	if err == nil {
 		t.Fatal("expected Verify to error on EACCES")
 	}
@@ -427,14 +427,14 @@ func TestEnsure_PathOccupied(t *testing.T) {
 	ctx := context.Background()
 
 	// Pre-create the target path with some unrelated content.
-	path, _ := worktree.PathFor(root, "as-0011")
+	path, _ := worktree.PathFor(root, "ask-000011")
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(path, "loitering.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := mgr.Ensure(ctx, root, "as-0011", "")
+	_, err := mgr.Ensure(ctx, root, "ask-000011", "")
 	if !errors.Is(err, worktree.ErrPathOccupied) {
 		t.Fatalf("want ErrPathOccupied, got %v", err)
 	}

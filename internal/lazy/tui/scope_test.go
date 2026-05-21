@@ -17,8 +17,8 @@ import (
 func TestScope_TasksToJobs(t *testing.T) {
 	gu := &Gui{st: newState()}
 	gu.st.tasks = []datasource.Task{
-		{ID: "as-a", Title: "alpha"},
-		{ID: "as-b", Title: "beta"},
+		{ID: "ask-aaaaaa", Title: "alpha"},
+		{ID: "ask-bbbbbb", Title: "beta"},
 	}
 	gu.st.taskCursor = 1
 	gu.st.focused = panelTasks
@@ -29,8 +29,8 @@ func TestScope_TasksToJobs(t *testing.T) {
 			gu.st.scope.TaskID = t.ID
 		}
 	})
-	if gu.st.scope.TaskID != "as-b" {
-		t.Fatalf("TaskID=%q want as-b", gu.st.scope.TaskID)
+	if gu.st.scope.TaskID != "ask-bbbbbb" {
+		t.Fatalf("TaskID=%q want ask-bbbbbb", gu.st.scope.TaskID)
 	}
 }
 
@@ -48,19 +48,19 @@ func TestAfterCursorMove_TasksDoesNotApplyScope(t *testing.T) {
 	gu := &Gui{st: newState()}
 	gu.dispatch = func(func()) {} // swallow scheduleRefresh's hand-off
 	gu.st.tasks = []datasource.Task{
-		{ID: "as-a", Title: "alpha"},
-		{ID: "as-b", Title: "beta"},
+		{ID: "ask-aaaaaa", Title: "alpha"},
+		{ID: "ask-bbbbbb", Title: "beta"},
 	}
-	// Setup: cursor lands on as-b but scope was previously committed
-	// to as-a (e.g. via an earlier Space press).
+	// Setup: cursor lands on ask-bbbbbb but scope was previously
+	// committed to ask-aaaaaa (e.g. via an earlier Space press).
 	gu.st.taskCursor = 1
 	gu.st.focused = panelTasks
-	gu.st.scope.TaskID = "as-a"
+	gu.st.scope.TaskID = "ask-aaaaaa"
 
 	gu.afterCursorMove(panelTasks)
 
-	if gu.st.scope.TaskID != "as-a" {
-		t.Fatalf("cursor-move silently changed scope: TaskID=%q want as-a", gu.st.scope.TaskID)
+	if gu.st.scope.TaskID != "ask-aaaaaa" {
+		t.Fatalf("cursor-move silently changed scope: TaskID=%q want ask-aaaaaa", gu.st.scope.TaskID)
 	}
 }
 
@@ -94,8 +94,8 @@ func TestTasksScopeFromCursor(t *testing.T) {
 	gu := &Gui{st: newState()}
 	gu.dispatch = func(func()) {}
 	gu.st.tasks = []datasource.Task{
-		{ID: "as-a", Title: "alpha"},
-		{ID: "as-b", Title: "beta"},
+		{ID: "ask-aaaaaa", Title: "alpha"},
+		{ID: "ask-bbbbbb", Title: "beta"},
 	}
 	gu.st.taskCursor = 1
 	gu.st.focused = panelTasks
@@ -103,8 +103,8 @@ func TestTasksScopeFromCursor(t *testing.T) {
 	if err := gu.tasksScopeFromCursor(nil, nil); err != nil {
 		t.Fatalf("tasksScopeFromCursor: %v", err)
 	}
-	if gu.st.scope.TaskID != "as-b" {
-		t.Errorf("after Space: TaskID=%q want as-b", gu.st.scope.TaskID)
+	if gu.st.scope.TaskID != "ask-bbbbbb" {
+		t.Errorf("after Space: TaskID=%q want ask-bbbbbb", gu.st.scope.TaskID)
 	}
 	if gu.st.focused != panelTasks {
 		t.Errorf("Space must NOT change focus: focused=%v want panelTasks", gu.st.focused)
@@ -117,8 +117,8 @@ func TestTasksScopeFromCursor(t *testing.T) {
 	if err := gu.tasksScopeFromCursor(nil, nil); err != nil {
 		t.Fatalf("tasksScopeFromCursor (empty): %v", err)
 	}
-	if gu.st.scope.TaskID != "as-b" {
-		t.Errorf("Space on empty list cleared scope: TaskID=%q want as-b", gu.st.scope.TaskID)
+	if gu.st.scope.TaskID != "ask-bbbbbb" {
+		t.Errorf("Space on empty list cleared scope: TaskID=%q want ask-bbbbbb", gu.st.scope.TaskID)
 	}
 }
 
@@ -180,7 +180,7 @@ func TestScope_AgentRelDistinct(t *testing.T) {
 // TestScope_ClearAllChips verifies handleClearScope drops every chip.
 func TestScope_ClearAllChips(t *testing.T) {
 	gu := &Gui{st: newState()}
-	gu.st.scope = scope{TaskID: "as-x", WorkflowID: "wf-y", WorkflowName: "n", Agent: "a", AgentRel: agentRelStep}
+	gu.st.scope = scope{TaskID: "ask-xxxxxx", WorkflowID: "wf-y", WorkflowName: "n", Agent: "a", AgentRel: agentRelStep}
 	gu.st.withLock(func() { gu.st.scope = scope{} })
 	if !gu.st.scope.IsEmpty() {
 		t.Fatalf("scope not empty: %+v", gu.st.scope)

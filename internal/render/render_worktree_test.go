@@ -13,7 +13,7 @@ import (
 
 func fixedIsolatedTask() store.Task {
 	return store.Task{
-		ID:          "as-iso01",
+		ID:          "ask-150001",
 		Title:       "Isolated task",
 		Description: "lives in a worktree",
 		Status:      store.StatusWork,
@@ -27,8 +27,8 @@ func fixedIsolatedTask() store.Task {
 // --json output when WithWorktree is supplied.
 func TestRender_WithWorktreeJSON(t *testing.T) {
 	wt := render.WorktreeJSON{
-		Path:   "/Users/x/.autosk/worktrees/proj-aabbccdd/as-iso01",
-		Branch: "autosk/as-iso01",
+		Path:   "/Users/x/.autosk/worktrees/proj-aabbccdd/ask-150001",
+		Branch: "autosk/ask-150001",
 		Exists: true,
 	}
 	var buf bytes.Buffer
@@ -75,8 +75,8 @@ func TestRender_WithoutWorktreeOmitsBlock(t *testing.T) {
 // the worktree + branch lines when the block is supplied.
 func TestRender_TextHasWorktreeLines(t *testing.T) {
 	wt := render.WorktreeJSON{
-		Path:   "/tmp/w/as-iso01",
-		Branch: "autosk/as-iso01",
+		Path:   "/tmp/w/ask-150001",
+		Branch: "autosk/ask-150001",
 		Exists: true,
 	}
 	var buf bytes.Buffer
@@ -86,10 +86,10 @@ func TestRender_TextHasWorktreeLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "worktree:      /tmp/w/as-iso01 (exists)") {
+	if !strings.Contains(out, "worktree:      /tmp/w/ask-150001 (exists)") {
 		t.Errorf("missing worktree line:\n%s", out)
 	}
-	if !strings.Contains(out, "branch:        autosk/as-iso01") {
+	if !strings.Contains(out, "branch:        autosk/ask-150001") {
 		t.Errorf("missing branch line:\n%s", out)
 	}
 }
@@ -98,8 +98,8 @@ func TestRender_TextHasWorktreeLines(t *testing.T) {
 // renders when the directory isn't on disk.
 func TestRender_TextWorktreeMissingFlag(t *testing.T) {
 	wt := render.WorktreeJSON{
-		Path:   "/tmp/w/as-iso01",
-		Branch: "autosk/as-iso01",
+		Path:   "/tmp/w/ask-150001",
+		Branch: "autosk/ask-150001",
 		Exists: false,
 	}
 	var buf bytes.Buffer

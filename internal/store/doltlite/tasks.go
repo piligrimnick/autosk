@@ -6,12 +6,33 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"autosk/internal/id"
 	"autosk/internal/store"
 )
+
+// taskIDShape pins the v0.2-post-007 task-id format: `ask-` followed
+// by exactly 6 lowercase hex chars. It is strictly narrower than
+// `id.Valid` (which still accepts the 4-hex agent-id shape and any
+// even-width hex suffix) because the create path mints task ids and
+// must reject anything that doesn't match the canonical task layout.
+var taskIDShape = regexp.MustCompile(`^ask-[0-9a-f]{6}$`)
+
+// assertTaskIDShape rejects caller-supplied ids that don't match the
+// `ask-XXXXXX` task-id shape. The generator path (`id.NewUnique`)
+// already produces the right shape, so this is purely defensive against
+// callers that pre-populate `Task.ID` (the rollback path in
+// `autosk create`, some tests, future RPC clients).
+func assertTaskIDShape(idStr string) error {
+	if !taskIDShape.MatchString(idStr) {
+		return fmt.Errorf("%w: task id %q does not match canonical shape `ask-` + 6 lowercase hex chars",
+			store.ErrInvalidShape, idStr)
+	}
+	return nil
+}
 
 // CreateTask inserts a new task. If t.ID is empty, a fresh unique id is
 // generated. created_at / updated_at are stamped here.
@@ -30,6 +51,8 @@ func (s *Store) CreateTask(ctx context.Context, t store.Task) (store.Task, error
 			return store.Task{}, fmt.Errorf("generate id: %w", err)
 		}
 		t.ID = newID
+	} else if err := assertTaskIDShape(t.ID); err != nil {
+		return store.Task{}, err
 	}
 	now := time.Unix(time.Now().Unix(), 0).UTC()
 	t.CreatedAt = now

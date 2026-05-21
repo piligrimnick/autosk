@@ -105,6 +105,177 @@ func TestApply006_ShortStatuses_RewritesAndPreservesDeps(t *testing.T) {
 	}
 }
 
+// TestApply007_TaskIDFormat_RewritesAndPreservesDeps replays migrations
+// 001..006 on a fresh DB, seeds legacy `as-XXXX` task ids plus dependent
+// rows across every FK that references tasks.id, then runs migration
+// 007 and asserts:
+//
+//   - every legacy task id is rewritten to the `ask-00XXXX` shape,
+//   - every dependent row (task_deps, comments, daemon_runs,
+//     step_signals) carries the rewritten id and still joins to the
+//     migrated task row,
+//   - PRAGMA foreign_key_check is clean post-migration,
+//   - no row still carries the legacy `as-` prefix.
+//
+// The FK-off directive in 007 is the load-bearing detail: with FKs on,
+// updating tasks.id without ON UPDATE CASCADE would orphan every
+// dependent row. This test pins that contract.
+func TestApply007_TaskIDFormat_RewritesAndPreservesDeps(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "schema.db")
+	db := openDB(t, dbPath)
+	t.Cleanup(func() { _ = db.Close() })
+
+	applyUpTo(t, ctx, db, 6)
+	seedPreV7Fixture(t, ctx, db)
+
+	if _, err := migrations.Apply(ctx, db); err != nil {
+		t.Fatalf("Apply(007): %v", err)
+	}
+
+	// No `as-` task ids survive.
+	var n int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tasks WHERE id LIKE 'as-%'`).Scan(&n); err != nil {
+		t.Fatalf("count as- tasks: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("tasks.id still carries %d as- rows post-007", n)
+	}
+
+	// Every legacy task is now ask-00<old-4hex>.
+	for _, want := range []string{"ask-00a1b2", "ask-00c3d4", "ask-00ffff"} {
+		var got string
+		if err := db.QueryRowContext(ctx,
+			`SELECT id FROM tasks WHERE id = ?`, want).Scan(&got); err != nil {
+			t.Errorf("missing migrated task %q: %v", want, err)
+		}
+	}
+
+	// Every dependent column carries the rewritten id. Cross-check the
+	// counts to make sure the SQL UPDATEs found every row and didn't
+	// drop any (FK enforcement was off, so a silent CASCADE wipe would
+	// have been catastrophic).
+	mustCount(t, db, `SELECT COUNT(*) FROM tasks      WHERE id LIKE 'ask-00%'`, 3)
+	mustCount(t, db, `SELECT COUNT(*) FROM task_deps  WHERE blocker_id LIKE 'ask-00%' OR blocked_id LIKE 'ask-00%'`, 1)
+	mustCount(t, db, `SELECT COUNT(*) FROM comments   WHERE task_id LIKE 'ask-00%'`, 1)
+	mustCount(t, db, `SELECT COUNT(*) FROM daemon_runs WHERE task_id LIKE 'ask-00%'`, 1)
+	mustCount(t, db, `SELECT COUNT(*) FROM step_signals WHERE task_id LIKE 'ask-00%'`, 1)
+
+	// And no dependent column still carries an `as-` prefix.
+	for _, q := range []string{
+		`SELECT COUNT(*) FROM task_deps   WHERE blocker_id LIKE 'as-%' OR blocked_id LIKE 'as-%'`,
+		`SELECT COUNT(*) FROM comments    WHERE task_id    LIKE 'as-%'`,
+		`SELECT COUNT(*) FROM daemon_runs WHERE task_id    LIKE 'as-%'`,
+		`SELECT COUNT(*) FROM step_signals WHERE task_id   LIKE 'as-%'`,
+	} {
+		mustCount(t, db, q, 0)
+	}
+
+	// FK invariant: dependent rows actually join to a task row.
+	mustCount(t, db,
+		`SELECT COUNT(*) FROM comments c JOIN tasks t ON c.task_id = t.id`, 1)
+	mustCount(t, db,
+		`SELECT COUNT(*) FROM daemon_runs dr JOIN tasks t ON dr.task_id = t.id`, 1)
+	mustCount(t, db,
+		`SELECT COUNT(*) FROM step_signals ss JOIN tasks t ON ss.task_id = t.id`, 1)
+
+	// PRAGMA foreign_key_check must be empty.
+	rows, err := db.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		t.Fatalf("foreign_key_check: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		var table, parent sql.NullString
+		var rowid, fkid sql.NullInt64
+		_ = rows.Scan(&table, &rowid, &parent, &fkid)
+		t.Fatalf("foreign_key_check returned a row post-007: table=%s rowid=%d parent=%s fkid=%d",
+			table.String, rowid.Int64, parent.String, fkid.Int64)
+	}
+
+	// schema_migrations advanced to >= 7.
+	var v sql.NullInt64
+	if err := db.QueryRowContext(ctx,
+		`SELECT MAX(version) FROM schema_migrations`).Scan(&v); err != nil {
+		t.Fatalf("SELECT max(version): %v", err)
+	}
+	if !v.Valid || v.Int64 < 7 {
+		t.Fatalf("schema_migrations max(version)=%v, want >= 7", v.Int64)
+	}
+}
+
+// TestApply007_IdempotentOnFreshDB pins acceptance criterion #2 from
+// the task description: a brand-new database (no `as-` rows to
+// rewrite) must apply migration 007 cleanly. This guards against a
+// future tweak that, for instance, expects at least one matching row.
+func TestApply007_IdempotentOnFreshDB(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "fresh.db")
+	db := openDB(t, dbPath)
+	t.Cleanup(func() { _ = db.Close() })
+
+	if _, err := migrations.Apply(ctx, db); err != nil {
+		t.Fatalf("Apply on empty DB: %v", err)
+	}
+	// No tasks at all, and certainly no `as-` rows.
+	var n int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tasks WHERE id LIKE 'as-%'`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("empty DB grew %d as- rows after Apply", n)
+	}
+	// And the schema is at the latest version (>= 7).
+	var v sql.NullInt64
+	if err := db.QueryRowContext(ctx,
+		`SELECT MAX(version) FROM schema_migrations`).Scan(&v); err != nil {
+		t.Fatalf("select max(version): %v", err)
+	}
+	if !v.Valid || v.Int64 < 7 {
+		t.Fatalf("max(version)=%v, want >= 7", v.Int64)
+	}
+}
+
+// seedPreV7Fixture inserts a small graph of `as-XXXX` task ids plus
+// dependent rows on every FK pointed at tasks.id. Schema is the
+// post-006 shape (status enum already short-form). The migration
+// rewrites every id to `ask-00XXXX` and the asserts in the test
+// verify the rewrite reached every row.
+func seedPreV7Fixture(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, q, args...); err != nil {
+			t.Fatalf("seed %q: %v", firstLineOfQuery(q), err)
+		}
+	}
+
+	exec(`INSERT INTO agents(id, name, is_human, created_at) VALUES('ag-d','dev',0,0)`)
+	exec(`INSERT INTO workflows(id, name, description, first_step_id, is_synthetic, created_at)
+	       VALUES('wf-a','feature-x','','s-a',0,0)`)
+	exec(`INSERT INTO steps(id, workflow_id, name, agent_id, seq) VALUES('s-a','wf-a','dev','ag-d',0)`)
+	exec(`INSERT INTO step_transitions(step_id, task_status, prompt_rule) VALUES('s-a','done','r')`)
+
+	// Three legacy tasks: one work (with current_step), one new, one done.
+	exec(`INSERT INTO tasks(id, title, status, priority, workflow_id, current_step_id, created_at, updated_at)
+	       VALUES('as-a1b2','w','work',2,'wf-a','s-a',1,1)`)
+	exec(`INSERT INTO tasks(id, title, status, priority, created_at, updated_at)
+	       VALUES('as-c3d4','n','new',2,1,1)`)
+	exec(`INSERT INTO tasks(id, title, status, priority, created_at, updated_at)
+	       VALUES('as-ffff','d','done',2,1,1)`)
+
+	// One row per dependent table, all referencing as-a1b2 (the work task).
+	exec(`INSERT INTO task_deps(blocker_id, blocked_id, kind) VALUES('as-c3d4','as-a1b2','blocks')`)
+	exec(`INSERT INTO comments(task_id, author_id, text, created_at)
+	       VALUES('as-a1b2','ag-d','hi',1)`)
+	exec(`INSERT INTO daemon_runs(job_id, task_id, step_id, status, created_at)
+	       VALUES('job-q','as-a1b2','s-a','queued',1)`)
+	exec(`INSERT INTO step_signals(run_id, task_id, transition_id, created_at)
+	       VALUES('job-q','as-a1b2',1,1)`)
+}
+
 // openDB opens a libsqlite3-backed sqlite3 db. We bypass doltlite here
 // because we need foreign-key enforcement to be enabled by default (006
 // disables it for the duration of the migration); the doltlite store

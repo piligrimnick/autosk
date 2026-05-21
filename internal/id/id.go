@@ -1,9 +1,9 @@
-// Package id generates short, hash-based task ids like "as-a1b2".
+// Package id generates short, hash-based task ids like "ask-a1b2c3".
 //
-// Format: <prefix>-<4 lowercase hex chars>. The hex is 16 bits of entropy
+// Format: <prefix>-<6 lowercase hex chars>. The hex is 24 bits of entropy
 // from crypto/rand. Collisions are detected and retried by the caller via
 // NewUnique. For autosk's expected scale (hundreds-to-low-thousands of tasks),
-// the birthday-paradox space (65536) is ample.
+// the birthday-paradox space (~16.7M) is ample.
 package id
 
 import (
@@ -16,18 +16,20 @@ import (
 )
 
 // DefaultPrefix is used when none is configured.
-const DefaultPrefix = "as"
+const DefaultPrefix = "ask"
 
 // MaxAttempts caps the collision retry loop in NewUnique.
 const MaxAttempts = 16
 
-// DefaultBytes is the random byte count used by New / NewUnique (2 bytes
-// = 4 hex chars, matching the canonical "as-XXXX" format).
-const DefaultBytes = 2
+// DefaultBytes is the random byte count used by New / NewUnique (3 bytes
+// = 6 hex chars, matching the canonical "ask-XXXXXX" format).
+const DefaultBytes = 3
 
 // pattern matches a valid id. Prefix is one-or-more lowercase letters;
-// suffix is an even number (≥4) of lowercase hex chars: 4 for tasks,
-// 6 for jobs, etc.
+// suffix is an even number (≥4) of lowercase hex chars. The width is
+// kept loose (≥4 hex chars) so the regex still validates legacy 4-hex
+// shapes such as agent ids (`ag-XXXX`) and any pre-007 task ids that
+// hung around in error logs or external scripts.
 var pattern = regexp.MustCompile(`^[a-z]+-[0-9a-f]{4}([0-9a-f]{2})*$`)
 
 // Valid reports whether s parses as a task id.
@@ -90,7 +92,10 @@ func NewUniqueN(prefix string, bytes int, exists ExistsFunc) (string, error) {
 }
 
 // ErrExhausted is returned when NewUnique can't find a free id in MaxAttempts.
-// Indicates the id space is saturated for the configured prefix.
+// Indicates the id space is saturated for the configured prefix. The default
+// task-id keyspace is ~16.7M (3 bytes / 6 hex chars), so hitting this in
+// practice means the project is overdue for a new prefix scheme rather than
+// a wider random suffix.
 var ErrExhausted = errors.New("id space exhausted (consider widening the prefix or suffix length)")
 
 // Prefix extracts the prefix portion of an id, or "" if invalid.

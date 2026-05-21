@@ -33,7 +33,7 @@ func testDeleteTaskRemovesRow(t *testing.T, f Factory) {
 func testDeleteTaskMissingReturnsNotFound(t *testing.T, f Factory) {
 	s, cleanup := f(t)
 	defer cleanup()
-	err := s.DeleteTask(context.Background(), "as-ffff")
+	err := s.DeleteTask(context.Background(), "ask-ffffff")
 	AssertErrIs(t, err, store.ErrNotFound)
 }
 

@@ -362,18 +362,17 @@ func renderTasksPanel(
 		return b.String(), header
 	}
 	// Fixed-column widths. Status is truncated/padded to
-	// statusColumnWidth. Id is padded to 7 cells — the exact width
-	// of an "as-XXXX" id (prefix-NNNN, 2+4 chars). The previous
-	// idW=8 left a cell of "slack for future id schemes" but the
-	// id package's contract is fixed-width per project, so the
-	// slack only showed up on screen as an unsightly double space
-	// before the > / spinner marker. The total below counts the
-	// inter-column separators too — keep it in sync with the
-	// Fprintf format string below.
+	// statusColumnWidth. Id is padded to 10 cells — the exact width
+	// of an "ask-XXXXXX" id (3 prefix chars + dash + 6 hex chars).
+	// The id package's contract is fixed-width per project, so the
+	// column is sized exactly: any slack would only show up on
+	// screen as an unsightly double space before the > / spinner
+	// marker. The total below counts the inter-column separators
+	// too — keep it in sync with the Fprintf format string below.
 	const (
-		prioW   = 2 // "P0".."P3"
-		idW     = 7 // "as-XXXX" (no trailing slack)
-		markerW = 1 // spinner braille frame, >, or blank
+		prioW   = 2  // "P0".."P3"
+		idW     = 10 // "ask-XXXXXX" (no trailing slack)
+		markerW = 1  // spinner braille frame, >, or blank
 		// 4 single-space separators between the 5 columns.
 		fixedW = prioW + 1 + idW + 1 + markerW + 1 + statusColumnWidth + 1
 	)

@@ -217,7 +217,7 @@ func testCreateRejectsBadPriority(t *testing.T, f Factory) {
 func testGetMissingReturnsNotFound(t *testing.T, f Factory) {
 	s, cleanup := f(t)
 	defer cleanup()
-	_, err := s.GetTask(context.Background(), "as-ffff")
+	_, err := s.GetTask(context.Background(), "ask-ffffff")
 	AssertErrIs(t, err, store.ErrNotFound)
 }
 

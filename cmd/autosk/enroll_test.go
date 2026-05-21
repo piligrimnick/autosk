@@ -52,8 +52,8 @@ func createBareTask(t *testing.T, dir, title string) string {
 	if i := strings.LastIndex(id, "\n"); i >= 0 {
 		id = id[i+1:]
 	}
-	if !strings.HasPrefix(id, "as-") {
-		t.Fatalf("create did not return an id; got %q", out)
+	if !strings.HasPrefix(id, "ask-") || len(id) != 10 {
+		t.Fatalf("create did not return an ask-XXXXXX id; got %q", out)
 	}
 	return id
 }

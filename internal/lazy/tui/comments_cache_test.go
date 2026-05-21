@@ -27,7 +27,7 @@ func TestCommentsCache_BoundedAndPreservesSelected(t *testing.T) {
 		for i := 0; i < commentsCacheMax; i++ {
 			st.comments[idForI(i)] = []datasource.Comment{{Text: "old"}}
 		}
-		selectedTaskID := "as-new"
+		selectedTaskID := "ask-fffff0"
 		selectedComments := []datasource.Comment{{Text: "fresh"}}
 		evictCacheIfNeeded(st.comments, selectedTaskID, commentsCacheMax)
 		st.comments[selectedTaskID] = selectedComments
@@ -43,7 +43,7 @@ func TestCommentsCache_BoundedAndPreservesSelected(t *testing.T) {
 	t.Run("preserves_selected_when_already_in_cache", func(t *testing.T) {
 		// Fill the cache to cap with the selected entry INCLUDED.
 		st := newState()
-		selectedTaskID := "as-selected"
+		selectedTaskID := "ask-5e1ec7"
 		for i := 0; i < commentsCacheMax-1; i++ {
 			st.comments[idForI(i)] = []datasource.Comment{{Text: "old"}}
 		}

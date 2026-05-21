@@ -33,4 +33,9 @@ var (
 
 	// ErrNotOpen — operation called before Open or after Close.
 	ErrNotOpen = errors.New("store is not open")
+
+	// ErrInvalidShape — the caller-supplied identifier does not match
+	// the canonical shape required by the store (e.g. task ids must be
+	// `ask-` + 6 lowercase hex chars).
+	ErrInvalidShape = errors.New("invalid id shape")
 )

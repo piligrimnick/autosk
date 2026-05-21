@@ -217,7 +217,7 @@ func seedTwoStepWF(t *testing.T, ts *doltlite.Store, maxVisitsDev, maxVisitsRevi
 // (B): lazy.Enroll must route through workflow.EnterStep so the
 // step_visits counter on the entry step is bumped to 1 — same shape
 // as `autosk enroll` on the CLI. Before the fix the lazy code path
-// did a raw UPDATE that left step_visits empty, so an as-290f-style
+// did a raw UPDATE that left step_visits empty, so an ask-00290f-style
 // loop ended up off-by-one on the source counter.
 func TestOfflineEnroll_BumpsFirstStepCounter(t *testing.T) {
 	ctx := context.Background()

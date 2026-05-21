@@ -168,8 +168,8 @@ func TestWorktree_CLI_CreateIsolated_AllocatesWorktreeAndBranch(t *testing.T) {
 		t.Fatalf("create: %v\n%s", err, out)
 	}
 	id := createIDFromOutput(out)
-	if !strings.HasPrefix(id, "as-") {
-		t.Fatalf("expected as-... id in stdout; got %q", out)
+	if !strings.HasPrefix(id, "ask-") || len(id) != 10 {
+		t.Fatalf("expected ask-XXXXXX (10-char) id in stdout; got %q", out)
 	}
 
 	// Worktree directory must be present on disk.

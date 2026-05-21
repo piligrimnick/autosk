@@ -43,7 +43,7 @@ func seedHumanFeedbackTask(t *testing.T, off *datasource.Offline, dl *doltlite.S
 }
 
 // TestOffline_UpdateStatus_DoneClearsCurrentStep is the regression for
-// "lazy can't mark `as-4de8` done": a task in human with a non-null
+// "lazy can't mark `ask-004de8` done": a task in human with a non-null
 // current_step_id used to trip the SQL CHECK invariant (status='work'
 // ⇔ current_step_id IS NOT NULL) when lazy's UpdateStatus did a naive
 // {Status: &StatusDone} patch. Since the refactor to internal/tasksvc

@@ -36,8 +36,8 @@ func TestLive_JobsHonoursWorkflowID(t *testing.T) {
 	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(api.ListResponse{
 			Jobs: []api.JobResponse{
-				{JobID: "job-A", TaskID: "as-aaaa", StepID: "st-A", Status: "running"},
-				{JobID: "job-B", TaskID: "as-bbbb", StepID: "st-B", Status: "running"},
+				{JobID: "job-A", TaskID: "ask-aaaaaa", StepID: "st-A", Status: "running"},
+				{JobID: "job-B", TaskID: "ask-bbbbbb", StepID: "st-B", Status: "running"},
 			},
 		})
 	})

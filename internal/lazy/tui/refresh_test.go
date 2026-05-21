@@ -80,14 +80,14 @@ func TestApplyFacetFilter_NoDoubleApply(t *testing.T) {
 	// Now apply substring search against a representative set; only
 	// the title-matching row should pass.
 	in := []datasource.Task{
-		{ID: "as-1", Title: "refactor auth", Priority: 1},
-		{ID: "as-2", Title: "unrelated", Priority: 1},
+		{ID: "ask-000001", Title: "refactor auth", Priority: 1},
+		{ID: "ask-000002", Title: "unrelated", Priority: 1},
 		// p:1 must not appear as substring in either id or title; if
 		// it does, the test stays correct because applyTaskSearch is
 		// fed the post-facet remainder, not the original expression.
 	}
 	got := applyTaskSearch(in, f.Search)
-	if len(got) != 1 || got[0].ID != "as-1" {
+	if len(got) != 1 || got[0].ID != "ask-000001" {
 		t.Fatalf("post-facet search: got %+v", got)
 	}
 }
@@ -96,9 +96,9 @@ func TestApplyFacetFilter_NoDoubleApply(t *testing.T) {
 // case-insensitive across id and title.
 func TestApplyTaskSearch(t *testing.T) {
 	in := []datasource.Task{
-		{ID: "as-aaaa", Title: "Refactor token validation"},
-		{ID: "as-bbbb", Title: "Logging cleanup"},
-		{ID: "as-cccc", Title: "Auth refactor"},
+		{ID: "ask-aaaaaa", Title: "Refactor token validation"},
+		{ID: "ask-bbbbbb", Title: "Logging cleanup"},
+		{ID: "ask-cccccc", Title: "Auth refactor"},
 	}
 	got := applyTaskSearch(in, "REFACTOR")
 	if len(got) != 2 {
@@ -114,19 +114,19 @@ func TestSortTasksByRecency(t *testing.T) {
 	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	in := []datasource.Task{
 		// Oldest open task.
-		{ID: "as-old", Status: store.StatusNew, CreatedAt: t0, UpdatedAt: t0},
+		{ID: "ask-0000d1", Status: store.StatusNew, CreatedAt: t0, UpdatedAt: t0},
 		// Edited an hour later.
-		{ID: "as-mid", Status: store.StatusWork,
+		{ID: "ask-0000d2", Status: store.StatusWork,
 			CreatedAt: t0, UpdatedAt: t0.Add(1 * time.Hour)},
 		// Just-closed task should rank first — by-recency, not by status.
-		{ID: "as-new", Status: store.StatusDone,
+		{ID: "ask-0000d3", Status: store.StatusDone,
 			CreatedAt: t0, UpdatedAt: t0.Add(2 * time.Hour)},
 		// No UpdatedAt — falls back to CreatedAt, which is later than t0.
-		{ID: "as-fb", Status: store.StatusNew,
+		{ID: "ask-0000d4", Status: store.StatusNew,
 			CreatedAt: t0.Add(30 * time.Minute)},
 	}
 	got := sortTasksByRecency(in)
-	want := []string{"as-new", "as-mid", "as-fb", "as-old"}
+	want := []string{"ask-0000d3", "ask-0000d2", "ask-0000d4", "ask-0000d1"}
 	if len(got) != len(want) {
 		t.Fatalf("len(got)=%d want=%d", len(got), len(want))
 	}
@@ -138,8 +138,8 @@ func TestSortTasksByRecency(t *testing.T) {
 	// The function MUST NOT mutate its input — the slice handed back
 	// from the datasource is owned by the caller, who may still hold a
 	// reference (e.g. for diffing).
-	if in[0].ID != "as-old" {
-		t.Errorf("input mutated: in[0]=%q want as-old", in[0].ID)
+	if in[0].ID != "ask-0000d1" {
+		t.Errorf("input mutated: in[0]=%q want ask-0000d1", in[0].ID)
 	}
 }
 
@@ -174,24 +174,24 @@ func TestSpinnerFrame(t *testing.T) {
 func TestTaskJobIndex_PartitionsByStatus(t *testing.T) {
 	jobs := []datasource.Job{
 		// Task A: one running + one queued — lands in BOTH sets.
-		mkJob("job-1", "as-a", "running"),
-		mkJob("job-2", "as-a", "queued"),
+		mkJob("job-1", "ask-aaaaaa", "running"),
+		mkJob("job-2", "ask-aaaaaa", "queued"),
 		// Task B: one done only — Any but NOT Active.
-		mkJob("job-3", "as-b", "done"),
+		mkJob("job-3", "ask-bbbbbb", "done"),
 		// Task C: failed + cancel — Any but NOT Active.
-		mkJob("job-4", "as-c", "failed"),
-		mkJob("job-5", "as-c", "cancel"),
+		mkJob("job-4", "ask-cccccc", "failed"),
+		mkJob("job-5", "ask-cccccc", "cancel"),
 		// Daemon row with no TaskID (legacy) — must be skipped.
 		mkJob("job-6", "", "running"),
 	}
 	idx := taskJobIndexFromJobs(jobs)
-	if !idx.Active["as-a"] {
-		t.Errorf("as-a missing from Active")
+	if !idx.Active["ask-aaaaaa"] {
+		t.Errorf("ask-aaaaaa missing from Active")
 	}
-	if idx.Active["as-b"] || idx.Active["as-c"] {
+	if idx.Active["ask-bbbbbb"] || idx.Active["ask-cccccc"] {
 		t.Errorf("non-running task leaked into Active: %+v", idx.Active)
 	}
-	for _, id := range []string{"as-a", "as-b", "as-c"} {
+	for _, id := range []string{"ask-aaaaaa", "ask-bbbbbb", "ask-cccccc"} {
 		if !idx.Any[id] {
 			t.Errorf("%s missing from Any", id)
 		}
@@ -213,23 +213,23 @@ func TestTaskJobIndex_PartitionsByStatus(t *testing.T) {
 // could see every task's jobs).
 func TestFilterJobsByTaskID(t *testing.T) {
 	jobs := []datasource.Job{
-		mkJob("job-1", "as-a", "running"),
-		mkJob("job-2", "as-a", "done"),
-		mkJob("job-3", "as-b", "running"),
+		mkJob("job-1", "ask-aaaaaa", "running"),
+		mkJob("job-2", "ask-aaaaaa", "done"),
+		mkJob("job-3", "ask-bbbbbb", "running"),
 	}
 	if got := filterJobsByTaskID(jobs, ""); len(got) != len(jobs) {
 		t.Errorf("empty id should pass-through: got %d want %d", len(got), len(jobs))
 	}
-	got := filterJobsByTaskID(jobs, "as-a")
+	got := filterJobsByTaskID(jobs, "ask-aaaaaa")
 	if len(got) != 2 {
-		t.Fatalf("as-a: got %d jobs want 2", len(got))
+		t.Fatalf("ask-aaaaaa: got %d jobs want 2", len(got))
 	}
 	for _, j := range got {
-		if j.TaskID != "as-a" {
-			t.Errorf("leaked %q into as-a slice", j.TaskID)
+		if j.TaskID != "ask-aaaaaa" {
+			t.Errorf("leaked %q into ask-aaaaaa slice", j.TaskID)
 		}
 	}
-	if got := filterJobsByTaskID(jobs, "as-missing"); len(got) != 0 {
+	if got := filterJobsByTaskID(jobs, "ask-fffff0"); len(got) != 0 {
 		t.Errorf("unknown id should return empty: got %d", len(got))
 	}
 }
@@ -247,11 +247,11 @@ func TestTaskJobIndex_SurvivesTaskScope_Regression(t *testing.T) {
 	// server-side TaskID filter) plus the scope.TaskID value the
 	// operator just committed via Space.
 	allJobs := []datasource.Job{
-		mkJob("job-1", "as-a", "running"),
-		mkJob("job-2", "as-b", "done"),
-		mkJob("job-3", "as-c", "done"),
+		mkJob("job-1", "ask-aaaaaa", "running"),
+		mkJob("job-2", "ask-bbbbbb", "done"),
+		mkJob("job-3", "ask-cccccc", "done"),
 	}
-	const scopedTaskID = "as-a"
+	const scopedTaskID = "ask-aaaaaa"
 
 	// The Jobs panel slice is narrowed client-side.
 	jobsForPanel := filterJobsByTaskID(allJobs, scopedTaskID)
@@ -262,7 +262,7 @@ func TestTaskJobIndex_SurvivesTaskScope_Regression(t *testing.T) {
 	// The marker index is built from the UNFILTERED list — every
 	// task that has any job must remain marked.
 	idx := taskJobIndexFromJobs(allJobs)
-	for _, id := range []string{"as-a", "as-b", "as-c"} {
+	for _, id := range []string{"ask-aaaaaa", "ask-bbbbbb", "ask-cccccc"} {
 		if !idx.Any[id] {
 			t.Errorf("task %s lost its > marker after scope.TaskID=%s", id, scopedTaskID)
 		}
@@ -273,8 +273,8 @@ func TestTaskJobIndex_SurvivesTaskScope_Regression(t *testing.T) {
 	// so a future refactor that re-introduces "index from filtered"
 	// trips the test instead of the operator.
 	buggyIdx := taskJobIndexFromJobs(jobsForPanel)
-	if buggyIdx.Any["as-b"] || buggyIdx.Any["as-c"] {
-		t.Errorf("sanity: filtered slice unexpectedly contains as-b/as-c — test setup is wrong")
+	if buggyIdx.Any["ask-bbbbbb"] || buggyIdx.Any["ask-cccccc"] {
+		t.Errorf("sanity: filtered slice unexpectedly contains ask-bbbbbb/ask-cccccc — test setup is wrong")
 	}
 }
 
@@ -285,13 +285,13 @@ func TestTaskJobIndex_SurvivesTaskScope_Regression(t *testing.T) {
 // not-Active, single space when neither.
 func TestRenderTasksPanel_JobMarker(t *testing.T) {
 	tasks := []datasource.Task{
-		{ID: "as-run", Title: "running task", Priority: 1, Status: store.StatusWork},
-		{ID: "as-done", Title: "done task", Priority: 2, Status: store.StatusDone},
-		{ID: "as-bare", Title: "jobless task", Priority: 2, Status: store.StatusNew},
+		{ID: "ask-001run", Title: "running task", Priority: 1, Status: store.StatusWork},
+		{ID: "ask-00d0ne", Title: "done task", Priority: 2, Status: store.StatusDone},
+		{ID: "ask-0bare0", Title: "jobless task", Priority: 2, Status: store.StatusNew},
 	}
 	idx := taskJobIndex{
-		Active: map[string]bool{"as-run": true},
-		Any:    map[string]bool{"as-run": true, "as-done": true},
+		Active: map[string]bool{"ask-001run": true},
+		Any:    map[string]bool{"ask-001run": true, "ask-00d0ne": true},
 	}
 	// Tick 0 → spinnerFrames[0] = "⠋".
 	body, _ := renderTasksPanel(tasks, 0, scope{}, "", 80, 0, idx)
@@ -316,11 +316,11 @@ func TestRenderTasksPanel_JobMarker(t *testing.T) {
 
 // jobMarkerOf extracts the marker cell from a rendered Tasks-panel
 // row by locating the id column's right edge: the id is
-// "as-XXXX" (regex-shape) at exactly 7 cells, preceded by "P{prio} "
-// (3 cells, prio+separator). So the marker starts at rune offset
-// 3 + 7 + 1 = 11, and is exactly one cell wide.
+// "ask-XXXXXX" (regex-shape) at exactly 10 cells, preceded by
+// "P{prio} " (3 cells, prio+separator). So the marker starts at
+// rune offset 3 + 10 + 1 = 14, and is exactly one cell wide.
 func jobMarkerOf(plainRow string) string {
-	const markerOffset = 3 + 7 + 1 // "P{n} as-XXXX "
+	const markerOffset = 3 + 10 + 1 // "P{n} ask-XXXXXX "
 	rs := []rune(plainRow)
 	if len(rs) <= markerOffset {
 		return ""
