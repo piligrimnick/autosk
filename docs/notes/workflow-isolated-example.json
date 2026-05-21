@@ -1,0 +1,51 @@
+{
+  "name": "feature-dev-isolated",
+  "description": "Same shape as feature-dev, but every task runs in its own git worktree on its own branch (autosk/<task-id>).",
+  "first_step": "dev",
+  "isolation": "worktree",
+  "steps": {
+    "dev": {
+      "agent": {
+        "name": "developer"
+      },
+      "max_visits": 5,
+      "next_steps": [
+        {
+          "step": "review",
+          "prompt_rule": "When all requirements of the task are met, the implementation builds and tests locally, AND the agent has committed its work on this task's branch (`autosk/<task-id>`). Uncommitted edits are discarded when the worktree is reaped on terminal status."
+        }
+      ]
+    },
+    "review": {
+      "agent": {
+        "name": "code-reviewer"
+      },
+      "max_visits": 5,
+      "next_steps": [
+        {
+          "step": "validator",
+          "prompt_rule": "When the review uncovered no blocking issues and coverage looks healthy."
+        },
+        {
+          "step": "dev",
+          "prompt_rule": "When the review surfaced bugs, missing tests, or style issues that need to go back to dev."
+        }
+      ]
+    },
+    "validator": {
+      "agent": {
+        "name": "task-validator"
+      },
+      "next_steps": [
+        {
+          "step": "dev",
+          "prompt_rule": "When the implementation does not satisfy the task description strictly."
+        },
+        {
+          "task_status": "human_feedback",
+          "prompt_rule": "When the task is implemented, verified, and the human should accept it (and merge `autosk/<task-id>` into the base branch)."
+        }
+      ]
+    }
+  }
+}

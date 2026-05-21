@@ -186,5 +186,3 @@ func TestScope_ClearAllChips(t *testing.T) {
 		t.Fatalf("scope not empty: %+v", gu.st.scope)
 	}
 }
-
-

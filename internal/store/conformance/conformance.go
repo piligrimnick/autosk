@@ -34,6 +34,10 @@ func RunConformance(t *testing.T, f Factory) {
 	t.Run("GetMissingReturnsNotFound", func(t *testing.T) { testGetMissingReturnsNotFound(t, f) })
 	t.Run("CreateAutoAssignsID", func(t *testing.T) { testCreateAutoAssignsID(t, f) })
 
+	t.Run("DeleteTaskRemovesRow", func(t *testing.T) { testDeleteTaskRemovesRow(t, f) })
+	t.Run("DeleteTaskMissingReturnsNotFound", func(t *testing.T) { testDeleteTaskMissingReturnsNotFound(t, f) })
+	t.Run("DeleteTaskCascadesDepsAndComments", func(t *testing.T) { testDeleteTaskCascadesDepsAndComments(t, f) })
+
 	t.Run("ListDefaultsToOpen", func(t *testing.T) { testListDefaultsToOpen(t, f) })
 	t.Run("ListAllShowsTerminal", func(t *testing.T) { testListAllShowsTerminal(t, f) })
 	t.Run("ListSorting", func(t *testing.T) { testListSorting(t, f) })

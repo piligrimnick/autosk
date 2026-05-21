@@ -293,6 +293,66 @@ func TestParse_MaxVisitsAbsentIsZero(t *testing.T) {
 	}
 }
 
+// TestParse_IsolationAbsentIsNone verifies the default for the new
+// `isolation` field.
+func TestParse_IsolationAbsentIsNone(t *testing.T) {
+	body := `{
+		"name": "x", "first_step": "a",
+		"steps": {
+			"a": {"agent": {"name": "dev"}, "next_steps": [{"task_status": "done", "prompt_rule": "."}]}
+		}}`
+	def, err := workflow.ParseReader(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.Isolation != workflow.IsolationNone {
+		t.Fatalf("isolation default: %q (want none)", def.Isolation)
+	}
+}
+
+func TestParse_IsolationWorktree(t *testing.T) {
+	body := `{
+		"name": "x", "first_step": "a", "isolation": "worktree",
+		"steps": {
+			"a": {"agent": {"name": "dev"}, "next_steps": [{"task_status": "done", "prompt_rule": "."}]}
+		}}`
+	def, err := workflow.ParseReader(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.Isolation != workflow.IsolationWorktree {
+		t.Fatalf("isolation: %q (want worktree)", def.Isolation)
+	}
+}
+
+func TestParse_IsolationUnknownRejected(t *testing.T) {
+	body := `{
+		"name": "x", "first_step": "a", "isolation": "docker",
+		"steps": {
+			"a": {"agent": {"name": "dev"}, "next_steps": [{"task_status": "done", "prompt_rule": "."}]}
+		}}`
+	_, err := workflow.ParseReader(strings.NewReader(body))
+	if err == nil || !strings.Contains(err.Error(), "unknown isolation") {
+		t.Fatalf("want unknown isolation error, got %v", err)
+	}
+}
+
+func TestValidate_RejectsSyntheticPrefixWithWorktree(t *testing.T) {
+	body := `{
+		"name": "single:dev", "first_step": "a", "isolation": "worktree",
+		"steps": {
+			"a": {"agent": {"name": "dev"}, "next_steps": [{"task_status": "done", "prompt_rule": "."}]}
+		}}`
+	def, err := workflow.ParseReader(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = workflow.Validate(context.Background(), def, nil, workflow.ValidateOpts{AllowSyntheticName: true})
+	if err == nil || !strings.Contains(err.Error(), "synthetic") {
+		t.Fatalf("want synthetic+worktree error, got %v", err)
+	}
+}
+
 func TestValidate_RejectsNegativeMaxVisits(t *testing.T) {
 	body := `{
 		"name": "x", "first_step": "a",

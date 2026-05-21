@@ -26,10 +26,45 @@ type Definition struct {
 	Name        string
 	Description string
 	FirstStep   string
-	Steps       map[string]StepDef
+	// Isolation is the workflow-level execution-isolation mode. Default
+	// IsolationNone preserves prior behaviour (steps spawn with
+	// cwd=projectRoot). IsolationWorktree allocates a git worktree per
+	// task at create/enroll time and spawns step runs inside it. See
+	// docs/plans/20260521-Worktree-Isolation.md.
+	Isolation IsolationMode
+	Steps     map[string]StepDef
 	// StepNames preserves source-file step order (helpful for stable
 	// rendering / `workflow show` output).
 	StepNames []string
+}
+
+// IsolationMode is the closed set of workflow-level isolation modes.
+// Mirrors the CHECK in migration 005_workflow_isolation.sql.
+type IsolationMode string
+
+const (
+	// IsolationNone (default) → steps spawn with cwd=projectRoot.
+	IsolationNone IsolationMode = "none"
+	// IsolationWorktree → CLI allocates a git worktree per task and the
+	// daemon spawns step runs inside it.
+	IsolationWorktree IsolationMode = "worktree"
+)
+
+// Valid reports whether m is one of the accepted modes.
+func (m IsolationMode) Valid() bool {
+	switch m {
+	case IsolationNone, IsolationWorktree:
+		return true
+	}
+	return false
+}
+
+// Normalize collapses the zero / empty value to IsolationNone.
+func (m IsolationMode) Normalize() IsolationMode {
+	if m == "" {
+		return IsolationNone
+	}
+	return m
 }
 
 // StepDef is one entry under "steps".
@@ -120,6 +155,7 @@ type rawDoc struct {
 	Name        string             `json:"name"`
 	Description string             `json:"description"`
 	FirstStep   string             `json:"first_step"`
+	Isolation   string             `json:"isolation,omitempty"`
 	Steps       map[string]rawStep `json:"steps"`
 }
 
@@ -184,10 +220,16 @@ func parseReader(r io.Reader, rejectFirstMessageFile bool) (Definition, error) {
 		return Definition{}, fmt.Errorf("decode workflow: %w", err)
 	}
 
+	isoRaw := strings.TrimSpace(raw.Isolation)
+	isolation := IsolationMode(isoRaw).Normalize()
+	if !isolation.Valid() {
+		return Definition{}, fmt.Errorf("unknown isolation mode: %q (want none|worktree)", isoRaw)
+	}
 	def := Definition{
 		Name:        strings.TrimSpace(raw.Name),
 		Description: strings.TrimSpace(raw.Description),
 		FirstStep:   strings.TrimSpace(raw.FirstStep),
+		Isolation:   isolation,
 		Steps:       make(map[string]StepDef, len(raw.Steps)),
 	}
 	for stepName, s := range raw.Steps {

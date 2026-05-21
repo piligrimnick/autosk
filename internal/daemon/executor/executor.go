@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -42,6 +43,7 @@ import (
 	"autosk/internal/step"
 	"autosk/internal/store"
 	"autosk/internal/workflow"
+	"autosk/internal/worktree"
 )
 
 // PiRunner is the subset of *pi.Runner the executor uses. Tests substitute
@@ -104,6 +106,11 @@ type Deps struct {
 	// consults Attached(jobID) on turn boundaries to skip correction
 	// prompts while a client is attached; nil disables the hook.
 	Attachments *pirunners.Attachments
+	// Worktree manages per-task git worktrees for workflows that opt
+	// into isolation=worktree. nil falls back to a fresh manager; the
+	// daemon shares one instance per process so racing Ensure/Verify
+	// calls on the same task serialise correctly.
+	Worktree worktree.Manager
 }
 
 // Config tunes the executor.
@@ -116,6 +123,12 @@ type Config struct {
 	// ProjectRoot is where .autosk/ lives. Used as cwd for the spawned
 	// agent process and to default SessionDirRoot.
 	ProjectRoot string
+	// DBPath is the absolute path to the project's .autosk/db file.
+	// Threaded into the child process as AUTOSK_DB when the workflow
+	// opts into worktree isolation — the agent's cwd lives outside
+	// the project tree and autosk CLI calls inside the worktree need
+	// the explicit pointer back to the canonical DB.
+	DBPath string
 	// Grace is the SIGTERM → SIGKILL grace period.
 	Grace time.Duration
 	// IdleTimeout caps a single WaitForAgentEnd.
@@ -140,6 +153,9 @@ func New(deps Deps, factory Factory, cfg Config) *Executor {
 	}
 	if cfg.IdleTimeout <= 0 {
 		cfg.IdleTimeout = 30 * time.Minute
+	}
+	if deps.Worktree == nil {
+		deps.Worktree = worktree.NewManager()
 	}
 	return &Executor{deps: deps, factory: factory, nodeFactory: DefaultNodeFactory, cfg: cfg}
 }
@@ -231,6 +247,33 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 	if err := ensureDir(sessionDir); err != nil {
 		return e.failTerminal(bg, jobID, nil, fmt.Errorf("session dir: %w", err))
 	}
+
+	// Per-workflow isolation: when the workflow opts into worktree
+	// isolation we point the child at the per-task worktree and thread
+	// AUTOSK_DB so autosk CLI calls inside the worktree still find the
+	// canonical project DB. See docs/plans/20260521-Worktree-Isolation.md.
+	cwd := e.cfg.ProjectRoot
+	var runEnv []string
+	if wf.Isolation == workflow.IsolationWorktree {
+		path, perr := worktree.PathFor(e.cfg.ProjectRoot, tk.ID)
+		if perr != nil {
+			return e.failTerminal(bg, jobID, nil, fmt.Errorf("worktree path: %w", perr))
+		}
+		if verr := e.deps.Worktree.Verify(ctx, e.cfg.ProjectRoot, tk.ID); verr != nil {
+			reason := "worktree_missing"
+			if errors.Is(verr, worktree.ErrWorktreeStranded) || errors.Is(verr, worktree.ErrNotGitRepo) {
+				reason = "worktree_stranded"
+			}
+			return e.failTerminal(bg, jobID, nil, fmt.Errorf("%s: %w", reason, verr))
+		}
+		cwd = path
+		dbPath := e.cfg.DBPath
+		if dbPath == "" {
+			dbPath = filepath.Join(e.cfg.ProjectRoot, ".autosk", "db")
+		}
+		runEnv = append(os.Environ(), "AUTOSK_DB="+dbPath)
+	}
+
 	var (
 		runner     PiRunner
 		initialMsg = prompt
@@ -250,7 +293,8 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 			BootstrapPath: bootstrap,
 			PackageName:   agentCfg.Name,
 			RunnerPath:    agentCfg.Runner,
-			Cwd:           e.cfg.ProjectRoot,
+			Cwd:           cwd,
+			Env:           runEnv,
 			UseTsxLoader:  true,
 		})
 		if err != nil {
@@ -261,7 +305,8 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 		extraArgs := buildPiExtraArgs(agentCfg)
 		runner, err = e.factory(ctx, pi.Opts{
 			PIBin:      e.cfg.PIBin,
-			Cwd:        e.cfg.ProjectRoot,
+			Cwd:        cwd,
+			Env:        runEnv,
 			Model:      agentCfg.Model,
 			Thinking:   agentCfg.Thinking,
 			SessionDir: sessionDir,
@@ -375,8 +420,76 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 	if _, err := e.deps.Runs.MarkDone(bg, jobID, exit, &tid); err != nil {
 		return fmt.Errorf("mark done: %w", err)
 	}
+	// On terminal transitions (done/cancelled) for isolated workflows,
+	// reap the per-task worktree. Cleanup failures are surfaced as a
+	// warning + agent comment so a stuck `git worktree remove` never
+	// masks a successful run. human_feedback / sibling-step transitions
+	// preserve the worktree (the human / next step may need it).
+	if wf.Isolation == workflow.IsolationWorktree && isTerminalStatus(signaled.TaskStatus) {
+		e.cleanupWorktreeBestEffort(bg, run.TaskID, signaled.TaskStatus)
+	}
 	return nil
 }
+
+// isTerminalStatus reports whether the emitted task_status closes the
+// task and so warrants worktree cleanup. human_feedback is NOT terminal
+// — the human may inspect / resume from the worktree.
+func isTerminalStatus(status string) bool {
+	return status == "done" || status == "cancelled"
+}
+
+// cleanupWorktreeBestEffort removes the per-task worktree directory
+// after a successful terminal transition. Errors are logged via an
+// agent comment authored as `human` so the failure survives past the
+// run — but never propagated, because the task is already terminally
+// closed and the agent did its job.
+//
+// The call is bounded by worktreeCleanupTimeout so a hung
+// `git worktree remove` (NFS, dead lock file, broken FS) can't block
+// the executor's worker slot indefinitely. The executor swaps the
+// turn ctx for context.Background() during the terminal phase, so
+// daemon shutdown cannot cancel us either — a hard local timeout is
+// the only backstop.
+//
+// The breadcrumb-comment path runs on a SEPARATE timeout off the
+// parent ctx, not the OnTerminal one: if OnTerminal blocked until
+// its deadline expired, that's exactly the case the breadcrumb is
+// meant to capture and we don't want the comment write to inherit
+// the already-expired context.
+func (e *Executor) cleanupWorktreeBestEffort(parentCtx context.Context, taskID, status string) {
+	cleanupCtx, cleanupCancel := context.WithTimeout(parentCtx, worktreeCleanupTimeout)
+	defer cleanupCancel()
+	_, werr := e.deps.Worktree.OnTerminal(cleanupCtx, e.cfg.ProjectRoot, taskID)
+	if werr == nil {
+		return
+	}
+	if e.deps.Comments == nil || e.deps.Agents == nil {
+		return
+	}
+	// Fresh ctx off parentCtx so the breadcrumb survives a
+	// deadline-exceeded OnTerminal. Tight bound (5s) keeps a wedged
+	// agents / comments store from pinning the worker slot.
+	crumbCtx, crumbCancel := context.WithTimeout(parentCtx, worktreeBreadcrumbTimeout)
+	defer crumbCancel()
+	humanAg, gerr := e.deps.Agents.GetByName(crumbCtx, agent.HumanAgentName)
+	if gerr != nil {
+		return
+	}
+	_, _ = e.deps.Comments.Add(crumbCtx, taskID, humanAg.ID,
+		fmt.Sprintf("worktree cleanup failed on %s: %v", status, werr))
+}
+
+// worktreeCleanupTimeout bounds a single cleanup invocation. 30s is
+// generous — `git worktree remove --force` on a non-trivial worktree
+// can run a few seconds, but past half a minute we'd rather fail and
+// surface the breadcrumb than pin a worker slot.
+const worktreeCleanupTimeout = 30 * time.Second
+
+// worktreeBreadcrumbTimeout bounds the breadcrumb-comment write that
+// runs after a cleanup failure. Kept small so a wedged store can't
+// pin the worker slot for another full cleanup-budget on top of the
+// OnTerminal timeout.
+const worktreeBreadcrumbTimeout = 5 * time.Second
 
 // advanceTask applies the transition's effect to tasks per §5.4.
 //

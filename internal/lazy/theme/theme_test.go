@@ -60,13 +60,13 @@ func TestTokyoNight_AllSlotsFilled(t *testing.T) {
 		"PopupBox":  p.PopupBox,
 		"Selection": p.Selection,
 		"Header":    p.Header,
-		"Muted":    p.Muted,
-		"Accent":   p.Accent,
-		"Warn":     p.Warn,
-		"Err":      p.Err,
-		"OK":       p.OK,
-		"Scope":    p.Scope,
-		"Filter":   p.Filter,
+		"Muted":     p.Muted,
+		"Accent":    p.Accent,
+		"Warn":      p.Warn,
+		"Err":       p.Err,
+		"OK":        p.OK,
+		"Scope":     p.Scope,
+		"Filter":    p.Filter,
 	}
 	for name, c := range slots {
 		if c.Hex == "" {

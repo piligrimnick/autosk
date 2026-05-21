@@ -15,19 +15,19 @@ import (
 // fetchRefresh calls need real implementations; the rest return
 // ErrDaemonRequired or zero values.
 type refreshFakeDS struct {
-	tasks         []datasource.Task
-	tasksErr      error
-	jobs          []datasource.Job
-	jobsErr       error
-	workflows     []datasource.Workflow
-	workflowsErr  error
-	agents        []datasource.Agent
-	agentsErr     error
-	health        datasource.Health
-	comments      []datasource.Comment
-	commentsErr   error
-	signals       []datasource.Signal
-	signalsErr    error
+	tasks        []datasource.Task
+	tasksErr     error
+	jobs         []datasource.Job
+	jobsErr      error
+	workflows    []datasource.Workflow
+	workflowsErr error
+	agents       []datasource.Agent
+	agentsErr    error
+	health       datasource.Health
+	comments     []datasource.Comment
+	commentsErr  error
+	signals      []datasource.Signal
+	signalsErr   error
 }
 
 func (f *refreshFakeDS) Tasks(_ context.Context, _ datasource.TaskFilter) ([]datasource.Task, error) {
@@ -135,7 +135,7 @@ func TestRefreshApply_CommentsErrorPreservesCache(t *testing.T) {
 
 	// First refresh: success path replaces the stale value.
 	fakeOK := &refreshFakeDS{
-		tasks: []datasource.Task{{ID: "as-aaaa", Title: "x"}},
+		tasks:    []datasource.Task{{ID: "as-aaaa", Title: "x"}},
 		comments: []datasource.Comment{{Text: "fresh"}},
 	}
 	gu.ds = fakeOK
@@ -152,7 +152,7 @@ func TestRefreshApply_CommentsErrorPreservesCache(t *testing.T) {
 	// (not get cleared, not be overwritten with nil).
 	wantErr := errors.New("db lock")
 	fakeErr := &refreshFakeDS{
-		tasks: []datasource.Task{{ID: "as-aaaa", Title: "x"}},
+		tasks:       []datasource.Task{{ID: "as-aaaa", Title: "x"}},
 		commentsErr: wantErr,
 	}
 	gu.ds = fakeErr
@@ -190,7 +190,7 @@ func TestRefreshApply_SignalsErrorPreservesCache(t *testing.T) {
 	gu.st.signals["as-bbbb"] = []datasource.Signal{{StepName: "stale"}}
 
 	fakeErr := &refreshFakeDS{
-		tasks: []datasource.Task{{ID: "as-bbbb", Title: "y"}},
+		tasks:      []datasource.Task{{ID: "as-bbbb", Title: "y"}},
 		signalsErr: errors.New("boom"),
 	}
 	gu.ds = fakeErr

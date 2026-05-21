@@ -60,7 +60,7 @@ type ExtensionUIRequest struct {
 // ExtensionUIResponse is what we send back. Daemon always cancels blocking
 // dialogs to keep headless runs from hanging.
 type ExtensionUIResponse struct {
-	Type      string `json:"type"`      // "extension_ui_response"
+	Type      string `json:"type"` // "extension_ui_response"
 	ID        string `json:"id"`
 	Cancelled bool   `json:"cancelled,omitempty"`
 	Value     string `json:"value,omitempty"`

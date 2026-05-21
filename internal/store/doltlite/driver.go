@@ -222,7 +222,7 @@ func (c *checkingConn) IsValid() bool {
 func (c *checkingConn) Prepare(query string) (driver.Stmt, error) {
 	return c.inner.Prepare(query)
 }
-func (c *checkingConn) Close() error             { return c.inner.Close() }
+func (c *checkingConn) Close() error              { return c.inner.Close() }
 func (c *checkingConn) Begin() (driver.Tx, error) { return c.inner.Begin() }
 
 // ---- driver.{Conn,Stmt}{Exec,Query}{Context}, driver.Pinger -------------

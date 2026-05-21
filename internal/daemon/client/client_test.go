@@ -303,8 +303,6 @@ func TestClient_Stream_OnHTTPErrorIsAPIError(t *testing.T) {
 
 // ---- helpers ------------------------------------------------------------
 
-
-
 func mustJSON(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {

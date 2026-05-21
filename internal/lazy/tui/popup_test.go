@@ -45,5 +45,3 @@ func TestMinPopupClampsToTerminal(t *testing.T) {
 		t.Fatalf("floor case: width %d should clamp", wf)
 	}
 }
-
-

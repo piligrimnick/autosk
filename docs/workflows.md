@@ -246,6 +246,184 @@ autosk metadata reset-visits as-bea9 --step review
 autosk resume as-bea9
 ```
 
+### Worktree isolation
+
+By default every step of every task on a project runs in the project
+root. Two tasks of the same workflow running concurrently will race on
+the filesystem. To give each task its own sandbox, mark the workflow as
+isolated:
+
+```jsonc
+{
+  "name":       "feature-dev",
+  "first_step": "dev",
+  "isolation": "worktree",        // NEW; optional, default "none"
+  "steps":     { ... }
+}
+```
+
+Accepted values: `"none"` (the default — preserves previous behaviour)
+and `"worktree"`. Anything else is rejected at `workflow create` time
+with `unknown isolation mode: %q (want none|worktree)`. Synthetic
+`single:<agent>` workflows (created implicitly by `--agent NAME`) are
+pinned to `"none"` by the engine and cannot be flipped.
+
+When a task targets a workflow with `isolation: "worktree"`:
+
+- `autosk create` and `autosk enroll` allocate a per-task git worktree
+  **before** the task enters the workflow. Path:
+  `~/.autosk/worktrees/<basename>-<8hex(sha256(canonRoot))>/<task-id>`.
+  Branch: `autosk/<task-id>`. Both are **derived deterministically**
+  from the canonical project root + task id — no row in any table
+  stores a copy.
+- The daemon spawns every step run with `cwd =` the worktree and
+  `AUTOSK_DB =` the canonical project DB. The agent's writes against
+  `.autosk/db` therefore still land in the project's single source of
+  truth, while file edits stay inside the per-task worktree.
+- On `done` / `cancelled` (via `autosk step next …`, `autosk done`,
+  `autosk cancel`, or any other terminal transition the engine
+  records), the worktree **directory** is removed automatically and
+  the **branch is preserved** for human review / merge.
+- On `human_feedback` (parked) and sibling-step transitions the
+  worktree is kept on disk — the human (or the next step's agent)
+  needs it to inspect or continue the work.
+- On a parked-failure (`parkTaskOnFailure`) the worktree is *also*
+  preserved: the human needs the on-disk state to debug. Cleanup
+  happens only at a real terminal status.
+
+```bash
+autosk create "Wire up auth" --workflow feature-dev
+# task created; worktree allocated at ~/.autosk/worktrees/myproj-7a3b9c2e/as-bea9
+# branch autosk/as-bea9 created off HEAD
+
+autosk show as-bea9
+# …
+# worktree:      ~/.autosk/worktrees/myproj-7a3b9c2e/as-bea9 (exists)
+# branch:        autosk/as-bea9
+
+autosk show as-bea9 --json | jq .worktree
+# {
+#   "path":   "/Users/me/.autosk/worktrees/myproj-7a3b9c2e/as-bea9",
+#   "branch": "autosk/as-bea9",
+#   "exists": true
+# }
+```
+
+The `worktree` block in `autosk show` (text + JSON) is **omitted
+entirely** for non-isolated workflows and for tasks with no workflow,
+so existing JSON consumers don't see a new always-present key.
+
+`autosk workflow show <name> [--json]` carries the isolation mode
+verbatim. The `--json` shape always includes an `isolation` field
+(`"none"` or `"worktree"`); the text form only prints an
+`isolation:` line when the mode is non-default.
+
+#### `enroll --base-ref`
+
+When enrolling an existing task into an isolated workflow you can pick
+the base ref the worktree's branch is forked from:
+
+```bash
+autosk enroll as-bea9 --workflow feature-dev --base-ref origin/main
+```
+
+`--base-ref` defaults to `HEAD`. It is **only** meaningful for
+isolated workflows on a fresh allocation — passing it with `--agent`
+or against a non-isolated workflow fails with `--base-ref requires the
+target workflow to use isolation=worktree`. When the branch
+`autosk/<task-id>` already exists (typical `reopen` → `enroll` cycle
+after the worktree dir was reaped), `--base-ref` is ignored with a
+stderr warning and the worktree is re-allocated on the existing
+branch.
+
+#### `autosk worktree`
+
+Diagnostic / manual-recovery verbs. None of them mutate task rows.
+
+| Verb | Behaviour |
+|---|---|
+| `autosk worktree list [--json]` | List every task in this project whose workflow has `isolation: "worktree"`, with task id, status, workflow, branch, on-disk presence, and path. Closed tasks whose dir survived a failed cleanup show `dir=missing` (`exists=false` in JSON). |
+| `autosk worktree path <id> [--json]` | Print the derived worktree path. Pure helper; does not stat the path. Useful in shell aliases and scripts. |
+| `autosk worktree rm <id> [--json]` | Force-remove the worktree directory; the branch is left intact. Refuses **only** `in_workflow` tasks (the daemon may be executing inside the dir right now). `new` / `human_feedback` / `done` / `cancelled` are all accepted, so the `worktree_missing` recovery flow below works without first closing the task. |
+
+No `--all-projects` flag in v0.3: the CLI is single-process and has no
+daemon round-trip for cross-project enumeration. Use it from each
+project root individually.
+
+#### Uncommitted work is discarded on terminal status
+
+`git worktree remove --force` discards any uncommitted edits inside
+the directory. The contract is **the agent commits its work before
+signalling `done`**; everything else is intentionally lost. This is
+why the kickback messages for `done` transitions in isolated
+workflows remind the agent to commit first, and why the branch is
+preserved (so a human can still inspect or merge what *was*
+committed).
+
+#### Recovering from `worktree_missing` / `worktree_stranded`
+
+If the daemon picks up an isolated task and discovers its worktree
+directory is gone or its `.git` no longer points at the project's
+gitdir, the run fails with `error=worktree_missing` (dir absent) or
+`error=worktree_stranded` (dir present but git is broken / project was
+moved) and the task is parked to `human_feedback`. The worktree is
+**not** auto-cleaned in this failure path — you may want to keep
+whatever is on disk for debugging.
+
+To recover, either give up:
+
+```bash
+autosk cancel as-bea9             # branch preserved; dir reaped if any remained
+```
+
+or re-allocate the worktree and retry:
+
+```bash
+autosk worktree rm as-bea9        # optional: clean up any stranded dir
+autosk cancel  as-bea9            # human_feedback → cancelled (‘reopen’ doesn’t
+                                  # take human_feedback as a source state)
+autosk reopen  as-bea9            # cancelled → new; current_step_id cleared
+autosk enroll  as-bea9 --workflow feature-dev   # Ensure re-allocates dir + branch
+# the daemon picks it up automatically; the branch (autosk/as-bea9)
+# survived the round-trip so the worktree reuses it.
+```
+
+A shorter recovery via plain `autosk resume` is **not** possible:
+`resume` flips status back to `in_workflow` at the same step without
+re-allocating the worktree, so the next run would `Verify`-fail and
+park again. Adding a `worktree create <id>` verb that calls `Ensure`
+on a parked task is a deferred follow-up (the locked decision was to
+keep the CLI surface minimal).
+
+#### Reopening a closed isolated task
+
+`autosk reopen` itself never touches git. The branch survives the
+reopen unmolested. A subsequent `enroll <id> --workflow <iso>`
+re-allocates a fresh worktree directory on the existing branch (so
+whatever was committed before is still in `git log`), and the engine
+resumes the workflow from the entry step. `--base-ref` is ignored on
+this path with a warning.
+
+#### Limitations
+
+- **Per-task, not per-step.** Every step of a given task shares the
+  same worktree. Per-step isolation is out of scope for v0.3.
+- **Project moves are unsupported.** The worktree path is derived
+  from the canonical project root; moving the project directory
+  invalidates every existing worktree. Recovery is `Verify`-fail →
+  human_feedback → manual cleanup (`autosk worktree rm`) →
+  re-enroll.
+- **Network filesystems are unsupported.** Same constraint as
+  `.autosk/db` itself.
+- **No `--all-projects` on `worktree list`** in v0.3 (see above).
+- **No orphan-branch GC.** `autosk worktree list` surfaces leaked
+  directories from broken runs, but branches accumulate — prune
+  them with normal git workflow once the task is well and truly
+  done.
+
+Design: [`docs/plans/20260521-Worktree-Isolation.md`](plans/20260521-Worktree-Isolation.md).
+Example: [`docs/notes/workflow-isolated-example.json`](notes/workflow-isolated-example.json).
+
 ### Task metadata
 
 Every task carries a free-form JSON `metadata` blob (the
@@ -588,6 +766,8 @@ every end-of-turn.
 ## Pointers
 
 - Design: [`docs/plans/20260517-Workflows-Plan.md`](plans/20260517-Workflows-Plan.md)
+- Worktree isolation: [`docs/plans/20260521-Worktree-Isolation.md`](plans/20260521-Worktree-Isolation.md)
 - Daemon details: [`docs/daemon.md`](daemon.md)
 - pi-extension surface: [`extension/src/`](../extension/src/)
 - Example workflow: [`docs/notes/workflow-example.json`](notes/workflow-example.json)
+- Isolated example: [`docs/notes/workflow-isolated-example.json`](notes/workflow-isolated-example.json)

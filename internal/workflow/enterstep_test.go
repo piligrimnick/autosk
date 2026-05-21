@@ -262,6 +262,7 @@ func TestEnterStep_StampsWorkflowID(t *testing.T) {
 //   - keep the typed MaxVisitsExceededError reachable via errors.As so
 //     CLI / lazy / executor code can still introspect the reason behind
 //     the hint.
+//
 // nil-in/nil-out and non-cap pass-through are tested too — those are
 // the only other branches.
 func TestMapEnterStepError(t *testing.T) {

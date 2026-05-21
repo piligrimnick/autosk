@@ -21,9 +21,9 @@ import (
 
 // Sentinel errors.
 var (
-	ErrNotOpen    = errors.New("comments store: not open")
-	ErrEmptyText  = errors.New("comment text is empty")
-	ErrInvalidFK  = errors.New("invalid task_id or author_id")
+	ErrNotOpen   = errors.New("comments store: not open")
+	ErrEmptyText = errors.New("comment text is empty")
+	ErrInvalidFK = errors.New("invalid task_id or author_id")
 )
 
 // Comment is one `comments` row plus the joined-in author name (cheap
@@ -136,8 +136,8 @@ type scanner interface {
 
 func scanComment(sc scanner) (Comment, error) {
 	var (
-		c          Comment
-		createdU   int64
+		c        Comment
+		createdU int64
 	)
 	if err := sc.Scan(&c.ID, &c.TaskID, &c.AuthorID, &c.AuthorName, &c.Text, &createdU); err != nil {
 		return Comment{}, err

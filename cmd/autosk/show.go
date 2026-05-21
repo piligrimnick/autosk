@@ -12,6 +12,7 @@ import (
 	"autosk/internal/store"
 	"autosk/internal/store/doltlite"
 	"autosk/internal/workflow"
+	"autosk/internal/worktree"
 )
 
 func newShowCmd() *cobra.Command {
@@ -65,6 +66,24 @@ func newShowCmd() *cobra.Command {
 				if t.WorkflowID != "" {
 					if wf, err := wfs.GetByID(cmd.Context(), t.WorkflowID); err == nil {
 						opts = append(opts, render.WithWorkflow(wf.Name))
+						// Surface the deterministic worktree block when
+						// the workflow opts into isolation. Path / branch
+						// are pure functions of (root, taskID); presence is
+						// stat'd at render time.
+						if wf.Isolation == workflow.IsolationWorktree {
+							if root, perr := projectRootFromCwd(); perr == nil {
+								if path, werr := worktree.PathFor(root, t.ID); werr == nil {
+									wj := render.WorktreeJSON{
+										Path:   path,
+										Branch: worktree.BranchFor(t.ID),
+									}
+									if _, statErr := os.Stat(path); statErr == nil {
+										wj.Exists = true
+									}
+									opts = append(opts, render.WithWorktree(&wj))
+								}
+							}
+						}
 					}
 				}
 				// Surface step_visits inline so humans see why a parked

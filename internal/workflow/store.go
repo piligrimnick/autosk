@@ -34,8 +34,13 @@ type Workflow struct {
 	Description string
 	FirstStepID string
 	IsSynthetic bool
-	CreatedAt   time.Time
-	Steps       []Step // populated by GetByName/Show, not by List
+	// Isolation is the workflow-level execution-isolation mode. See
+	// docs/plans/20260521-Worktree-Isolation.md. Empty in the on-disk
+	// row collapses to IsolationNone on scan so callers can compare
+	// against IsolationNone / IsolationWorktree directly.
+	Isolation IsolationMode
+	CreatedAt time.Time
+	Steps     []Step // populated by GetByName/Show, not by List
 }
 
 // Step mirrors one `steps` row plus its outgoing transitions.
@@ -140,10 +145,18 @@ func (s *Store) Create(ctx context.Context, def Definition, isSynthetic bool) (W
 	if isSynthetic {
 		synthetic = 1
 	}
+	isolation := def.Isolation.Normalize()
+	if isSynthetic && isolation != IsolationNone {
+		// Defensive: synthetic workflows must always pin isolation='none'.
+		// Validate() also catches user-driven attempts; this guard makes
+		// sure EnsureSingle's invariant stays true even if a programmer
+		// tries to flip the field on a synthetic def.
+		return Workflow{}, fmt.Errorf("synthetic workflow %q cannot use isolation=%q", def.Name, isolation)
+	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO workflows(id, name, description, first_step_id, is_synthetic, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, wfID, def.Name, def.Description, firstStepID, synthetic, now); err != nil {
+		INSERT INTO workflows(id, name, description, first_step_id, is_synthetic, isolation, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, wfID, def.Name, def.Description, firstStepID, synthetic, string(isolation), now); err != nil {
 		if isUniqueErr(err, "workflows.name") {
 			return Workflow{}, fmt.Errorf("%w: %s", ErrAlreadyExist, def.Name)
 		}
@@ -202,7 +215,7 @@ func (s *Store) GetByName(ctx context.Context, name string) (Workflow, error) {
 		return Workflow{}, ErrNotOpen
 	}
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, name, description, first_step_id, is_synthetic, created_at
+		`SELECT id, name, description, first_step_id, is_synthetic, isolation, created_at
 		   FROM workflows WHERE name = ?`, name)
 	w, err := scanWorkflowRow(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -225,7 +238,7 @@ func (s *Store) List(ctx context.Context, includeSynthetic bool) ([]Workflow, er
 	if s.db == nil {
 		return nil, ErrNotOpen
 	}
-	q := `SELECT id, name, description, first_step_id, is_synthetic, created_at
+	q := `SELECT id, name, description, first_step_id, is_synthetic, isolation, created_at
 	        FROM workflows`
 	if !includeSynthetic {
 		q += ` WHERE is_synthetic = 0`
@@ -306,7 +319,7 @@ func (s *Store) GetByID(ctx context.Context, workflowID string) (Workflow, error
 		return Workflow{}, ErrNotOpen
 	}
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, name, description, first_step_id, is_synthetic, created_at
+		`SELECT id, name, description, first_step_id, is_synthetic, isolation, created_at
 		   FROM workflows WHERE id = ?`, workflowID)
 	w, err := scanWorkflowRow(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -468,14 +481,20 @@ func marshalAgentParams(p *AgentParams) (any, error) {
 
 func scanWorkflowRow(sc interface{ Scan(...any) error }) (Workflow, error) {
 	var (
-		w       Workflow
-		synth   int
-		created int64
+		w         Workflow
+		synth     int
+		isolation sql.NullString
+		created   int64
 	)
-	if err := sc.Scan(&w.ID, &w.Name, &w.Description, &w.FirstStepID, &synth, &created); err != nil {
+	if err := sc.Scan(&w.ID, &w.Name, &w.Description, &w.FirstStepID, &synth, &isolation, &created); err != nil {
 		return Workflow{}, err
 	}
 	w.IsSynthetic = synth != 0
+	if isolation.Valid {
+		w.Isolation = IsolationMode(strings.TrimSpace(isolation.String)).Normalize()
+	} else {
+		w.Isolation = IsolationNone
+	}
 	w.CreatedAt = time.Unix(created, 0).UTC()
 	return w, nil
 }

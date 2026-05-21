@@ -45,12 +45,12 @@ type Options struct {
 // Gui ties together the gocui main loop, the model, the datasource,
 // and the helper goroutines.
 type Gui struct {
-	g     *gocui.Gui
-	st    *state
-	ds    datasource.Datasource
-	opts  Options
-	ctx   context.Context
-	cancel context.CancelFunc
+	g           *gocui.Gui
+	st          *state
+	ds          datasource.Datasource
+	opts        Options
+	ctx         context.Context
+	cancel      context.CancelFunc
 	stopRefresh chan struct{}
 
 	// refreshInFlight coalesces redundant refresh requests. j-spam

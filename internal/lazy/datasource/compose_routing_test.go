@@ -211,4 +211,3 @@ func TestCompose_BoundedInitialProbe(t *testing.T) {
 		t.Fatalf("expected daemon!=ok against hung listener, got %q", h.Daemon)
 	}
 }
-

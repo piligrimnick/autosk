@@ -1029,5 +1029,3 @@ func (gu *Gui) jobCancel(*gocui.Gui, *gocui.View) error {
 func (gu *Gui) confirmThen(prompt string, f func()) {
 	gu.openConfirm(prompt, func() error { f(); return nil })
 }
-
-

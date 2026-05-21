@@ -29,21 +29,21 @@ import (
 type Kind string
 
 const (
-	KindSession       Kind = "session"
-	KindUserText      Kind = "user_text"
-	KindAssistantText Kind = "assistant_text"
+	KindSession           Kind = "session"
+	KindUserText          Kind = "user_text"
+	KindAssistantText     Kind = "assistant_text"
 	KindAssistantThinking Kind = "assistant_thinking"
-	KindToolCall      Kind = "tool_call"
-	KindToolResult    Kind = "tool_result"
-	KindThinkingLevel Kind = "thinking_level_change"
-	KindModelChange   Kind = "model_change"
-	KindCompaction    Kind = "compaction"
-	KindBranchSummary Kind = "branch_summary"
-	KindLabel         Kind = "label"
-	KindSessionInfo   Kind = "session_info"
-	KindCustom        Kind = "custom"
-	KindCustomMessage Kind = "custom_message"
-	KindOther         Kind = "other"
+	KindToolCall          Kind = "tool_call"
+	KindToolResult        Kind = "tool_result"
+	KindThinkingLevel     Kind = "thinking_level_change"
+	KindModelChange       Kind = "model_change"
+	KindCompaction        Kind = "compaction"
+	KindBranchSummary     Kind = "branch_summary"
+	KindLabel             Kind = "label"
+	KindSessionInfo       Kind = "session_info"
+	KindCustom            Kind = "custom"
+	KindCustomMessage     Kind = "custom_message"
+	KindOther             Kind = "other"
 )
 
 // Event is the projected shape served by the messages API.
@@ -124,8 +124,8 @@ func parseAll(r io.Reader) ([]Event, error) {
 // projectEntry inspects entry's "type" and returns 0+ projected Events.
 func projectEntry(raw json.RawMessage) ([]Event, error) {
 	var hdr struct {
-		Type      string `json:"type"`
-		Timestamp string `json:"timestamp"`
+		Type      string          `json:"type"`
+		Timestamp string          `json:"timestamp"`
 		Message   json.RawMessage `json:"message"`
 	}
 	if err := json.Unmarshal(raw, &hdr); err != nil {
@@ -161,7 +161,7 @@ func projectEntry(raw json.RawMessage) ([]Event, error) {
 // projectMessage projects an AgentMessage into 0+ events. The shape we
 // look at:
 //
-//   { "role": "user" | "assistant" | "toolResult", "content": ... }
+//	{ "role": "user" | "assistant" | "toolResult", "content": ... }
 func projectMessage(msg json.RawMessage, ts time.Time, parentRaw json.RawMessage) []Event {
 	var m struct {
 		Role       string          `json:"role"`

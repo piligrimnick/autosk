@@ -43,11 +43,11 @@ var ErrUnknownResponse = errors.New("pi: response id not registered")
 
 // Runner manages one pi child process.
 type Runner struct {
-	opts    Opts
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdout  io.ReadCloser
-	stderr  io.ReadCloser
+	opts   Opts
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+	stderr io.ReadCloser
 
 	encMu sync.Mutex // protects writes to stdin
 

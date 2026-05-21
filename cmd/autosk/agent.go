@@ -301,8 +301,8 @@ func newAgentShowCmd() *cobra.Command {
 			a, dbErr := ag.GetByName(cmd.Context(), name)
 			reg, regErr := openPackagesRegistry()
 			var (
-				entry pkgregistry.Entry
-				cfg   pkgregistry.PackageConfig
+				entry  pkgregistry.Entry
+				cfg    pkgregistry.PackageConfig
 				gotPkg bool
 			)
 			if regErr == nil {
@@ -416,7 +416,7 @@ func emitAgent(a agent.Agent) error {
 func emitAgentUnion(dbRows []agent.Agent, entries []pkgregistry.Entry) error {
 	type row struct {
 		Name    string `json:"name"`
-		Source  string `json:"source"`  // builtin|package|db_only
+		Source  string `json:"source"` // builtin|package|db_only
 		Version string `json:"version,omitempty"`
 		InDB    bool   `json:"in_db"`
 	}
@@ -479,8 +479,8 @@ func emitAgentUnion(dbRows []agent.Agent, entries []pkgregistry.Entry) error {
 func emitAgentDetailed(name string, a agent.Agent, inDB bool, e pkgregistry.Entry, cfg pkgregistry.PackageConfig, hasPkg bool) error {
 	if flagJSON {
 		out := map[string]any{
-			"name":   name,
-			"in_db":  inDB,
+			"name":  name,
+			"in_db": inDB,
 		}
 		if inDB {
 			out["agent"] = toJSON(a)

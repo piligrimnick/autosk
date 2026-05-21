@@ -18,7 +18,7 @@ func (fakeHandle) SendCommand(pi.Command) (<-chan pi.Response, error) {
 	return ch, nil
 }
 func (fakeHandle) Abort(context.Context) error { return nil }
-func (fakeHandle) IsStreaming() bool          { return false }
+func (fakeHandle) IsStreaming() bool           { return false }
 
 func TestRegistry_RegisterGetUnregister(t *testing.T) {
 	r := pirunners.NewRegistry()

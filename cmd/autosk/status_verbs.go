@@ -1,14 +1,21 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"autosk/internal/agent"
+	"autosk/internal/comments"
 	"autosk/internal/render"
 	"autosk/internal/store"
+	"autosk/internal/store/doltlite"
+	"autosk/internal/workflow"
+	"autosk/internal/worktree"
 )
 
 // newDoneCmd / newCancelCmd: direct status setters. They bypass the
@@ -105,8 +112,82 @@ func statusSetterCmd(use, short string, target store.Status, allowedFrom map[sto
 				return err
 			}
 			commitWrite(cmd.Context(), s, use+" "+args[0])
+			// Cleanup the per-task worktree on terminal status. Best-
+			// effort: failures are surfaced as a warning + agent
+			// comment so the status flip is never masked by a stuck
+			// `git worktree remove`.
+			if target == store.StatusDone || target == store.StatusCancelled {
+				cleanupWorktreeOnTerminal(cmd.Context(), s, t)
+			}
 			return emit(t)
 		},
+	}
+}
+
+// cleanupWorktreeOnTerminal removes the per-task worktree directory
+// when a CLI verb closes a task that was running under an isolated
+// workflow. Branch is preserved. All failures are surfaced as a
+// warning + agent comment — a stuck `git worktree remove` must never
+// mask a successful done/cancel.
+//
+// Every silent-skip branch surfaces a stderr warning: the function's
+// callers (`autosk done` / `cancel`) have already committed the
+// status flip, so a silent bailout here would leak the worktree with
+// no breadcrumb. The user always gets some signal.
+func cleanupWorktreeOnTerminal(ctx context.Context, s store.Store, t store.Task) {
+	if t.WorkflowID == "" {
+		return
+	}
+	dl, ok := s.(*doltlite.Store)
+	if !ok {
+		return
+	}
+	ag := agent.New(dl.DB())
+	wfs := workflow.New(dl.DB(), ag)
+	wf, err := wfs.GetByID(ctx, t.WorkflowID)
+	if err != nil {
+		// We don't know whether the workflow was isolated. Surface the
+		// lookup failure on stderr so a transient DB blip doesn't
+		// silently leak the worktree.
+		fmt.Fprintf(os.Stderr, "warning: worktree cleanup for %s skipped: load workflow %s: %v\n",
+			t.ID, t.WorkflowID, err)
+		return
+	}
+	if wf.Isolation != workflow.IsolationWorktree {
+		return
+	}
+	root, perr := projectRootFromCwd()
+	if perr != nil {
+		// Symmetric to the wfs.GetByID branch: don't silently leak the
+		// worktree just because cwd resolution wobbled (moved cwd,
+		// broken symlink, EACCES on .autosk parent, …).
+		fmt.Fprintf(os.Stderr, "warning: worktree cleanup for %s skipped: resolve project root: %v\n",
+			t.ID, perr)
+		return
+	}
+	wtMgr := worktree.NewManager()
+	_, werr := wtMgr.OnTerminal(ctx, root, t.ID)
+	if werr == nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "warning: worktree cleanup for %s failed: %v\n", t.ID, werr)
+	// Surface the failure as an agent comment so it survives
+	// past the CLI invocation. Author the comment under the
+	// seeded `human` agent — we don't want a synthetic
+	// `autosk` agent row (the package resolver would reject
+	// EnsureByName on unknown names).
+	//
+	// The comment write uses a fresh derived ctx in case the
+	// OnTerminal failure was a deadline exceedance under the
+	// caller's ctx — same shape as the executor's breadcrumb
+	// path. cmd.Context() already respects Ctrl+C, so callers
+	// that walk away mid-cleanup still get torn down.
+	crumbCtx, crumbCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer crumbCancel()
+	cs := comments.New(dl.DB())
+	if humanAg, aerr := ag.GetByName(crumbCtx, agent.HumanAgentName); aerr == nil {
+		_, _ = cs.Add(crumbCtx, t.ID, humanAg.ID,
+			fmt.Sprintf("worktree cleanup failed on %s: %v", t.Status, werr))
 	}
 }
 

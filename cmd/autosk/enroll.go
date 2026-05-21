@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -12,6 +13,7 @@ import (
 	"autosk/internal/store"
 	"autosk/internal/store/doltlite"
 	"autosk/internal/workflow"
+	"autosk/internal/worktree"
 )
 
 // newEnrollCmd: `autosk enroll <id> --workflow NAME|--agent NAME` —
@@ -34,6 +36,7 @@ func newEnrollCmd() *cobra.Command {
 		workflowArg string
 		agentArg    string
 		stepArg     string
+		baseRefArg  string
 	)
 	cmd := &cobra.Command{
 		Use:   "enroll <id>",
@@ -86,6 +89,9 @@ Examples:
 			if stepArg != "" && agentArg != "" {
 				return errors.New("--step only applies with --workflow (single:<agent> workflows have a single step)")
 			}
+			if baseRefArg != "" && agentArg != "" {
+				return errors.New("--base-ref requires --workflow targeting an isolation=worktree workflow")
+			}
 			taskID := args[0]
 
 			s, closeFn, err := openStore(cmd.Context(), true)
@@ -117,6 +123,35 @@ Examples:
 				return err
 			}
 
+			// Worktree allocation for isolated workflows. Runs BEFORE
+			// EnterStep so the daemon's first run for the task sees a
+			// ready worktree at the deterministic path. On failure the
+			// task stays in status='new'; the user retries after fixing
+			// git state.
+			var (
+				wtAllocated bool
+				wtRoot      string
+				wtMgr       worktree.Manager
+			)
+			if w.Isolation == workflow.IsolationWorktree {
+				root, perr := projectRootFromCwd()
+				if perr != nil {
+					return fmt.Errorf("enroll %s: resolve project root: %w", taskID, perr)
+				}
+				wtMgr = worktree.NewManager()
+				res, werr := wtMgr.Ensure(cmd.Context(), root, taskID, baseRefArg)
+				if werr != nil {
+					return fmt.Errorf("enroll %s: allocate worktree: %w", taskID, werr)
+				}
+				if res.BaseRefIgnored && !flagQuiet {
+					fmt.Fprintf(os.Stderr, "warning: --base-ref ignored — branch %s already exists; reusing\n", res.Branch)
+				}
+				wtAllocated = true
+				wtRoot = root
+			} else if baseRefArg != "" {
+				return errors.New("--base-ref requires the target workflow to use isolation=worktree")
+			}
+
 			// EnterStep stamps workflow_id + current_step_id + status +
 			// bumps step_visits[<entry step>] in a single tx, enforcing
 			// step.max_visits along the way. Hitting the cap on first
@@ -127,6 +162,23 @@ Examples:
 				StepID:     st.ID,
 				WorkflowID: w.ID,
 			}); err != nil {
+				// Roll back the worktree we just allocated so a failed
+				// enroll preserves the pre-isolation invariant of "no
+				// on-disk side effects". cleanupWorktreeOnTerminal
+				// won't reach this case via `autosk cancel`: EnterStep
+				// failure means workflow_id never got stamped, so the
+				// cancel-time guard `t.WorkflowID == ""` short-circuits
+				// before the cleanup runs. Symmetric to create.go's
+				// rollback.
+				if wtAllocated {
+					// Reuse the outer wtMgr (already constructed for
+					// Ensure) so we don't accidentally split the
+					// per-(canonRoot, taskID) mutex across two managers
+					// in the same CLI invocation.
+					if _, terr := wtMgr.OnTerminal(cmd.Context(), wtRoot, taskID); terr != nil {
+						fmt.Fprintf(os.Stderr, "warning: worktree rollback for %s failed: %v\n", taskID, terr)
+					}
+				}
 				return mapEnterStepError(err, taskID)
 			}
 			t, err := s.GetTask(cmd.Context(), taskID)
@@ -148,6 +200,7 @@ Examples:
 	cmd.Flags().StringVar(&workflowArg, "workflow", "", "enroll the task into this named workflow at its first step")
 	cmd.Flags().StringVar(&agentArg, "agent", "", "shorthand for --workflow single:<name>; ensures the synthetic workflow exists")
 	cmd.Flags().StringVar(&stepArg, "step", "", "enroll at this step name instead of the workflow's first step (requires --workflow)")
+	cmd.Flags().StringVar(&baseRefArg, "base-ref", "", "git ref to branch the worktree from (isolation=worktree workflows; default HEAD; ignored when the task's branch already exists)")
 	return cmd
 }
 

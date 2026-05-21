@@ -210,6 +210,81 @@ func TestCreate_RoundTripsMaxVisits(t *testing.T) {
 
 // TestEnsureSingle_MaxVisitsIsZero verifies the synthetic single-agent
 // workflow stays uncapped (cap=0).
+// TestCreate_RoundTripsIsolation verifies the workflow's isolation
+// field survives a Create + GetByName/GetByID round-trip.
+func TestCreate_RoundTripsIsolation(t *testing.T) {
+	wf, _, _, done := newWFFixture(t)
+	defer done()
+	ctx := context.Background()
+	body := `{
+		"name": "isolated",
+		"first_step": "dev",
+		"isolation": "worktree",
+		"steps": {
+			"dev": {"agent": {"name": "developer"}, "next_steps": [{"task_status": "done", "prompt_rule": "."}]}
+		}}`
+	def, err := workflow.ParseReader(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := wf.Create(ctx, def, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Isolation != workflow.IsolationWorktree {
+		t.Fatalf("Create.Isolation: %q (want worktree)", w.Isolation)
+	}
+	got, err := wf.GetByName(ctx, "isolated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Isolation != workflow.IsolationWorktree {
+		t.Fatalf("GetByName.Isolation: %q", got.Isolation)
+	}
+	got2, err := wf.GetByID(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2.Isolation != workflow.IsolationWorktree {
+		t.Fatalf("GetByID.Isolation: %q", got2.Isolation)
+	}
+	list, err := wf.List(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, x := range list {
+		if x.Name == "isolated" {
+			if x.Isolation != workflow.IsolationWorktree {
+				t.Fatalf("List row Isolation: %q", x.Isolation)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("workflow not in List")
+	}
+}
+
+// TestCreate_DefaultIsolationIsNone verifies that workflows without
+// `isolation` set on disk get the default `none` on scan paths.
+func TestCreate_DefaultIsolationIsNone(t *testing.T) {
+	wf, _, _, done := newWFFixture(t)
+	defer done()
+	ctx := context.Background()
+	def, err := workflow.ParseFile("../../docs/notes/workflow-example.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := wf.Create(ctx, def, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Isolation != workflow.IsolationNone {
+		t.Fatalf("default Isolation: %q (want none)", w.Isolation)
+	}
+}
+
 func TestEnsureSingle_MaxVisitsIsZero(t *testing.T) {
 	wf, _, _, done := newWFFixture(t)
 	defer done()
@@ -251,6 +326,21 @@ func TestList_HidesSyntheticByDefault(t *testing.T) {
 	}
 	if len(all) != 2 {
 		t.Fatalf("all list len: %d", len(all))
+	}
+}
+
+// TestEnsureSingle_IsolationIsNone verifies the synthetic workflow's
+// isolation is pinned to `none`.
+func TestEnsureSingle_IsolationIsNone(t *testing.T) {
+	wf, _, _, done := newWFFixture(t)
+	defer done()
+	ctx := context.Background()
+	w, err := wf.EnsureSingle(ctx, "developer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Isolation != workflow.IsolationNone {
+		t.Fatalf("synthetic workflow isolation: %q", w.Isolation)
 	}
 }
 

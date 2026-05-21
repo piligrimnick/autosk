@@ -94,6 +94,35 @@ func nullText(s string) any {
 	return s
 }
 
+// DeleteTask removes a task row by id. Returns ErrNotFound when no row
+// matched. Used by the worktree-isolation rollback path in `autosk
+// create` — see store.Store.DeleteTask for the broader contract.
+//
+// FK CASCADE handles task_deps, comments, daemon_runs and
+// (transitively through daemon_runs) step_signals. Callers do NOT
+// need to reap those rows first.
+func (s *Store) DeleteTask(ctx context.Context, idStr string) error {
+	if s.db == nil {
+		return store.ErrNotOpen
+	}
+	var (
+		res store.Result
+		err error
+	)
+	err = retryOnBusy(ctx, func() error {
+		res, err = s.db.ExecContext(ctx, `DELETE FROM tasks WHERE id = ?`, idStr)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("delete task: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
 // GetTask returns the task with the given id, or ErrNotFound.
 func (s *Store) GetTask(ctx context.Context, idStr string) (store.Task, error) {
 	if s.db == nil {

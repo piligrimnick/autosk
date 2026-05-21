@@ -115,5 +115,3 @@ func (w *timeoutWrapper) Healthz(ctx context.Context) (datasource.Health, error)
 	})
 	return out, err
 }
-
-

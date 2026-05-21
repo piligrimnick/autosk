@@ -14,11 +14,11 @@ import (
 
 // fixtureWF spins up a doltlite store with a feature-dev workflow.
 type fixtureWF struct {
-	s      *doltlite.Store
-	ag     *agent.Store
-	wfs    *workflow.Store
-	wf     workflow.Workflow
-	close  func()
+	s     *doltlite.Store
+	ag    *agent.Store
+	wfs   *workflow.Store
+	wf    workflow.Workflow
+	close func()
 }
 
 func newFixtureWF(t *testing.T) *fixtureWF {

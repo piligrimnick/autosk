@@ -136,6 +136,19 @@ type Store interface {
 	UpdateTask(ctx context.Context, id string, p TaskPatch) (Task, error)
 	ListTasks(ctx context.Context, f ListFilter) ([]Task, error)
 
+	// DeleteTask removes a task row. Used by the worktree-isolation
+	// rollback path in `autosk create` when the freshly-created row
+	// must be unwound because the worktree could not be allocated.
+	//
+	// FK CASCADE handles every dependent row declared in the schema:
+	// task_deps (both blocker_id and blocked_id), comments,
+	// daemon_runs and — transitively through daemon_runs —
+	// step_signals. A future caller deleting a task with run history
+	// attached therefore does NOT need to reap those rows first.
+	//
+	// Returns ErrNotFound when no row matched.
+	DeleteTask(ctx context.Context, id string) error
+
 	// UpdateMetadata is the read-modify-write helper used by engine and
 	// CLI callers that need to mutate one or two keys in tasks.metadata
 	// without clobbering concurrent writers.

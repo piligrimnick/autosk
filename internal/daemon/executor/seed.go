@@ -40,8 +40,8 @@ type workflowSeed struct {
 }
 
 type transitionSeed struct {
-	Kind       string `json:"kind"`        // "step" | "task_status"
-	Target     string `json:"target"`      // step name or task_status value
+	Kind       string `json:"kind"`   // "step" | "task_status"
+	Target     string `json:"target"` // step name or task_status value
 	PromptRule string `json:"prompt_rule"`
 }
 
@@ -54,17 +54,17 @@ type commentSeed struct {
 // this shape (minus the function members which the bootstrapper
 // constructs).
 type RunContextSeed struct {
-	SchemaVersion int               `json:"schema_version"`
-	Task          taskSeed          `json:"task"`
-	Step          stepSeed          `json:"step"`
-	Workflow      workflowSeed      `json:"workflow"`
-	Comments      []commentSeed     `json:"comments"`
-	Transitions   []transitionSeed  `json:"transitions"`
-	ProjectRoot   string            `json:"project_root"`
-	JobID         string            `json:"job_id"`
-	AgentName     string            `json:"agent_name"`
-	AgentVersion  string            `json:"agent_version"`
-	AgentInstall  string            `json:"agent_install"`
+	SchemaVersion int              `json:"schema_version"`
+	Task          taskSeed         `json:"task"`
+	Step          stepSeed         `json:"step"`
+	Workflow      workflowSeed     `json:"workflow"`
+	Comments      []commentSeed    `json:"comments"`
+	Transitions   []transitionSeed `json:"transitions"`
+	ProjectRoot   string           `json:"project_root"`
+	JobID         string           `json:"job_id"`
+	AgentName     string           `json:"agent_name"`
+	AgentVersion  string           `json:"agent_version"`
+	AgentInstall  string           `json:"agent_install"`
 }
 
 // RenderSeedJSON builds the JSON-encoded RunContextSeed sent to a

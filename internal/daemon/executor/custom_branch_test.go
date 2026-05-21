@@ -28,7 +28,7 @@ import (
 // nodeStub mimics the agentnode.Runner contract: SendPrompt writes the
 // seed once, WaitForAgentEnd returns when the test fires triggerExit.
 type nodeStub struct {
-	mu          sync.Mutex
+	mu           sync.Mutex
 	receivedSeed string
 	promptCount  int
 
@@ -48,7 +48,7 @@ func (n *nodeStub) triggerExit() {
 	n.exitOnce.Do(func() { close(n.doneCh) })
 }
 
-func (n *nodeStub) PID() int                                            { return 9999 }
+func (n *nodeStub) PID() int { return 9999 }
 func (n *nodeStub) Events() <-chan pi.Event {
 	c := make(chan pi.Event)
 	close(c)
@@ -77,9 +77,9 @@ func (n *nodeStub) Abort(_ context.Context) error {
 	n.triggerExit()
 	return nil
 }
-func (n *nodeStub) CloseStdin() error  { return nil }
-func (n *nodeStub) Terminate() error   { n.terminated.Store(true); n.triggerExit(); return nil }
-func (n *nodeStub) Kill() error        { n.killed.Store(true); n.triggerExit(); return nil }
+func (n *nodeStub) CloseStdin() error { return nil }
+func (n *nodeStub) Terminate() error  { n.terminated.Store(true); n.triggerExit(); return nil }
+func (n *nodeStub) Kill() error       { n.killed.Store(true); n.triggerExit(); return nil }
 func (n *nodeStub) Wait(_ context.Context, _ time.Duration) (int, error) {
 	<-n.doneCh
 	return 0, nil

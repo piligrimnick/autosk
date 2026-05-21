@@ -15,12 +15,12 @@ import (
 )
 
 type fixture struct {
-	cs       *comments.Store
-	ts       *doltlite.Store
-	taskID   string
-	humanID  string
-	devID    string
-	close    func()
+	cs      *comments.Store
+	ts      *doltlite.Store
+	taskID  string
+	humanID string
+	devID   string
+	close   func()
 }
 
 func newFx(t *testing.T) *fixture {

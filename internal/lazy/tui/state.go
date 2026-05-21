@@ -100,8 +100,8 @@ func (r agentRel) String() string {
 
 // scope describes the cross-link scope chips active on the dashboard.
 type scope struct {
-	TaskID       string   // narrows Jobs
-	WorkflowID   string   // narrows Tasks + Jobs
+	TaskID       string // narrows Jobs
+	WorkflowID   string // narrows Tasks + Jobs
 	WorkflowName string
 	Agent        string   // narrows Tasks (opt-in via Enter)
 	AgentRel     agentRel // which agent relation Agent refers to
@@ -151,9 +151,9 @@ const (
 type popupState struct {
 	Kind     popupKind
 	Title    string
-	Lines    []string         // for menu / help / search-results
-	Cursor   int              // for menu
-	Input    string           // for prompt / search
+	Lines    []string // for menu / help / search-results
+	Cursor   int      // for menu
+	Input    string   // for prompt / search
 	OnAccept func(value string) error
 	OnSelect func(index int) error
 	OnCancel func() error
@@ -174,25 +174,25 @@ type popupState struct {
 
 // inspectorState carries everything the inspector view needs.
 type inspectorState struct {
-	JobID         string
-	Tab           inspectorTab
-	Job           datasource.Job
-	Streaming     bool
+	JobID          string
+	Tab            inspectorTab
+	Job            datasource.Job
+	Streaming      bool
 	TerminalAtOpen bool
 	// Live tab plumbing.
 	live          *datasource.LiveHandle
 	liveCancel    context.CancelFunc
-	liveBuf       []string  // pre-rendered transcript lines (oldest→newest)
-	liveTruncated bool      // true once liveBuf hit its cap and was trimmed
-	liveInput     string    // textarea contents (single-line in v1 — risk #3)
+	liveBuf       []string // pre-rendered transcript lines (oldest→newest)
+	liveTruncated bool     // true once liveBuf hit its cap and was trimmed
+	liveInput     string   // textarea contents (single-line in v1 — risk #3)
 	// Archive tab plumbing.
 	archive       []datasource.MessageEvent
 	archiveLoaded bool
 	archiveErr    error // non-nil → hydrate failed; UI shows a plashka instead of (loading…)
 	// Meta + Signals.
-	signals       []datasource.Signal
-	comments      []datasource.Comment
-	scrollY       int
+	signals  []datasource.Signal
+	comments []datasource.Comment
+	scrollY  int
 }
 
 // flashState is the ephemeral toast line. CreatedAt makes the layout
@@ -225,21 +225,21 @@ type state struct {
 	// Data caches. The View() is the source of truth for rendered
 	// content — these are the most recent slice from the datasource so
 	// the cursor positions are stable across re-renders.
-	tasks         []datasource.Task
-	jobs          []datasource.Job
+	tasks []datasource.Task
+	jobs  []datasource.Job
 	// taskJobIdx is the per-task job-presence index used by the
 	// Tasks-panel marker column. Always computed from the
 	// TaskID-UNFILTERED jobs read (workflow scope still applies)
 	// so the ">" marker survives when scope.TaskID filters the
 	// Jobs panel down to a single task — otherwise every other row
 	// would lose its marker the moment Space was pressed.
-	taskJobIdx    taskJobIndex
-	workflows     []datasource.Workflow
-	agents        []datasource.Agent
-	taskCursor    int
-	jobCursor     int
+	taskJobIdx     taskJobIndex
+	workflows      []datasource.Workflow
+	agents         []datasource.Agent
+	taskCursor     int
+	jobCursor      int
 	workflowCursor int
-	agentCursor   int
+	agentCursor    int
 
 	scope   scope
 	filter  filterState

@@ -3,12 +3,12 @@
 // on. Behavior is controlled by environment variables so tests don't need
 // to recompile per case:
 //
-//   FAKEPI_SESSION_ID    — value returned in get_state.data.sessionId
-//   FAKEPI_SESSION_FILE  — value returned in get_state.data.sessionFile
-//   FAKEPI_AGENT_END_DELAY_MS — milliseconds to wait before emitting agent_end
-//   FAKEPI_SCENARIO      — "ok" (default), "no_agent_end" (drop agent_end),
-//                          "prompt_error" (reply success=false to prompt),
-//                          "dialog" (emit a select extension_ui_request)
+//	FAKEPI_SESSION_ID    — value returned in get_state.data.sessionId
+//	FAKEPI_SESSION_FILE  — value returned in get_state.data.sessionFile
+//	FAKEPI_AGENT_END_DELAY_MS — milliseconds to wait before emitting agent_end
+//	FAKEPI_SCENARIO      — "ok" (default), "no_agent_end" (drop agent_end),
+//	                       "prompt_error" (reply success=false to prompt),
+//	                       "dialog" (emit a select extension_ui_request)
 //
 // fakepi exits 0 on stdin EOF or SIGTERM.
 package main
@@ -86,8 +86,8 @@ func handle(c cmd, scenario, sessID, sessFile string, delay time.Duration) {
 			"command": "get_state",
 			"success": true,
 			"data": map[string]any{
-				"sessionId":   sessID,
-				"sessionFile": sessFile,
+				"sessionId":    sessID,
+				"sessionFile":  sessFile,
 				"messageCount": 0,
 			},
 		})
@@ -110,7 +110,7 @@ func handle(c cmd, scenario, sessID, sessFile string, delay time.Duration) {
 			emit(map[string]any{"type": "agent_start"})
 			emit(map[string]any{"type": "turn_start"})
 			emit(map[string]any{
-				"type": "message_start",
+				"type":    "message_start",
 				"message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": "ack: " + prompt}}, "timestamp": time.Now().UnixMilli()},
 			})
 			emit(map[string]any{

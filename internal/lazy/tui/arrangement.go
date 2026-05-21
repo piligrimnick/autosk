@@ -7,20 +7,20 @@ import (
 // Window names referenced by both the arrangement and the layout
 // loop. Keep them in one place so renames stay in sync.
 const (
-	winTasks      = "tasks"
-	winJobs       = "jobs"
-	winWorkflows  = "workflows"
-	winAgents     = "agents"
-	winDetail     = "main"
-	winLog        = "extras"
-	winStatusBar  = "statusbar"
-	winFlash      = "flash" // popup flash line (toast)
-	winInspector  = "inspectorMain"
+	winTasks        = "tasks"
+	winJobs         = "jobs"
+	winWorkflows    = "workflows"
+	winAgents       = "agents"
+	winDetail       = "main"
+	winLog          = "extras"
+	winStatusBar    = "statusbar"
+	winFlash        = "flash" // popup flash line (toast)
+	winInspector    = "inspectorMain"
 	winInspectorHdr = "inspectorHeader"
 	winInspectorIn  = "inspectorInput"
-	winPopupMenu  = "popupMenu"
+	winPopupMenu    = "popupMenu"
 	winPopupConfirm = "popupConfirm"
-	winPopupPrompt = "popupPrompt"
+	winPopupPrompt  = "popupPrompt"
 	// Task-compose popup (lazygit-style two-pane commit editor).
 	winTaskComposeSummary     = "taskComposeSummary"
 	winTaskComposeDescription = "taskComposeDescription"

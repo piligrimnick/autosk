@@ -34,7 +34,7 @@ var (
 
 // Entry is a single row from registry.json.
 type Entry struct {
-	Name        string    `json:"-"`            // map key in registry.json
+	Name        string    `json:"-"` // map key in registry.json
 	Version     string    `json:"version"`
 	InstalledAt time.Time `json:"installed_at"`
 }

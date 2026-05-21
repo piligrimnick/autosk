@@ -210,11 +210,15 @@ autosk enroll   <id>  --agent    @autosk/developer
   inherits the parent environment, can shell, edit files, install
   dependencies, etc. Do not point a project's cwd at directories you
   would not give an interactive pi session access to.
-- **Concurrent runs in the same project will race on files.** There
-  is no worktree isolation in this iteration. The global worker pool
-  serialises across projects but does not prevent two jobs in
-  *different* projects from touching the same path if the user
-  chose to symlink them.
+- **Concurrent runs in the same project may race on files.** The
+  global worker pool serialises across projects but does not prevent
+  two jobs in the same project from touching the same path. Mark a
+  workflow with `"isolation": "worktree"` (see
+  [`docs/workflows.md` § Worktree isolation](workflows.md#worktree-isolation))
+  to give each task its own git worktree on its own branch; the
+  daemon then spawns step runs with `cwd` pointing at the worktree
+  and threads `AUTOSK_DB` so `autosk` CLI calls inside the worktree
+  still find the canonical project DB.
 
 ---
 
@@ -243,6 +247,8 @@ owned by the runner via `step next`.
 | Run sits in `running` forever | The agent never emits `agent_end`. The daemon will fail it after `--idle-timeout`. |
 | Run fails with `agent_did_not_emit_transition` | The agent stopped without calling `autosk step next`, `max_corrections` times. Inspect transcript via `autosk daemon messages`. |
 | Run fails with `daemon_restart` | The daemon was restarted while this run was active. This iteration does not re-attach. Re-enroll the task. |
+| Run fails with `worktree_missing` | Isolated workflow's per-task worktree directory is gone at run start (`Verify` pre-flight failed). Task is parked → `human_feedback`. Recover via `cancel` → `reopen` → `enroll --workflow <iso>` to re-allocate, or `cancel` to give up. See [`docs/workflows.md` § Recovering from `worktree_missing` / `worktree_stranded`](workflows.md#recovering-from-worktree_missing--worktree_stranded). |
+| Run fails with `worktree_stranded` | Isolated workflow's worktree exists but its `.git` no longer points at the project's gitdir (typical when the project was moved or re-initialised). Same recovery as `worktree_missing`. |
 | 410 on `/v1/jobs/{id}/messages` | `session_path` is empty or the file was deleted. |
 | Stream connection drops | Long polls may need `X-Accel-Buffering: no` (already sent). Use `Last-Event-ID` on reconnect to skip replay. |
 
@@ -257,7 +263,10 @@ owned by the runner via `step next`.
 - Explicit project registration (replaces the lazy walk-up from
   `X-Autosk-Cwd`; not related to the removed `autosk attach` CLI verb).
 - Reconnect to surviving pi processes after a daemon restart.
-- Worktree-per-job isolation.
+- Cross-project enumeration for `autosk worktree list --all-projects`
+  (per-project isolation already lands in v0.3 via the workflow
+  `isolation: worktree` opt-in; see
+  [`docs/workflows.md` § Worktree isolation](workflows.md#worktree-isolation)).
 
 See [`docs/plans/20260518-Daemon-UDS-Plan.md`](plans/20260518-Daemon-UDS-Plan.md)
 §10 for the canonical out-of-scope list.

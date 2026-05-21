@@ -42,6 +42,10 @@ func (s *Store) EnsureSingle(ctx context.Context, agentName string) (Workflow, e
 		Name:        name,
 		Description: fmt.Sprintf("Auto-generated single-agent workflow for %s.", agentName),
 		FirstStep:   "do",
+		// Synthetic workflows must never use worktree isolation — the
+		// `--agent` shorthand has no project-root semantics to isolate
+		// against. The store's Create() also enforces this defensively.
+		Isolation: IsolationNone,
 		Steps: map[string]StepDef{
 			"do": {
 				AgentName: agentName,

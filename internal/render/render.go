@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -40,12 +41,29 @@ type TaskJSON struct {
 	// or empty) so callers can rely on its presence in --json output.
 	Metadata map[string]any `json:"metadata"`
 
+	// Worktree, when non-nil, is the worktree-isolation block surfaced
+	// by `autosk show` for tasks whose workflow has isolation=worktree.
+	// Omitted entirely for tasks that don't qualify (no workflow / non-
+	// isolated workflow) so existing JSON consumers don't see a new
+	// always-present key.
+	Worktree *WorktreeJSON `json:"worktree,omitempty"`
+
 	// Display-only joins. Not emitted in JSON (those carry the raw id);
 	// only used by the human renderer to build the `[id]: name` form.
 	authorName     string
 	workflowName   string
 	currentAgentID string
 	visitsSummary  string
+}
+
+// WorktreeJSON is the per-task worktree-isolation block surfaced by
+// `autosk show --json` (and the matching text-mode lines). Path /
+// Branch are derived deterministically from (canonicalProjectRoot,
+// task.id); Exists is computed at render time via stat.
+type WorktreeJSON struct {
+	Path   string `json:"path"`
+	Branch string `json:"branch"`
+	Exists bool   `json:"exists"`
 }
 
 // ToWire converts a store.Task into the wire shape. blocked / arrays /
@@ -112,6 +130,14 @@ func WithMetadata(md map[string]any, visitsSummary string) Option {
 	}
 }
 
+// WithWorktree adds the worktree-isolation block to the rendered
+// output (both text and JSON forms). Pass nil to omit the block;
+// callers that detect an isolated workflow construct WorktreeJSON
+// from internal/worktree's deterministic helpers and pass it here.
+func WithWorktree(wt *WorktreeJSON) Option {
+	return func(t *TaskJSON) { t.Worktree = wt }
+}
+
 // TaskJSONTo writes a single task as JSON (one line, no trailing newline
 // is added by Marshal; we add one to be POSIX-friendly).
 func TaskJSONTo(w io.Writer, t store.Task, opts ...Option) error {
@@ -175,6 +201,19 @@ func Task(w io.Writer, t store.Task, opts ...Option) error {
 	if wire.visitsSummary != "" {
 		fmt.Fprintf(w, "visits:        %s\n", wire.visitsSummary)
 	}
+	if wire.Worktree != nil {
+		presence := "missing"
+		if wire.Worktree.Exists {
+			presence = "exists"
+		}
+		// shortenHome matches the `worktree list` convention so the
+		// path reads `~/.autosk/worktrees/...` for any worktree
+		// rooted under the user's home. JSON output keeps the
+		// absolute form (Worktree.Path), since that's the field
+		// machine consumers want.
+		fmt.Fprintf(w, "worktree:      %s (%s)\n", shortenHome(wire.Worktree.Path), presence)
+		fmt.Fprintf(w, "branch:        %s\n", wire.Worktree.Branch)
+	}
 	if wire.Description != "" {
 		fmt.Fprintf(w, "description:\n%s\n", indent(wire.Description, "  "))
 	} else {
@@ -225,6 +264,20 @@ func bracketedRef(id, name string) string {
 // BracketedRef is the exported form used by other render callers (e.g.
 // cmd/autosk/agent.go) so the format stays in one place.
 func BracketedRef(id, name string) string { return bracketedRef(id, name) }
+
+// shortenHome replaces a leading $HOME with `~` for readable output.
+// Used by the human-mode worktree line so it matches the convention
+// in cmd/autosk/worktree.go. JSON output keeps the absolute form.
+func shortenHome(p string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	if strings.HasPrefix(p, home+string(os.PathSeparator)) {
+		return "~" + p[len(home):]
+	}
+	return p
+}
 
 // Tasks writes a compact table for a slice of tasks.
 func Tasks(w io.Writer, ts []store.Task, deco Decorator) error {

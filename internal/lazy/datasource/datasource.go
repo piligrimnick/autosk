@@ -87,12 +87,12 @@ type Workflow struct {
 
 // WorkflowStep is one row of a workflow's step graph.
 type WorkflowStep struct {
-	ID          string
-	Name        string
-	AgentName   string
-	NextSteps   []string // resolved names
-	NextStatus  []string // task_status transitions (terminal)
-	TaskCount   int      // tasks whose current_step_id == this step
+	ID         string
+	Name       string
+	AgentName  string
+	NextSteps  []string // resolved names
+	NextStatus []string // task_status transitions (terminal)
+	TaskCount  int      // tasks whose current_step_id == this step
 }
 
 // Agent is the projection of an agents row + (optional) package
@@ -163,10 +163,10 @@ type MessageEvent = api.MessageEvent
 type LiveEvent struct {
 	// Kind is "message" | "status" | "done" | "error".
 	Kind    string
-	Message MessageEvent      // populated when Kind == "message"
-	Status  api.JobResponse   // populated when Kind == "status" or "done"
-	Err     error             // populated when Kind == "error"
-	EventID int               // SSE id, 0 when absent
+	Message MessageEvent    // populated when Kind == "message"
+	Status  api.JobResponse // populated when Kind == "status" or "done"
+	Err     error           // populated when Kind == "error"
+	EventID int             // SSE id, 0 when absent
 }
 
 // LiveHandle is the active SSE subscription returned by StreamLive.
@@ -255,14 +255,14 @@ type Datasource interface {
 // Agent scoping has three flavours because the design plan §3.4
 // explicitly distinguishes them:
 //   - AgentName       – broad: match either AuthorName OR StepAgentName.
-//                       Used by the agent: facet for backwards
-//                       compatibility with the help text.
+//     Used by the agent: facet for backwards
+//     compatibility with the help text.
 //   - AuthorName      – narrow: filter on tasks.author_id only.
-//                       Used when the Agents-panel popup chooses
-//                       "by author".
+//     Used when the Agents-panel popup chooses
+//     "by author".
 //   - StepAgentName   – narrow: filter on current_step.agent_id only.
-//                       Used when the Agents-panel popup chooses
-//                       "by current step".
+//     Used when the Agents-panel popup chooses
+//     "by current step".
 type TaskFilter struct {
 	Statuses      []store.Status
 	Priority      *int

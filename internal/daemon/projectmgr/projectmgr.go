@@ -33,6 +33,7 @@ import (
 	"autosk/internal/step"
 	"autosk/internal/store/doltlite"
 	"autosk/internal/workflow"
+	"autosk/internal/worktree"
 )
 
 // Key is the canonical absolute project root (filepath.Clean +
@@ -66,10 +67,10 @@ type Deps struct {
 	// compactor. 0 → compactor.DefaultInterval (30m); <0 → disabled
 	// (the operator opts out via `autosk daemon serve --gc-interval=-1`
 	// and runs `autosk gc` on demand instead).
-	GCInterval   time.Duration
-	Logger       *slog.Logger
-	Runners      *pirunners.Registry
-	Attachments  *pirunners.Attachments
+	GCInterval  time.Duration
+	Logger      *slog.Logger
+	Runners     *pirunners.Registry
+	Attachments *pirunners.Attachments
 }
 
 // Project is a single opened autosk project. All fields are immutable
@@ -90,11 +91,11 @@ type Project struct {
 
 	OpenedAt time.Time
 
-	mu                sync.Mutex
-	closed            bool
-	pollerStopped     bool
-	compactorStopped  bool
-	closeFns          []func() error
+	mu               sync.Mutex
+	closed           bool
+	pollerStopped    bool
+	compactorStopped bool
+	closeFns         []func() error
 }
 
 // Manager is the per-daemon project cache.
@@ -102,6 +103,7 @@ type Manager struct {
 	mu       sync.Mutex
 	projects map[Key]*projectEntry
 	deps     Deps
+	wtMgr    worktree.Manager
 }
 
 // projectEntry tracks the lifecycle of a project so concurrent Resolve
@@ -114,10 +116,15 @@ type projectEntry struct {
 }
 
 // New constructs a manager. The caller wires Deps once at daemon start.
+//
+// A single worktree.Manager is created here and shared with every
+// per-project executor so racing Ensure/Verify calls on the same task
+// serialise correctly across projects.
 func New(deps Deps) *Manager {
 	return &Manager{
 		projects: make(map[Key]*projectEntry),
 		deps:     deps,
+		wtMgr:    worktree.NewManager(),
 	}
 }
 
@@ -443,9 +450,12 @@ func (m *Manager) openProject(ctx context.Context, key Key, dbPath string) (*Pro
 	// inherits from manager-level config. The executor uses
 	// cfg.SessionDirRoot verbatim (a literal path, shared across
 	// projects when set) and falls back to <ProjectRoot>/.autosk/sessions
-	// when empty.
+	// when empty. DBPath is the canonical .autosk/db path the executor
+	// threads into the spawned child as AUTOSK_DB for worktree-isolated
+	// runs (the agent's cwd lives outside the project tree).
 	execCfg := m.deps.ExecCfg
 	execCfg.ProjectRoot = root
+	execCfg.DBPath = dbPath
 	ex := executor.New(executor.Deps{
 		Runs:        runs,
 		Tasks:       tasks,
@@ -456,6 +466,7 @@ func (m *Manager) openProject(ctx context.Context, key Key, dbPath string) (*Pro
 		Packages:    m.deps.Packages,
 		Runners:     m.deps.Runners,
 		Attachments: m.deps.Attachments,
+		Worktree:    m.wtMgr,
 	}, executor.DefaultFactory, execCfg)
 
 	pl := poller.New(tasks.DB(), runs, m.deps.Sched, poller.Config{

@@ -132,6 +132,12 @@ Workflows
   autosk workflow show <name>
   autosk workflow delete <name>
 
+Worktrees (isolation=worktree workflows only)
+  autosk worktree list               # tasks of isolated workflows + dir presence
+  autosk worktree path <id>          # print the derived per-task worktree path
+  autosk worktree rm   <id>          # force-remove the dir (branch preserved;
+                                     # refuses in_workflow tasks)
+
 Agent-facing (inside a workflow step)
   autosk step next <id> --to <step-or-status>
 
@@ -232,7 +238,6 @@ from the command line.
 ## Roadmap (post v0.2)
 
 - doltserver backend for multi-writer collaboration
-- worktree isolation per run (re-introduces `tasks.git_branch`)
 - labels / tags
 - full-text search
 - audit log table / `autosk history` real implementation

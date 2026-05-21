@@ -18,11 +18,11 @@ import (
 // tests drive the cache-preservation / fallback-counter invariants
 // without spinning up a real gocui.Gui.
 type refreshResult struct {
-	tasks         []datasource.Task
-	taskSearch    string // post-facet free text remainder
-	terr          error
-	jobs          []datasource.Job
-	jerr          error
+	tasks      []datasource.Task
+	taskSearch string // post-facet free text remainder
+	terr       error
+	jobs       []datasource.Job
+	jerr       error
 	// taskJobIdx mirrors the state field of the same name: a
 	// per-task job-presence projection built from the
 	// TaskID-UNFILTERED jobs read so the Tasks-panel ">" marker
@@ -31,18 +31,18 @@ type refreshResult struct {
 	taskJobIdx       taskJobIndex
 	visibleWorkflows []datasource.Workflow
 	workflowSearch   string
-	werr          error
-	agents        []datasource.Agent
-	agentSearch   string
-	aerr          error
-	health        datasource.Health
-	jobsSearch    string
+	werr             error
+	agents           []datasource.Agent
+	agentSearch      string
+	aerr             error
+	health           datasource.Health
+	jobsSearch       string
 
-	selectedTaskID    string
-	selectedComments  []datasource.Comment
-	hasCommentsErr    bool
-	selectedSignals   []datasource.Signal
-	hasSignalsErr     bool
+	selectedTaskID   string
+	selectedComments []datasource.Comment
+	hasCommentsErr   bool
+	selectedSignals  []datasource.Signal
+	hasSignalsErr    bool
 
 	fallbacksNow uint64
 }
@@ -206,10 +206,10 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 		taskJobIdx:       taskJobIdx,
 		visibleWorkflows: visibleWorkflows, workflowSearch: ft.Workflows, werr: werr,
 		agents: agents, agentSearch: ft.Agents, aerr: aerr,
-		health: health,
+		health:           health,
 		selectedTaskID:   selectedTaskID,
 		selectedComments: selectedComments, hasCommentsErr: hasCommentsErr,
-		selectedSignals:  selectedSignals, hasSignalsErr: hasSignalsErr,
+		selectedSignals: selectedSignals, hasSignalsErr: hasSignalsErr,
 		fallbacksNow: fallbacksNow,
 	}
 }
@@ -219,7 +219,7 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 // allows touching view state). Held under st.mu.Lock.
 func (gu *Gui) applyRefreshLocked(r refreshResult) {
 	gu.st.withLock(func() {
-			if r.terr == nil {
+		if r.terr == nil {
 			// The datasource already applied tasksFilter.Search
 			// (post-facet free-text). Do NOT re-filter with the raw
 			// expression here: that would re-apply 'p:1' or 'wf:foo'

@@ -194,8 +194,6 @@ func looksLikeScopedNpmName(s string) bool {
 	return slash > 1 && slash < len(s)-1
 }
 
-
-
 func newWorkflowListCmd() *cobra.Command {
 	var all bool
 	cmd := &cobra.Command{
@@ -274,22 +272,23 @@ func newWorkflowDeleteCmd() *cobra.Command {
 
 // workflowJSON is the JSON projection used by `workflow show/create --json`.
 type workflowJSON struct {
-	ID          string        `json:"id"`
-	Name        string        `json:"name"`
-	Description string        `json:"description,omitempty"`
-	FirstStepID string        `json:"first_step_id"`
-	IsSynthetic bool          `json:"is_synthetic"`
-	CreatedAt   string        `json:"created_at"`
-	Steps       []stepJSON    `json:"steps,omitempty"`
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Description string     `json:"description,omitempty"`
+	FirstStepID string     `json:"first_step_id"`
+	IsSynthetic bool       `json:"is_synthetic"`
+	Isolation   string     `json:"isolation"`
+	CreatedAt   string     `json:"created_at"`
+	Steps       []stepJSON `json:"steps,omitempty"`
 }
 
 type stepJSON struct {
-	ID          string               `json:"id"`
-	Name        string               `json:"name"`
-	AgentID     string               `json:"agent_id"`
-	AgentName   string               `json:"agent_name"`
+	ID          string                `json:"id"`
+	Name        string                `json:"name"`
+	AgentID     string                `json:"agent_id"`
+	AgentName   string                `json:"agent_name"`
 	AgentParams *workflow.AgentParams `json:"agent_params,omitempty"`
-	Transitions []transitionJSON     `json:"transitions"`
+	Transitions []transitionJSON      `json:"transitions"`
 }
 
 type transitionJSON struct {
@@ -301,12 +300,17 @@ type transitionJSON struct {
 }
 
 func toWorkflowJSON(w workflow.Workflow, withSteps bool) workflowJSON {
+	iso := string(w.Isolation)
+	if iso == "" {
+		iso = string(workflow.IsolationNone)
+	}
 	wj := workflowJSON{
 		ID:          w.ID,
 		Name:        w.Name,
 		Description: w.Description,
 		FirstStepID: w.FirstStepID,
 		IsSynthetic: w.IsSynthetic,
+		Isolation:   iso,
 		CreatedAt:   w.CreatedAt.Format("2006-01-02T15:04:05Z"),
 	}
 	if withSteps {
@@ -352,6 +356,9 @@ func emitWorkflow(w workflow.Workflow, withSteps bool) error {
 	}
 	fmt.Printf("first_step:   %s\n", render.BracketedRef(w.FirstStepID, firstStepName))
 	fmt.Printf("synthetic:    %t\n", w.IsSynthetic)
+	if w.Isolation != "" && w.Isolation != workflow.IsolationNone {
+		fmt.Printf("isolation:    %s\n", w.Isolation)
+	}
 	fmt.Printf("created_at:   %s\n", w.CreatedAt.Format("2006-01-02T15:04:05Z"))
 	if withSteps && len(w.Steps) > 0 {
 		fmt.Println("steps:")

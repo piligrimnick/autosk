@@ -15,9 +15,9 @@ import (
 // rendering across the three states the hydrate path can leave the
 // inspector in:
 //
-//	 archiveLoaded=false                  → "(loading…)"
-//	 archiveLoaded=true, archiveErr!=nil  → "(archive load failed: …)"
-//	 archiveLoaded=true, archiveErr==nil  → transcript / "(no transcript events)"
+//	archiveLoaded=false                  → "(loading…)"
+//	archiveLoaded=true, archiveErr!=nil  → "(archive load failed: …)"
+//	archiveLoaded=true, archiveErr==nil  → transcript / "(no transcript events)"
 //
 // Before the fix the hydrate path on error called only flashf and
 // returned without flipping archiveLoaded, leaving the Archive tab

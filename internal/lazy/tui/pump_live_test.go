@@ -24,10 +24,10 @@ func TestPumpLiveLoop_ThrottleCoalescesBursts(t *testing.T) {
 
 	events := make(chan datasource.LiveEvent, 64)
 	var (
-		flushes   atomic.Int32
-		total     atomic.Int32
-		mu        sync.Mutex
-		batches   [][]int // sizes of each flush's batch
+		flushes atomic.Int32
+		total   atomic.Int32
+		mu      sync.Mutex
+		batches [][]int // sizes of each flush's batch
 	)
 	done := make(chan struct{})
 	go func() {

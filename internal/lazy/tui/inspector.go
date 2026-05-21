@@ -532,8 +532,8 @@ func (gu *Gui) detailScroll(step int) func(*gocui.Gui, *gocui.View) error {
 // renderInspectorBody renders the body for the active tab.
 func (gu *Gui) renderInspectorBody() string {
 	var (
-		tab    inspectorTab
-		insp   inspectorState
+		tab  inspectorTab
+		insp inspectorState
 	)
 	gu.st.withRLock(func() {
 		tab = gu.st.insp.Tab

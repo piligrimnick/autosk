@@ -15,6 +15,7 @@ import (
 	"autosk/internal/store"
 	"autosk/internal/store/doltlite"
 	"autosk/internal/workflow"
+	"autosk/internal/worktree"
 )
 
 func newCreateCmd() *cobra.Command {
@@ -112,7 +113,10 @@ If --description is "-", the description is read from stdin.`,
 			// starts at 0 by definition for a fresh task), but the
 			// invariant "every entry into a workflow step bumps the
 			// counter" makes the engine's model uniform.
-			var entryWorkflowID, entryStepID string
+			var (
+				entryWorkflowID, entryStepID string
+				isolatedWorkflow             bool
+			)
 			if workflowArg != "" || agentArg != "" {
 				if stepArg != "" && agentArg != "" {
 					return errors.New("--step only applies with --workflow (single:<agent> workflows have a single step)")
@@ -123,6 +127,7 @@ If --description is "-", the description is read from stdin.`,
 				}
 				entryWorkflowID = wf.ID
 				entryStepID = entryStep.ID
+				isolatedWorkflow = wf.Isolation == workflow.IsolationWorktree
 			} else if stepArg != "" {
 				return errors.New("--step requires --workflow")
 			}
@@ -131,16 +136,58 @@ If --description is "-", the description is read from stdin.`,
 			if err != nil {
 				return err
 			}
+			// Worktree allocation for isolated workflows. We do this
+			// AFTER CreateTask (so we have the task id) but BEFORE
+			// EnterStep — the daemon's first run for the task must see a
+			// ready worktree at the deterministic path. On failure we roll
+			// back the freshly-created task row so the user doesn't see a
+			// half-formed task in status='new'.
+			var (
+				wtAllocated bool
+				wtRoot      string
+				wtMgr       worktree.Manager
+			)
+			if entryStepID != "" && isolatedWorkflow {
+				root, perr := projectRootFromCwd()
+				if perr != nil {
+					_ = s.DeleteTask(cmd.Context(), t.ID)
+					return fmt.Errorf("create %s: resolve project root: %w", t.ID, perr)
+				}
+				wtMgr = worktree.NewManager()
+				if _, werr := wtMgr.Ensure(cmd.Context(), root, t.ID, ""); werr != nil {
+					_ = s.DeleteTask(cmd.Context(), t.ID)
+					return fmt.Errorf("create %s: allocate worktree: %w", t.ID, werr)
+				}
+				wtAllocated = true
+				wtRoot = root
+			}
 			if entryStepID != "" {
 				if err := workflow.EnterStep(cmd.Context(), s, wfStore, workflow.EnterStepInput{
 					TaskID:     t.ID,
 					StepID:     entryStepID,
 					WorkflowID: entryWorkflowID,
 				}); err != nil {
-					// CreateTask succeeded; EnterStep failed. The row exists
-					// in status='new' (no workflow_id stamped). Surface the
-					// orphan id in the error so the user can decide whether
-					// to cancel it or retry via `autosk enroll`.
+					// CreateTask succeeded; EnterStep failed. Roll back
+					// the worktree we just allocated so the create path
+					// preserves its pre-isolation invariant of "failed
+					// create leaves no on-disk side effects". The hint
+					// `autosk cancel <id>` wouldn't clean it up otherwise:
+					// cleanupWorktreeOnTerminal bails on an empty
+					// workflow_id (the EnterStep failure means workflow_id
+					// never got stamped).
+					if wtAllocated {
+						// Reuse the outer wtMgr (already constructed for
+						// Ensure) so we don't accidentally split the
+						// per-(canonRoot, taskID) mutex across two
+						// managers in the same CLI invocation.
+						if _, terr := wtMgr.OnTerminal(cmd.Context(), wtRoot, t.ID); terr != nil {
+							fmt.Fprintf(os.Stderr, "warning: worktree rollback for %s failed: %v\n", t.ID, terr)
+						}
+					}
+					// The row exists in status='new' (no workflow_id
+					// stamped). Surface the orphan id in the error so the
+					// user can decide whether to cancel it or retry via
+					// `autosk enroll`.
 					return fmt.Errorf(
 						"created task %s but failed to enter the workflow: %w\n"+
 							"the task is in status='new'; you can drop it with `autosk cancel %s` or retry with `autosk enroll %s ...`",

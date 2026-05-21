@@ -31,11 +31,11 @@ const IDPrefix = "ag"
 
 // Sentinel errors.
 var (
-	ErrNotOpen         = errors.New("agent store: not open")
-	ErrNotFound        = errors.New("agent not found")
-	ErrAlreadyExist    = errors.New("agent already exists")
-	ErrInvalidName     = errors.New("invalid agent name")
-	ErrNotInstalled    = errors.New("agent_not_installed")
+	ErrNotOpen      = errors.New("agent store: not open")
+	ErrNotFound     = errors.New("agent not found")
+	ErrAlreadyExist = errors.New("agent already exists")
+	ErrInvalidName  = errors.New("invalid agent name")
+	ErrNotInstalled = errors.New("agent_not_installed")
 )
 
 // PackageResolver is the validation hook used by EnsureByName and

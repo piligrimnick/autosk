@@ -307,4 +307,3 @@ func injectResize(w, h int) {
 	}
 	sim.SetSize(w, h)
 }
-

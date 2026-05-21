@@ -54,6 +54,18 @@ func Validate(ctx context.Context, def Definition, ag *agent.Store, opts Validat
 	if !opts.AllowSyntheticName && strings.HasPrefix(def.Name, SyntheticPrefix) {
 		addf("`name` starts with reserved prefix %q (used for synthetic single-agent workflows)", SyntheticPrefix)
 	}
+	iso := def.Isolation.Normalize()
+	if !iso.Valid() {
+		addf("`isolation` has unknown value %q (want none|worktree)", string(def.Isolation))
+	}
+	// Synthetic single:<agent> workflows must always run with no
+	// isolation — the `--agent` shorthand has no project-root
+	// expectations and must not silently allocate worktrees. EnsureSingle
+	// also pins this on the insert side, but failing here gives a clean
+	// error if a programmer ever tries to bypass it.
+	if strings.HasPrefix(def.Name, SyntheticPrefix) && iso == IsolationWorktree {
+		addf("synthetic `single:<agent>` workflows cannot use `isolation: worktree` (synthetic workflows must remain `none`)")
+	}
 	if def.FirstStep == "" {
 		addf("`first_step` is required")
 	}

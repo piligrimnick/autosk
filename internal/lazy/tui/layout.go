@@ -11,12 +11,12 @@ import (
 // four corners are swapped for their rounded variants. The slot order
 // matches gocui's expected layout (see gocui/gui.go:cornerCustomRune):
 //
-//	 0: horizontal '─'
-//	 1: vertical   '│'
-//	 2: top-left   '╭'
-//	 3: top-right  '╮'
-//	 4: bottom-left  '╰'
-//	 5: bottom-right '╯'
+//	0: horizontal '─'
+//	1: vertical   '│'
+//	2: top-left   '╭'
+//	3: top-right  '╮'
+//	4: bottom-left  '╰'
+//	5: bottom-right '╯'
 //
 // gocui falls back to its hard-edge defaults for any rune past index 5
 // (the T-junctions used when views meet at edges), which is fine for
@@ -49,11 +49,11 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 	// concurrent g.Update closures + worker-side mutations (inspector
 	// SSE) would otherwise race against these reads under -race.
 	var (
-		state       ViewState
-		focused     string
-		logHidden   bool
-		currentTab  inspectorTab
-		focusedWin  string
+		state      ViewState
+		focused    string
+		logHidden  bool
+		currentTab inspectorTab
+		focusedWin string
 	)
 	gu.st.withRLock(func() {
 		state = gu.st.view
