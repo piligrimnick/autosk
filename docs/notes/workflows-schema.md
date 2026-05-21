@@ -6,7 +6,7 @@ tasks:
 - workflow_id (fk:workflows->id, nullable)
 - git_branch
 - blocked_by
-- status (enum: 'new', 'in_progress', 'in_workflow', 'human_feedback', 'cancelled', 'done')
+- status (enum: 'new', 'work', 'human', 'done', 'cancel')
 
 agents:
 - id

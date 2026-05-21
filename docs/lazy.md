@@ -60,10 +60,10 @@ follow_up, `Ctrl-A` abort.
 
 ```
 ┌─[1] Tasks ──────────────────────────────┬─[0] Detail / Inspector ────────────┐
-│ as-a1b2 ●P1 in_workflow ▶dev   Refactor │ task as-a1b2  in_workflow          │
-│ as-c3d4  P1 in_workflow ▶rev   Add CLI  │ wf=feature-dev step=dev (developer)│
-│ as-e5f6  P2 done               Bump ver │ author: @autosk/developer          │
-│ as-7788 ✋P0 human_feedback ▶qa Tune w… │ priority: 1   blocked: false       │
+│ as-a1b2 ●P1 work   ▶dev   Refactor      │ task as-a1b2  work                 │
+│ as-c3d4  P1 work   ▶rev   Add CLI       │ wf=feature-dev step=dev (developer)│
+│ as-e5f6  P2 done          Bump ver      │ author: @autosk/developer          │
+│ as-7788 ✋P0 human  ▶qa    Tune w…       │ priority: 1   blocked: false       │
 ├─[2] Jobs ───────────────────────────────┤ ─ description ───────────────────  │
 │ ◐ run-9ab1 stream  feature-dev:dev 3m   │ Refactor the auth flow so that …  │
 │ ◯ run-77a2 done    feature-dev:rev 12m  │                                    │
@@ -119,11 +119,11 @@ with the same job still selected.
 | Key | Action |
 |---|---|
 | `n` | New task — prompt for the title. |
-| `d` | Mark **done** (confirms when status was `in_workflow`). |
+| `d` | Mark **done** (confirms when status was `work`). |
 | `x` | Cancel (confirms). |
-| `o` | Reopen (`done`/`cancelled` → `new`, preserves `workflow_id`). |
+| `o` | Reopen (`done`/`cancel` → `new`, preserves `workflow_id`). |
 | `e` | Enroll into a workflow — prompts for the workflow name. |
-| `r` | Resume (`human_feedback` → `in_workflow`); optionally to a named step. |
+| `r` | Resume (`human` → `work`); optionally to a named step. |
 | `b` | Add a blocker (prompts for blocker id). |
 | `u` | Remove a blocker (prompts for blocker id). |
 | `m` | Add a comment. |
@@ -192,7 +192,7 @@ is matched as a substring against id + title.
 | Facet | Effect |
 |---|---|
 | `p:<n>` | Priority. |
-| `status:<status>` | Task status (`new`, `in_workflow`, `human_feedback`, `done`, `cancelled`). |
+| `status:<status>` | Task status (`new`, `work`, `human`, `done`, `cancel`). Legacy spellings (`in_workflow`, `human_feedback`, `cancelled`) are rejected. |
 | `wf:<name>` | Workflow name (resolved to wf-id). An unknown name returns zero rows so the chip never silently widens. |
 | `agent:<name>` | Matches author **or** current-step agent (broadest sense). |
 
@@ -227,7 +227,7 @@ panel.
 
 `Enter` on a job opens the inspector. The default tab depends on the
 job's terminal status: **Live** for `queued`/`running`, **Archive**
-for `done`/`failed`/`cancelled`. Use `1..4` or `[ ` / `]` to switch.
+for `done`/`failed`/`cancel`. Use `1..4` or `[ ` / `]` to switch.
 
 ### Live
 

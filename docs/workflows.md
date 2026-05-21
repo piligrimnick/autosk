@@ -3,7 +3,7 @@
 autosk v0.2 turns the task tracker into a small workflow engine. Tasks
 move through a directed graph of **steps**; each step is owned by an
 **agent** (a human or a background pi instance). The daemon picks up
-tasks in `in_workflow` status, spawns the step's agent, and advances the
+tasks in `work` status, spawns the step's agent, and advances the
 task when the agent emits a structural transition signal.
 
 If you haven't yet, read the design plan first:
@@ -150,8 +150,8 @@ The shipped example:
                      {"step":"dev",       "prompt_rule":"…"}
                    ]},
     "validator": { "agent": { "name": "task-validator" },"next_steps": [
-                     {"step":"dev",                    "prompt_rule":"…"},
-                     {"task_status":"human_feedback",  "prompt_rule":"…"}
+                     {"step":"dev",                  "prompt_rule":"…"},
+                     {"task_status":"human",         "prompt_rule":"…"}
                    ]}
   }
 }
@@ -162,8 +162,8 @@ The `agent` field is always an object. The bare-string form
 accepted; the parser rejects it with a hint.
 
 A `next_steps[]` entry has either a `step` (sibling step name in the
-same workflow) or a `task_status` (one of `done`, `cancelled`,
-`human_feedback`), never both. `prompt_rule` is natural-language guidance
+same workflow) or a `task_status` (one of `done`, `cancel`,
+`human`), never both. `prompt_rule` is natural-language guidance
 shown to the agent in its prompt — the agent uses it to decide which
 transition to emit.
 
@@ -191,7 +191,7 @@ Semantics:
   counter is bumped, so the Nth visit is allowed and the (N+1)th
   fails.
 - **`autosk resume <id>` without `--to` does NOT count.** It just flips
-  `human_feedback → in_workflow` and the same step keeps its current
+  `human → work` and the same step keeps its current
   counter — there was no transition. `autosk resume <id> --to STEP`
   DOES count, even when `STEP` is the step the task currently sits on:
   that's a deliberate re-entry and is treated as one.
@@ -201,7 +201,7 @@ Semantics:
 - **What happens when the cap fires.** The current run is failed with
   `daemon_runs.status = 'failed'` and
   `daemon_runs.error = 'step_max_visits_exceeded: step "…" reached
-  visits=N max=N'`. The task is parked to `status = 'human_feedback'`
+  visits=N max=N'`. The task is parked to `status = 'human'`
   via the same `parkTaskOnFailure` path used by any other terminal
   failure. **`current_step_id` moves to the TARGET step** — the one
   the run was trying to enter when the cap fired (e.g. on a
@@ -229,7 +229,7 @@ Typical cap-fire recovery:
 ```bash
 # Task is parked because review hit max_visits = 5.
 autosk show as-bea9
-# status: human_feedback
+# status: human
 # current_step: review   <-- TARGET of the failed advance (the
 #                            cap fired on the dev→review transition,
 #                            so the task parks on review and `resume`
@@ -280,11 +280,11 @@ When a task targets a workflow with `isolation: "worktree"`:
   `AUTOSK_DB =` the canonical project DB. The agent's writes against
   `.autosk/db` therefore still land in the project's single source of
   truth, while file edits stay inside the per-task worktree.
-- On `done` / `cancelled` (via `autosk step next …`, `autosk done`,
+- On `done` / `cancel` (via `autosk step next …`, `autosk done`,
   `autosk cancel`, or any other terminal transition the engine
   records), the worktree **directory** is removed automatically and
   the **branch is preserved** for human review / merge.
-- On `human_feedback` (parked) and sibling-step transitions the
+- On `human` (parked) and sibling-step transitions the
   worktree is kept on disk — the human (or the next step's agent)
   needs it to inspect or continue the work.
 - On a parked-failure (`parkTaskOnFailure`) the worktree is *also*
@@ -344,7 +344,7 @@ Diagnostic / manual-recovery verbs. None of them mutate task rows.
 |---|---|
 | `autosk worktree list [--json]` | List every task in this project whose workflow has `isolation: "worktree"`, with task id, status, workflow, branch, on-disk presence, and path. Closed tasks whose dir survived a failed cleanup show `dir=missing` (`exists=false` in JSON). |
 | `autosk worktree path <id> [--json]` | Print the derived worktree path. Pure helper; does not stat the path. Useful in shell aliases and scripts. |
-| `autosk worktree rm <id> [--json]` | Force-remove the worktree directory; the branch is left intact. Refuses **only** `in_workflow` tasks (the daemon may be executing inside the dir right now). `new` / `human_feedback` / `done` / `cancelled` are all accepted, so the `worktree_stranded` recovery flow below works without first closing the task. |
+| `autosk worktree rm <id> [--json]` | Force-remove the worktree directory; the branch is left intact. Refuses **only** `work` tasks (the daemon may be executing inside the dir right now). `new` / `human` / `done` / `cancel` are all accepted, so the `worktree_stranded` recovery flow below works without first closing the task. |
 
 No `--all-projects` flag in v0.3: the CLI is single-process and has no
 daemon round-trip for cross-project enumeration. Use it from each
@@ -381,14 +381,14 @@ If re-allocation itself fails (git not on PATH, project root no
 longer a git repo, the slot is occupied by something that isn't a
 registered worktree, etc.), the run fails with
 `worktree_missing: re-allocate failed: ...` and the task is parked
-to `human_feedback` for human triage.
+to `human` for human triage.
 
 #### Recovering from `worktree_stranded`
 
 If the worktree directory is present but its `.git` no longer
 resolves to the project's gitdir (the project was moved or
 re-initialised), the run fails with `error=worktree_stranded` and the
-task is parked to `human_feedback`. The worktree is **not**
+task is parked to `human`. The worktree is **not**
 auto-cleaned in this failure path — you may want to keep whatever is
 on disk for debugging.
 
@@ -402,16 +402,16 @@ or re-allocate the worktree and retry:
 
 ```bash
 autosk worktree rm as-bea9        # clean up the stranded dir
-autosk cancel  as-bea9            # human_feedback → cancelled (‘reopen’ doesn’t
-                                  # take human_feedback as a source state)
-autosk reopen  as-bea9            # cancelled → new; current_step_id cleared
+autosk cancel  as-bea9            # human → cancel (‘reopen’ doesn’t
+                                  # take human as a source state)
+autosk reopen  as-bea9            # cancel → new; current_step_id cleared
 autosk enroll  as-bea9 --workflow feature-dev   # Ensure re-allocates dir + branch
 # the daemon picks it up automatically; the branch (autosk/as-bea9)
 # survived the round-trip so the worktree reuses it.
 ```
 
 A shorter recovery via plain `autosk resume` is **not** possible:
-`resume` flips status back to `in_workflow` at the same step without
+`resume` flips status back to `work` at the same step without
 cleaning the stranded dir, so the next run would `Verify`-fail and
 park again.
 
@@ -431,7 +431,7 @@ this path with a warning.
 - **Project moves are unsupported.** The worktree path is derived
   from the canonical project root; moving the project directory
   invalidates every existing worktree. Recovery is `Verify`-fail →
-  human_feedback → manual cleanup (`autosk worktree rm`) →
+  `human` → manual cleanup (`autosk worktree rm`) →
   re-enroll.
 - **Network filesystems are unsupported.** Same constraint as
   `.autosk/db` itself.
@@ -516,8 +516,8 @@ the package's value.
         }
       },
       "next_steps": [
-        { "task_status": "human_feedback", "prompt_rule": "When a human should accept it." },
-        { "task_status": "done",           "prompt_rule": "When the task is complete." }
+        { "task_status": "human", "prompt_rule": "When a human should accept it." },
+        { "task_status": "done",  "prompt_rule": "When the task is complete." }
       ]
     }
   }
@@ -562,13 +562,20 @@ In v0.2 a task carries three new nullable FKs: `author_id`,
 `workflow_id`, `current_step_id`. The status enum is exactly:
 
 ```
-new | in_workflow | human_feedback | done | cancelled
+new | work | human | done | cancel
 ```
 
-(`claimed` is gone — replaced by `assign --agent`. `blocked` is still
-**not** a stored status: it's derived from open blocker edges.)
+Every spelling is ≤ 7 chars so the persisted columns stay tight and
+the TUI doesn't need to truncate. (`claimed` is gone — replaced by
+`assign --agent`. `blocked` is still **not** a stored status: it's
+derived from open blocker edges.) The legacy spellings
+(`in_workflow`, `human_feedback`, `cancelled`) are not accepted on
+any input surface (CLI flags, YAML/JSON workflow definitions, the
+autosk_task / autosk_step JSON-RPC SDK). They were rewritten
+in-place by a one-shot migration; see
+[`docs/plans/20260521-Short-Statuses.md`](plans/20260521-Short-Statuses.md).
 
-A SQL CHECK ties `status = 'in_workflow'` to `current_step_id IS NOT
+A SQL CHECK ties `status = 'work'` to `current_step_id IS NOT
 NULL`. The CLI verbs (`create`, `assign`, `resume`, `done`, `cancel`,
 `reopen`) take care of keeping this invariant satisfied; you should not
 need to think about it.
@@ -577,7 +584,7 @@ need to think about it.
 
 `autosk create … --agent NAME` (and `autosk assign … --agent NAME`)
 auto-create a hidden workflow named `single:NAME` with one step `do`
-whose transitions go to `{done, cancelled, human_feedback}`. The
+whose transitions go to `{done, cancel, human}`. The
 executor uses the same code path as a real workflow — there is no
 second branch.
 
@@ -607,7 +614,7 @@ autosk workflow create --file docs/notes/workflow-example.json
 # 2. Create a task in the workflow.
 id=$(autosk create "Implement auth module" --workflow feature-dev --json | jq -r .id)
 autosk show "$id"
-# status: in_workflow, current_step: dev, current_agent: developer
+# status: work, current_step: dev, current_agent: developer
 
 # 3. Run the daemon (in another shell).
 autosk daemon serve --workers 1 &
@@ -618,7 +625,7 @@ autosk daemon serve --workers 1 &
 #     autosk step next $id --to review
 #
 # The daemon records the signal, advances the task to step=review,
-# and the loop continues until validator → human_feedback.
+# and the loop continues until validator → human.
 
 # 5. Watch transitions.
 while true; do
@@ -627,7 +634,7 @@ while true; do
 done
 
 # 6. Resume after human review.
-autosk resume "$id"          # back to status=in_workflow at validator
+autosk resume "$id"          # back to status=work at validator
 # … the workflow continues; eventually validator → done (via `done`
 # transition you added, or a human running `autosk done $id`).
 ```
@@ -637,7 +644,7 @@ The single-agent shorthand:
 ```bash
 id=$(autosk create "Bump version to 0.2" --agent @autosk/developer --json | jq -r .id)
 autosk show "$id"
-# status: in_workflow, workflow: single:@autosk/developer, current_step: do
+# status: work, workflow: single:@autosk/developer, current_step: do
 
 # The developer agent runs once, picks `--to done`, and the task closes.
 ```
@@ -654,7 +661,7 @@ autosk enroll as-bea9 --agent    @autosk/developer   # single:@autosk/developer
 
 `enroll` is the post-creation mirror of `create --workflow` /
 `create --agent`: it sets `workflow_id`, `current_step_id =
-workflow.first_step` and flips status to `in_workflow`. Exactly one of
+workflow.first_step` and flips status to `work`. Exactly one of
 `--workflow` / `--agent` is required.
 
 Only `status='new'` is accepted; other states get pointed at the right
@@ -662,9 +669,9 @@ verb instead:
 
 | Current status   | Error hint                                                        |
 |------------------|-------------------------------------------------------------------|
-| `in_workflow`    | the daemon will advance this task — to switch workflows, `cancel + reopen + enroll`. |
-| `human_feedback` | use `autosk resume <id> [--to STEP]` to put it back into the workflow. |
-| `done` / `cancelled` | use `autosk reopen <id>` first.                                |
+| `work`           | the daemon will advance this task — to switch workflows, `cancel + reopen + enroll`. |
+| `human`          | use `autosk resume <id> [--to STEP]` to put it back into the workflow. |
+| `done` / `cancel` | use `autosk reopen <id>` first.                                  |
 
 `enroll --json` emits the same shape as `autosk show --json`
 (including the derived `blocked` / `blocked_by` / `blocks` fields).
@@ -679,8 +686,8 @@ it), it MUST call exactly one of:
 ```bash
 autosk step next <task-id> --to <sibling-step-name>
 autosk step next <task-id> --to done
-autosk step next <task-id> --to cancelled
-autosk step next <task-id> --to human_feedback
+autosk step next <task-id> --to cancel
+autosk step next <task-id> --to human
 ```
 
 before stopping its turn. The valid targets for the current step are
@@ -699,7 +706,7 @@ into this CLI — same arguments, same semantics.
 
 ## What humans still do directly
 
-For tasks in `human_feedback`, the agent has handed control back to a
+For tasks in `human`, the agent has handed control back to a
 human. Humans can:
 
 - **Inspect**: `autosk show <id>`, `autosk comment list <id>`.
@@ -711,7 +718,7 @@ human. Humans can:
 - **Close**: `autosk done <id>` / `autosk cancel <id>` — direct, never
   through `step next`. The poller only picks tasks whose current step
   has `is_human=0`, so these verbs never race with the engine.
-- **Reopen**: `autosk reopen <id>` — done/cancelled → new. Clears
+- **Reopen**: `autosk reopen <id>` — `done`/`cancel` → `new`. Clears
   `current_step_id`; preserves `workflow_id` for audit.
 - **Inspect / edit metadata**: `autosk metadata show <id>` (add
   `--visits-pretty` for a labelled visit-counter view),
@@ -720,7 +727,7 @@ human. Humans can:
   — the escape hatch after a `step_max_visits_exceeded` park. See
   [Visit limits](#visit-limits-max_visits) above.
 
-`autosk update --status` is rejected on `in_workflow` tasks: those
+`autosk update --status` is rejected on `work` tasks: those
 transitions are owned by the workflow engine.
 
 ---
@@ -755,7 +762,7 @@ SELECT t.id, t.current_step_id
   FROM tasks t
   JOIN steps s   ON t.current_step_id = s.id
   JOIN agents a  ON s.agent_id        = a.id
- WHERE t.status = 'in_workflow'
+ WHERE t.status = 'work'
    AND a.is_human = 0
    AND NOT EXISTS (
      SELECT 1 FROM daemon_runs r
@@ -776,7 +783,7 @@ every end-of-turn.
 | Term | Meaning |
 |---|---|
 | **Step** | One node in a workflow. Has a name (`dev`, `review`, …), an `agent_id`, and ≥1 outgoing transition. |
-| **Transition** | One edge from a step. Carries either a sibling-step target or a `task_status` (`done`/`cancelled`/`human_feedback`), plus a natural-language `prompt_rule`. |
+| **Transition** | One edge from a step. Carries either a sibling-step target or a `task_status` (`done`/`cancel`/`human`), plus a natural-language `prompt_rule`. |
 | **Signal** | A row in `step_signals`. Inserted by `autosk step next` from inside the agent; consumed by the executor after end-of-turn. PK on `run_id` enforces "exactly one signal per run". |
 | **Kickback** | A corrective message sent to the agent when it ends a turn without emitting a signal. Bounded by `max_corrections`. |
 | **Synthetic workflow** | `single:<agent>` workflow auto-created by `--agent NAME`. `is_synthetic = 1`; hidden from `workflow list` unless `--all`. |

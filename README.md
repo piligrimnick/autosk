@@ -26,7 +26,7 @@ agents, workflows, comments, and a daemon poller that drives tasks
 through step transitions. Workflows can cap how many times a task may
 enter a given step (per-step `max_visits`); when the cap fires the
 run is failed with `daemon_runs.error = 'step_max_visits_exceeded: …'`,
-the task is parked to `human_feedback` on the **target** step (the
+the task is parked to `human` on the **target** step (the
 one the run was about to enter), and the human clears the counter
 with `autosk metadata reset-visits <id> [--step NAME]` before
 resuming.
@@ -82,9 +82,12 @@ autosk done as-a1b2
 
 - **Task** — id, title, description, status, priority, optional FKs to
   `author_id` / `workflow_id` / `current_step_id`, timestamps.
-- **Status** — one of `new`, `in_workflow`, `human_feedback`, `done`,
-  `cancelled`. A SQL CHECK ties `status='in_workflow'` to
-  `current_step_id IS NOT NULL`.
+- **Status** — one of `new`, `work`, `human`, `done`, `cancel` (every
+  spelling is ≤ 7 chars). A SQL CHECK ties `status='work'` to
+  `current_step_id IS NOT NULL`. The legacy spellings
+  (`in_workflow`, `human_feedback`, `cancelled`) are no longer
+  accepted on any input surface and are rejected at the CLI / SDK
+  boundary.
 - **Priority** — `0..3`, `0` = highest.
 - **Agent** — a named actor that can own a task. `human` is seeded on
   init; background agents are npm packages installed into
@@ -93,7 +96,7 @@ autosk done as-a1b2
   ≥1 outgoing transition. The daemon advances tasks via step transitions.
 - **Dependency** — directed `blocker → blocked` edge.
 - **Ready set** — tasks where `status='new'` AND no open blocker (open =
-  blocker status in `{new, in_workflow, human_feedback}`).
+  blocker status in `{new, work, human}`).
 - **Blocked** — *derived*, not stored.
 
 ## Command reference
@@ -108,10 +111,10 @@ Lifecycle
   autosk assign <id> --agent NAME    # only valid on status=new
   autosk enroll <id> --workflow NAME # attach an existing `new` task to a workflow
   autosk enroll <id> --agent    NAME # ...or the synthetic single:<NAME> flow
-  autosk resume <id> [--to STEP]     # human_feedback → in_workflow
+  autosk resume <id> [--to STEP]     # human → work
   autosk done <id>                   # direct; also clears current_step_id
   autosk cancel <id>                 # direct; also clears current_step_id
-  autosk reopen <id>                 # done|cancelled → new (preserves workflow_id)
+  autosk reopen <id>                 # done|cancel → new (preserves workflow_id)
 
 Task metadata (free-form JSON; engine-reserved `step_visits` counters)
   autosk metadata show         <id> [--visits-pretty]
@@ -136,7 +139,7 @@ Worktrees (isolation=worktree workflows only)
   autosk worktree list               # tasks of isolated workflows + dir presence
   autosk worktree path <id>          # print the derived per-task worktree path
   autosk worktree rm   <id>          # force-remove the dir (branch preserved;
-                                     # refuses in_workflow tasks)
+                                     # refuses `work` tasks)
 
 Agent-facing (inside a workflow step)
   autosk step next <id> --to <step-or-status>
