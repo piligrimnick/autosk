@@ -630,8 +630,10 @@ func TestWorktree_CLI_Rm_Terminal_RemovesDirKeepsBranch(t *testing.T) {
 }
 
 func TestWorktree_CLI_Rm_OnHumanFeedback_Permitted(t *testing.T) {
-	// Plan \u00a78.3 documents recovery flow for worktree_missing:
-	// run parks \u2192 `autosk worktree rm <id>` \u2192 enroll \u2192 resume.
+	// Documented recovery flow for worktree_stranded (and the legacy
+	// worktree_missing flow that the daemon now auto-recovers, but
+	// which an operator can still invoke manually): run parks \u2192
+	// `autosk worktree rm <id>` \u2192 cancel \u2192 reopen \u2192 enroll.
 	// `worktree rm` must therefore NOT refuse `human_feedback` tasks.
 	root := makeIsolatedProject(t)
 	installFixturesAndIsolatedWF(t, root, "iso-park")

@@ -86,8 +86,20 @@ func withIsolatedPackagesPrefix(t *testing.T) string {
 
 // runRoot executes the CLI's root cobra command in-process and captures
 // stdout + stderr. Run inside the supplied directory.
+//
+// Env-isolation: this helper unsets AUTOSK_DB and AUTOSK_NO_AUTOINIT for
+// the duration of the test. Without this, tests running inside a
+// worktree-isolated agent's subprocess (which the executor spawns with
+// AUTOSK_DB=<projectRoot>/.autosk/db so the agent's `autosk` CLI calls
+// find the canonical DB) would inherit that env via os.Environ() and
+// every `runRoot` invocation would write tasks/workflows into the
+// project's DB instead of the per-test t.TempDir(). Same hazard if a
+// developer's shell has AUTOSK_DB set. t.Setenv restores the prior
+// state on test cleanup.
 func runRoot(t *testing.T, dir string, argv ...string) (string, error) {
 	t.Helper()
+	t.Setenv("AUTOSK_DB", "")
+	t.Setenv("AUTOSK_NO_AUTOINIT", "")
 	root := newRootCmd()
 	root.SetArgs(argv)
 	// emit* helpers write to os.Stdout directly; capture via pipe.

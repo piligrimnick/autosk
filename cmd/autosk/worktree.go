@@ -103,14 +103,16 @@ func newWorktreeRmCmd() *cobra.Command {
 		Short: "Force-remove the worktree directory for a non-live task (branch preserved)",
 		Long: "Manually removes the on-disk worktree directory for a task. The\n" +
 			"engine performs this automatically on done/cancelled \u2014 use this\n" +
-			"verb only for orphan cleanup or when the engine couldn't reach\n" +
-			"the filesystem at terminal time. The branch is never touched.\n\n" +
+			"verb for orphan cleanup, stranded-worktree recovery, or when the\n" +
+			"engine couldn't reach the filesystem at terminal time. The branch\n" +
+			"is never touched.\n\n" +
 			"Refuses tasks that are status=in_workflow: the daemon may be\n" +
 			"executing inside that worktree right now, and yanking it would\n" +
 			"crash the live run. Parked (human_feedback) and new tasks are\n" +
-			"fair game \u2014 the plan's documented recovery flow for\n" +
-			"`worktree_missing` (run parks \u2192 worktree rm \u2192 enroll \u2192 resume)\n" +
-			"relies on this.",
+			"fair game \u2014 the documented recovery flow for `worktree_stranded`\n" +
+			"(run parks \u2192 worktree rm \u2192 cancel \u2192 reopen \u2192 enroll) relies on\n" +
+			"this. The `worktree_missing` case is auto-recovered by the daemon\n" +
+			"itself \u2014 no manual `rm` needed.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, closeFn, err := openStore(cmd.Context(), true)

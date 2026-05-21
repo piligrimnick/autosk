@@ -247,8 +247,8 @@ owned by the runner via `step next`.
 | Run sits in `running` forever | The agent never emits `agent_end`. The daemon will fail it after `--idle-timeout`. |
 | Run fails with `agent_did_not_emit_transition` | The agent stopped without calling `autosk step next`, `max_corrections` times. Inspect transcript via `autosk daemon messages`. |
 | Run fails with `daemon_restart` | The daemon was restarted while this run was active. This iteration does not re-attach. Re-enroll the task. |
-| Run fails with `worktree_missing` | Isolated workflow's per-task worktree directory is gone at run start (`Verify` pre-flight failed). Task is parked → `human_feedback`. Recover via `cancel` → `reopen` → `enroll --workflow <iso>` to re-allocate, or `cancel` to give up. See [`docs/workflows.md` § Recovering from `worktree_missing` / `worktree_stranded`](workflows.md#recovering-from-worktree_missing--worktree_stranded). |
-| Run fails with `worktree_stranded` | Isolated workflow's worktree exists but its `.git` no longer points at the project's gitdir (typical when the project was moved or re-initialised). Same recovery as `worktree_missing`. |
+| Daemon log: `executor: re-allocated missing worktree` | Isolated workflow's per-task worktree directory was gone at run start; the executor re-allocated it on the existing branch (`autosk/<task-id>`) and continued the run. No human action required. The previous behaviour (park → `human_feedback`) only applies to `worktree_stranded` now. |
+| Run fails with `worktree_stranded` | Isolated workflow's worktree directory exists but its `.git` no longer resolves to the project's gitdir (typical when the project was moved or re-initialised). Task is parked → `human_feedback`. See [`docs/workflows.md` § Recovering from `worktree_stranded`](workflows.md#recovering-from-worktree_stranded). |
 | 410 on `/v1/jobs/{id}/messages` | `session_path` is empty or the file was deleted. |
 | Stream connection drops | Long polls may need `X-Accel-Buffering: no` (already sent). Use `Last-Event-ID` on reconnect to skip replay. |
 

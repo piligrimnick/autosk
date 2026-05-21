@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -260,11 +261,36 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 			return e.failTerminal(bg, jobID, nil, fmt.Errorf("worktree path: %w", perr))
 		}
 		if verr := e.deps.Worktree.Verify(ctx, e.cfg.ProjectRoot, tk.ID); verr != nil {
-			reason := "worktree_missing"
-			if errors.Is(verr, worktree.ErrWorktreeStranded) || errors.Is(verr, worktree.ErrNotGitRepo) {
-				reason = "worktree_stranded"
+			// Auto-recovery for the simple "directory just isn't there"
+			// case: a previous terminal cleanup reaped the dir, the task
+			// was reopened/re-enrolled and the dir got cleaned again, or
+			// the operator nuked ~/.autosk/worktrees by hand. The branch
+			// is the load-bearing piece (it survives terminal cleanup
+			// by design); re-allocating the dir on the existing branch
+			// is a safe no-op-equivalent and saves the human a four-step
+			// cancel/reopen/enroll dance.
+			//
+			// Stranded / not-a-git-repo are NOT auto-recovered: they
+			// signal that the project itself moved or git state broke,
+			// neither of which we can safely fix from here. Those keep
+			// the documented park flow.
+			if errors.Is(verr, worktree.ErrWorktreeMissing) {
+				res, eerr := e.deps.Worktree.Ensure(ctx, e.cfg.ProjectRoot, tk.ID, "")
+				if eerr != nil {
+					return e.failTerminal(bg, jobID, nil, fmt.Errorf("worktree_missing: re-allocate failed: %w", eerr))
+				}
+				slog.Default().Info("executor: re-allocated missing worktree",
+					"task", tk.ID,
+					"job", jobID,
+					"path", res.Path,
+					"branch", res.Branch)
+			} else {
+				// ErrWorktreeStranded / ErrNotGitRepo (and any future
+				// Verify-only error) collapse to worktree_stranded:
+				// the on-disk state exists in some form but isn't safe
+				// to spawn into.
+				return e.failTerminal(bg, jobID, nil, fmt.Errorf("worktree_stranded: %w", verr))
 			}
-			return e.failTerminal(bg, jobID, nil, fmt.Errorf("%s: %w", reason, verr))
 		}
 		cwd = path
 		dbPath := e.cfg.DBPath

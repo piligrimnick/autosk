@@ -552,18 +552,29 @@ transitions ditto (obviously).
 
 | Symptom | What the executor does |
 |---|---|
-| `Verify` fails: directory missing | Run fails with `error="worktree_missing"`; task parked → `human_feedback`. Recovery: see below. |
-| `Verify` fails: `.git` stranded (e.g. project moved) | Same: `error="worktree_stranded"`. Same recovery sequence. |
+| `Verify` fails: directory missing | **Auto-recovered** (deviation from the original plan — see note below). Executor calls `Ensure("")` on the existing branch and proceeds; logs `executor: re-allocated missing worktree`. Only fails (`error="worktree_missing: re-allocate failed: ..."`, task parked → `human_feedback`) when `Ensure` itself errors (e.g. git binary missing, slot occupied by non-worktree). |
+| `Verify` fails: `.git` stranded (e.g. project moved) | Run fails with `error="worktree_stranded"`; task parked → `human_feedback`. Recovery: see below. |
 | Worktree exists but agent crashed mid-edit | Standard kickback flow applies; no special handling. The worktree retains the partial state for the next step run to pick up. |
 | Cleanup on terminal fails | Warning + agent comment; run still marked `done`. |
 
-**Recovery from `worktree_missing` / `worktree_stranded`** is either
-"give up" (one command) or "re-allocate and retry" (four commands).
-The earlier draft of this section claimed a 2-step recovery via
-`worktree rm` + `resume`; that doesn't actually work because
-`autosk resume` returns the task to `in_workflow` at the same step
-without re-allocating the worktree, so the next run `Verify`-fails
-and parks again. The accurate recovery is:
+**Deviation (2026-05-21 follow-up to WT5).** The original plan parked
+the task on a missing-directory `Verify` fail and required a four-step
+manual recovery (`worktree rm` → `cancel` → `reopen` → `enroll`). In
+practice this hit on every legitimate reopen after a cleanup-on-done
+and felt strictly worse than just re-`Ensure`-ing on the branch (which
+is the load-bearing piece and is preserved on terminal cleanup by
+design). The executor now auto-recovers the missing-dir case and only
+the stranded case (project moved / git state broken / slot occupied)
+still parks. The dedicated `autosk worktree create <id>` verb
+discussed in §13 is therefore not needed for this case.
+
+**Recovery from `worktree_stranded`** (and from the residual
+`worktree_missing: re-allocate failed: ...` case when auto-recovery
+itself bombs) is either "give up" (one command) or "re-allocate and
+retry" (four commands). A plain `autosk resume` does NOT work because
+it returns the task to `in_workflow` at the same step without
+cleaning the stranded dir, so the next run `Verify`-fails and parks
+again. The accurate recovery is:
 
 ```bash
 # give up:

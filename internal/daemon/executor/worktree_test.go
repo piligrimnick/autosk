@@ -155,19 +155,100 @@ func TestRun_Worktree_HappyPath_RemovesDirOnDone(t *testing.T) {
 	}
 }
 
-// TestRun_Worktree_VerifyFails_ParksTask asserts that a missing
-// worktree at run start fails the run with worktree_missing and parks
-// the task into human_feedback.
-func TestRun_Worktree_VerifyFails_ParksTask(t *testing.T) {
+// TestRun_Worktree_Missing_AutoRecover asserts that a missing
+// worktree at run start is transparently re-allocated by the
+// executor (Verify → ErrWorktreeMissing → Ensure → continue) so the
+// task is NOT parked. The branch is the load-bearing piece and is
+// preserved across terminal cleanup; re-creating the dir on the
+// existing branch is safe.
+func TestRun_Worktree_Missing_AutoRecover(t *testing.T) {
 	fx, wf, devID := makeIsolatedFixture(t)
 	defer fx.close()
 	ctx := context.Background()
 
 	// NO pre-allocation. The worktree will be missing when the
-	// executor's pre-flight runs.
+	// executor's pre-flight runs — but the executor must Ensure it
+	// and proceed instead of failing the run.
+	wtPath, _ := worktree.PathFor(fx.cfg.ProjectRoot, "as-iso02")
 	tk, err := fx.ts.CreateTask(ctx, store.Task{
 		ID:            "as-iso02",
 		Title:         "missing wt",
+		Status:        store.StatusInWorkflow,
+		Priority:      2,
+		WorkflowID:    wf.ID,
+		CurrentStepID: devID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := fx.deps.Runs.CreateRun(ctx, runstore.NewRun{TaskID: tk.ID, StepID: devID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var captured pi.Opts
+	stub := newStub()
+	stub.onPrompt = func(prompt string, attempt int) {
+		if attempt == 1 {
+			if _, err := fx.deps.Signals.Emit(ctx, tk.ID, "done"); err != nil {
+				t.Errorf("Emit done: %v", err)
+			}
+		}
+	}
+	factory := func(_ context.Context, opts pi.Opts) (executor.PiRunner, error) {
+		captured = opts
+		return stub, nil
+	}
+
+	deps := fx.deps
+	deps.Worktree = worktree.NewManager()
+	ex := executor.New(deps, factory, fx.cfg)
+	if err := ex.Run(ctx, run.JobID); err != nil {
+		t.Fatalf("Run should auto-recover from missing worktree: %v", err)
+	}
+	if captured.Cwd != wtPath {
+		t.Fatalf("executor cwd should be the (re-allocated) worktree path: got %q want %q", captured.Cwd, wtPath)
+	}
+	// Branch should exist (Ensure created it from HEAD).
+	if out, err := runOut("git", "-C", fx.cfg.ProjectRoot, "rev-parse", "--verify", "refs/heads/autosk/as-iso02"); err != nil {
+		t.Fatalf("branch should have been created by auto-Ensure: %v: %s", err, out)
+	}
+	// After a successful `done` transition the terminal cleanup hook
+	// reaps the dir again — same contract as the happy-path test.
+	if _, statErr := os.Stat(wtPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("worktree dir should be removed on terminal done, stat err=%v", statErr)
+	}
+	runRow, _ := fx.deps.Runs.GetRun(ctx, run.JobID)
+	if runRow.Status != runstore.StatusDone {
+		t.Fatalf("run.Status: %s (want done)", runRow.Status)
+	}
+	tkAfter, _ := fx.ts.GetTask(ctx, tk.ID)
+	if tkAfter.Status != store.StatusDone {
+		t.Fatalf("task should be done, got %s", tkAfter.Status)
+	}
+}
+
+// TestRun_Worktree_Stranded_ParksTask asserts that a stranded
+// worktree (directory exists at the canonical path but `.git` no
+// longer resolves to the project's gitdir) still fails the run with
+// worktree_stranded and parks the task — auto-recovery only covers
+// the simple "directory absent" case.
+func TestRun_Worktree_Stranded_ParksTask(t *testing.T) {
+	fx, wf, devID := makeIsolatedFixture(t)
+	defer fx.close()
+	ctx := context.Background()
+
+	// Plant a non-git directory at the expected worktree path. Verify
+	// stat-succeeds, then `git rev-parse --git-common-dir` from inside
+	// fails → ErrWorktreeStranded.
+	wtPath, _ := worktree.PathFor(fx.cfg.ProjectRoot, "as-iso04")
+	if err := os.MkdirAll(wtPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tk, err := fx.ts.CreateTask(ctx, store.Task{
+		ID:            "as-iso04",
+		Title:         "stranded wt",
 		Status:        store.StatusInWorkflow,
 		Priority:      2,
 		WorkflowID:    wf.ID,
@@ -187,17 +268,17 @@ func TestRun_Worktree_VerifyFails_ParksTask(t *testing.T) {
 	ex := executor.New(deps, stubFactory(stub), fx.cfg)
 	err = ex.Run(ctx, run.JobID)
 	if err == nil {
-		t.Fatal("expected worktree_missing failure")
+		t.Fatal("expected worktree_stranded failure")
 	}
-	if !strings.Contains(err.Error(), "worktree_missing") {
-		t.Fatalf("err %q does not mention worktree_missing", err.Error())
+	if !strings.Contains(err.Error(), "worktree_stranded") {
+		t.Fatalf("err %q does not mention worktree_stranded", err.Error())
 	}
 	runRow, _ := fx.deps.Runs.GetRun(ctx, run.JobID)
 	if runRow.Status != runstore.StatusFailed {
 		t.Fatalf("run.Status: %s (want failed)", runRow.Status)
 	}
-	if !strings.Contains(runRow.Error, "worktree_missing") {
-		t.Fatalf("run.Error: %q (want worktree_missing)", runRow.Error)
+	if !strings.Contains(runRow.Error, "worktree_stranded") {
+		t.Fatalf("run.Error: %q (want worktree_stranded)", runRow.Error)
 	}
 	tkAfter, _ := fx.ts.GetTask(ctx, tk.ID)
 	if tkAfter.Status != store.StatusHumanFeedback {

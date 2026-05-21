@@ -344,7 +344,7 @@ Diagnostic / manual-recovery verbs. None of them mutate task rows.
 |---|---|
 | `autosk worktree list [--json]` | List every task in this project whose workflow has `isolation: "worktree"`, with task id, status, workflow, branch, on-disk presence, and path. Closed tasks whose dir survived a failed cleanup show `dir=missing` (`exists=false` in JSON). |
 | `autosk worktree path <id> [--json]` | Print the derived worktree path. Pure helper; does not stat the path. Useful in shell aliases and scripts. |
-| `autosk worktree rm <id> [--json]` | Force-remove the worktree directory; the branch is left intact. Refuses **only** `in_workflow` tasks (the daemon may be executing inside the dir right now). `new` / `human_feedback` / `done` / `cancelled` are all accepted, so the `worktree_missing` recovery flow below works without first closing the task. |
+| `autosk worktree rm <id> [--json]` | Force-remove the worktree directory; the branch is left intact. Refuses **only** `in_workflow` tasks (the daemon may be executing inside the dir right now). `new` / `human_feedback` / `done` / `cancelled` are all accepted, so the `worktree_stranded` recovery flow below works without first closing the task. |
 
 No `--all-projects` flag in v0.3: the CLI is single-process and has no
 daemon round-trip for cross-project enumeration. Use it from each
@@ -360,15 +360,37 @@ workflows remind the agent to commit first, and why the branch is
 preserved (so a human can still inspect or merge what *was*
 committed).
 
-#### Recovering from `worktree_missing` / `worktree_stranded`
+#### Missing worktree directory → auto-recovered
 
 If the daemon picks up an isolated task and discovers its worktree
-directory is gone or its `.git` no longer points at the project's
-gitdir, the run fails with `error=worktree_missing` (dir absent) or
-`error=worktree_stranded` (dir present but git is broken / project was
-moved) and the task is parked to `human_feedback`. The worktree is
-**not** auto-cleaned in this failure path — you may want to keep
-whatever is on disk for debugging.
+directory is gone, the executor transparently re-allocates it on the
+existing `autosk/<task-id>` branch (via the same `worktree.Ensure`
+the CLI uses on `enroll`) and the run proceeds. No park, no human
+action required. The daemon emits an `executor: re-allocated missing
+worktree` log line at `info` level so the recovery is auditable.
+
+This covers the common cases where the dir went missing between
+runs: terminal cleanup reaped it and the task was then
+resumed/reopened, the operator manually `rm -rf`-ed
+`~/.autosk/worktrees/...`, or a failed cleanup left only the branch.
+The branch is the load-bearing piece (it survives terminal cleanup
+by design), so re-creating the dir from the existing branch is
+always safe.
+
+If re-allocation itself fails (git not on PATH, project root no
+longer a git repo, the slot is occupied by something that isn't a
+registered worktree, etc.), the run fails with
+`worktree_missing: re-allocate failed: ...` and the task is parked
+to `human_feedback` for human triage.
+
+#### Recovering from `worktree_stranded`
+
+If the worktree directory is present but its `.git` no longer
+resolves to the project's gitdir (the project was moved or
+re-initialised), the run fails with `error=worktree_stranded` and the
+task is parked to `human_feedback`. The worktree is **not**
+auto-cleaned in this failure path — you may want to keep whatever is
+on disk for debugging.
 
 To recover, either give up:
 
@@ -379,7 +401,7 @@ autosk cancel as-bea9             # branch preserved; dir reaped if any remained
 or re-allocate the worktree and retry:
 
 ```bash
-autosk worktree rm as-bea9        # optional: clean up any stranded dir
+autosk worktree rm as-bea9        # clean up the stranded dir
 autosk cancel  as-bea9            # human_feedback → cancelled (‘reopen’ doesn’t
                                   # take human_feedback as a source state)
 autosk reopen  as-bea9            # cancelled → new; current_step_id cleared
@@ -390,10 +412,8 @@ autosk enroll  as-bea9 --workflow feature-dev   # Ensure re-allocates dir + bran
 
 A shorter recovery via plain `autosk resume` is **not** possible:
 `resume` flips status back to `in_workflow` at the same step without
-re-allocating the worktree, so the next run would `Verify`-fail and
-park again. Adding a `worktree create <id>` verb that calls `Ensure`
-on a parked task is a deferred follow-up (the locked decision was to
-keep the CLI surface minimal).
+cleaning the stranded dir, so the next run would `Verify`-fail and
+park again.
 
 #### Reopening a closed isolated task
 
