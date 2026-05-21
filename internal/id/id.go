@@ -36,7 +36,7 @@ var pattern = regexp.MustCompile(`^[a-z]+-[0-9a-f]{4}([0-9a-f]{2})*$`)
 func Valid(s string) bool { return pattern.MatchString(s) }
 
 // New returns a single fresh id with the given prefix and DefaultBytes of
-// entropy (4 hex chars). Use NewN for a wider suffix.
+// entropy (6 hex chars). Use NewN for a wider suffix.
 func New(prefix string) (string, error) {
 	return NewN(prefix, DefaultBytes)
 }
