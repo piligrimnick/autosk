@@ -42,3 +42,4 @@ The `libsqlite3` build tag is mandatory: it routes `mattn/go-sqlite3` through th
 - Commits follow Conventional Commits: `feat:`, `fix:`, `chore:`, `refactor:`, `docs:`, `test:`, etc.
 - Go 1.25 toolchain (`go.mod`).
 - The TUI uses the `jesseduffield/gocui` fork (the lazygit one), not `awesome-gocui`.
+- **Time rendering.** Anything user-facing (CLI text output, TUI panes, daemon-list output, flash toasts, command log) MUST format through `internal/timeformat` — `FormatDate` / `FormatTime` / `FormatDateTime` / `FormatDateTimeSmart`. These render in the operator's local timezone using the layouts `2006-01-02`, `15:04:05`, `2006-01-02 15:04:05`. Machine wire formats (JSON CLI output behind `--json`, daemon HTTP API in `internal/daemon/api`, `RunContextSeed` in `internal/daemon/executor`, `comment.RenderForPrompt` in `internal/comments`, TS types in `extension/src`) stay on **RFC3339 UTC** and must NOT route through `timeformat`.

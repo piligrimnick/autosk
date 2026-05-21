@@ -271,8 +271,12 @@ Two stacked sub-regions:
    (queued / dispatched) the cutoff is dropped and all comments
    render.
 
-Timestamps render as RFC3339 so a kickback chain spanning midnight,
-or a run from yesterday opened today, is unambiguous.
+Timestamps render as the full local `YYYY-MM-DD HH:MM:SS` (via
+`internal/timeformat.FormatDateTime`) so a kickback chain spanning
+midnight, or a run from yesterday opened today, is unambiguous. The
+dashboard task-detail timeline (which usually shows today's events)
+uses the smart variant — bare `HH:MM:SS` when the event is today in
+the operator's TZ, full datetime otherwise.
 
 ---
 
