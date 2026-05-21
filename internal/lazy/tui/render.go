@@ -164,6 +164,8 @@ func renderStepName(name string) string {
 	return styleStepName.Render(name)
 }
 
+// (renderSignalTarget lives in inspector.go and is reused here.)
+
 // renderWorkflowStep composes a "workflow:step" label with each half
 // in its entity colour and the colon left in the default foreground.
 // Returns a muted "(no-wf)" when wf is empty (legacy daemon rows

@@ -468,6 +468,77 @@ func TestRenderTaskDetail_SignalsBoxAll(t *testing.T) {
 	}
 }
 
+// TestRenderTaskDetail_SignalsTargetColored pins the contract that
+// the right-hand side of each signal arrow wears its canonical
+// entity colour: a sibling step name gets the step-name hue, while
+// a lifecycle terminal (done/cancel/human) gets its task-status hue.
+func TestRenderTaskDetail_SignalsTargetColored(t *testing.T) {
+	task := datasource.Task{
+		ID: "as-sig", Status: store.StatusWork, CreatedAt: fixedTime,
+	}
+	signals := []datasource.Signal{
+		{StepName: "developer", Target: "validator", CreatedAt: fixedTime},
+		{StepName: "validator", Target: "done", CreatedAt: fixedTime},
+		{StepName: "developer", Target: "cancel", CreatedAt: fixedTime},
+		{StepName: "developer", Target: "human", CreatedAt: fixedTime},
+	}
+	out := renderTaskDetail(task, nil, signals, 80)
+
+	// Step-name target wears renderStepName's hue.
+	if !strings.Contains(out, renderStepName("validator")) {
+		t.Errorf("step-name target \"validator\" not styled with step-name hue: %q", out)
+	}
+	// Lifecycle-terminal targets wear their task-status hue (same
+	// styling renderWorkflowDetail uses on the step graph).
+	for _, st := range []store.Status{store.StatusDone, store.StatusCancel, store.StatusHuman} {
+		want := styleForTaskStatus(st).Render(string(st))
+		if !strings.Contains(out, want) {
+			t.Errorf("lifecycle terminal %q not styled with task-status hue: out=%q", st, out)
+		}
+	}
+}
+
+// TestRenderTaskDetail_FullWidthWrap pins the contract that the
+// description body wraps at the FULL inner-box width, not at the
+// old 120-cell readability cap. Symptom on a wide pane was a dead
+// column of padding inside the right border because markdown
+// wrapped at 120 even though the box extended further.
+func TestRenderTaskDetail_FullWidthWrap(t *testing.T) {
+	const paneW = 200
+	long := strings.Repeat("word ", 80) // ~400 cells of fillable content
+	task := datasource.Task{
+		ID: "as-wide", Status: store.StatusNew, CreatedAt: fixedTime,
+		Description: long,
+	}
+	out := renderTaskDetail(task, nil, nil, paneW)
+	visible := ansiutil.Strip(out)
+
+	// Locate the description body line(s) inside the box. Lines
+	// inside the box start with "│ " (frame + padding). Measure the
+	// LONGEST body line's visible-cell width and assert it stretches
+	// closer to the box's inner content width than to the legacy
+	// 120-cell cap.
+	contentW := paneW - 4 // 2 frame cells + 2 padding cells
+	maxBodyW := 0
+	for _, ln := range strings.Split(visible, "\n") {
+		if !strings.HasPrefix(ln, "│ ") || !strings.HasSuffix(ln, " │") {
+			continue
+		}
+		inner := strings.TrimSuffix(strings.TrimPrefix(ln, "│ "), " │")
+		inner = strings.TrimRight(inner, " ")
+		if w := utf8.RuneCountInString(inner); w > maxBodyW {
+			maxBodyW = w
+		}
+	}
+	// At paneW=200, contentW=196. We expect the wrap to land near
+	// contentW (within a word's worth of slack). A regression to the
+	// old 120-cell cap would land maxBodyW at ~120.
+	if maxBodyW < contentW-10 {
+		t.Errorf("description body wraps too early: maxBodyW=%d, contentW=%d (a regression to the legacy 120-cell cap would land here at ~120):\n%s",
+			maxBodyW, contentW, visible)
+	}
+}
+
 // TestRenderTaskDetail_CommentBoxLabel pins the per-comment box
 // label contract: "<smart-time> <author>" on the top border, body
 // inside the frame, no leftover "─ comments (N) ─" section header.

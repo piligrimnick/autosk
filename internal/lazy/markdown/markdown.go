@@ -34,11 +34,15 @@ import (
 )
 
 // maxRenderWidth is the absolute cap on the wrap width passed to
-// glamour, regardless of how wide the detail pane is. Long lines past
-// ~120 cells lose the rhythm a markdown paragraph relies on (the eye
-// has to track too far between line breaks) so we cap the wrap there
-// even when the pane has room for more.
-const maxRenderWidth = 120
+// glamour, regardless of how wide the detail pane is. Lifted from the
+// original 120 to 500 so wide terminals (ultrawide / 2K+) actually
+// fill the labeled-box body to the right border instead of leaving a
+// dead column of padding inside the frame. The cap is still here to
+// protect glamour from being asked to lay out at silly widths
+// (megapixel sized panes from a misconfigured Gui); 500 cells is
+// well above any real terminal layout while staying inside glamour's
+// tested-sane envelope.
+const maxRenderWidth = 500
 
 // Pathological-input guards. Glamour's blockquote renderer recurses
 // per nesting level and allocates a fresh wrap buffer at every layer,
