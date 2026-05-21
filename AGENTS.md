@@ -39,6 +39,7 @@ The `libsqlite3` build tag is mandatory: it routes `mattn/go-sqlite3` through th
 
 ## Conventions
 
+- All text in tasks / comments / docs should be in English.
 - Commits follow Conventional Commits: `feat:`, `fix:`, `chore:`, `refactor:`, `docs:`, `test:`, etc.
 - Go 1.25 toolchain (`go.mod`).
 - The TUI uses the `jesseduffield/gocui` fork (the lazygit one), not `awesome-gocui`.
