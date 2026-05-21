@@ -374,7 +374,21 @@ func (r *Runner) readLoop() {
 	//     non-JSON byte (no skip-to-newline-and-retry primitive) and
 	//     silently drops every subsequent value. pi's stdout is
 	//     contractually JSON-Lines today, but matching the pre-fix
-	//     resync behaviour is cheap and worth keeping.
+	//     resync behaviour is cheap and worth keeping. Locked down by
+	//     TestRunner_GarbageLineDoesNotWedgeReader.
+	//
+	// Tradeoff to be aware of: ReadBytes('\n') has no upper bound on a
+	// single line, so a misbehaving writer that pumps bytes onto stdout
+	// without ever emitting '\n' can grow the buffer arbitrarily — we
+	// swapped "crash at 1 MiB" for "unbounded growth if pi forgets a
+	// newline". Acceptable today because pi is contractually JSON-Lines
+	// (every legal frame ends with '\n') and the executor's defensive
+	// lookup in handleRunError recovers a stranded step_signal on the
+	// next run if the daemon ever does OOM on a misbehaving stream.
+	// If the daemon starts ingesting untrusted pi-shaped streams, wrap
+	// r.stdout with an io.LimitedReader (or a custom line-bounded reader)
+	// and treat exceeding the limit as a read error so the same
+	// defensive lookup kicks in.
 	br := bufio.NewReader(r.stdout)
 	var readErr error
 	for {

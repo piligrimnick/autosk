@@ -159,9 +159,9 @@ func TestRunner_CleanShutdownOnStdinClose(t *testing.T) {
 // TestRunner_LargePayloadDoesNotCrashReader exercises the reader on a
 // JSON line significantly larger than bufio.Scanner's old 1 MiB cap.
 // The historical reader (bufio.Scanner with a 1 MiB buffer) would
-// fail this with bufio.ErrTooLong; the json.Decoder-based reader has
-// no per-token cap and must stream the message through to the consumer
-// before emitting agent_end.
+// fail this with bufio.ErrTooLong; the bufio.Reader.ReadBytes-based
+// reader has no per-line cap and must stream the message through to
+// the consumer before emitting agent_end.
 func TestRunner_LargePayloadDoesNotCrashReader(t *testing.T) {
 	const payloadBytes = 4 << 20 // 4 MiB
 	r := newRunner(t, fmt.Sprintf("FAKEPI_HUGE_PAYLOAD_BYTES=%d", payloadBytes))
@@ -172,6 +172,74 @@ func TestRunner_LargePayloadDoesNotCrashReader(t *testing.T) {
 	}
 	if err := r.WaitForAgentEnd(ctx); err != nil {
 		t.Fatalf("WaitForAgentEnd: %v", err)
+	}
+}
+
+// TestRunner_GarbageLineDoesNotWedgeReader pins the second contract the
+// runner's read loop promises (see runner.go readLoop comment, reason 2):
+// a single non-JSON line between two valid frames must surface as exactly
+// one KindOther event and the reader must keep parsing subsequent lines.
+//
+// The old bufio.Scanner reader did this naturally; the round-1 json.Decoder
+// reader did NOT (the decoder cursor wedges on the first non-JSON byte and
+// silently drops every subsequent value); the round-2 bufio.Reader.ReadBytes
+// reader restores the resync behaviour. Without this test the next refactor
+// of the reader could silently re-regress reason 2 — the size-cap test
+// would still pass.
+func TestRunner_GarbageLineDoesNotWedgeReader(t *testing.T) {
+	const garbage = "garbage-not-json"
+	r := newRunner(t, "FAKEPI_INJECT_GARBAGE_LINE="+garbage)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.SendPrompt(ctx, "ok"); err != nil {
+		t.Fatalf("SendPrompt: %v", err)
+	}
+	if err := r.WaitForAgentEnd(ctx); err != nil {
+		t.Fatalf("WaitForAgentEnd: %v", err)
+	}
+
+	// Drain events to confirm the resync contract: the garbage line
+	// surfaced as exactly one KindOther event AND the reader kept going
+	// to deliver the post-garbage frames (turn_end, agent_end).
+	deadline := time.After(500 * time.Millisecond)
+	var (
+		otherCount  int
+		otherRaw    []byte
+		sawTurnEnd  bool
+		sawAgentEnd bool
+	)
+LOOP:
+	for {
+		select {
+		case e, ok := <-r.Events():
+			if !ok {
+				break LOOP
+			}
+			switch e.Kind {
+			case pi.KindOther:
+				otherCount++
+				otherRaw = append([]byte(nil), e.Raw...)
+			case pi.KindTurnEnd:
+				sawTurnEnd = true
+			case pi.KindAgentEnd:
+				sawAgentEnd = true
+				break LOOP
+			}
+		case <-deadline:
+			break LOOP
+		}
+	}
+	if otherCount != 1 {
+		t.Fatalf("want exactly 1 KindOther event, got %d (raw=%q)", otherCount, string(otherRaw))
+	}
+	if string(otherRaw) != garbage {
+		t.Fatalf("KindOther.Raw = %q, want %q", string(otherRaw), garbage)
+	}
+	if !sawTurnEnd {
+		t.Error("did not observe turn_end after the garbage line (reader wedged?)")
+	}
+	if !sawAgentEnd {
+		t.Error("did not observe agent_end after the garbage line (reader wedged?)")
 	}
 }
 

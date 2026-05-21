@@ -17,6 +17,13 @@
 //	                       message_end is convenient because the regular
 //	                       turn already emits one and reusing the shape
 //	                       keeps the fakepi switch small.
+//	FAKEPI_INJECT_GARBAGE_LINE — when non-empty, write the literal value
+//	                       (followed by '\n') as its own line on stdout
+//	                       between message_end and turn_end. The runner's
+//	                       reader is expected to surface it as a single
+//	                       KindOther event and keep parsing subsequent
+//	                       lines (used by runner tests to lock the
+//	                       line-oriented resync contract).
 //
 // fakepi exits 0 on stdin EOF or SIGTERM.
 package main
@@ -55,6 +62,18 @@ func emit(v any) {
 	_ = writer.Flush()
 }
 
+// emitRawLine writes s followed by '\n' to stdout, bypassing json.Encoder.
+// Used by FAKEPI_INJECT_GARBAGE_LINE to feed deliberately malformed bytes
+// to the runner's reader so tests can pin the line-oriented resync
+// behaviour.
+func emitRawLine(s string) {
+	outMu.Lock()
+	defer outMu.Unlock()
+	_, _ = writer.WriteString(s)
+	_ = writer.WriteByte('\n')
+	_ = writer.Flush()
+}
+
 func main() {
 	// Trap SIGTERM/SIGINT — flush any pending writes and exit cleanly.
 	sigC := make(chan os.Signal, 1)
@@ -71,9 +90,14 @@ func main() {
 	sessFile := envOr("FAKEPI_SESSION_FILE", "/tmp/fakepi/session.jsonl")
 	delay := envIntMS("FAKEPI_AGENT_END_DELAY_MS", 0)
 	hugePayload := envInt("FAKEPI_HUGE_PAYLOAD_BYTES", 0)
+	garbageLine := os.Getenv("FAKEPI_INJECT_GARBAGE_LINE")
 
-	// JSON Lines on stdin. json.Decoder streams without the
-	// per-token cap bufio.Scanner imposes, matching the runner-side fix.
+	// JSON Lines on stdin. json.Decoder streams without the per-token
+	// cap bufio.Scanner imposes — fine here because the daemon only
+	// writes well-formed JSON to fakepi's stdin, so the no-resync
+	// behaviour of json.Decoder is never observable. (The runner-side
+	// reader uses bufio.Reader.ReadBytes for a different reason: pi's
+	// stdout in the wild needs the resync property; see runner.go.)
 	dec := json.NewDecoder(os.Stdin)
 	for {
 		var c cmd
@@ -84,12 +108,12 @@ func main() {
 			emit(map[string]any{"type": "response", "id": "", "command": "?", "success": false, "error": fmt.Sprintf("parse: %v", err)})
 			continue
 		}
-		handle(c, scenario, sessID, sessFile, delay, hugePayload)
+		handle(c, scenario, sessID, sessFile, delay, hugePayload, garbageLine)
 	}
 	// stdin closed → exit cleanly.
 }
 
-func handle(c cmd, scenario, sessID, sessFile string, delay time.Duration, hugePayload int) {
+func handle(c cmd, scenario, sessID, sessFile string, delay time.Duration, hugePayload int, garbageLine string) {
 	switch c.Type {
 	case "get_state":
 		emit(map[string]any{
@@ -139,6 +163,12 @@ func handle(c cmd, scenario, sessID, sessFile string, delay time.Duration, hugeP
 					"type":    "message_end",
 					"message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": big}}, "timestamp": time.Now().UnixMilli()},
 				})
+			}
+			if garbageLine != "" {
+				// Inject a non-JSON line between two valid frames. The
+				// runner's reader must surface this as a single KindOther
+				// event and keep parsing subsequent lines normally.
+				emitRawLine(garbageLine)
 			}
 			emit(map[string]any{"type": "turn_end", "message": map[string]any{}, "toolResults": []any{}})
 
