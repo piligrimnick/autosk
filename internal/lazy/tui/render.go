@@ -548,110 +548,270 @@ func renderDetail(s *state, width int) string {
 
 func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals []datasource.Signal, width int) string {
 	var b strings.Builder
-	// Header line: "task <id-blue>  <status-coloured>  P<n>". The label
-	// "task" stays bold-blue (styleHeader) so the line still reads as
-	// the pane header; the id picks up styleTaskID for cross-pane
-	// consistency with the Tasks panel column.
-	fmt.Fprintln(&b,
-		styleHeader.Render("task")+" "+renderTaskID(t.ID)+
-			"  "+styleForTaskStatus(t.Status).Render(string(t.Status))+
-			fmt.Sprintf("  P%d", t.Priority))
-	if t.WorkflowName != "" {
-		fmt.Fprintf(&b, "wf=%s step=%s agent=%s\n",
-			renderWorkflowName(t.WorkflowName),
-			renderStepName(t.StepName),
-			renderAgentName(t.AgentName))
+
+	// Header row: P{prio} <id> <status> <wf:step> <agent>.
+	//
+	// No "task" label literal — the gocui frame title ("[0] Detail")
+	// already identifies the pane, and the row reads as a single
+	// scan line keyed on the id. Priority is muted-gray to match the
+	// Tasks panel column-1 styling so the two views speak the same
+	// visual language. workflow:step is composed by
+	// renderWorkflowStep (yellow / colon / purple) and the agent
+	// picks up its entity hue. Trailing tokens are skipped when
+	// empty so a task without a workflow doesn't render "(no-wf)"
+	// at the top of every pane open.
+	hdr := []string{
+		styleMuted.Render(fmt.Sprintf("P%d", t.Priority)),
+		renderTaskID(t.ID),
+		styleForTaskStatus(t.Status).Render(string(t.Status)),
 	}
+	if t.WorkflowName != "" {
+		hdr = append(hdr, renderWorkflowStep(t.WorkflowName, t.StepName))
+	}
+	if t.AgentName != "" {
+		hdr = append(hdr, renderAgentName(t.AgentName))
+	}
+	b.WriteString(strings.Join(hdr, " ") + "\n")
+
+	// Optional "blocked by" row: only when the task is actually
+	// blocked AND we have ids to point at. The word "blocked" wears
+	// styleErr (red) so a blocked task screams at the operator from
+	// the top of the pane; the ids themselves stay in the task-id
+	// hue for cross-pane consistency.
+	if t.Blocked && len(t.BlockedBy) > 0 {
+		ids := make([]string, 0, len(t.BlockedBy))
+		for _, id := range t.BlockedBy {
+			ids = append(ids, renderTaskID(id))
+		}
+		b.WriteString(styleErr.Render("blocked") + " by: " + strings.Join(ids, ", ") + "\n")
+	}
+
+	// Stats row: created + comment count. FormatDateTimeSmart drops
+	// the date for today's events so the common case stays compact
+	// ("created: 14:31:47") and only older tasks render the full
+	// "YYYY-MM-DD HH:MM:SS". Machine-facing wire formats stay on
+	// RFC3339 UTC and intentionally do NOT route through timeformat.
+	fmt.Fprintf(&b, "created: %s, comments: %d\n",
+		timeformat.FormatDateTimeSmart(t.CreatedAt), t.CommentCount)
 	if t.AuthorName != "" {
 		fmt.Fprintf(&b, "author: %s\n", renderAgentName(t.AuthorName))
 	}
-	fmt.Fprintf(&b, "blocked: %v   comments: %d\n", t.Blocked, t.CommentCount)
-	// Local-TZ DateTime for the operator. Machine-facing wire formats
-	// (JSON output, daemon HTTP API, RunContextSeed) stay on RFC3339
-	// UTC and intentionally do NOT route through timeformat.
-	fmt.Fprintf(&b, "created: %s\n", timeformat.FormatDateTime(t.CreatedAt))
-	b.WriteString(styleMuted.Render("─ description ─") + "\n")
-	if t.Description == "" {
-		// Keep the placeholder exactly as before — acceptance criterion
-		// #4 pins this verbatim, and routing the empty string through
-		// glamour would just give us a blank pane.
-		b.WriteString(styleMuted.Render("(no description)") + "\n")
-	} else {
-		b.WriteString(markdown.Render(t.Description, width) + "\n")
-	}
-	if len(t.BlockedBy) > 0 {
-		b.WriteString("\n" + styleMuted.Render(fmt.Sprintf("─ blocked by (%d) ─", len(t.BlockedBy))) + "\n")
-		for _, id := range t.BlockedBy {
-			fmt.Fprintf(&b, "  ↑ %s\n", renderTaskID(id))
+
+	// First-frame fallback: when innerWidth returns 0 (the gocui view
+	// hasn't been sized yet) we skip the box-drawing entirely and
+	// fall back to plain-text sections so the pane still renders
+	// something useful. markdown.Render also short-circuits at
+	// width<=0, so the description leaks through verbatim — exercised
+	// by TestRenderTaskDetail_ZeroWidth.
+	if width <= 0 {
+		if t.Title != "" {
+			b.WriteString("\n" + t.Title + "\n")
 		}
-	}
-	if len(t.Blocks) > 0 {
-		b.WriteString("\n" + styleMuted.Render(fmt.Sprintf("─ blocks (%d) ─", len(t.Blocks))) + "\n")
-		for _, id := range t.Blocks {
-			fmt.Fprintf(&b, "  ↓ %s\n", renderTaskID(id))
+		if t.Description != "" {
+			b.WriteString("\n" + markdown.Render(t.Description, 0) + "\n")
+		} else {
+			b.WriteString("\n" + styleMuted.Render("(no description)") + "\n")
 		}
-	}
-	// Design plan §4: Tasks detail pane includes the last ≤5 comments.
-	// Each comment renders as a header line (time + author in agent
-	// hue) followed by the body run through glamour. Comments are no
-	// longer clipped to 70 chars (acceptance criterion #3); the body
-	// wraps at width-2 to leave room for the 2-cell indent that
-	// nests the body under the header line. The "last 5" cap is
-	// preserved — long comment chains stay browsable from the
-	// Tasks panel without scrolling past the rest of the pane.
-	if len(comments) > 0 {
-		n := len(comments)
-		start := 0
-		if n > 5 {
-			start = n - 5
-		}
-		b.WriteString("\n" + styleMuted.Render(fmt.Sprintf("─ comments (%d) ─", n)) + "\n")
-		bodyWidth := width - 2
-		if bodyWidth < 1 {
-			bodyWidth = 0 // markdown.Render falls back to raw text at width<=0
-		}
-		for _, c := range comments[start:] {
-			// Smart timeline: time-only for today's events, full datetime
-			// for anything older so a comment from yesterday is still
-			// readable when the operator opens the pane mid-morning.
-			fmt.Fprintf(&b, "  %s %s\n",
-				timeformat.FormatDateTimeSmart(c.CreatedAt),
-				renderAgentName(c.AuthorName))
-			body := markdown.Render(c.Text, bodyWidth)
-			// Defensive: markdown.Render("", _) returns "", and
-			// strings.Split("", "\n") yields [""] — which would emit a
-			// wasted blank indented line under the header. autosk_comment
-			// rejects empty bodies upstream, but rendering still has to
-			// behave sanely if a comment row ever lands here with no text.
-			if body == "" {
+		for _, c := range tailComments(comments) {
+			if strings.TrimSpace(c.Text) == "" {
 				continue
 			}
-			// Indent every line of the rendered body by 2 cells so the
-			// comment block visually nests under its header. Trailing
-			// empty line (if any) is dropped so two comments don't get
-			// double-spaced.
-			for _, line := range strings.Split(body, "\n") {
-				b.WriteString("  " + line + "\n")
-			}
+			fmt.Fprintf(&b, "\n%s %s\n%s\n",
+				timeformat.FormatDateTimeSmart(c.CreatedAt),
+				renderAgentName(c.AuthorName), c.Text)
 		}
+		return b.String()
 	}
-	// Design plan §4: Tasks detail pane includes the tail of the last
-	// open kickback chain. SignalsForTask returns rows newest-first,
-	// so the first ≤3 entries are the freshest signals across all
-	// runs of this task.
+
+	// Box content width: total outer width minus 2 frame cells minus
+	// 2 cells of inner padding (one each side). Floor at 1 so a
+	// narrow but non-zero pane still feeds markdown.Render a usable
+	// wrap width instead of degenerating into raw passthrough.
+	contentW := width - 4
+	if contentW < 1 {
+		contentW = 1
+	}
+
+	// ── Title box ────────────────────────────────────────────────
+	titleBody := wrapPlain(t.Title, contentW)
+	if titleBody == "" {
+		titleBody = styleMuted.Render("(untitled)")
+	}
+	b.WriteString("\n" + drawLabeledBox(styleMuted.Render("Title"), titleBody, width) + "\n")
+
+	// ── Description box ──────────────────────────────────────────
+	var descBody string
+	if t.Description == "" {
+		// Acceptance criterion #4: "(no description)" placeholder is
+		// pinned verbatim. Routing the empty string through glamour
+		// would just give us a blank box body.
+		descBody = styleMuted.Render("(no description)")
+	} else {
+		descBody = markdown.Render(t.Description, contentW)
+	}
+	b.WriteString("\n" + drawLabeledBox(styleMuted.Render("Description"), descBody, width) + "\n")
+
+	// ── Per-comment boxes ────────────────────────────────────────
+	// Each comment is its own labeled box; the label is
+	// "<smart-time> <author>" where smart-time drops the date for
+	// today's events and the author wears its agent hue. The "last
+	// 5" cap is preserved so long comment chains stay browsable
+	// from the Tasks panel without burying the rest of the pane.
+	// Empty-body comments are skipped entirely — an empty box would
+	// just be visual noise (autosk_comment rejects empty bodies
+	// upstream so this is defensive).
+	for _, c := range tailComments(comments) {
+		if strings.TrimSpace(c.Text) == "" {
+			continue
+		}
+		body := markdown.Render(c.Text, contentW)
+		if body == "" {
+			continue
+		}
+		label := timeformat.FormatDateTimeSmart(c.CreatedAt) +
+			" " + renderAgentName(c.AuthorName)
+		b.WriteString("\n" + drawLabeledBox(label, body, width) + "\n")
+	}
+
+	// ── Recent signals (N) box ───────────────────────────────────
+	// Show ALL signals rather than the old last-3 cap: the operator
+	// asked for the full kickback history visible at a glance, and
+	// the box renders inside a scrollable pane so a tall list isn't
+	// a usability problem. SignalsForTask returns newest-first.
 	if len(signals) > 0 {
-		n := len(signals)
-		end := n
-		if end > 3 {
-			end = 3
+		lines := make([]string, 0, len(signals))
+		for _, s := range signals {
+			lines = append(lines, fmt.Sprintf("%s %s → %s",
+				timeformat.FormatDateTimeSmart(s.CreatedAt),
+				renderStepName(s.StepName), s.Target))
 		}
-		b.WriteString("\n" + styleMuted.Render(fmt.Sprintf("─ recent signals (%d) ─", n)) + "\n")
-		for _, s := range signals[:end] {
-			fmt.Fprintf(&b, "  %s %s → %s\n",
-				timeformat.FormatDateTimeSmart(s.CreatedAt), s.StepName, s.Target)
+		label := styleMuted.Render(fmt.Sprintf("Recent signals (%d)", len(signals)))
+		b.WriteString("\n" + drawLabeledBox(label, strings.Join(lines, "\n"), width) + "\n")
+	}
+
+	return b.String()
+}
+
+// tailComments returns the trailing slice of comments to render —
+// the design pins this at the last 5, so long chains stay browsable
+// from the Tasks panel without taking over the pane.
+func tailComments(cs []datasource.Comment) []datasource.Comment {
+	const cap = 5
+	if len(cs) <= cap {
+		return cs
+	}
+	return cs[len(cs)-cap:]
+}
+
+// drawLabeledBox renders body inside a rounded box of the given
+// outer width with label embedded in the top border:
+//
+//	╭─ Label ───────────────╮
+//	│ body line 1           │
+//	│ body line 2           │
+//	╰───────────────────────╯
+//
+// width is the total OUTER width in cells (frame included). The
+// frame (corners + sides + dashes) wears styleMuted so it reads as
+// chrome, not content. label is passed already styled — callers
+// hand in either a plain string (label width measured via
+// lipgloss.Width) or a pre-styled value (e.g. an agent name in its
+// entity hue for a comment header). body may carry ANSI escapes
+// and newlines; each visible line is padded to the inner content
+// width with plain spaces so the right border lines up regardless
+// of SGR noise.
+//
+// width<6 collapses the call to a frame-less body — the layout's
+// first-frame race (innerWidth==0) is already handled by
+// renderTaskDetail one level up, but this defends against an
+// impossibly narrow pane mid-resize.
+func drawLabeledBox(label, body string, width int) string {
+	if width < 6 {
+		return body
+	}
+	inner := width - 2    // cells between │ and │
+	contentW := inner - 2 // 1-cell padding on each side
+	labelW := lipgloss.Width(label)
+
+	var top string
+	if labelW == 0 {
+		top = styleMuted.Render("╭" + strings.Repeat("─", inner) + "╮")
+	} else {
+		// Layout: ╭─ <label> <N dashes> ╮ →
+		// 1 + 1 + 1 + labelW + 1 + N + 1 = width → N = width-labelW-5.
+		dashes := width - labelW - 5
+		if dashes < 1 {
+			dashes = 1
+		}
+		top = styleMuted.Render("╭─ ") + label + styleMuted.Render(" "+strings.Repeat("─", dashes)+"╮")
+	}
+	bottom := styleMuted.Render("╰" + strings.Repeat("─", inner) + "╯")
+
+	// Render each body line padded to contentW visible cells. Lines
+	// wider than contentW are emitted unpadded; the markdown / wrap
+	// helpers feeding us are already sized to contentW, so overflow
+	// only happens when an unwrappable token (long URL, code-fence
+	// content) exceeds the budget. Better to let the terminal wrap
+	// than to truncate authored content silently.
+	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	rendered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		w := lipgloss.Width(line)
+		pad := contentW - w
+		if pad < 0 {
+			pad = 0
+		}
+		rendered = append(rendered, styleMuted.Render("│ ")+line+strings.Repeat(" ", pad)+styleMuted.Render(" │"))
+	}
+	return top + "\n" + strings.Join(rendered, "\n") + "\n" + bottom
+}
+
+// wrapPlain word-wraps plain (ANSI-free) text s to at most width
+// runes per line. Breaks on whitespace; words longer than width are
+// hard-broken at the width boundary so the box never grows wider
+// than its budget. Used by the Title box where the input is
+// operator-authored plain text and markdown.Render would be
+// overkill.
+func wrapPlain(s string, width int) string {
+	if width < 1 {
+		return s
+	}
+	if utf8.RuneCountInString(s) <= width {
+		return s
+	}
+	var out []string
+	var line []rune
+	flush := func() {
+		if len(line) > 0 {
+			out = append(out, string(line))
+			line = line[:0]
 		}
 	}
-	return b.String()
+	for _, word := range strings.Fields(s) {
+		rs := []rune(word)
+		wLen := len(rs)
+		if wLen > width {
+			flush()
+			for len(rs) > width {
+				out = append(out, string(rs[:width]))
+				rs = rs[width:]
+			}
+			line = append(line, rs...)
+			continue
+		}
+		switch {
+		case len(line) == 0:
+			line = append(line, rs...)
+		case len(line)+1+wLen <= width:
+			line = append(line, ' ')
+			line = append(line, rs...)
+		default:
+			flush()
+			line = append(line, rs...)
+		}
+	}
+	flush()
+	return strings.Join(out, "\n")
 }
 
 func renderJobDetail(j datasource.Job) string {

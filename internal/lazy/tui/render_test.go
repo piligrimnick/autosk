@@ -6,10 +6,18 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"autosk/internal/lazy/ansiutil"
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/store"
+	"autosk/internal/timeformat"
 )
+
+// lipglossWidth is the on-screen cell width of s (ANSI-aware).
+// Tiny alias around lipgloss.Width so the box-dimensions test reads
+// the way the prose narrative talks about "visible width".
+func lipglossWidth(s string) int { return lipgloss.Width(s) }
 
 // stripANSI is defined in refresh_test.go (a thin alias over
 // ansiutil.Strip) and shared across render-pane tests so substring
@@ -183,11 +191,16 @@ func TestRenderTaskDetail_CommentsMultiline(t *testing.T) {
 	}
 }
 
-// TestRenderTaskDetail_EmptyCommentSkipped pins REMARK 3 from the
-// as-a261 review: a comment with an empty body must not emit a
-// wasted blank indented line under its header. autosk_comment
-// rejects empty bodies upstream so this is purely defensive, but
-// the rendering still has to behave sanely.
+// TestRenderTaskDetail_EmptyCommentSkipped pins the new
+// box-rendering contract for empty comments: a comment with an
+// empty body must NOT produce a box at all (header included).
+// The previous design (REMARK 3 from the as-a261 review) emitted
+// a header line and skipped the body, leaving a wasted indented
+// line behind; with each comment now wrapped in its own labeled
+// box, the right thing to do is drop the entry entirely — a
+// labeled box with no content conveys less than no entry at all.
+// autosk_comment rejects empty bodies upstream so this is
+// defensive, but rendering still has to behave sanely.
 func TestRenderTaskDetail_EmptyCommentSkipped(t *testing.T) {
 	comments := []datasource.Comment{
 		{ID: 1, AuthorName: "alice", Text: "first body", CreatedAt: fixedTime},
@@ -200,35 +213,17 @@ func TestRenderTaskDetail_EmptyCommentSkipped(t *testing.T) {
 	out := renderTaskDetail(task, comments, nil, 80)
 	visible := ansiutil.Strip(out)
 
-	// All three headers are present; only the bob entry has no body.
-	for _, name := range []string{"alice", "bob", "carol"} {
+	// alice and carol have non-empty bodies — their author header
+	// shows up on the box's top border.
+	for _, name := range []string{"alice", "carol"} {
 		if !strings.Contains(visible, name) {
-			t.Errorf("author %q header missing: %q", name, out)
+			t.Errorf("author %q header missing from rendered output: %q", name, out)
 		}
 	}
-
-	// Locate bob's header line and assert that the next non-empty
-	// line is carol's header — not a blank indented line from the
-	// empty body. Scanning by line keeps the assertion robust to
-	// future whitespace tweaks elsewhere in the pane.
-	lines := strings.Split(visible, "\n")
-	var bobIdx, carolIdx int = -1, -1
-	for i, ln := range lines {
-		if bobIdx < 0 && strings.Contains(ln, "bob") {
-			bobIdx = i
-		}
-		if carolIdx < 0 && strings.Contains(ln, "carol") {
-			carolIdx = i
-		}
-	}
-	if bobIdx < 0 || carolIdx < 0 {
-		t.Fatalf("bob/carol headers not located: %q", visible)
-	}
-	// Header lines for bob and carol should be adjacent: nothing
-	// from bob's (empty) body should sit between them.
-	if carolIdx-bobIdx != 1 {
-		t.Errorf("expected bob header immediately followed by carol header (delta=1); got delta=%d:\n%s",
-			carolIdx-bobIdx, visible)
+	// bob's empty-body comment must be skipped entirely — no
+	// labeled box with just a header and no content.
+	if strings.Contains(visible, "bob") {
+		t.Errorf("empty-body comment author %q leaked into rendered output: %q", "bob", out)
 	}
 }
 
@@ -317,5 +312,237 @@ func TestRenderTaskDetail_ZeroWidth(t *testing.T) {
 	}
 	if !strings.Contains(visible, "body") {
 		t.Errorf("body text missing at width=0: %q", out)
+	}
+}
+
+// TestRenderTaskDetail_HeaderRow pins the first-row contract from
+// the as-a261 spec: P{prio} id status wf:step agent, no "task"
+// label and no per-token labels ("wf=", "step=", "agent=").
+// Priority is muted-gray so the row reads the same way the Tasks
+// panel does.
+func TestRenderTaskDetail_HeaderRow(t *testing.T) {
+	task := datasource.Task{
+		ID: "as-a261", Title: "—", Status: store.StatusHuman, Priority: 2,
+		CreatedAt:    fixedTime,
+		WorkflowName: "feature-dev-generic",
+		StepName:     "validator",
+		AgentName:    "@autogent/generic",
+	}
+	out := renderTaskDetail(task, nil, nil, 80)
+	visible := ansiutil.Strip(out)
+	firstLine := strings.SplitN(visible, "\n", 2)[0]
+	want := "P2 as-a261 human feature-dev-generic:validator @autogent/generic"
+	if firstLine != want {
+		t.Errorf("first row mismatch:\n got: %q\nwant: %q", firstLine, want)
+	}
+	if strings.Contains(firstLine, "task ") {
+		t.Errorf("unexpected \"task\" label literal on first row: %q", firstLine)
+	}
+	if strings.Contains(firstLine, "wf=") || strings.Contains(firstLine, "agent=") {
+		t.Errorf("unexpected key=value tokens on first row: %q", firstLine)
+	}
+}
+
+// TestRenderTaskDetail_BlockedRow pins the conditional "blocked by"
+// row: it shows up only when the task is actually blocked and we
+// have ids; the word "blocked" wears the err (red) hue.
+func TestRenderTaskDetail_BlockedRow(t *testing.T) {
+	task := datasource.Task{
+		ID: "as-a261", Status: store.StatusWork, Priority: 1,
+		CreatedAt: fixedTime,
+		Blocked:   true,
+		BlockedBy: []string{"as-0011", "as-0022"},
+	}
+	out := renderTaskDetail(task, nil, nil, 80)
+	visible := ansiutil.Strip(out)
+	if !strings.Contains(visible, "blocked by: as-0011, as-0022") {
+		t.Errorf("missing blocked-by row with both ids: %q", visible)
+	}
+	// The word "blocked" must be styled in styleErr (red). We look for
+	// the styled prefix the renderer emits — styleErr.Render("blocked")
+	// wraps the word in an SGR escape ending with the visible token.
+	if !strings.Contains(out, styleErr.Render("blocked")) {
+		t.Errorf("\"blocked\" label not painted with styleErr (red): %q", out)
+	}
+
+	// And the row must NOT appear when Blocked=false, even if
+	// BlockedBy still carries closed-blocker ids from a stale snapshot.
+	task.Blocked = false
+	out = renderTaskDetail(task, nil, nil, 80)
+	visible = ansiutil.Strip(out)
+	if strings.Contains(visible, "blocked by:") {
+		t.Errorf("blocked-by row leaked when Blocked=false: %q", visible)
+	}
+}
+
+// TestRenderTaskDetail_StatsRow pins the created+comments row: time
+// without date for today (FormatDateTimeSmart contract), full
+// datetime otherwise, and comma-separated formatting.
+func TestRenderTaskDetail_StatsRow(t *testing.T) {
+	// Reference "now" matching the test's CreatedAt local date so
+	// FormatDateTimeSmart drops the date — we exercise the today
+	// branch by passing a fixed CreatedAt and letting time.Now() act
+	// as the smart-format reference. To keep the assertion stable
+	// across CI clocks we use the formatted time string and check the
+	// row contains it (instead of pinning a literal HH:MM:SS).
+	task := datasource.Task{
+		ID: "as-a261", Status: store.StatusNew,
+		CreatedAt:    time.Now().Add(-30 * time.Minute),
+		CommentCount: 12,
+	}
+	out := renderTaskDetail(task, nil, nil, 80)
+	visible := ansiutil.Strip(out)
+	wantStamp := timeformat.FormatDateTimeSmart(task.CreatedAt)
+	wantRow := "created: " + wantStamp + ", comments: 12"
+	if !strings.Contains(visible, wantRow) {
+		t.Errorf("stats row missing or mis-formatted; want substring %q in %q", wantRow, visible)
+	}
+	// Today branch: the rendered stamp has no date dashes.
+	if strings.Contains(wantStamp, "-") {
+		t.Fatalf("test fixture broken: smart stamp for now-30m should be time-only, got %q", wantStamp)
+	}
+}
+
+// TestRenderTaskDetail_TitleBox pins the Title box contract: the
+// task title sits inside a rounded box labelled "Title".
+func TestRenderTaskDetail_TitleBox(t *testing.T) {
+	task := datasource.Task{
+		ID: "as-box", Status: store.StatusNew, CreatedAt: fixedTime,
+		Title: "feat: markdown rendering of tasks description",
+	}
+	out := renderTaskDetail(task, nil, nil, 80)
+	visible := ansiutil.Strip(out)
+	if !strings.Contains(visible, "╭─ Title ") {
+		t.Errorf("missing Title box top border: %q", visible)
+	}
+	if !strings.Contains(visible, task.Title) {
+		t.Errorf("task title body missing from Title box: %q", visible)
+	}
+	if !strings.Contains(visible, "╰─") {
+		t.Errorf("missing rounded-bottom-left corner anywhere in output: %q", visible)
+	}
+}
+
+// TestRenderTaskDetail_DescriptionBox pins the Description box: the
+// rendered markdown sits inside a box labelled "Description".
+func TestRenderTaskDetail_DescriptionBox(t *testing.T) {
+	task := datasource.Task{
+		ID: "as-box", Status: store.StatusNew, CreatedAt: fixedTime,
+		Description: "# Heading\n\nbody paragraph.\n",
+	}
+	out := renderTaskDetail(task, nil, nil, 80)
+	visible := ansiutil.Strip(out)
+	if !strings.Contains(visible, "╭─ Description ") {
+		t.Errorf("missing Description box top border: %q", visible)
+	}
+	if !strings.Contains(visible, "Heading") {
+		t.Errorf("description heading missing from box: %q", visible)
+	}
+}
+
+// TestRenderTaskDetail_SignalsBoxAll pins the new contract that the
+// Recent signals box now shows ALL signals, not just the last 3.
+// Box label includes the count.
+func TestRenderTaskDetail_SignalsBoxAll(t *testing.T) {
+	task := datasource.Task{
+		ID: "as-sig", Status: store.StatusWork, CreatedAt: fixedTime,
+	}
+	signals := []datasource.Signal{
+		{StepName: "step-a", Target: "step-b", CreatedAt: fixedTime},
+		{StepName: "step-b", Target: "step-c", CreatedAt: fixedTime},
+		{StepName: "step-c", Target: "step-d", CreatedAt: fixedTime},
+		{StepName: "step-d", Target: "step-e", CreatedAt: fixedTime},
+		{StepName: "step-e", Target: "step-f", CreatedAt: fixedTime},
+		{StepName: "step-f", Target: "done", CreatedAt: fixedTime},
+	}
+	out := renderTaskDetail(task, nil, signals, 80)
+	visible := ansiutil.Strip(out)
+	if !strings.Contains(visible, "╭─ Recent signals (6) ") {
+		t.Errorf("missing \"Recent signals (6)\" box header: %q", visible)
+	}
+	// Every signal row must render — no last-3 truncation.
+	for _, want := range []string{"step-a", "step-b", "step-c", "step-d", "step-e", "step-f"} {
+		if !strings.Contains(visible, want) {
+			t.Errorf("signal step %q missing from box; the box must show ALL signals, not just the last 3: %q", want, visible)
+		}
+	}
+}
+
+// TestRenderTaskDetail_CommentBoxLabel pins the per-comment box
+// label contract: "<smart-time> <author>" on the top border, body
+// inside the frame, no leftover "─ comments (N) ─" section header.
+func TestRenderTaskDetail_CommentBoxLabel(t *testing.T) {
+	task := datasource.Task{
+		ID: "as-c", Status: store.StatusNew, CreatedAt: fixedTime,
+	}
+	comments := []datasource.Comment{
+		{ID: 1, AuthorName: "alice", Text: "hello world", CreatedAt: fixedTime},
+	}
+	out := renderTaskDetail(task, comments, nil, 80)
+	visible := ansiutil.Strip(out)
+	wantStamp := timeformat.FormatDateTimeSmart(fixedTime)
+	wantHeader := "╭─ " + wantStamp + " alice "
+	if !strings.Contains(visible, wantHeader) {
+		t.Errorf("missing comment-box header %q in: %q", wantHeader, visible)
+	}
+	if !strings.Contains(visible, "hello world") {
+		t.Errorf("comment body missing inside box: %q", visible)
+	}
+	// The old "─ comments (N) ─" section header must NOT survive —
+	// each comment now wears its own box label.
+	if strings.Contains(visible, "─ comments (") {
+		t.Errorf("legacy \"─ comments (N) ─\" section header leaked: %q", visible)
+	}
+}
+
+// TestWrapPlain spot-checks the plain-text word wrap helper used by
+// the Title box.
+func TestWrapPlain(t *testing.T) {
+	cases := []struct {
+		name  string
+		in    string
+		width int
+		want  string
+	}{
+		{"empty", "", 10, ""},
+		{"short", "abc def", 10, "abc def"},
+		{"wraps_at_word", "alpha beta gamma", 10, "alpha beta\ngamma"},
+		{"hard_break_long_word", "abcdefghijklmnop", 5, "abcde\nfghij\nklmno\np"},
+		// width=6 fits one 4-rune word per line but not "два три"
+		// together (3+1+3=7>6), so the wrap drops to one word per
+		// line for the short middles too.
+		{"cyrillic", "Один два три четыре", 6, "Один\nдва\nтри\nчетыре"},
+		{"cyrillic_wider", "Один два три четыре", 8, "Один два\nтри\nчетыре"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := wrapPlain(tc.in, tc.width)
+			if got != tc.want {
+				t.Errorf("wrapPlain(%q, %d):\n got:  %q\n want: %q", tc.in, tc.width, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDrawLabeledBox_Dimensions pins the box's width invariant: top
+// and bottom borders are exactly `width` cells wide regardless of
+// label length, and each body line is padded to the same visible
+// width as the borders.
+func TestDrawLabeledBox_Dimensions(t *testing.T) {
+	const width = 30
+	out := drawLabeledBox("Lbl", "hello\nworld", width)
+	lines := strings.Split(out, "\n")
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 lines (top + 2 body + bottom); got %d: %q", len(lines), out)
+	}
+	for i, ln := range lines {
+		w := lipglossWidth(ln)
+		if w != width {
+			t.Errorf("line %d width %d, want %d: %q", i, w, width, ln)
+		}
+	}
+	// Frame-less fallback at impossibly narrow widths.
+	if got := drawLabeledBox("x", "hi", 3); got != "hi" {
+		t.Errorf("narrow box should fall back to body; got %q", got)
 	}
 }
