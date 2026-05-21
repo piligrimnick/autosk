@@ -918,6 +918,155 @@ func TestRun_AdvanceCapFires_OperatorRaceNoClobber(t *testing.T) {
 	}
 }
 
+// TestRun_WaitErrorAfterSignal_HonoursSignal is the regression guard
+// for the runner-side bufio.ErrTooLong crash: even when
+// WaitForAgentEnd returns a non-cancel error, if the agent already
+// recorded a valid step_signal we honor it and advance the task
+// instead of marking the run failed and parking the task in
+// human_feedback. The original symptom (job-26b4f2 / job-46ccb4 /
+// job-90f413) is now defensively guarded inside the executor too,
+// independently of the reader fix in internal/daemon/pi/runner.go.
+func TestRun_WaitErrorAfterSignal_HonoursSignal(t *testing.T) {
+	fx := newExecFixture(t)
+	defer fx.close()
+	ctx := context.Background()
+	taskID, jobID := fx.makeRun(t, "survive read-loop crash", "dev")
+
+	waitFailStub := &waitErrAfterSignalStub{
+		stubRunner: newStub(),
+		waitErr:    errors.New("bufio.Scanner: token too long"),
+		signals:    fx.deps.Signals,
+		taskID:     taskID,
+		target:     "review",
+	}
+	exec := executor.New(fx.deps, waitErrAfterSignalFactory(waitFailStub), fx.cfg)
+	if err := exec.Run(ctx, jobID); err != nil {
+		t.Fatalf("Run should treat the signal as a successful turn: %v", err)
+	}
+	run, _ := fx.deps.Runs.GetRun(ctx, jobID)
+	if run.Status != runstore.StatusDone {
+		t.Fatalf("run.Status: %s (want done despite WaitForAgentEnd error)", run.Status)
+	}
+	if run.TransitionID == nil || *run.TransitionID == 0 {
+		t.Errorf("transition_id should be recorded: %v", run.TransitionID)
+	}
+	tk, _ := fx.ts.GetTask(ctx, taskID)
+	if tk.Status != store.StatusInWorkflow {
+		t.Fatalf("task should have advanced (in_workflow), got %s", tk.Status)
+	}
+	rev, err := fx.deps.Workflows.FindStepByName(ctx, fx.wf.ID, "review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.CurrentStepID != rev.ID {
+		t.Fatalf("current_step_id: %s, want review %s", tk.CurrentStepID, rev.ID)
+	}
+}
+
+// waitErrAfterSignalStub records a step_signal in the same Emit-time
+// window as a real agent would, but returns an error from
+// WaitForAgentEnd to simulate the read-loop dying after the agent
+// emitted its transition.
+type waitErrAfterSignalStub struct {
+	*stubRunner
+	waitErr error
+	signals *step.Store
+	taskID  string
+	target  string
+}
+
+func (s *waitErrAfterSignalStub) WaitForAgentEnd(ctx context.Context) error {
+	// Emit the signal first so the executor's defensive lookup finds
+	// it after our error surfaces.
+	if _, err := s.signals.Emit(ctx, s.taskID, s.target); err != nil {
+		return err
+	}
+	return s.waitErr
+}
+
+func waitErrAfterSignalFactory(stub *waitErrAfterSignalStub) executor.Factory {
+	return func(ctx context.Context, opts pi.Opts) (executor.PiRunner, error) {
+		return stub, nil
+	}
+}
+
+// TestRun_IdleTimeoutWithSignal_HonoursSignal pins the second branch of
+// the executor's defensive lookup (executor.go, the `werr != nil` arm of
+// the turn loop): when WaitForAgentEnd surfaces context.DeadlineExceeded
+// from the unattached turnCtx idle timer AND a valid step_signal is
+// already recorded for the run, the executor honours the signal and
+// advances the task instead of MarkFailed + parkTaskOnFailure.
+//
+// This case is deliberately covered by the same code path as the
+// read-loop-crash case in TestRun_WaitErrorAfterSignal_HonoursSignal,
+// but the trigger is different (deadline rather than a raw error
+// returned synchronously). Keeping both tests means a future refactor
+// of the turn-loop guard can't silently re-regress the idle-timeout
+// side without tripping at least one of them.
+func TestRun_IdleTimeoutWithSignal_HonoursSignal(t *testing.T) {
+	fx := newExecFixture(t)
+	defer fx.close()
+	// Force the unattached idle timer to fire promptly. The stub below
+	// emits the signal then parks on turnCtx.Done() so the executor
+	// sees turnCtx.DeadlineExceeded once the timer expires.
+	fx.cfg.IdleTimeout = 20 * time.Millisecond
+	ctx := context.Background()
+	taskID, jobID := fx.makeRun(t, "survive idle-timeout-with-signal", "dev")
+
+	stub := &idleTimeoutAfterSignalStub{
+		stubRunner: newStub(),
+		signals:    fx.deps.Signals,
+		taskID:     taskID,
+		target:     "review",
+	}
+	exec := executor.New(fx.deps, idleTimeoutAfterSignalFactory(stub), fx.cfg)
+	if err := exec.Run(ctx, jobID); err != nil {
+		t.Fatalf("Run should honour the signal despite idle-timeout: %v", err)
+	}
+	run, _ := fx.deps.Runs.GetRun(ctx, jobID)
+	if run.Status != runstore.StatusDone {
+		t.Fatalf("run.Status: %s (want done despite turnCtx deadline)", run.Status)
+	}
+	if run.TransitionID == nil || *run.TransitionID == 0 {
+		t.Errorf("transition_id should be recorded: %v", run.TransitionID)
+	}
+	tk, _ := fx.ts.GetTask(ctx, taskID)
+	if tk.Status != store.StatusInWorkflow {
+		t.Fatalf("task should have advanced (in_workflow), got %s", tk.Status)
+	}
+	rev, err := fx.deps.Workflows.FindStepByName(ctx, fx.wf.ID, "review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.CurrentStepID != rev.ID {
+		t.Fatalf("current_step_id: %s, want review %s", tk.CurrentStepID, rev.ID)
+	}
+}
+
+// idleTimeoutAfterSignalStub emits a step_signal then blocks on
+// turnCtx.Done(), returning whatever error the context surfaces
+// (context.DeadlineExceeded under the unattached IdleTimeout path).
+type idleTimeoutAfterSignalStub struct {
+	*stubRunner
+	signals *step.Store
+	taskID  string
+	target  string
+}
+
+func (s *idleTimeoutAfterSignalStub) WaitForAgentEnd(ctx context.Context) error {
+	if _, err := s.signals.Emit(ctx, s.taskID, s.target); err != nil {
+		return err
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func idleTimeoutAfterSignalFactory(stub *idleTimeoutAfterSignalStub) executor.Factory {
+	return func(ctx context.Context, opts pi.Opts) (executor.PiRunner, error) {
+		return stub, nil
+	}
+}
+
 func contains(haystack, needle string) bool {
 	return len(haystack) >= len(needle) && haystack != "" && needle != "" && (haystack == needle || indexOf(haystack, needle) >= 0)
 }

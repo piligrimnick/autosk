@@ -235,6 +235,19 @@ outcome via `step_signals`:
 The daemon **never** calls `autosk done`/`cancel` directly — that is
 owned by the runner via `step next`.
 
+The recorded `step_signal` is treated as the source of truth for the
+turn outcome. If the agent wrote a signal but the executor's wait on
+the `agent_end` event then errored — pi pipe died, extension-RPC
+payload broke the reader, the unattached `--idle-timeout` fired before
+`agent_end` landed, etc. — the executor still honours the signal and
+advances the task instead of parking it. The original error is
+preserved in the daemon log as
+`executor: WaitForAgentEnd errored but step_signal already recorded; honoring signal`
+so the misbehaving turn is still investigable. Cancellation
+(`ctx.Err() != nil` or `errors.Is(err, context.Canceled)`) is excluded
+from this recovery path and routes through the normal cancel-aware
+cleanup.
+
 ---
 
 ## Troubleshooting
@@ -244,7 +257,8 @@ owned by the runner via `step next`.
 | `daemon already running at <sock>` | Another `autosk daemon serve` owns the socket. `ps -fU $(whoami) \| grep autosk` to find it. |
 | `400 "X-Autosk-Cwd header required"` | Client did not set the header. CLI subcommands set it automatically from `--cwd` or `os.Getwd()`. |
 | `404 "no .autosk/db found from <cwd>"` | The cwd is outside any autosk project. Run `autosk init` or supply `--cwd` pointing into a real project. |
-| Run sits in `running` forever | The agent never emits `agent_end`. The daemon will fail it after `--idle-timeout`. |
+| Run sits in `running` forever | The agent never emits `agent_end`. The daemon will fail it after `--idle-timeout` — unless the agent already wrote a `step_signal`, in which case the recorded transition is honoured and the task advances (see [Closure verification](#closure-verification)). |
+| Daemon log: `executor: WaitForAgentEnd errored but step_signal already recorded; honoring signal` | The turn finished correctly from the agent's side (the `step_signal` is in the DB) but the reader / idle-timer tripped during shutdown. The run is recorded as `done` and the task advances; the log line is the forensic breadcrumb. Inspect the `err=` field to see whether the reader died, the idle-timer fired, or another failure mode landed. |
 | Run fails with `agent_did_not_emit_transition` | The agent stopped without calling `autosk step next`, `max_corrections` times. Inspect transcript via `autosk daemon messages`. |
 | Run fails with `daemon_restart` | The daemon was restarted while this run was active. This iteration does not re-attach. Re-enroll the task. |
 | Daemon log: `executor: re-allocated missing worktree` | Isolated workflow's per-task worktree directory was gone at run start; the executor re-allocated it on the existing branch (`autosk/<task-id>`) and continued the run. No human action required. The previous behaviour (park → `human_feedback`) only applies to `worktree_stranded` now. |

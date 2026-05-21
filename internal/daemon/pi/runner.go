@@ -2,6 +2,7 @@ package pi
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -350,27 +351,75 @@ func IsWaitTimeout(err error) bool { return errors.Is(err, errWaitTimeout) }
 func (r *Runner) readLoop() {
 	defer close(r.readDone)
 	defer close(r.events)
-	scanner := bufio.NewScanner(r.stdout)
-	// Long lines tolerated: 1 MiB. pi rarely emits anything close to that.
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	// pi speaks JSON Lines. We deliberately do the framing ourselves
+	// (bufio.Reader.ReadBytes('\n') + per-line json.Unmarshal) instead of
+	// using either bufio.Scanner or json.Decoder, for two reasons:
+	//
+	//  1. bufio.Reader.ReadBytes('\n') grows its internal buffer as
+	//     needed and has no per-line size cap. bufio.Scanner has a hard
+	//     cap (MaxScanTokenSize, default 64 KiB; even an explicit 1 MiB
+	//     cap was insufficient on long sessions where pi can legitimately
+	//     emit a single JSON line >>1 MiB: large tool_result payloads,
+	//     extension-RPC blobs, set_editor_text with the entire buffer,
+	//     etc.). Hitting that cap used to crash the reader with
+	//     bufio.ErrTooLong, which then fanned out into MarkFailed +
+	//     parkTaskOnFailure even when the agent had already recorded a
+	//     valid step_signal — see fix: "daemon pi runner падает на
+	//     длинных сессиях с 'bufio.Scanner: token too long'".
+	//
+	//  2. Line-oriented framing preserves robustness against a single
+	//     bad line. A non-JSON byte on one line surfaces as one KindOther
+	//     event and the reader keeps going on subsequent lines.
+	//     json.Decoder, by contrast, wedges its cursor on the first
+	//     non-JSON byte (no skip-to-newline-and-retry primitive) and
+	//     silently drops every subsequent value. pi's stdout is
+	//     contractually JSON-Lines today, but matching the pre-fix
+	//     resync behaviour is cheap and worth keeping. Locked down by
+	//     TestRunner_GarbageLineDoesNotWedgeReader.
+	//
+	// Tradeoff to be aware of: ReadBytes('\n') has no upper bound on a
+	// single line, so a misbehaving writer that pumps bytes onto stdout
+	// without ever emitting '\n' can grow the buffer arbitrarily — we
+	// swapped "crash at 1 MiB" for "unbounded growth if pi forgets a
+	// newline". Acceptable today because pi is contractually JSON-Lines
+	// (every legal frame ends with '\n') and the executor's defensive
+	// lookup in handleRunError recovers a stranded step_signal on the
+	// next run if the daemon ever does OOM on a misbehaving stream.
+	// If the daemon starts ingesting untrusted pi-shaped streams, wrap
+	// r.stdout with an io.LimitedReader (or a custom line-bounded reader)
+	// and treat exceeding the limit as a read error so the same
+	// defensive lookup kicks in.
+	br := bufio.NewReader(r.stdout)
+	var readErr error
+	for {
+		line, err := br.ReadBytes('\n')
+		if len(line) > 0 {
+			// Trim trailing newline / whitespace; skip blank lines.
+			trimmed := bytes.TrimSpace(line)
+			if len(trimmed) > 0 {
+				// Copy out: br owns `line` until the next ReadBytes,
+				// and Event.Raw must outlive that.
+				raw := append([]byte(nil), trimmed...)
+				var msg inboundMessage
+				if uerr := json.Unmarshal(raw, &msg); uerr != nil {
+					// Malformed line, or well-formed JSON we don't
+					// recognise (bare string / number / null) — preserve
+					// the raw bytes and keep reading.
+					r.emit(Event{Kind: KindOther, Raw: raw, ReceivedAt: time.Now().UTC()})
+				} else {
+					r.handle(msg, raw)
+				}
+			}
 		}
-		// Copy so the buffer reuse in Scanner doesn't bite us.
-		raw := append([]byte(nil), line...)
-		var msg inboundMessage
-		if err := json.Unmarshal(raw, &msg); err != nil {
-			// Malformed line — treat as KindOther but log via stderr is too
-			// noisy; preserve the raw bytes in the event payload.
-			r.emit(Event{Kind: KindOther, Raw: raw, ReceivedAt: time.Now().UTC()})
-			continue
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				readErr = err
+			}
+			break
 		}
-		r.handle(msg, raw)
 	}
 	r.mu.Lock()
-	r.readErr = scanner.Err()
+	r.readErr = readErr
 	r.closed = true
 	// Fail any still-pending responses.
 	for id, ch := range r.pending {
