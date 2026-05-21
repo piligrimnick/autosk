@@ -469,7 +469,7 @@ const signalsBaseQuery = `
 //
 // For task-scoped lookups (the dashboard's Tasks-detail widgets) use
 // SignalsForTask instead. The prior implementation overloaded one
-// verb based on a `strings.HasPrefix(id, "ask-")` sniff; that's
+// verb based on a `strings.HasPrefix(id, "as-")` sniff; that's
 // brittle (silently breaks if id prefixes ever change) and dead
 // (the task-scoped branch had no callers). Splitting them gives each
 // call site a statically chosen semantic.

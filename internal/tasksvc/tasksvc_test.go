@@ -162,7 +162,7 @@ func TestDone_NotFound(t *testing.T) {
 	s, closeFn := newFx(t)
 	defer closeFn()
 
-	_, err := tasksvc.Done(ctx, s, "as-doesnotexist", tasksvc.Options{})
+	_, err := tasksvc.Done(ctx, s, "ask-d0e5ff", tasksvc.Options{})
 	if err == nil {
 		t.Fatalf("Done on missing id should fail")
 	}

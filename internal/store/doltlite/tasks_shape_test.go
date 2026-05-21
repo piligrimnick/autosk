@@ -55,19 +55,16 @@ func TestCreateTask_RejectsLegacyIDShape(t *testing.T) {
 func TestCreateTask_RejectsBadCanonicalShape(t *testing.T) {
 	ctx := context.Background()
 	s := freshStore(t)
+	// Empty ID is the auto-mint signal, covered by
+	// TestCreateTask_AutomintIDIsCanonical; deliberately excluded here.
 	for _, bad := range []string{
 		"ask-a1b2",     // 4 hex chars — old width under new prefix
 		"ask-a1b2c3d4", // 8 hex chars — too wide
 		"ask-A1B2C3",   // uppercase
 		"task-a1b2c3",  // wrong prefix
 		"ask-",         // no suffix
-		"",             // genuine-empty handled by the auto-mint path
 		"ask-z1b2c3",   // non-hex character
 	} {
-		if bad == "" {
-			// Empty ID is the auto-mint signal; skip from the reject suite.
-			continue
-		}
 		_, err := s.CreateTask(ctx, store.Task{
 			ID: bad, Title: "t", Status: store.StatusNew, Priority: 2,
 		})

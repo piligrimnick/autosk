@@ -463,11 +463,11 @@ func TestWorktree_CLI_Path_DeterministicNoStat(t *testing.T) {
 
 	// We do NOT need to create the task in the DB: `worktree path` is a
 	// pure helper. Pass any well-formed id.
-	want, err := worktree.PathFor(root, "as-xxxx")
+	want, err := worktree.PathFor(root, "ask-aaaaaa")
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := runRoot(t, root, "worktree", "path", "as-xxxx")
+	out, err := runRoot(t, root, "worktree", "path", "ask-aaaaaa")
 	if err != nil {
 		t.Fatalf("worktree path: %v\n%s", err, out)
 	}
@@ -483,9 +483,9 @@ func TestWorktree_CLI_Path_DeterministicNoStat(t *testing.T) {
 
 func TestWorktree_CLI_PathJSON_Shape(t *testing.T) {
 	root := makeIsolatedProject(t)
-	wantPath, _ := worktree.PathFor(root, "as-jsonpath")
+	wantPath, _ := worktree.PathFor(root, "ask-3a50ed")
 
-	out, err := runRoot(t, root, "worktree", "path", "as-jsonpath", "--json")
+	out, err := runRoot(t, root, "worktree", "path", "ask-3a50ed", "--json")
 	if err != nil {
 		t.Fatalf("worktree path --json: %v", err)
 	}
@@ -493,13 +493,13 @@ func TestWorktree_CLI_PathJSON_Shape(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &got); err != nil {
 		t.Fatalf("unmarshal: %v\n%s", err, out)
 	}
-	if got["task_id"] != "as-jsonpath" {
+	if got["task_id"] != "ask-3a50ed" {
 		t.Errorf("task_id: %v", got["task_id"])
 	}
 	if got["path"] != wantPath {
 		t.Errorf("path: got %v want %s", got["path"], wantPath)
 	}
-	if got["branch"] != "autosk/as-jsonpath" {
+	if got["branch"] != "autosk/ask-3a50ed" {
 		t.Errorf("branch: %v", got["branch"])
 	}
 }

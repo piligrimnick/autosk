@@ -53,7 +53,7 @@ func TestLazy_DaemonUp_RendersStreamingGlyph(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(api.ListResponse{
 			Jobs: []api.JobResponse{
 				{
-					JobID: "job-live-1", TaskID: "as-task1", Status: "running",
+					JobID: "job-live-1", TaskID: "ask-7a5601", Status: "running",
 					Streaming: true, AttachCount: 3,
 				},
 			},
@@ -62,7 +62,7 @@ func TestLazy_DaemonUp_RendersStreamingGlyph(t *testing.T) {
 	mux.HandleFunc("GET /v1/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		_ = json.NewEncoder(w).Encode(api.JobResponse{
-			JobID: id, TaskID: "as-task1", Status: "running",
+			JobID: id, TaskID: "ask-7a5601", Status: "running",
 			Streaming: true, AttachCount: 3,
 		})
 	})

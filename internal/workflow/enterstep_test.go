@@ -266,17 +266,17 @@ func TestEnterStep_StampsWorkflowID(t *testing.T) {
 // nil-in/nil-out and non-cap pass-through are tested too — those are
 // the only other branches.
 func TestMapEnterStepError(t *testing.T) {
-	if got := workflow.MapEnterStepError("as-1234", nil); got != nil {
+	if got := workflow.MapEnterStepError("ask-001234", nil); got != nil {
 		t.Fatalf("nil-in must be nil-out, got %v", got)
 	}
 	plain := errors.New("boom")
-	if got := workflow.MapEnterStepError("as-1234", plain); got != plain {
+	if got := workflow.MapEnterStepError("ask-001234", plain); got != plain {
 		t.Fatalf("non-cap error must pass through verbatim, got %v", got)
 	}
 	mve := workflow.MaxVisitsExceededError{
 		StepID: "st-abcd", StepName: "review", Visits: 2, Max: 2,
 	}
-	out := workflow.MapEnterStepError("as-1234", mve)
+	out := workflow.MapEnterStepError("ask-001234", mve)
 	if out == nil {
 		t.Fatal("cap error must produce a hint")
 	}
@@ -294,7 +294,7 @@ func TestMapEnterStepError(t *testing.T) {
 	if !strings.Contains(out.Error(), "max_visits=2") {
 		t.Fatalf("hint must mention the cap, got %q", out.Error())
 	}
-	if !strings.Contains(out.Error(), "autosk metadata reset-visits as-1234 --step review") {
+	if !strings.Contains(out.Error(), "autosk metadata reset-visits ask-001234 --step review") {
 		t.Fatalf("hint must include the copy-pasteable reset command, got %q", out.Error())
 	}
 	if !strings.Contains(out.Error(), "resume to a different step") {

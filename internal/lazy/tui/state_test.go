@@ -31,7 +31,7 @@ func TestScopeIsEmpty(t *testing.T) {
 	if !(scope{}).IsEmpty() {
 		t.Fatal("zero scope must be empty")
 	}
-	if (scope{TaskID: "as-1"}).IsEmpty() {
+	if (scope{TaskID: "ask-000001"}).IsEmpty() {
 		t.Fatal("scope with TaskID is not empty")
 	}
 	if (scope{WorkflowID: "wf-1"}).IsEmpty() {

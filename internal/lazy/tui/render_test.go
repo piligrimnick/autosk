@@ -109,7 +109,7 @@ var fixedTime = time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
 // styled, hash stripped) and the body picks up ANSI escapes.
 func TestRenderTaskDetail_Markdown(t *testing.T) {
 	task := datasource.Task{
-		ID:          "as-0001",
+		ID:          "ask-000001",
 		Title:       "fixture",
 		Status:      store.StatusNew,
 		Priority:    2,
@@ -145,7 +145,7 @@ func TestRenderTaskDetail_Markdown(t *testing.T) {
 // NOT be routed through glamour — the placeholder is the contract.
 func TestRenderTaskDetail_EmptyDescription(t *testing.T) {
 	task := datasource.Task{
-		ID:          "as-0002",
+		ID:          "ask-000002",
 		Title:       "fixture",
 		Status:      store.StatusNew,
 		CreatedAt:   fixedTime,
@@ -174,7 +174,7 @@ func TestRenderTaskDetail_CommentsMultiline(t *testing.T) {
 		{ID: 6, AuthorName: "frank", Text: "c6", CreatedAt: fixedTime},
 	}
 	task := datasource.Task{
-		ID: "as-0003", Title: "f", Status: store.StatusNew, CreatedAt: fixedTime,
+		ID: "ask-000003", Title: "f", Status: store.StatusNew, CreatedAt: fixedTime,
 	}
 	out := renderTaskDetail(task, comments, nil, 80)
 	visible := stripANSI(out)
@@ -230,7 +230,7 @@ func TestRenderTaskDetail_EmptyCommentSkipped(t *testing.T) {
 		{ID: 3, AuthorName: "carol", Text: "third body", CreatedAt: fixedTime},
 	}
 	task := datasource.Task{
-		ID: "as-empty", Title: "f", Status: store.StatusNew, CreatedAt: fixedTime,
+		ID: "ask-e22907", Title: "f", Status: store.StatusNew, CreatedAt: fixedTime,
 	}
 	out := renderTaskDetail(task, comments, nil, 80)
 	visible := ansiutil.Strip(out)
@@ -297,7 +297,7 @@ func TestRenderTaskDetail_LongDescription_Scrollable(t *testing.T) {
 		sb.WriteString("- bullet line that is long enough to take a row in the pane\n")
 	}
 	task := datasource.Task{
-		ID: "as-long", Title: "f", Status: store.StatusNew, CreatedAt: fixedTime,
+		ID: "ask-100043", Title: "f", Status: store.StatusNew, CreatedAt: fixedTime,
 		Description: sb.String(),
 	}
 	out := renderTaskDetail(task, nil, nil, 80)
@@ -323,7 +323,7 @@ func TestRenderTaskDetail_LongDescription_Scrollable(t *testing.T) {
 // renderTaskDetail still produces a usable pane.
 func TestRenderTaskDetail_ZeroWidth(t *testing.T) {
 	task := datasource.Task{
-		ID: "as-0004", Title: "f", Status: store.StatusNew,
+		ID: "ask-000004", Title: "f", Status: store.StatusNew,
 		CreatedAt:   fixedTime,
 		Description: "# Title\n\nbody",
 	}
@@ -344,7 +344,7 @@ func TestRenderTaskDetail_ZeroWidth(t *testing.T) {
 // panel does.
 func TestRenderTaskDetail_HeaderRow(t *testing.T) {
 	task := datasource.Task{
-		ID: "as-a261", Title: "—", Status: store.StatusHuman, Priority: 2,
+		ID: "ask-00a261", Title: "—", Status: store.StatusHuman, Priority: 2,
 		CreatedAt:    fixedTime,
 		WorkflowName: "feature-dev-generic",
 		StepName:     "validator",
@@ -353,7 +353,7 @@ func TestRenderTaskDetail_HeaderRow(t *testing.T) {
 	out := renderTaskDetail(task, nil, nil, 80)
 	visible := ansiutil.Strip(out)
 	firstLine := strings.SplitN(visible, "\n", 2)[0]
-	want := "P2 as-a261 human feature-dev-generic:validator @autogent/generic"
+	want := "P2 ask-00a261 human feature-dev-generic:validator @autogent/generic"
 	if firstLine != want {
 		t.Errorf("first row mismatch:\n got: %q\nwant: %q", firstLine, want)
 	}
@@ -370,17 +370,17 @@ func TestRenderTaskDetail_HeaderRow(t *testing.T) {
 // have ids; the word "blocked" wears the err (red) hue.
 func TestRenderTaskDetail_BlockedRow(t *testing.T) {
 	task := datasource.Task{
-		ID: "as-a261", Status: store.StatusWork, Priority: 1,
+		ID: "ask-00a261", Status: store.StatusWork, Priority: 1,
 		CreatedAt: fixedTime,
 		Blocked:   true,
 		BlockedBy: []datasource.TaskRef{
-			{ID: "as-0011", Status: store.StatusWork},
-			{ID: "as-0022", Status: store.StatusNew},
+			{ID: "ask-000011", Status: store.StatusWork},
+			{ID: "ask-000022", Status: store.StatusNew},
 		},
 	}
 	out := renderTaskDetail(task, nil, nil, 80)
 	visible := ansiutil.Strip(out)
-	if !strings.Contains(visible, "blocked by: as-0011, as-0022") {
+	if !strings.Contains(visible, "blocked by: ask-000011, ask-000022") {
 		t.Errorf("missing blocked-by row with both ids: %q", visible)
 	}
 	// The word "blocked" must be styled in styleErr (red). We look for
@@ -409,33 +409,33 @@ func TestRenderTaskDetail_BlockedRow(t *testing.T) {
 func TestRenderTaskDetail_BlockedRow_Partitioned(t *testing.T) {
 	forceTrueColor(t)
 	task := datasource.Task{
-		ID: "as-mix", Status: store.StatusWork, CreatedAt: fixedTime,
+		ID: "ask-30a1c5", Status: store.StatusWork, CreatedAt: fixedTime,
 		Blocked: true,
 		BlockedBy: []datasource.TaskRef{
-			{ID: "as-done1", Status: store.StatusDone},
-			{ID: "as-actv1", Status: store.StatusWork},
-			{ID: "as-canc1", Status: store.StatusCancel},
-			{ID: "as-actv2", Status: store.StatusNew},
-			{ID: "as-actv3", Status: store.StatusHuman},
+			{ID: "ask-d0ne01", Status: store.StatusDone},
+			{ID: "ask-ac7501", Status: store.StatusWork},
+			{ID: "ask-ca0c01", Status: store.StatusCancel},
+			{ID: "ask-ac7502", Status: store.StatusNew},
+			{ID: "ask-ac7503", Status: store.StatusHuman},
 		},
 	}
 	out := renderTaskDetail(task, nil, nil, 80)
 	visible := ansiutil.Strip(out)
 
 	// Active first (input order), then closed (input order).
-	wantOrder := "blocked by: as-actv1, as-actv2, as-actv3, as-done1, as-canc1"
+	wantOrder := "blocked by: ask-ac7501, ask-ac7502, ask-ac7503, ask-d0ne01, ask-ca0c01"
 	if !strings.Contains(visible, wantOrder) {
 		t.Errorf("blocker order wrong; want substring %q in %q", wantOrder, visible)
 	}
 
 	// Active rows wear the task-id hue (blue).
-	for _, id := range []string{"as-actv1", "as-actv2", "as-actv3"} {
+	for _, id := range []string{"ask-ac7501", "ask-ac7502", "ask-ac7503"} {
 		if !strings.Contains(out, renderTaskID(id)) {
 			t.Errorf("active blocker %q not styled with task-id hue: %q", id, out)
 		}
 	}
 	// Closed rows drop to muted gray.
-	for _, id := range []string{"as-done1", "as-canc1"} {
+	for _, id := range []string{"ask-d0ne01", "ask-ca0c01"} {
 		if !strings.Contains(out, styleMuted.Render(id)) {
 			t.Errorf("closed blocker %q not styled with muted hue: %q", id, out)
 		}
@@ -452,7 +452,7 @@ func TestRenderTaskDetail_StatsRow_Coloring(t *testing.T) {
 	forceTrueColor(t)
 
 	// Zero-comment branch: the comments half stays muted.
-	task := datasource.Task{ID: "as-z", Status: store.StatusNew, CreatedAt: fixedTime, CommentCount: 0}
+	task := datasource.Task{ID: "ask-2e7000", Status: store.StatusNew, CreatedAt: fixedTime, CommentCount: 0}
 	out := renderTaskDetail(task, nil, nil, 80)
 	if !strings.Contains(out, styleMuted.Render("comments: 0")) {
 		t.Errorf("zero-comment label not all-muted: %q", out)
@@ -496,7 +496,7 @@ func TestRenderTaskDetail_StatsRow(t *testing.T) {
 	now := time.Now().In(time.Local)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.Local)
 	task := datasource.Task{
-		ID: "as-a261", Status: store.StatusNew,
+		ID: "ask-00a261", Status: store.StatusNew,
 		CreatedAt:    today,
 		CommentCount: 12,
 	}
@@ -517,7 +517,7 @@ func TestRenderTaskDetail_StatsRow(t *testing.T) {
 // task title sits inside a rounded box labelled "Title".
 func TestRenderTaskDetail_TitleBox(t *testing.T) {
 	task := datasource.Task{
-		ID: "as-box", Status: store.StatusNew, CreatedAt: fixedTime,
+		ID: "ask-b07001", Status: store.StatusNew, CreatedAt: fixedTime,
 		Title: "feat: markdown rendering of tasks description",
 	}
 	out := renderTaskDetail(task, nil, nil, 80)
@@ -537,7 +537,7 @@ func TestRenderTaskDetail_TitleBox(t *testing.T) {
 // rendered markdown sits inside a box labelled "Description".
 func TestRenderTaskDetail_DescriptionBox(t *testing.T) {
 	task := datasource.Task{
-		ID: "as-box", Status: store.StatusNew, CreatedAt: fixedTime,
+		ID: "ask-b07002", Status: store.StatusNew, CreatedAt: fixedTime,
 		Description: "# Heading\n\nbody paragraph.\n",
 	}
 	out := renderTaskDetail(task, nil, nil, 80)
@@ -555,7 +555,7 @@ func TestRenderTaskDetail_DescriptionBox(t *testing.T) {
 // Box label includes the count.
 func TestRenderTaskDetail_SignalsBoxAll(t *testing.T) {
 	task := datasource.Task{
-		ID: "as-sig", Status: store.StatusWork, CreatedAt: fixedTime,
+		ID: "ask-516001", Status: store.StatusWork, CreatedAt: fixedTime,
 	}
 	signals := []datasource.Signal{
 		{StepName: "step-a", Target: "step-b", CreatedAt: fixedTime},
@@ -592,7 +592,7 @@ func TestRenderTaskDetail_SignalsBoxAll(t *testing.T) {
 func TestRenderTaskDetail_SignalsTargetColored(t *testing.T) {
 	forceTrueColor(t)
 	task := datasource.Task{
-		ID: "as-sig", Status: store.StatusWork, CreatedAt: fixedTime,
+		ID: "ask-516002", Status: store.StatusWork, CreatedAt: fixedTime,
 	}
 	signals := []datasource.Signal{
 		// Each signal pairs a source unique to the row with a target
@@ -649,7 +649,7 @@ func TestRenderTaskDetail_SignalsStacked(t *testing.T) {
 		{StepName: "review", Target: "docs", CreatedAt: old.Add(30 * time.Minute)},
 		{StepName: "dev", Target: "review", CreatedAt: old},
 	}
-	task := datasource.Task{ID: "as-sig", Status: store.StatusWork, CreatedAt: old}
+	task := datasource.Task{ID: "ask-516003", Status: store.StatusWork, CreatedAt: old}
 	out := renderTaskDetail(task, nil, signals, 80)
 	visible := ansiutil.Strip(out)
 
@@ -713,7 +713,7 @@ func TestRenderTaskDetail_FullWidthWrap(t *testing.T) {
 	const paneW = 200
 	long := strings.Repeat("word ", 80) // ~400 cells of fillable content
 	task := datasource.Task{
-		ID: "as-wide", Status: store.StatusNew, CreatedAt: fixedTime,
+		ID: "ask-71de01", Status: store.StatusNew, CreatedAt: fixedTime,
 		Description: long,
 	}
 	out := renderTaskDetail(task, nil, nil, paneW)
@@ -750,7 +750,7 @@ func TestRenderTaskDetail_FullWidthWrap(t *testing.T) {
 // inside the frame, no leftover "─ comments (N) ─" section header.
 func TestRenderTaskDetail_CommentBoxLabel(t *testing.T) {
 	task := datasource.Task{
-		ID: "as-c", Status: store.StatusNew, CreatedAt: fixedTime,
+		ID: "ask-c00001", Status: store.StatusNew, CreatedAt: fixedTime,
 	}
 	comments := []datasource.Comment{
 		{ID: 1, AuthorName: "alice", Text: "hello world", CreatedAt: fixedTime},

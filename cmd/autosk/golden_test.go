@@ -24,7 +24,7 @@ var updateGolden = flag.Bool("update", false, "rewrite golden files")
 
 func fixedTask() store.Task {
 	return store.Task{
-		ID:          "as-a1b2",
+		ID:          "ask-a1b2c3",
 		Title:       "Wire up doltlite store",
 		Description: "Implement Open/Close/Migrate and the smoke test.",
 		Status:      store.StatusWork,
@@ -37,7 +37,7 @@ func fixedTask() store.Task {
 func TestGolden_ShowJSON(t *testing.T) {
 	var buf bytes.Buffer
 	if err := render.TaskJSONTo(&buf, fixedTask(),
-		render.WithBlocked(false, nil, []string{"as-3c4d"})); err != nil {
+		render.WithBlocked(false, nil, []string{"ask-3c4d5e"})); err != nil {
 		t.Fatal(err)
 	}
 	compareGolden(t, "show.golden.json", buf.Bytes())
@@ -47,7 +47,7 @@ func TestGolden_ListJSON(t *testing.T) {
 	tasks := []store.Task{
 		fixedTask(),
 		{
-			ID: "as-c3d4", Title: "second one", Status: store.StatusNew,
+			ID: "ask-c3d4e5", Title: "second one", Status: store.StatusNew,
 			Priority:  0,
 			CreatedAt: time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC),
 			UpdatedAt: time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC),
@@ -92,7 +92,7 @@ func TestGolden_ShowText(t *testing.T) {
 	withFixedLocal(t, "Europe/Moscow")
 	var buf bytes.Buffer
 	if err := render.Task(&buf, fixedTask(),
-		render.WithBlocked(false, nil, []string{"as-3c4d"})); err != nil {
+		render.WithBlocked(false, nil, []string{"ask-3c4d5e"})); err != nil {
 		t.Fatal(err)
 	}
 	compareGoldenText(t, "show.golden.txt", buf.Bytes())

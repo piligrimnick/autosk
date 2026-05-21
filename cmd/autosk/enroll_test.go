@@ -301,7 +301,7 @@ func TestEnroll_TaskNotFound(t *testing.T) {
 	if _, err := runRoot(t, dir, "init"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := runRoot(t, dir, "enroll", "as-zzzz", "--workflow", "anything")
+	_, err := runRoot(t, dir, "enroll", "ask-zzzzzz", "--workflow", "anything")
 	if err == nil {
 		t.Fatal("expected error for missing task id")
 	}

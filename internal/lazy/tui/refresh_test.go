@@ -285,13 +285,13 @@ func TestTaskJobIndex_SurvivesTaskScope_Regression(t *testing.T) {
 // not-Active, single space when neither.
 func TestRenderTasksPanel_JobMarker(t *testing.T) {
 	tasks := []datasource.Task{
-		{ID: "ask-001run", Title: "running task", Priority: 1, Status: store.StatusWork},
-		{ID: "ask-00d0ne", Title: "done task", Priority: 2, Status: store.StatusDone},
-		{ID: "ask-0bare0", Title: "jobless task", Priority: 2, Status: store.StatusNew},
+		{ID: "ask-000001" /* running */, Title: "running task", Priority: 1, Status: store.StatusWork},
+		{ID: "ask-000002" /* done    */, Title: "done task", Priority: 2, Status: store.StatusDone},
+		{ID: "ask-000003" /* bare    */, Title: "jobless task", Priority: 2, Status: store.StatusNew},
 	}
 	idx := taskJobIndex{
-		Active: map[string]bool{"ask-001run": true},
-		Any:    map[string]bool{"ask-001run": true, "ask-00d0ne": true},
+		Active: map[string]bool{"ask-000001": true},
+		Any:    map[string]bool{"ask-000001": true, "ask-000002": true},
 	}
 	// Tick 0 → spinnerFrames[0] = "⠋".
 	body, _ := renderTasksPanel(tasks, 0, scope{}, "", 80, 0, idx)
