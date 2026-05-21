@@ -42,7 +42,7 @@
           "prompt_rule": "When the implementation does not satisfy the task description strictly."
         },
         {
-          "task_status": "human_feedback",
+          "task_status": "human",
           "prompt_rule": "When the task is implemented, verified, and the human should accept it (and merge `autosk/<task-id>` into the base branch)."
         }
       ]

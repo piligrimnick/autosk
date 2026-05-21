@@ -36,7 +36,7 @@ func TestParseFile_Example(t *testing.T) {
 		t.Fatalf("validator transitions: %d", len(val.NextSteps))
 	}
 	gotStatus := val.NextSteps[1].TaskStatus
-	if gotStatus != "human_feedback" {
+	if gotStatus != "human" {
 		t.Errorf("validator's second transition task_status: %q", gotStatus)
 	}
 }

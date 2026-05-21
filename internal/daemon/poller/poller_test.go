@@ -77,7 +77,7 @@ func (fx *pollFixture) makeTask(t *testing.T, title, stepName string) string {
 	}
 	tk, err := fx.ts.CreateTask(context.Background(), store.Task{
 		Title:         title,
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    fx.wf.ID,
 		CurrentStepID: stepID,
@@ -88,7 +88,7 @@ func (fx *pollFixture) makeTask(t *testing.T, title, stepName string) string {
 	return tk.ID
 }
 
-// TestPoller_EnqueuesNonHumanTask creates one in_workflow task whose
+// TestPoller_EnqueuesNonHumanTask creates one work task whose
 // current step's agent is the (non-human) developer. After Start, a
 // daemon_runs row appears within ~3s.
 func TestPoller_EnqueuesNonHumanTask(t *testing.T) {
@@ -209,7 +209,7 @@ func TestPoller_SkipsHumanAgent(t *testing.T) {
 	}
 	tk, err := fx.ts.CreateTask(ctx, store.Task{
 		Title:         "Mine",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    syn.ID,
 		CurrentStepID: syn.Steps[0].ID,

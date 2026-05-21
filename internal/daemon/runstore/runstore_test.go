@@ -165,7 +165,7 @@ func TestLifecycle_FailedCancelled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cancelled.Status != runstore.StatusCancelled {
+	if cancelled.Status != runstore.StatusCancel {
 		t.Fatalf("cancelled: %+v", cancelled)
 	}
 }

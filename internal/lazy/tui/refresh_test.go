@@ -115,7 +115,7 @@ func TestSortTasksByRecency(t *testing.T) {
 		// Oldest open task.
 		{ID: "as-old", Status: store.StatusNew, CreatedAt: t0, UpdatedAt: t0},
 		// Edited an hour later.
-		{ID: "as-mid", Status: store.StatusInWorkflow,
+		{ID: "as-mid", Status: store.StatusWork,
 			CreatedAt: t0, UpdatedAt: t0.Add(1 * time.Hour)},
 		// Just-closed task should rank first — by-recency, not by status.
 		{ID: "as-new", Status: store.StatusDone,
@@ -177,9 +177,9 @@ func TestTaskJobIndex_PartitionsByStatus(t *testing.T) {
 		mkJob("job-2", "as-a", "queued"),
 		// Task B: one done only — Any but NOT Active.
 		mkJob("job-3", "as-b", "done"),
-		// Task C: failed + cancelled — Any but NOT Active.
+		// Task C: failed + cancel — Any but NOT Active.
 		mkJob("job-4", "as-c", "failed"),
-		mkJob("job-5", "as-c", "cancelled"),
+		mkJob("job-5", "as-c", "cancel"),
 		// Daemon row with no TaskID (legacy) — must be skipped.
 		mkJob("job-6", "", "running"),
 	}
@@ -284,7 +284,7 @@ func TestTaskJobIndex_SurvivesTaskScope_Regression(t *testing.T) {
 // not-Active, single space when neither.
 func TestRenderTasksPanel_JobMarker(t *testing.T) {
 	tasks := []datasource.Task{
-		{ID: "as-run", Title: "running task", Priority: 1, Status: store.StatusInWorkflow},
+		{ID: "as-run", Title: "running task", Priority: 1, Status: store.StatusWork},
 		{ID: "as-done", Title: "done task", Priority: 2, Status: store.StatusDone},
 		{ID: "as-bare", Title: "jobless task", Priority: 2, Status: store.StatusNew},
 	}

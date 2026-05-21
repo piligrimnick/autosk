@@ -16,7 +16,7 @@ func fixedIsolatedTask() store.Task {
 		ID:          "as-iso01",
 		Title:       "Isolated task",
 		Description: "lives in a worktree",
-		Status:      store.StatusInWorkflow,
+		Status:      store.StatusWork,
 		Priority:    1,
 		CreatedAt:   time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC),
 		UpdatedAt:   time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC),

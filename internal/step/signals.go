@@ -49,7 +49,7 @@ func New(db *sql.DB) *Store { return &Store{db: db} }
 // Emit resolves the active run for taskID, validates target against the
 // run's current step's outgoing transitions, and records the chosen
 // transition in step_signals. target is either a sibling step name or
-// one of {done, cancelled, human_feedback}.
+// one of {done, cancel, human}.
 //
 // Errors:
 //   - ErrNoActiveRun     — no daemon_runs row in status='running' for this task.

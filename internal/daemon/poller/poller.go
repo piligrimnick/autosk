@@ -1,5 +1,5 @@
 // Package poller drives the daemon's workflow engine: every poll
-// interval it selects `in_workflow` tasks whose current step's agent is
+// interval it selects `work` tasks whose current step's agent is
 // non-human and which have no queued/running daemon_runs row, then
 // enqueues a fresh run for each.
 //
@@ -156,7 +156,7 @@ func (p *Poller) Scan(ctx context.Context) ([]Candidate, error) {
 		  FROM tasks t
 		  JOIN steps s   ON t.current_step_id = s.id
 		  JOIN agents a  ON s.agent_id        = a.id
-		 WHERE t.status = 'in_workflow'
+		 WHERE t.status = 'work'
 		   AND a.is_human = 0
 		   AND NOT EXISTS (
 		         SELECT 1 FROM daemon_runs r

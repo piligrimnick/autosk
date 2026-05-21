@@ -58,7 +58,7 @@ func newSigFixture(t *testing.T) *sigFixture {
 	}
 	tk, err := ts.CreateTask(ctx, store.Task{
 		Title:         "x",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    wf.ID,
 		CurrentStepID: wf.FirstStepID,
@@ -119,7 +119,7 @@ func TestEmit_TaskStatusFromValidator(t *testing.T) {
 	fx := newSigFixture(t)
 	defer fx.close()
 	// Move the task's current step to "validator" (which has task_status
-	// human_feedback) so we can exercise the task-status path.
+	// human) so we can exercise the task-status path.
 	validatorStep, err := fx.wfs.FindStepByName(context.Background(), fx.wf.ID, "validator")
 	if err != nil {
 		t.Fatal(err)
@@ -142,11 +142,11 @@ func TestEmit_TaskStatusFromValidator(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	e, err := fx.sigs.Emit(context.Background(), fx.taskID, "human_feedback")
+	e, err := fx.sigs.Emit(context.Background(), fx.taskID, "human")
 	if err != nil {
 		t.Fatalf("Emit: %v", err)
 	}
-	if e.TaskStatus != "human_feedback" {
+	if e.TaskStatus != "human" {
 		t.Errorf("task_status: %q", e.TaskStatus)
 	}
 	if e.NextStepName != "" {

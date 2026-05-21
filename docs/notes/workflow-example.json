@@ -41,7 +41,7 @@
           "prompt_rule": "When the implementation does not satisfy the task description strictly."
         },
         {
-          "task_status": "human_feedback",
+          "task_status": "human",
           "prompt_rule": "When the task is implemented and verified and a human should accept it."
         }
       ]

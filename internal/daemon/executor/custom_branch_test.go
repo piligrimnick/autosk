@@ -194,7 +194,7 @@ func (fx *customFixture) makeRun(t *testing.T, title string) (taskID, jobID stri
 	ctx := context.Background()
 	tk, err := fx.ts.CreateTask(ctx, store.Task{
 		Title:         title,
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    fx.wf.ID,
 		CurrentStepID: fx.wf.Steps[0].ID,

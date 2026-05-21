@@ -10,10 +10,10 @@
 
 export type TaskStatus =
 	| "new"
-	| "in_workflow"
-	| "human_feedback"
+	| "work"
+	| "human"
 	| "done"
-	| "cancelled";
+	| "cancel";
 
 export interface Task {
 	id: string;

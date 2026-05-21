@@ -21,7 +21,7 @@ func newListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
-		Short:   "List tasks (default: open work — new + claimed)",
+		Short:   "List tasks (default: open work — new, work, human)",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, closeFn, err := openStore(cmd.Context(), false)
@@ -42,7 +42,7 @@ func newListCmd() *cobra.Command {
 					for _, s := range statuses {
 						st := store.Status(strings.TrimSpace(s))
 						if !st.Valid() {
-							return fmt.Errorf("invalid status %q (valid: new, claimed, done, cancelled, all)", s)
+							return fmt.Errorf("invalid status %q (valid: new, work, human, done, cancel, all)", s)
 						}
 						f.Statuses = append(f.Statuses, st)
 					}
@@ -71,7 +71,7 @@ func newListCmd() *cobra.Command {
 			return render.Tasks(os.Stdout, tasks, nil)
 		},
 	}
-	cmd.Flags().StringSliceVar(&statuses, "status", nil, "filter by status (comma-separated; 'all' = no filter; default: new,claimed)")
+	cmd.Flags().StringSliceVar(&statuses, "status", nil, "filter by status (comma-separated; 'all' = no filter; default: new,work,human)")
 	cmd.Flags().IntVarP(&priority, "priority", "p", 0, "filter by exact priority (0..3)")
 	cmd.Flags().IntVar(&limit, "limit", 0, "max rows (0 = unlimited)")
 	return cmd

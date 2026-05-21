@@ -192,7 +192,7 @@ func testCancelledBlockerDoesNotBlock(t *testing.T, f Factory) {
 	if err := s.Block(ctx, b.ID, a.ID); err != nil {
 		t.Fatal(err)
 	}
-	setStatus(t, s, a.ID, store.StatusCancelled)
+	setStatus(t, s, a.ID, store.StatusCancel)
 	got, err := s.Ready(ctx, 0)
 	if err != nil {
 		t.Fatal(err)

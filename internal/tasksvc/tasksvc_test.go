@@ -27,9 +27,9 @@ func newFx(t *testing.T) (*doltlite.Store, func()) {
 }
 
 // seedHumanFeedback creates a task and forces it into the
-// "paused-mid-workflow" shape: status=human_feedback with a
+// "paused-mid-workflow" shape: status=human with a
 // non-null current_step_id. The shape that used to trip the
-// CHECK in 001_init.sql when the terminal verb didn't clear
+// SQL CHECK invariant when the terminal verb didn't clear
 // current_step_id.
 func seedHumanFeedback(t *testing.T, s *doltlite.Store) string {
 	t.Helper()
@@ -51,9 +51,9 @@ func seedHumanFeedback(t *testing.T, s *doltlite.Store) string {
 		t.Fatalf("seed step: %v", err)
 	}
 	wf, st := "wf-1", "st-1"
-	hf := store.StatusHumanFeedback
+	hf := store.StatusHuman
 	if _, err := s.UpdateTask(ctx, tk.ID, store.TaskPatch{WorkflowID: &wf, CurrentStepID: &st, Status: &hf}); err != nil {
-		t.Fatalf("seed human_feedback: %v", err)
+		t.Fatalf("seed human: %v", err)
 	}
 	return tk.ID
 }
@@ -86,7 +86,7 @@ func TestCancel_ClearsCurrentStepOnHumanFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	if got.Status != store.StatusCancelled {
+	if got.Status != store.StatusCancel {
 		t.Fatalf("status: got %q want cancelled", got.Status)
 	}
 	if got.CurrentStepID != "" {
@@ -102,7 +102,7 @@ func TestReopen_RejectsNonTerminal(t *testing.T) {
 
 	_, err := tasksvc.Reopen(ctx, s, id)
 	if err == nil {
-		t.Fatalf("reopen on human_feedback should fail")
+		t.Fatalf("reopen on human should fail")
 	}
 	if !strings.Contains(err.Error(), "cannot reopen") {
 		t.Fatalf("unexpected error: %v", err)
@@ -136,9 +136,9 @@ func TestSetStatus_RejectsInWorkflowTarget(t *testing.T) {
 	defer closeFn()
 	tk, _ := s.CreateTask(ctx, store.Task{Title: "x", Priority: 2, Status: store.StatusNew})
 
-	_, err := tasksvc.SetStatus(ctx, s, tk.ID, store.StatusInWorkflow, tasksvc.Options{})
+	_, err := tasksvc.SetStatus(ctx, s, tk.ID, store.StatusWork, tasksvc.Options{})
 	if err == nil {
-		t.Fatalf("setting status='in_workflow' should be rejected")
+		t.Fatalf("setting status='work' should be rejected")
 	}
 }
 

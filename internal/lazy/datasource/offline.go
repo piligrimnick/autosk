@@ -586,15 +586,16 @@ func (o *Offline) CreateTask(ctx context.Context, title, description string, pri
 // (done), `x` (cancel) and `o` (reopen) hotkeys share the CLI's
 // done|cancel|reopen behaviour exactly:
 //
-//   - terminal targets (done|cancelled) clear current_step_id so a
-//     task paused in human_feedback with a non-null step can actually
-//     be closed (CHECK in 001_init.sql);
+//   - terminal targets (done|cancel) clear current_step_id so a
+//     task paused in human with a non-null step can actually
+//     be closed (SQL CHECK invariant: status='work' ⇔
+//     current_step_id IS NOT NULL);
 //   - terminal targets also do best-effort worktree cleanup when the
 //     task ran under an isolated workflow;
-//   - StatusNew on a done|cancelled task delegates to tasksvc.Reopen
-//     and inherits its precondition (rejects new / in_workflow /
-//     human_feedback sources);
-//   - in_workflow targets are rejected (workflow lifecycle is owned
+//   - StatusNew on a done|cancel task delegates to tasksvc.Reopen
+//     and inherits its precondition (rejects new / work /
+//     human sources);
+//   - work targets are rejected (workflow lifecycle is owned
 //     by the workflow engine).
 func (o *Offline) UpdateStatus(ctx context.Context, id string, status store.Status) error {
 	opts := tasksvc.Options{ProjectRoot: o.projectRoot}
@@ -602,10 +603,10 @@ func (o *Offline) UpdateStatus(ctx context.Context, id string, status store.Stat
 	switch status {
 	case store.StatusDone:
 		_, err = tasksvc.Done(ctx, o.s, id, opts)
-	case store.StatusCancelled:
+	case store.StatusCancel:
 		_, err = tasksvc.Cancel(ctx, o.s, id, opts)
 	case store.StatusNew:
-		// Mirror the CLI: only valid coming from done|cancelled.
+		// Mirror the CLI: only valid coming from done|cancel.
 		// tasksvc.Reopen returns a clear error otherwise.
 		_, err = tasksvc.Reopen(ctx, o.s, id)
 	default:
@@ -698,7 +699,7 @@ func (o *Offline) EnrollAgent(ctx context.Context, id, agentName string) error {
 	return nil
 }
 
-// Resume flips a task from human_feedback back to in_workflow,
+// Resume flips a task from human back to work,
 // optionally relocating its current step.
 //
 // Visit-counter semantics (docs/plans/20260520-Step-Visit-Limits.md):
@@ -713,8 +714,8 @@ func (o *Offline) Resume(ctx context.Context, id, toStep string) error {
 	if err != nil {
 		return err
 	}
-	if t.Status != store.StatusHumanFeedback {
-		return fmt.Errorf("resume: task is not 'human_feedback' (status=%s)", t.Status)
+	if t.Status != store.StatusHuman {
+		return fmt.Errorf("resume: task is not 'human' (status=%s)", t.Status)
 	}
 	if toStep == "" {
 		// No transition — just flip the status. Do NOT touch
@@ -722,14 +723,15 @@ func (o *Offline) Resume(ctx context.Context, id, toStep string) error {
 		//
 		// Refuse if the parked task has no current_step_id (e.g. someone
 		// hand-edited via `autosk sql --write`): without --to we have
-		// nowhere to land, and the schema CHECK in 001_init.sql:55
-		// would reject the in_workflow flip with a cryptic constraint
-		// error in the flash bar. Mirror the CLI guard in
-		// cmd/autosk/resume.go so the operator sees the actionable hint.
+		// nowhere to land, and the SQL CHECK invariant
+		// (status='work' ⇔ current_step_id IS NOT NULL) would reject
+		// the work flip with a cryptic constraint error in the flash
+		// bar. Mirror the CLI guard in cmd/autosk/resume.go so the
+		// operator sees the actionable hint.
 		if t.CurrentStepID == "" {
 			return errors.New("task has no current_step_id; pass --to STEP")
 		}
-		newStatus := store.StatusInWorkflow
+		newStatus := store.StatusWork
 		if _, err := o.s.UpdateTask(ctx, id, store.TaskPatch{Status: &newStatus}); err != nil {
 			return err
 		}

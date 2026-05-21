@@ -238,7 +238,7 @@ func (fx *execFixture) makeRun(t *testing.T, taskTitle, stepName string) (taskID
 	}
 	tk, err := fx.ts.CreateTask(ctx, store.Task{
 		Title:         taskTitle,
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    fx.wf.ID,
 		CurrentStepID: stepID,
@@ -290,7 +290,7 @@ func TestRun_AdvancesOnValidSignal(t *testing.T) {
 	}
 	// Task advanced to review.
 	tk, _ := fx.ts.GetTask(ctx, taskID)
-	if tk.Status != store.StatusInWorkflow {
+	if tk.Status != store.StatusWork {
 		t.Fatalf("task.Status: %s", tk.Status)
 	}
 	rev, err := fx.deps.Workflows.FindStepByName(ctx, fx.wf.ID, "review")
@@ -302,9 +302,9 @@ func TestRun_AdvancesOnValidSignal(t *testing.T) {
 	}
 }
 
-// TestRun_TaskStatusHumanFeedback verifies the executor parks the task in
-// human_feedback and preserves current_step_id.
-func TestRun_TaskStatusHumanFeedback(t *testing.T) {
+// TestRun_TaskStatusHuman verifies the executor parks the task in
+// human and preserves current_step_id.
+func TestRun_TaskStatusHuman(t *testing.T) {
 	fx := newExecFixture(t)
 	defer fx.close()
 	ctx := context.Background()
@@ -313,7 +313,7 @@ func TestRun_TaskStatusHumanFeedback(t *testing.T) {
 	stub := newStub()
 	stub.onPrompt = func(prompt string, attempt int) {
 		if attempt == 1 {
-			if _, err := fx.deps.Signals.Emit(ctx, taskID, "human_feedback"); err != nil {
+			if _, err := fx.deps.Signals.Emit(ctx, taskID, "human"); err != nil {
 				t.Errorf("Emit: %v", err)
 			}
 		}
@@ -323,7 +323,7 @@ func TestRun_TaskStatusHumanFeedback(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	tk, _ := fx.ts.GetTask(ctx, taskID)
-	if tk.Status != store.StatusHumanFeedback {
+	if tk.Status != store.StatusHuman {
 		t.Fatalf("task.Status: %s", tk.Status)
 	}
 	val, _ := fx.deps.Workflows.FindStepByName(ctx, fx.wf.ID, "validator")
@@ -378,7 +378,7 @@ func TestRun_TerminalDoneClearsStep(t *testing.T) {
 	stepID := syn.Steps[0].ID
 	tk, err := fx.ts.CreateTask(ctx, store.Task{
 		Title:         "Bump version",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    syn.ID,
 		CurrentStepID: stepID,
@@ -438,11 +438,11 @@ func TestRun_MissingAgentConfig(t *testing.T) {
 	if !contains(run.Error, "agent_config_invalid") {
 		t.Errorf("run.Error: %q (expected agent_config_invalid)", run.Error)
 	}
-	// Failure parking: the task should have moved to human_feedback so
+	// Failure parking: the task should have moved to human so
 	// the poller stops re-picking it.
 	tk, _ := fx.ts.GetTask(context.Background(), taskID)
-	if tk.Status != store.StatusHumanFeedback {
-		t.Fatalf("task should be parked to human_feedback, got %s", tk.Status)
+	if tk.Status != store.StatusHuman {
+		t.Fatalf("task should be parked to human, got %s", tk.Status)
 	}
 	if tk.CurrentStepID == "" {
 		t.Fatalf("current_step_id should be preserved on park (so resume works)")
@@ -464,7 +464,7 @@ func TestRun_KickbackThenFail_ParksTask(t *testing.T) {
 		t.Fatal("expected ErrAgentDidNotEmit")
 	}
 	tk, _ := fx.ts.GetTask(ctx, taskID)
-	if tk.Status != store.StatusHumanFeedback {
+	if tk.Status != store.StatusHuman {
 		t.Fatalf("task should be parked, got %s", tk.Status)
 	}
 }
@@ -474,7 +474,7 @@ func TestRun_KickbackThenFail_ParksTask(t *testing.T) {
 // drive a `dev` run that signals `--to review`, and assert:
 //   - daemon_runs.status='failed'
 //   - daemon_runs.error starts with `step_max_visits_exceeded:`
-//   - tasks.status='human_feedback' (parked)
+//   - tasks.status='human' (parked)
 //   - tasks.current_step_id is the TARGET step (review), so a bare
 //     `autosk resume <id>` (no --to) lands on the right step once the
 //     human resets visits; the source step is fully done.
@@ -516,7 +516,7 @@ func TestAdvanceTask_CapExceeded_ParksOnTargetStep(t *testing.T) {
 	// Create a task on dev with step_visits[review] already at the cap.
 	tk, err := fx.ts.CreateTask(ctx, store.Task{
 		Title:         "At the cap",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    cappedWF.ID,
 		CurrentStepID: devID,
@@ -560,7 +560,7 @@ func TestAdvanceTask_CapExceeded_ParksOnTargetStep(t *testing.T) {
 		t.Fatalf("run.Error: %q (want step_max_visits_exceeded: prefix)", runRow.Error)
 	}
 	tkAfter, _ := fx.ts.GetTask(ctx, tk.ID)
-	if tkAfter.Status != store.StatusHumanFeedback {
+	if tkAfter.Status != store.StatusHuman {
 		t.Fatalf("task parked? got status %s", tkAfter.Status)
 	}
 	if tkAfter.CurrentStepID != reviewID {
@@ -610,7 +610,7 @@ func TestAdvanceTask_GenericAdvanceError_ParksOnTargetStep(t *testing.T) {
 	}
 	tk, err := fx.ts.CreateTask(ctx, store.Task{
 		Title:         "Generic advance error",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    wf.ID,
 		CurrentStepID: devID,
@@ -655,7 +655,7 @@ func TestAdvanceTask_GenericAdvanceError_ParksOnTargetStep(t *testing.T) {
 		t.Fatalf("run.Error: %q (want `advance task: ...` prefix)", runRow.Error)
 	}
 	tkAfter, _ := fx.ts.GetTask(ctx, tk.ID)
-	if tkAfter.Status != store.StatusHumanFeedback {
+	if tkAfter.Status != store.StatusHuman {
 		t.Fatalf("task parked? got status %s", tkAfter.Status)
 	}
 	if tkAfter.CurrentStepID != reviewID {
@@ -687,7 +687,7 @@ func TestAdvanceTask_RunnerCrash_PreservesSourceStep(t *testing.T) {
 		t.Fatalf("run.Status: %s (want failed)", run.Status)
 	}
 	tk, _ := fx.ts.GetTask(ctx, taskID)
-	if tk.Status != store.StatusHumanFeedback {
+	if tk.Status != store.StatusHuman {
 		t.Fatalf("task parked? got status %s", tk.Status)
 	}
 	dev, err := fx.deps.Workflows.FindStepByName(ctx, fx.wf.ID, "dev")
@@ -764,7 +764,7 @@ func TestRun_AdvanceBumpsVisitCounter(t *testing.T) {
 	}
 	tk, err := fx.ts.CreateTask(ctx, store.Task{
 		Title:         "counter",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    wf.ID,
 		CurrentStepID: devID,
@@ -803,14 +803,14 @@ func TestRun_AdvanceBumpsVisitCounter(t *testing.T) {
 // TestRun_AdvanceCapFires_OperatorRaceNoClobber drives the cap path
 // concurrently with a human-side `done` (the operator races the
 // executor while it is failing the run). The expected outcome is that
-// parkTaskOnFailure's "only park if still in_workflow" guard prevents
+// parkTaskOnFailure's "only park if still work" guard prevents
 // the executor from clobbering the operator's terminal status.
 //
 // We synchronise via the stub's onPrompt callback: emit the cap-fire
 // signal, then flip the task to `done` BEFORE returning. By the time
 // the executor calls advanceTask, the task is already terminal; the
 // subsequent failTerminal path marks the run failed but skips the
-// parking step because the task is no longer in_workflow.
+// parking step because the task is no longer work.
 func TestRun_AdvanceCapFires_OperatorRaceNoClobber(t *testing.T) {
 	fx := newExecFixture(t)
 	defer fx.close()
@@ -843,7 +843,7 @@ func TestRun_AdvanceCapFires_OperatorRaceNoClobber(t *testing.T) {
 
 	tk, err := fx.ts.CreateTask(ctx, store.Task{
 		Title:         "Operator races executor",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    cappedWF.ID,
 		CurrentStepID: devID,
@@ -873,7 +873,7 @@ func TestRun_AdvanceCapFires_OperatorRaceNoClobber(t *testing.T) {
 		// Race the executor: while it's still in WaitForAgentEnd /
 		// shutdown, mark the task done from the operator side. The cap
 		// will fire in advanceTask afterwards; parkTaskOnFailure must
-		// then short-circuit because the task is no longer in_workflow.
+		// then short-circuit because the task is no longer work.
 		doneStatus := store.StatusDone
 		emptyStep := ""
 		if _, err := fx.ts.UpdateTask(ctx, tk.ID, store.TaskPatch{

@@ -24,10 +24,10 @@ const TaskActionSchema = Type.Union([
 
 const TaskStatusSchema = Type.Union([
 	Type.Literal("new"),
-	Type.Literal("in_workflow"),
-	Type.Literal("human_feedback"),
+	Type.Literal("work"),
+	Type.Literal("human"),
 	Type.Literal("done"),
-	Type.Literal("cancelled"),
+	Type.Literal("cancel"),
 ]);
 
 const TaskArgsSchema = Type.Partial(
@@ -56,7 +56,7 @@ const TaskArgsSchema = Type.Partial(
 		}),
 		/** create only: join an existing workflow at its first step. */
 		workflow: Type.String({
-			description: "create only: join this named workflow at its first step (status becomes in_workflow).",
+			description: "create only: join this named workflow at its first step (status becomes work).",
 		}),
 		/** create only: shorthand for workflow=single:<agent>. */
 		agent: Type.String({
@@ -98,7 +98,7 @@ create
 
 update
   args.id (req) — target task.
-  At least one of: title, description, priority, status. Status changes on in_workflow tasks are rejected by the engine; advance them via the workflow's step_next instead.
+  At least one of: title, description, priority, status. Status changes on work tasks are rejected by the engine; advance them via the workflow's step_next instead.
 
 show
   args.id (req) — returns the task plus blocked_by / blocks / blocked / workflow_id / current_step / current_agent.
@@ -405,10 +405,10 @@ function statusColor(status: TaskStatus): "success" | "warning" | "muted" | "tex
 	switch (status) {
 		case "done":
 			return "success";
-		case "in_workflow":
-		case "human_feedback":
+		case "work":
+		case "human":
 			return "warning";
-		case "cancelled":
+		case "cancel":
 			return "muted";
 		case "new":
 			return "text";

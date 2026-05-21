@@ -28,7 +28,7 @@ func newWorktreeCmd() *cobra.Command {
 		Short: "Inspect / clean up per-task git worktrees (isolation=worktree workflows)",
 		Long: "Diagnostic verbs for the per-task worktrees allocated by\n" +
 			"isolation=worktree workflows. The engine creates worktrees on\n" +
-			"enroll/create and removes them on done/cancelled \u2014 these verbs\n" +
+			"enroll/create and removes them on done/cancel \u2014 these verbs\n" +
 			"are for inspection and manual recovery.",
 	}
 	cmd.AddCommand(
@@ -102,17 +102,17 @@ func newWorktreeRmCmd() *cobra.Command {
 		Use:   "rm <task-id>",
 		Short: "Force-remove the worktree directory for a non-live task (branch preserved)",
 		Long: "Manually removes the on-disk worktree directory for a task. The\n" +
-			"engine performs this automatically on done/cancelled \u2014 use this\n" +
+			"engine performs this automatically on done/cancel \u2014 use this\n" +
 			"verb for orphan cleanup, stranded-worktree recovery, or when the\n" +
 			"engine couldn't reach the filesystem at terminal time. The branch\n" +
 			"is never touched.\n\n" +
-			"Refuses tasks that are status=in_workflow: the daemon may be\n" +
-			"executing inside that worktree right now, and yanking it would\n" +
-			"crash the live run. Parked (human_feedback) and new tasks are\n" +
-			"fair game \u2014 the documented recovery flow for `worktree_stranded`\n" +
-			"(run parks \u2192 worktree rm \u2192 cancel \u2192 reopen \u2192 enroll) relies on\n" +
-			"this. The `worktree_missing` case is auto-recovered by the daemon\n" +
-			"itself \u2014 no manual `rm` needed.",
+			"Refuses tasks that are status=work: the daemon may be executing\n" +
+			"inside that worktree right now, and yanking it would crash the\n" +
+			"live run. Parked (human) and new tasks are fair game \u2014 the\n" +
+			"documented recovery flow for `worktree_stranded` (run parks \u2192\n" +
+			"worktree rm \u2192 cancel \u2192 reopen \u2192 enroll) relies on this. The\n" +
+			"`worktree_missing` case is auto-recovered by the daemon itself \u2014\n" +
+			"no manual `rm` needed.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, closeFn, err := openStore(cmd.Context(), true)
@@ -127,8 +127,8 @@ func newWorktreeRmCmd() *cobra.Command {
 				}
 				return err
 			}
-			if t.Status == store.StatusInWorkflow {
-				return fmt.Errorf("refusing to rm worktree of in_workflow task %s; the daemon may be executing inside it. Cancel or wait for the workflow to close / park it first",
+			if t.Status == store.StatusWork {
+				return fmt.Errorf("refusing to rm worktree of work task %s; the daemon may be executing inside it. Cancel or wait for the workflow to close / park it first",
 					t.ID)
 			}
 			root, err := projectRootFromCwd()

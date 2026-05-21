@@ -319,7 +319,7 @@ func TestResolve_DBOverrideMissingFileReturnsNotFound(t *testing.T) {
 }
 
 // TestResolve_FirstPollAfterOpenIsDispatched is the regression test for
-// the open-vs-poll race: when a project has an in_workflow task waiting
+// the open-vs-poll race: when a project has a work task waiting
 // at first Resolve and the poll interval is short, the scheduler closure
 // must observe the project as loaded (i.e. mgr.Get must return non-nil
 // for the job's project key) so the job is dispatched rather than
@@ -339,7 +339,7 @@ func TestResolve_FirstPollAfterOpenIsDispatched(t *testing.T) {
 		t.Fatalf("EnsurePrefix: %v", err)
 	}
 
-	// Pre-create a project with an in_workflow task pointed at a
+	// Pre-create a project with a work task pointed at a
 	// non-human step so the poller has something to enqueue
 	// immediately.
 	root := initProject(t)
@@ -380,9 +380,9 @@ func TestResolve_FirstPollAfterOpenIsDispatched(t *testing.T) {
 		_ = ts.Close()
 		t.Fatalf("create task: %v", err)
 	}
-	// Attach the workflow + step and flip the status to in_workflow.
+	// Attach the workflow + step and flip the status to work.
 	if _, err := db.ExecContext(context.Background(),
-		`UPDATE tasks SET workflow_id='wf-race', current_step_id='st-race', status='in_workflow' WHERE id=?`, tk.ID); err != nil {
+		`UPDATE tasks SET workflow_id='wf-race', current_step_id='st-race', status='work' WHERE id=?`, tk.ID); err != nil {
 		_ = ts.Close()
 		t.Fatalf("attach workflow: %v", err)
 	}

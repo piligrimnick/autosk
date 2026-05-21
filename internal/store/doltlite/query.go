@@ -55,8 +55,8 @@ func (s *Store) ListTasks(ctx context.Context, f store.ListFilter) ([]store.Task
 }
 
 // Ready returns the ready set: status='new' AND every incoming blocker is
-// already in a terminal state (done|cancelled). Tasks already in_workflow
-// or human_feedback are owned by the daemon / a human and are not surfaced
+// already in a terminal state (done|cancel). Tasks already work
+// or human are owned by the daemon / a human and are not surfaced
 // as "ready to pick up".
 func (s *Store) Ready(ctx context.Context, limit int) ([]store.Task, error) {
 	if s.db == nil {
@@ -72,7 +72,7 @@ func (s *Store) Ready(ctx context.Context, limit int) ([]store.Task, error) {
 		         SELECT 1 FROM task_deps d
 		           JOIN tasks b ON b.id = d.blocker_id
 		          WHERE d.blocked_id = t.id
-		            AND b.status IN ('new','in_workflow','human_feedback'))
+		            AND b.status IN ('new','work','human'))
 		ORDER BY t.priority ASC, t.created_at ASC`
 	args := []any{}
 	if limit > 0 {
@@ -152,7 +152,7 @@ func (s *Store) scanTasks(ctx context.Context, q string, args ...any) ([]store.T
 }
 
 // defaultStatuses applies the "nil = backend default" rule.
-// nil  → OpenStatuses (new + in_workflow + human_feedback).
+// nil  → OpenStatuses (new + work + human).
 // []   → no filter (all statuses).
 // list → as given.
 func defaultStatuses(in []store.Status) []store.Status {

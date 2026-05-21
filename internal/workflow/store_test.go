@@ -69,7 +69,7 @@ func TestCreate_RoundTripExample(t *testing.T) {
 	if val.Transitions[0].NextStepName != "dev" || val.Transitions[0].IsTaskStatus() {
 		t.Errorf("transition 0: %+v", val.Transitions[0])
 	}
-	if val.Transitions[1].TaskStatus != "human_feedback" {
+	if val.Transitions[1].TaskStatus != "human" {
 		t.Errorf("transition 1 task_status: %q", val.Transitions[1].TaskStatus)
 	}
 }

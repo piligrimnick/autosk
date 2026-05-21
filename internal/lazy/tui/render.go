@@ -36,11 +36,11 @@ var (
 	// each one taps is picked for the hue, not for the slot's primary
 	// semantic role — see styleForTaskStatus's comment for the
 	// rationale and the requested mapping.
-	styleStatusNew           lipgloss.Style
-	styleStatusInWorkflow    lipgloss.Style
-	styleStatusHumanFeedback lipgloss.Style
-	styleStatusDone          lipgloss.Style
-	styleStatusCancelled     lipgloss.Style
+	styleStatusNew    lipgloss.Style
+	styleStatusWork   lipgloss.Style
+	styleStatusHuman  lipgloss.Style
+	styleStatusDone   lipgloss.Style
+	styleStatusCancel lipgloss.Style
 
 	// Per-entity colours. Every reference to a task / job / agent /
 	// workflow / step in the TUI — panel rows, detail panes, status
@@ -79,26 +79,26 @@ func RebuildStyles() {
 	// (no new palette entries) but drop the bold / decorative bits so
 	// the status column reads as data, not as a chip:
 	//
-	//	new              cyan   (Scope hue, non-bold)
-	//	in_workflow      purple (PopupBox hue)
-	//	human_feedback   yellow (Warn hue — shares the workflow entity
-	//	                        colour on purpose: a row waiting on an
-	//	                        operator sits in the same visual category
-	//	                        as the workflow it's pinned to)
-	//	done             green  (OK)
-	//	cancelled        gray   (Muted)
+	//	new     cyan   (Scope hue, non-bold)
+	//	work    purple (PopupBox hue)
+	//	human   yellow (Warn hue — shares the workflow entity colour on
+	//	               purpose: a row waiting on an operator sits in
+	//	               the same visual category as the workflow it's
+	//	               pinned to)
+	//	done    green  (OK)
+	//	cancel  gray   (Muted)
 	styleStatusNew = lipgloss.NewStyle().Foreground(p.Scope.Lipgloss())
-	styleStatusInWorkflow = lipgloss.NewStyle().Foreground(p.PopupBox.Lipgloss())
-	styleStatusHumanFeedback = lipgloss.NewStyle().Foreground(p.Warn.Lipgloss())
+	styleStatusWork = lipgloss.NewStyle().Foreground(p.PopupBox.Lipgloss())
+	styleStatusHuman = lipgloss.NewStyle().Foreground(p.Warn.Lipgloss())
 	styleStatusDone = lipgloss.NewStyle().Foreground(p.OK.Lipgloss())
-	styleStatusCancelled = lipgloss.NewStyle().Foreground(p.Muted.Lipgloss())
+	styleStatusCancel = lipgloss.NewStyle().Foreground(p.Muted.Lipgloss())
 
 	// Per-entity colour styles. See the var block above for the
 	// rationale. None of these are bold: the column position and the
 	// hue itself already do the work — bolding a Cyrillic title in
 	// addition would only make the row noisier.
 	//
-	// Step + in_workflow status share the PopupBox hue on purpose:
+	// Step + work status share the PopupBox hue on purpose:
 	// they're semantically the same thing ("a workflow step is
 	// driving this row"), just rendered in two different columns.
 	styleTaskID = lipgloss.NewStyle().Foreground(p.Focus.Lipgloss())
@@ -194,14 +194,14 @@ func styleForTaskStatus(s store.Status) lipgloss.Style {
 	switch s {
 	case store.StatusNew:
 		return styleStatusNew
-	case store.StatusInWorkflow:
-		return styleStatusInWorkflow
-	case store.StatusHumanFeedback:
-		return styleStatusHumanFeedback
+	case store.StatusWork:
+		return styleStatusWork
+	case store.StatusHuman:
+		return styleStatusHuman
 	case store.StatusDone:
 		return styleStatusDone
-	case store.StatusCancelled:
-		return styleStatusCancelled
+	case store.StatusCancel:
+		return styleStatusCancel
 	}
 	return styleMuted
 }
@@ -234,21 +234,19 @@ func glyphForJobStatus(j datasource.Job) string {
 		return "◯ done"
 	case runstore.StatusFailed:
 		return "✗ failed"
-	case runstore.StatusCancelled:
+	case runstore.StatusCancel:
 		return "‣ cancel"
 	}
 	return j.Status
 }
 
 // statusColumnWidth caps the rendered status string at this many
-// display cells. Statuses longer than this are truncated with an
-// ellipsis (truncate replaces the last rune with …) so the title
-// column always starts at the same column position regardless of
-// which enum value the row carries. 7 fits "done" / "new" without
-// padding bloat and collapses "in_workflow" / "human_feedback" /
-// "cancelled" into recognisable abbreviations ("in_wor…", "human_…",
-// "cancel…").
-const statusColumnWidth = 7
+// display cells. Every status enum value is at most 6 cells wide
+// ("cancel"), so the column never has to ellipsis-truncate; the
+// cap is the visual budget the panel reserves for the column. The
+// title column always starts at the same x regardless of which
+// enum value the row carries.
+const statusColumnWidth = 6
 
 // renderTasksPanel returns the rendered text for the Tasks panel
 // and the number of leading header lines (scope / filter notes) so
@@ -273,7 +271,7 @@ const statusColumnWidth = 7
 //
 //   - active job (running) → braille spinner frame in styleTaskID
 //     (blue), animated by Gui.spinnerLoop at ~100ms.
-//   - any other job (queued / done / failed / cancelled) → a static
+//   - any other job (queued / done / failed / cancel) → a static
 //     ">" in styleJobID (magenta) so the operator can see at a
 //     glance which task rows are tied to a job, even after the run
 //     finished. ASCII `>` on purpose: keeps width math trivial and
@@ -647,8 +645,8 @@ func renderWorkflowDetail(w datasource.Workflow) string {
 	b.WriteString(styleMuted.Render("─ steps ─") + "\n")
 	for _, s := range w.Steps {
 		// Format the next-target list with per-entry colouring: step
-		// names go red; lifecycle terminals (done/cancelled/
-		// human_feedback) take their task-status hue. workflow's own
+		// names go red; lifecycle terminals (done/cancel/
+		// human) take their task-status hue. workflow's own
 		// step graph mixes both, so we colour each token before
 		// joining instead of styling the joined string.
 		var tokens []string

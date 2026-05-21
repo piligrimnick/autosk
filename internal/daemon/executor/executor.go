@@ -446,10 +446,10 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 	if _, err := e.deps.Runs.MarkDone(bg, jobID, exit, &tid); err != nil {
 		return fmt.Errorf("mark done: %w", err)
 	}
-	// On terminal transitions (done/cancelled) for isolated workflows,
+	// On terminal transitions (done/cancel) for isolated workflows,
 	// reap the per-task worktree. Cleanup failures are surfaced as a
 	// warning + agent comment so a stuck `git worktree remove` never
-	// masks a successful run. human_feedback / sibling-step transitions
+	// masks a successful run. human / sibling-step transitions
 	// preserve the worktree (the human / next step may need it).
 	if wf.Isolation == workflow.IsolationWorktree && isTerminalStatus(signaled.TaskStatus) {
 		e.cleanupWorktreeBestEffort(bg, run.TaskID, signaled.TaskStatus)
@@ -458,10 +458,10 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 }
 
 // isTerminalStatus reports whether the emitted task_status closes the
-// task and so warrants worktree cleanup. human_feedback is NOT terminal
+// task and so warrants worktree cleanup. human is NOT terminal
 // — the human may inspect / resume from the worktree.
 func isTerminalStatus(status string) bool {
-	return status == "done" || status == "cancelled"
+	return status == "done" || status == "cancel"
 }
 
 // cleanupWorktreeBestEffort removes the per-task worktree directory
@@ -519,14 +519,14 @@ const worktreeBreadcrumbTimeout = 5 * time.Second
 
 // advanceTask applies the transition's effect to tasks per §5.4.
 //
-//   - next_step_id   → current_step_id = next; status = in_workflow.
+//   - next_step_id   → current_step_id = next; status = work.
 //     The visit counter is bumped + cap enforced via
 //     workflow.EnterStep; a max-visits exceedance
 //     surfaces as MaxVisitsExceededError, which the
 //     caller maps to a failed run + parked task.
-//   - human_feedback → current_step_id preserved (resume rewinds here);
-//     status = human_feedback.
-//   - done|cancelled → current_step_id = NULL; status flipped.
+//   - human → current_step_id preserved (resume rewinds here);
+//     status = human.
+//   - done|cancel → current_step_id = NULL; status flipped.
 func (e *Executor) advanceTask(ctx context.Context, taskID string, sig step.Emitted) error {
 	switch {
 	case sig.NextStepName != "":
@@ -558,8 +558,8 @@ func (e *Executor) advanceTask(ctx context.Context, taskID string, sig step.Emit
 			return &advanceTargetError{TargetStepID: st.ID, Err: err}
 		}
 		return nil
-	case sig.TaskStatus == "human_feedback":
-		status := store.StatusHumanFeedback
+	case sig.TaskStatus == "human":
+		status := store.StatusHuman
 		if _, err := e.deps.Tasks.UpdateTask(ctx, taskID, store.TaskPatch{Status: &status}); err != nil {
 			return err
 		}
@@ -571,8 +571,8 @@ func (e *Executor) advanceTask(ctx context.Context, taskID string, sig step.Emit
 			return err
 		}
 		return nil
-	case sig.TaskStatus == "cancelled":
-		status := store.StatusCancelled
+	case sig.TaskStatus == "cancel":
+		status := store.StatusCancel
 		empty := ""
 		if _, err := e.deps.Tasks.UpdateTask(ctx, taskID, store.TaskPatch{Status: &status, CurrentStepID: &empty}); err != nil {
 			return err
@@ -678,7 +678,7 @@ func RenderPrompt(
 		}
 	}
 	sb.WriteString("\n")
-	fmt.Fprintf(&sb, "When you have decided, call: `autosk step next %s --to <name>` (sibling step name OR done|cancelled|human_feedback).\n", t.ID)
+	fmt.Fprintf(&sb, "When you have decided, call: `autosk step next %s --to <name>` (sibling step name OR done|cancel|human).\n", t.ID)
 	sb.WriteString("Do not stop before issuing exactly one such call.\n")
 	if len(commentLines) > 0 {
 		sb.WriteString("\nComments (oldest first):\n")
@@ -753,10 +753,10 @@ func (e *Executor) failTerminal(ctx context.Context, jobID string, exit *int, ca
 	return cause
 }
 
-// parkTaskOnFailure moves the run's task into `human_feedback` so the
+// parkTaskOnFailure moves the run's task into `human` so the
 // poller stops re-picking it. Without this, a permanent failure (e.g.
 // agent_config_invalid, pi binary missing) spams daemon_runs forever
-// because the task stays in in_workflow with no queued/running row.
+// because the task stays in work with no queued/running row.
 //
 // Step-pointer policy:
 //
@@ -785,13 +785,13 @@ func (e *Executor) parkTaskOnFailure(ctx context.Context, jobID string, cause er
 	if err != nil {
 		return
 	}
-	// Only park tasks that are still in_workflow. If a human raced us
+	// Only park tasks that are still work. If a human raced us
 	// (e.g. typed `autosk done` while the executor was failing), leave
 	// their terminal status intact.
-	if tk.Status != store.StatusInWorkflow {
+	if tk.Status != store.StatusWork {
 		return
 	}
-	parked := store.StatusHumanFeedback
+	parked := store.StatusHuman
 	patch := store.TaskPatch{Status: &parked}
 	var ate *advanceTargetError
 	if errors.As(cause, &ate) && ate.TargetStepID != "" {

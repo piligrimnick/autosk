@@ -28,18 +28,27 @@ import (
 type RunStatus string
 
 const (
-	StatusQueued    RunStatus = "queued"
-	StatusRunning   RunStatus = "running"
-	StatusDone      RunStatus = "done"
-	StatusFailed    RunStatus = "failed"
-	StatusCancelled RunStatus = "cancelled"
+	StatusQueued  RunStatus = "queued"
+	StatusRunning RunStatus = "running"
+	StatusDone    RunStatus = "done"
+	StatusFailed  RunStatus = "failed"
+	StatusCancel  RunStatus = "cancel"
 )
 
-// Valid reports whether s is one of the five allowed values.
+// AllStatuses returns the run-status enum in canonical order. This is
+// the single source of truth for the closed set so the conformance
+// length guard and any future iterator picks up new values
+// automatically.
+func AllStatuses() []RunStatus {
+	return []RunStatus{StatusQueued, StatusRunning, StatusDone, StatusFailed, StatusCancel}
+}
+
+// Valid reports whether s is one of the allowed values.
 func (s RunStatus) Valid() bool {
-	switch s {
-	case StatusQueued, StatusRunning, StatusDone, StatusFailed, StatusCancelled:
-		return true
+	for _, v := range AllStatuses() {
+		if s == v {
+			return true
+		}
 	}
 	return false
 }
@@ -47,7 +56,7 @@ func (s RunStatus) Valid() bool {
 // IsTerminal reports whether s is a sticky terminal status.
 func (s RunStatus) IsTerminal() bool {
 	switch s {
-	case StatusDone, StatusFailed, StatusCancelled:
+	case StatusDone, StatusFailed, StatusCancel:
 		return true
 	}
 	return false
@@ -245,9 +254,9 @@ func (s *Store) MarkFailed(ctx context.Context, jobID string, exitCode *int, err
 	return s.markTerminal(ctx, jobID, StatusFailed, exitCode, errMsg, nil)
 }
 
-// MarkCancelled transitions to cancelled.
+// MarkCancelled transitions to cancel.
 func (s *Store) MarkCancelled(ctx context.Context, jobID string, exitCode *int) (Run, error) {
-	return s.markTerminal(ctx, jobID, StatusCancelled, exitCode, "", nil)
+	return s.markTerminal(ctx, jobID, StatusCancel, exitCode, "", nil)
 }
 
 func (s *Store) markTerminal(

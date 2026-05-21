@@ -7,7 +7,7 @@ var (
 	// ErrNotFound — the requested task does not exist.
 	ErrNotFound = errors.New("task not found")
 
-	// ErrNotClaimable — the task is in a terminal status (done or cancelled).
+	// ErrNotClaimable — the task is in a terminal status (done or cancel).
 	ErrNotClaimable = errors.New("task is not in a claimable state")
 
 	// ErrSelfBlock — a task cannot block itself.

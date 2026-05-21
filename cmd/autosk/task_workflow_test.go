@@ -59,14 +59,14 @@ func TestCreateTask_WorkflowEnforcement(t *testing.T) {
 	defer fx.close()
 	ctx := context.Background()
 
-	// status=in_workflow without current_step_id ⇒ validation fails.
+	// status=work without current_step_id ⇒ validation fails.
 	_, err := fx.s.CreateTask(ctx, store.Task{
 		Title:    "bad",
-		Status:   store.StatusInWorkflow,
+		Status:   store.StatusWork,
 		Priority: 2,
 	})
-	if err == nil || !strings.Contains(err.Error(), "in_workflow requires") {
-		t.Fatalf("want in_workflow validation error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "work requires") {
+		t.Fatalf("want work validation error, got %v", err)
 	}
 
 	// status=new with current_step_id set ⇒ validation fails.
@@ -81,10 +81,10 @@ func TestCreateTask_WorkflowEnforcement(t *testing.T) {
 		t.Fatalf("want new-without-step error, got %v", err)
 	}
 
-	// Happy path: in_workflow + step + workflow.
+	// Happy path: work + step + workflow.
 	t1, err := fx.s.CreateTask(ctx, store.Task{
 		Title:         "good",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    fx.wf.ID,
 		CurrentStepID: stepID,
@@ -92,7 +92,7 @@ func TestCreateTask_WorkflowEnforcement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if t1.Status != store.StatusInWorkflow || t1.WorkflowID != fx.wf.ID || t1.CurrentStepID != stepID {
+	if t1.Status != store.StatusWork || t1.WorkflowID != fx.wf.ID || t1.CurrentStepID != stepID {
 		t.Fatalf("round-trip: %+v", t1)
 	}
 }
@@ -169,7 +169,7 @@ func TestSyntheticWorkflow_CreatedOnDemand(t *testing.T) {
 	// Now create a task --agent developer (simulated via store ops).
 	t1, err := fx.s.CreateTask(ctx, store.Task{
 		Title:         "go",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    w1.ID,
 		CurrentStepID: w1.Steps[0].ID,
@@ -190,7 +190,7 @@ func mustCreateInWorkflow(t *testing.T, fx *fixtureWF, title string) store.Task 
 	t.Helper()
 	t1, err := fx.s.CreateTask(context.Background(), store.Task{
 		Title:         title,
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    fx.wf.ID,
 		CurrentStepID: fx.wf.FirstStepID,

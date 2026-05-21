@@ -62,7 +62,7 @@ func newCappedTask(t *testing.T, dl storeWrapper, w workflow.Workflow, stepID st
 	t.Helper()
 	tk, err := dl.CreateTask(context.Background(), store.Task{
 		Title:         "Capped",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    w.ID,
 		CurrentStepID: stepID,
@@ -89,7 +89,7 @@ func TestEnterStep_HappyPath_BumpsCounter(t *testing.T) {
 	devID := stepIDByName(w, "dev")
 	reviewID := stepIDByName(w, "review")
 
-	// Seed: task created in_workflow at dev (no counter recorded yet —
+	// Seed: task created work at dev (no counter recorded yet —
 	// the test exercises EnterStep directly, not the create path).
 	tk := newCappedTask(t, fx.dl, w, devID)
 
@@ -105,7 +105,7 @@ func TestEnterStep_HappyPath_BumpsCounter(t *testing.T) {
 	if got.CurrentStepID != reviewID {
 		t.Fatalf("current_step_id: %s (want %s)", got.CurrentStepID, reviewID)
 	}
-	if got.Status != store.StatusInWorkflow {
+	if got.Status != store.StatusWork {
 		t.Fatalf("status: %s", got.Status)
 	}
 	if meta.GetStepVisits(got.Metadata)[reviewID] != 1 {
@@ -245,7 +245,7 @@ func TestEnterStep_StampsWorkflowID(t *testing.T) {
 	if got.WorkflowID != w.ID {
 		t.Fatalf("workflow_id not stamped: %q vs %q", got.WorkflowID, w.ID)
 	}
-	if got.Status != store.StatusInWorkflow {
+	if got.Status != store.StatusWork {
 		t.Fatalf("status: %s", got.Status)
 	}
 	if meta.GetStepVisits(got.Metadata)[devID] != 1 {

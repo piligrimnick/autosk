@@ -752,7 +752,7 @@ func (gu *Gui) taskCancel(*gocui.Gui, *gocui.View) error {
 	}
 	gu.confirmThen(fmt.Sprintf("cancel %s?", t.ID), func() {
 		gu.g.OnWorker(func(_ gocui.Task) error {
-			if err := gu.ds.UpdateStatus(gu.ctx, t.ID, store.StatusCancelled); err != nil {
+			if err := gu.ds.UpdateStatus(gu.ctx, t.ID, store.StatusCancel); err != nil {
 				gu.flashf("err", "cancel: %v", err)
 				return nil
 			}

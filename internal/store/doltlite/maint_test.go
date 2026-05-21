@@ -9,10 +9,16 @@ import (
 	"autosk/internal/store/doltlite"
 )
 
-// TestCompact_FreshDBIsNoOp: dolt_gc() on a brand-new store should
-// succeed and report zero removed chunks. The parse helper should
-// pick up "0 chunks kept" / "0 chunks removed" without choking.
-func TestCompact_FreshDBIsNoOp(t *testing.T) {
+// TestCompact_FreshDB: dolt_gc() on a brand-new store should succeed,
+// report a non-empty Raw, keep a non-zero working set, and finish in
+// positive wall-clock time. The first Compact may reclaim chunks left
+// behind by migration 006 (which rebuilds tasks / step_transitions /
+// daemon_runs to apply the new CHECK enum), so we do NOT assert
+// ChunksRemoved == 0 on it. The follow-up Compact, however, runs on a
+// quiescent DB and MUST be a no-op — that preserves the documented
+// "GC on a quiescent DB is a no-op" contract that the original test
+// pinned.
+func TestCompact_FreshDB(t *testing.T) {
 	ctx := context.Background()
 	s := doltlite.New()
 	if err := s.Open(ctx, filepath.Join(t.TempDir(), "fresh.db")); err != nil {
@@ -22,18 +28,32 @@ func TestCompact_FreshDBIsNoOp(t *testing.T) {
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	res, err := s.Compact(ctx)
+	// First Compact reclaims migration leftovers (006 rebuild). The
+	// ChunksRemoved value is implementation-defined; only Kept / Raw /
+	// Duration get pinned.
+	res1, err := s.Compact(ctx)
 	if err != nil {
-		t.Fatalf("Compact: %v", err)
+		t.Fatalf("Compact #1: %v", err)
 	}
-	if res.ChunksRemoved != 0 {
-		t.Fatalf("fresh DB removed %d chunks, want 0 (raw=%q)", res.ChunksRemoved, res.Raw)
+	if res1.Raw == "" {
+		t.Fatalf("Compact #1 returned empty raw output")
 	}
-	if res.Raw == "" {
-		t.Fatalf("Compact returned empty raw output")
+	if res1.ChunksKept == 0 {
+		t.Fatalf("ChunksKept=0 on a freshly migrated DB (raw=%q)", res1.Raw)
 	}
-	if res.Duration <= 0 {
-		t.Fatalf("Compact reported non-positive duration: %v", res.Duration)
+	if res1.Duration <= 0 {
+		t.Fatalf("Compact #1 reported non-positive duration: %v", res1.Duration)
+	}
+	// Second Compact on a now-quiescent DB MUST be a no-op. This is the
+	// invariant the original (pre-006) test pinned — a regression in
+	// dolt_gc() that started reclaiming live chunks would trip here.
+	res2, err := s.Compact(ctx)
+	if err != nil {
+		t.Fatalf("Compact #2: %v", err)
+	}
+	if res2.ChunksRemoved != 0 {
+		t.Fatalf("quiescent Compact removed %d chunks (raw=%q)",
+			res2.ChunksRemoved, res2.Raw)
 	}
 }
 
@@ -54,7 +74,7 @@ func TestCompact_AfterWrites_ReclaimsChunks(t *testing.T) {
 	// 50 tasks × 2 status updates each is roughly the working set the
 	// daemon racks up in ~20 minutes of busy activity.
 	done := store.StatusDone
-	cancelled := store.StatusCancelled
+	cancel := store.StatusCancel
 	for i := 0; i < 50; i++ {
 		tk, err := s.CreateTask(ctx, store.Task{
 			Title:  "gc-churn",
@@ -66,8 +86,8 @@ func TestCompact_AfterWrites_ReclaimsChunks(t *testing.T) {
 		if _, err := s.UpdateTask(ctx, tk.ID, store.TaskPatch{Status: &done}); err != nil {
 			t.Fatalf("UpdateTask done: %v", err)
 		}
-		if _, err := s.UpdateTask(ctx, tk.ID, store.TaskPatch{Status: &cancelled}); err != nil {
-			t.Fatalf("UpdateTask cancelled: %v", err)
+		if _, err := s.UpdateTask(ctx, tk.ID, store.TaskPatch{Status: &cancel}); err != nil {
+			t.Fatalf("UpdateTask cancel: %v", err)
 		}
 	}
 	res, err := s.Compact(ctx)

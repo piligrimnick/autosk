@@ -39,8 +39,13 @@ carries `blocked_by`, `blocks`, `blocked`, plus `workflow_id` / `current_step`
 / `current_agent` when the task is inside a workflow.
 
 `workflow` and `agent` are mutually exclusive. `step` requires `workflow`.
-Status edits on `in_workflow` tasks are rejected by autosk — advance via
+Status edits on `work` tasks are rejected by autosk — advance via
 `autosk_step` instead.
+
+`status` values: `new` | `work` | `human` | `done` | `cancel` (every
+spelling is at most 7 characters). Legacy spellings (`in_workflow`,
+`human_feedback`, `cancelled`) are rejected at the JSON-RPC schema
+boundary.
 
 ### `autosk_comment`
 
@@ -60,7 +65,7 @@ immutable; "edits" are appended as new comments.
 | next   | `task_id`, `to`          |
 
 `to` is a sibling step name in the current workflow, or one of
-`done` / `cancelled` / `human_feedback`. Records a `step_signals` row that the
+`done` / `cancel` / `human`. Records a `step_signals` row that the
 autosk daemon consumes after the agent's turn ends.
 
 `details = { kind: "step_signal", domain: "step", action: "next", signal: {...} }`.

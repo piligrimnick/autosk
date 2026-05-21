@@ -114,7 +114,7 @@ func TestStandardBranch_BuildsPiOptsFromPackage(t *testing.T) {
 	}
 	tk, err := ts.CreateTask(ctx, store.Task{
 		Title:         "Do",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    w.ID,
 		CurrentStepID: w.Steps[0].ID,
@@ -255,7 +255,7 @@ func TestStandardBranch_StepAgentParamsOverridePackage(t *testing.T) {
 
 	tk, err := ts.CreateTask(ctx, store.Task{
 		Title:         "Generic task",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    w.ID,
 		CurrentStepID: w.Steps[0].ID,
@@ -387,7 +387,7 @@ func TestStandardBranch_StepParamsOnRunnerPackageFails(t *testing.T) {
 	}
 	tk, err := ts.CreateTask(ctx, store.Task{
 		Title:         "Bad override",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    w.ID,
 		CurrentStepID: w.Steps[0].ID,

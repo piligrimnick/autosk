@@ -634,7 +634,7 @@ func TestWorktree_CLI_Rm_OnHumanFeedback_Permitted(t *testing.T) {
 	// worktree_missing flow that the daemon now auto-recovers, but
 	// which an operator can still invoke manually): run parks \u2192
 	// `autosk worktree rm <id>` \u2192 cancel \u2192 reopen \u2192 enroll.
-	// `worktree rm` must therefore NOT refuse `human_feedback` tasks.
+	// `worktree rm` must therefore NOT refuse `human` tasks.
 	root := makeIsolatedProject(t)
 	installFixturesAndIsolatedWF(t, root, "iso-park")
 
@@ -643,16 +643,16 @@ func TestWorktree_CLI_Rm_OnHumanFeedback_Permitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := createIDFromOutput(out)
-	// Park the task via raw SQL (same trick as enroll's human_feedback
+	// Park the task via raw SQL (same trick as enroll's human
 	// test) \u2014 keep current_step_id intact so the CHECK passes.
-	q := fmt.Sprintf("UPDATE tasks SET status='human_feedback' WHERE id='%s'", id)
+	q := fmt.Sprintf("UPDATE tasks SET status='human' WHERE id='%s'", id)
 	if _, err := runRoot(t, root, "sql", "--write", q); err != nil {
-		t.Fatalf("force human_feedback: %v", err)
+		t.Fatalf("force human: %v", err)
 	}
 
 	rmOut, err := runRoot(t, root, "worktree", "rm", id)
 	if err != nil {
-		t.Fatalf("`worktree rm` must accept human_feedback tasks (plan \u00a78.3 recovery): %v\n%s", err, rmOut)
+		t.Fatalf("`worktree rm` must accept human tasks (plan \u00a78.3 recovery): %v\n%s", err, rmOut)
 	}
 }
 
@@ -665,13 +665,13 @@ func TestWorktree_CLI_Rm_OnInWorkflow_Refused(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := createIDFromOutput(out)
-	// Task is now in_workflow. `worktree rm` must refuse.
+	// Task is now work. `worktree rm` must refuse.
 	_, err = runRoot(t, root, "worktree", "rm", id)
 	if err == nil {
-		t.Fatal("expected `worktree rm` to refuse an in_workflow task")
+		t.Fatal("expected `worktree rm` to refuse a work task")
 	}
-	if !strings.Contains(err.Error(), "in_workflow") {
-		t.Errorf("error should mention in_workflow, got: %v", err)
+	if !strings.Contains(err.Error(), "work") {
+		t.Errorf("error should mention work, got: %v", err)
 	}
 }
 

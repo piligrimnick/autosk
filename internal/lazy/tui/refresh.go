@@ -105,7 +105,7 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 	// empty Statuses slice is the datasource's escape hatch for
 	// "no status WHERE clause" (nil would mean "OpenStatuses", i.e.
 	// what `autosk list` defaults to). The operator needs to see
-	// recently-done / cancelled work alongside the open queue,
+	// recently-done / cancel work alongside the open queue,
 	// and the by-recency sort below keeps stale terminal rows from
 	// drowning out fresh work.
 	tasksFilter := datasource.TaskFilter{Statuses: []store.Status{}}

@@ -605,15 +605,15 @@ func renderInspectorSignals(sigs []datasource.Signal, comments []datasource.Comm
 
 // renderSignalTarget colours a step_signals.target value: a target
 // that names a sibling step gets the StepName hue (purple); a
-// lifecycle terminal (done / cancelled / human_feedback) gets its
-// task-status hue so the kickback chain reads as "step → status"
-// with each half visually grounded in its panel counterpart.
+// lifecycle terminal (done / cancel / human) gets its task-status
+// hue so the kickback chain reads as "step → status" with each half
+// visually grounded in its panel counterpart.
 func renderSignalTarget(target string) string {
 	if target == "" {
 		return ""
 	}
 	switch store.Status(target) {
-	case store.StatusDone, store.StatusCancelled, store.StatusHumanFeedback:
+	case store.StatusDone, store.StatusCancel, store.StatusHuman:
 		return styleForTaskStatus(store.Status(target)).Render(target)
 	}
 	return renderStepName(target)

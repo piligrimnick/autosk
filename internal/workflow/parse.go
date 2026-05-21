@@ -142,12 +142,12 @@ func (p *AgentParams) IsZero() bool {
 // of Step and TaskStatus is set; the parser enforces that.
 type TransitionDef struct {
 	Step       string // target step name
-	TaskStatus string // one of human_feedback|done|cancelled
+	TaskStatus string // one of human|done|cancel
 	PromptRule string
 }
 
 // IsTaskStatus reports whether this transition terminates the workflow
-// (or routes to human_feedback) rather than advancing to a sibling step.
+// (or routes to human) rather than advancing to a sibling step.
 func (t TransitionDef) IsTaskStatus() bool { return t.TaskStatus != "" }
 
 // rawDoc mirrors the on-disk shape one-to-one for json.Unmarshal.

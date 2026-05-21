@@ -11,13 +11,13 @@ import (
 // CLI escape hatch from a parked, capped task:
 //
 //  1. Enroll a task into a 2-step capped workflow (caps small).
-//  2. Force the task into human_feedback (raw SQL, mirroring
+//  2. Force the task into human (raw SQL, mirroring
 //     TestEnroll_HumanFeedback_Rejected).
 //  3. `autosk resume --to dev` — expect an error whose message contains
 //     `cannot enter step` AND the concrete task id (regression guard
 //     against the literal `<id>` placeholder leaking into the hint).
 //  4. `autosk metadata reset-visits --step dev` — expect success.
-//  5. `autosk resume --to dev` — expect success, in_workflow at dev,
+//  5. `autosk resume --to dev` — expect success, work at dev,
 //     counter dev=1.
 //
 // This is the "what does an operator type" coverage that the engine
@@ -45,11 +45,11 @@ func TestResume_CapExceeded_HintsResetThenSucceeds(t *testing.T) {
 		"--key", "step_visits."+devStepID(t, dir, "capped"), "--value", "2"); err != nil {
 		t.Fatal(err)
 	}
-	// Park the task in human_feedback so resume is the only path
+	// Park the task in human so resume is the only path
 	// forward.
-	q := fmt.Sprintf("UPDATE tasks SET status='human_feedback' WHERE id='%s'", id)
+	q := fmt.Sprintf("UPDATE tasks SET status='human' WHERE id='%s'", id)
 	if out, err := runRoot(t, dir, "sql", "--write", q); err != nil {
-		t.Fatalf("force human_feedback: %v\n%s", err, out)
+		t.Fatalf("force human: %v\n%s", err, out)
 	}
 
 	// 3. resume --to dev hits the cap. The hint must include this
@@ -79,7 +79,7 @@ func TestResume_CapExceeded_HintsResetThenSucceeds(t *testing.T) {
 		t.Fatalf("resume after reset: %v", err)
 	}
 	st := statusOf(t, dir, id)
-	if st["status"] != "in_workflow" {
+	if st["status"] != "work" {
 		t.Fatalf("status after resume: %v", st["status"])
 	}
 	md, _ := st["metadata"].(map[string]any)
@@ -137,7 +137,7 @@ func TestResume_NoTo_DoesNotBumpCounter(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Park.
-	q := fmt.Sprintf("UPDATE tasks SET status='human_feedback' WHERE id='%s'", id)
+	q := fmt.Sprintf("UPDATE tasks SET status='human' WHERE id='%s'", id)
 	if _, err := runRoot(t, dir, "sql", "--write", q); err != nil {
 		t.Fatal(err)
 	}

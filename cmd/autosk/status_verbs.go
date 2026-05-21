@@ -26,16 +26,17 @@ func newDoneCmd() *cobra.Command {
 }
 
 func newCancelCmd() *cobra.Command {
-	return statusSetterCmd("cancel", "Mark a task cancelled", store.StatusCancelled)
+	return statusSetterCmd("cancel", "Cancel a task", store.StatusCancel)
 }
 
-// newReopenCmd: status → new, but only from done|cancelled. tasksvc.Reopen
-// enforces the precondition AND clears current_step_id so the CHECK in
-// 001_init.sql stays satisfied; workflow_id is preserved for audit (plan §7).
+// newReopenCmd: status → new, but only from done|cancel. tasksvc.Reopen
+// enforces the precondition AND clears current_step_id so the CHECK
+// invariant (status='work' ⇔ current_step_id IS NOT NULL) stays
+// satisfied; workflow_id is preserved for audit (plan §7).
 func newReopenCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reopen <id>",
-		Short: "Reopen a done/cancelled task (→ new)",
+		Short: "Reopen a closed task (→ new)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, closeFn, err := openStore(cmd.Context(), true)
@@ -54,8 +55,8 @@ func newReopenCmd() *cobra.Command {
 }
 
 // statusSetterCmd builds a `<verb> <id>` command that sets status via
-// tasksvc. Terminal verbs (done/cancelled) also get the worktree
-// cleanup from tasksvc when the task ran under an isolated workflow.
+// tasksvc. Terminal verbs (done/cancel) also get the worktree cleanup
+// from tasksvc when the task ran under an isolated workflow.
 func statusSetterCmd(use, short string, target store.Status) *cobra.Command {
 	return &cobra.Command{
 		Use:   use + " <id>",
@@ -87,7 +88,7 @@ func statusSetterCmd(use, short string, target store.Status) *cobra.Command {
 			switch target {
 			case store.StatusDone:
 				t, err = tasksvc.Done(cmd.Context(), s, args[0], opts)
-			case store.StatusCancelled:
+			case store.StatusCancel:
 				t, err = tasksvc.Cancel(cmd.Context(), s, args[0], opts)
 			default:
 				return fmt.Errorf("statusSetterCmd: unsupported target %q", target)
@@ -102,7 +103,7 @@ func statusSetterCmd(use, short string, target store.Status) *cobra.Command {
 }
 
 // newUpdateCmd is the generic field-update verb. Status edits flow
-// through tasksvc.SetStatus so the same rules (no in_workflow source/target,
+// through tasksvc.SetStatus so the same rules (no work source/target,
 // current_step_id cleanup, worktree cleanup on terminal targets) apply.
 func newUpdateCmd() *cobra.Command {
 	var (
@@ -135,7 +136,7 @@ func newUpdateCmd() *cobra.Command {
 			if cmd.Flags().Changed("status") {
 				st := store.Status(statusFlag)
 				if !st.Valid() {
-					return fmt.Errorf("invalid status %q (valid: new, in_workflow, human_feedback, done, cancelled)", statusFlag)
+					return fmt.Errorf("invalid status %q (valid: new, work, human, done, cancel)", statusFlag)
 				}
 				statusPatch = &st
 			}
@@ -178,7 +179,7 @@ func newUpdateCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&title, "title", "", "new title")
 	cmd.Flags().StringVarP(&description, "description", "d", "", "new description")
-	cmd.Flags().StringVar(&statusFlag, "status", "", "new status (new|human_feedback|done|cancelled)")
+	cmd.Flags().StringVar(&statusFlag, "status", "", "new status (new|human|done|cancel)")
 	cmd.Flags().IntVarP(&priority, "priority", "p", 0, "new priority (0..3)")
 	return cmd
 }

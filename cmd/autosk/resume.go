@@ -12,14 +12,14 @@ import (
 	"autosk/internal/workflow"
 )
 
-// newResumeCmd: `autosk resume <id> [--to STEP]` — out of human_feedback.
+// newResumeCmd: `autosk resume <id> [--to STEP]` — out of human.
 // Plan §5.6.
 //
 // Visit-counter semantics (docs/plans/20260520-Step-Visit-Limits.md):
 //
 //   - `resume <id>` with NO --to does NOT count as a transition. The
-//     task is flipped back to in_workflow at the same step; no visit
-//     bump and no cap check.
+//     task is flipped back to work at the same step; no visit bump and
+//     no cap check.
 //   - `resume <id> --to STEP` IS treated as a deliberate transition
 //     into STEP, even when STEP == current_step. It goes through
 //     workflow.EnterStep so the visit counter bumps and step.max_visits
@@ -28,8 +28,8 @@ func newResumeCmd() *cobra.Command {
 	var toStep string
 	cmd := &cobra.Command{
 		Use:   "resume <id>",
-		Short: "Resume a task from human_feedback back into the workflow",
-		Long: "Move a task out of `human_feedback` and back into `in_workflow`.\n\n" +
+		Short: "Resume a task from human back into the workflow",
+		Long: "Move a task out of `human` and back into `work`.\n\n" +
 			"By default it returns to the step it was waiting in (so the same\n" +
 			"agent sees the new comments and retries). Use --to STEP to jump\n" +
 			"to a different step in the same workflow.\n\n" +
@@ -62,8 +62,8 @@ func newResumeCmd() *cobra.Command {
 				}
 				return err
 			}
-			if cur.Status != store.StatusHumanFeedback {
-				return fmt.Errorf("cannot resume task in status %q (only `human_feedback`)", cur.Status)
+			if cur.Status != store.StatusHuman {
+				return fmt.Errorf("cannot resume task in status %q (only `human`)", cur.Status)
 			}
 			if cur.WorkflowID == "" {
 				return fmt.Errorf("task %s has no workflow_id; cannot resume", taskID)
@@ -76,7 +76,7 @@ func newResumeCmd() *cobra.Command {
 				if cur.CurrentStepID == "" {
 					return errors.New("task has no current_step_id; pass --to STEP")
 				}
-				newStatus := store.StatusInWorkflow
+				newStatus := store.StatusWork
 				t, err := s.UpdateTask(cmd.Context(), taskID, store.TaskPatch{Status: &newStatus})
 				if err != nil {
 					return err

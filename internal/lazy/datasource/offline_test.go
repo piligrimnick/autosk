@@ -242,8 +242,8 @@ func TestOfflineEnroll_BumpsFirstStepCounter(t *testing.T) {
 	if tk.CurrentStepID != devID {
 		t.Fatalf("current_step_id: %q (want dev=%q)", tk.CurrentStepID, devID)
 	}
-	if tk.Status != store.StatusInWorkflow {
-		t.Fatalf("status: %s (want in_workflow)", tk.Status)
+	if tk.Status != store.StatusWork {
+		t.Fatalf("status: %s (want work)", tk.Status)
 	}
 	sv, _ := tk.Metadata["step_visits"].(map[string]any)
 	if sv == nil {
@@ -274,8 +274,8 @@ func TestOfflineEnrollAgent_BumpsSyntheticStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if tk.Status != store.StatusInWorkflow {
-		t.Fatalf("status: %s (want in_workflow)", tk.Status)
+	if tk.Status != store.StatusWork {
+		t.Fatalf("status: %s (want work)", tk.Status)
 	}
 	if tk.WorkflowID == "" {
 		t.Fatal("workflow_id not stamped on the task")
@@ -311,8 +311,8 @@ func TestOfflineResume_WithTo_BumpsTargetStep(t *testing.T) {
 	}
 	// Park on dev so Resume is callable. We bypass the executor by
 	// flipping status directly — the only Resume contract is that the
-	// task is in human_feedback.
-	parked := store.StatusHumanFeedback
+	// task is in human.
+	parked := store.StatusHuman
 	if _, err := ts.UpdateTask(ctx, id, store.TaskPatch{Status: &parked}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
@@ -323,8 +323,8 @@ func TestOfflineResume_WithTo_BumpsTargetStep(t *testing.T) {
 	if tk.CurrentStepID != revID {
 		t.Fatalf("current_step_id: %q (want review=%q)", tk.CurrentStepID, revID)
 	}
-	if tk.Status != store.StatusInWorkflow {
-		t.Fatalf("status: %s (want in_workflow)", tk.Status)
+	if tk.Status != store.StatusWork {
+		t.Fatalf("status: %s (want work)", tk.Status)
 	}
 	sv, _ := tk.Metadata["step_visits"].(map[string]any)
 	if v, _ := sv[revID].(float64); int(v) != 1 {
@@ -339,7 +339,7 @@ func TestOfflineResume_WithTo_BumpsTargetStep(t *testing.T) {
 // TestOfflineResume_NoTo_NoCounterBump covers the no-transition
 // branch of Resume. Park a task on "dev", Resume(""), assert the
 // step pointer and counters are unchanged — only the status flips
-// back to in_workflow. Pins the documented "no transition" rule
+// back to work. Pins the documented "no transition" rule
 // (docs/plans/20260520-Step-Visit-Limits.md) for the lazy surface.
 func TestOfflineResume_NoTo_NoCounterBump(t *testing.T) {
 	ctx := context.Background()
@@ -356,7 +356,7 @@ func TestOfflineResume_NoTo_NoCounterBump(t *testing.T) {
 	}
 	pre, _ := ts.GetTask(ctx, id)
 	// Park (status flip only — leaves current_step_id / metadata alone).
-	parked := store.StatusHumanFeedback
+	parked := store.StatusHuman
 	if _, err := ts.UpdateTask(ctx, id, store.TaskPatch{Status: &parked}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
@@ -364,8 +364,8 @@ func TestOfflineResume_NoTo_NoCounterBump(t *testing.T) {
 		t.Fatalf("resume: %v", err)
 	}
 	tk, _ := ts.GetTask(ctx, id)
-	if tk.Status != store.StatusInWorkflow {
-		t.Fatalf("status: %s (want in_workflow)", tk.Status)
+	if tk.Status != store.StatusWork {
+		t.Fatalf("status: %s (want work)", tk.Status)
 	}
 	if tk.CurrentStepID != devID {
 		t.Fatalf("current_step_id: %q (want dev=%q; no-transition resume must not move the pointer)", tk.CurrentStepID, devID)
@@ -384,9 +384,9 @@ func TestOfflineResume_NoTo_NoCounterBump(t *testing.T) {
 // TestOfflineResume_NoTo_RefusesWhenNoCurrentStep mirrors the CLI's
 // `task has no current_step_id; pass --to STEP` guard in
 // cmd/autosk/resume.go. Without the guard the lazy path would trip
-// the schema CHECK in 001_init.sql:55 (in_workflow requires a
-// non-NULL current_step_id) and surface a cryptic doltlite error in
-// the flash bar instead of an actionable hint.
+// the SQL CHECK invariant (status='work' ⇔ current_step_id IS NOT
+// NULL) and surface a cryptic doltlite error in the flash bar
+// instead of an actionable hint.
 func TestOfflineResume_NoTo_RefusesWhenNoCurrentStep(t *testing.T) {
 	ctx := context.Background()
 	ds, ts, closeFn := newOfflineFx(t)
@@ -401,10 +401,10 @@ func TestOfflineResume_NoTo_RefusesWhenNoCurrentStep(t *testing.T) {
 		t.Fatalf("enroll: %v", err)
 	}
 	// Hand-edit to mimic the pathological state: parked in
-	// human_feedback with current_step_id NULL. The schema allows
-	// human_feedback with a NULL step (it's only in_workflow that
+	// human with current_step_id NULL. The schema allows
+	// human with a NULL step (it's only work that
 	// requires it), so the corrupted intermediate state is reachable.
-	parked := store.StatusHumanFeedback
+	parked := store.StatusHuman
 	empty := ""
 	if _, err := ts.UpdateTask(ctx, id, store.TaskPatch{Status: &parked, CurrentStepID: &empty}); err != nil {
 		t.Fatalf("park: %v", err)
@@ -419,8 +419,8 @@ func TestOfflineResume_NoTo_RefusesWhenNoCurrentStep(t *testing.T) {
 	// Status must NOT have flipped — the operator has to choose a
 	// target step before the task moves anywhere.
 	tk, _ := ts.GetTask(ctx, id)
-	if tk.Status != store.StatusHumanFeedback {
-		t.Fatalf("status flipped on refused resume: %s (want human_feedback)", tk.Status)
+	if tk.Status != store.StatusHuman {
+		t.Fatalf("status flipped on refused resume: %s (want human)", tk.Status)
 	}
 }
 

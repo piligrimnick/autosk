@@ -209,12 +209,12 @@ func validateForCreate(t *store.Task) error {
 		return store.ErrInvalidPriority
 	}
 	switch t.Status {
-	case store.StatusInWorkflow:
+	case store.StatusWork:
 		if t.CurrentStepID == "" || t.WorkflowID == "" {
-			return fmt.Errorf("%w: status=in_workflow requires workflow_id and current_step_id",
+			return fmt.Errorf("%w: status=work requires workflow_id and current_step_id",
 				store.ErrInvalidStatus)
 		}
-	case store.StatusNew, store.StatusDone, store.StatusCancelled:
+	case store.StatusNew, store.StatusDone, store.StatusCancel:
 		if t.CurrentStepID != "" {
 			return fmt.Errorf("%w: status=%s must have current_step_id cleared",
 				store.ErrInvalidStatus, t.Status)

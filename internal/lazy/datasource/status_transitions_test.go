@@ -11,9 +11,10 @@ import (
 )
 
 // seedHumanFeedbackTask creates a task and forces it into
-// status='human_feedback' with a non-null current_step_id — the
+// status='human' with a non-null current_step_id — the
 // canonical "workflow kicked back to a human" shape that exercises
-// the CHECK in 001_init.sql. Returns the task id.
+// the SQL CHECK invariant (status='work' ⇔ current_step_id IS NOT
+// NULL). Returns the task id.
 func seedHumanFeedbackTask(t *testing.T, off *datasource.Offline, dl *doltlite.Store) string {
 	t.Helper()
 	ctx := context.Background()
@@ -34,19 +35,20 @@ func seedHumanFeedbackTask(t *testing.T, off *datasource.Offline, dl *doltlite.S
 		t.Fatalf("seed step: %v", err)
 	}
 	wf, st := "wf-1", "st-1"
-	hf := store.StatusHumanFeedback
+	hf := store.StatusHuman
 	if _, err := dl.UpdateTask(ctx, id, store.TaskPatch{WorkflowID: &wf, CurrentStepID: &st, Status: &hf}); err != nil {
-		t.Fatalf("seed human_feedback: %v", err)
+		t.Fatalf("seed human: %v", err)
 	}
 	return id
 }
 
 // TestOffline_UpdateStatus_DoneClearsCurrentStep is the regression for
-// "lazy can't mark `as-4de8` done": a task in human_feedback with a
-// non-null current_step_id used to trip the CHECK in 001_init.sql when
-// lazy's UpdateStatus did a naive {Status: &StatusDone} patch. Since
-// the refactor to internal/tasksvc the CLI and lazy take the same code
-// path, so the terminal verb also clears current_step_id.
+// "lazy can't mark `as-4de8` done": a task in human with a non-null
+// current_step_id used to trip the SQL CHECK invariant (status='work'
+// ⇔ current_step_id IS NOT NULL) when lazy's UpdateStatus did a naive
+// {Status: &StatusDone} patch. Since the refactor to internal/tasksvc
+// the CLI and lazy take the same code path, so the terminal verb also
+// clears current_step_id.
 func TestOffline_UpdateStatus_DoneClearsCurrentStep(t *testing.T) {
 	ctx := context.Background()
 	off, dl, closeFn := newOfflineFx(t)
@@ -54,7 +56,7 @@ func TestOffline_UpdateStatus_DoneClearsCurrentStep(t *testing.T) {
 	id := seedHumanFeedbackTask(t, off, dl)
 
 	if err := off.UpdateStatus(ctx, id, store.StatusDone); err != nil {
-		t.Fatalf("UpdateStatus(done) on human_feedback task: %v", err)
+		t.Fatalf("UpdateStatus(done) on human task: %v", err)
 	}
 	got, err := off.GetTask(ctx, id)
 	if err != nil {
@@ -76,12 +78,12 @@ func TestOffline_UpdateStatus_CancelClearsCurrentStep(t *testing.T) {
 	defer closeFn()
 	id := seedHumanFeedbackTask(t, off, dl)
 
-	if err := off.UpdateStatus(ctx, id, store.StatusCancelled); err != nil {
-		t.Fatalf("UpdateStatus(cancelled): %v", err)
+	if err := off.UpdateStatus(ctx, id, store.StatusCancel); err != nil {
+		t.Fatalf("UpdateStatus(cancel): %v", err)
 	}
 	got, _ := off.GetTask(ctx, id)
-	if got.Status != store.StatusCancelled {
-		t.Fatalf("status: got %q want cancelled", got.Status)
+	if got.Status != store.StatusCancel {
+		t.Fatalf("status: got %q want cancel", got.Status)
 	}
 	if got.CurrentStepID != "" {
 		t.Fatalf("current_step_id should be cleared on cancel, got %q", got.CurrentStepID)
@@ -100,13 +102,13 @@ func TestOffline_UpdateStatus_ReopenPrecondition(t *testing.T) {
 
 	err := off.UpdateStatus(ctx, id, store.StatusNew)
 	if err == nil {
-		t.Fatalf("reopen on human_feedback task should fail, got nil")
+		t.Fatalf("reopen on human task should fail, got nil")
 	}
 	if !strings.Contains(err.Error(), "cannot reopen") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got, _ := off.GetTask(ctx, id)
-	if got.Status != store.StatusHumanFeedback {
+	if got.Status != store.StatusHuman {
 		t.Fatalf("status mutated: %q", got.Status)
 	}
 }
@@ -139,14 +141,14 @@ func TestOffline_UpdateStatus_ReopenFromTerminal(t *testing.T) {
 }
 
 // TestOffline_UpdateStatus_RejectsInWorkflow: lazy must refuse to set
-// status='in_workflow' (or to change status away from in_workflow via
+// status='work' (or to change status away from work via
 // this path). Same rule the CLI's `update --status` enforces.
 func TestOffline_UpdateStatus_RejectsInWorkflow(t *testing.T) {
 	ctx := context.Background()
 	off, _, closeFn := newOfflineFx(t)
 	defer closeFn()
 	id, _ := off.CreateTask(ctx, "x", "", 2)
-	if err := off.UpdateStatus(ctx, id, store.StatusInWorkflow); err == nil {
-		t.Fatalf("setting status='in_workflow' should be rejected")
+	if err := off.UpdateStatus(ctx, id, store.StatusWork); err == nil {
+		t.Fatalf("setting status='work' should be rejected")
 	}
 }

@@ -188,7 +188,7 @@ func newDaemonServeCmd() *cobra.Command {
 	cmd.Flags().IntVar(&workers, "workers", 2, "max concurrent agent processes across all projects")
 	cmd.Flags().DurationVar(&grace, "grace", 10*time.Second, "SIGTERM grace before SIGKILL")
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 30*time.Minute, "per-turn idle timeout")
-	cmd.Flags().DurationVar(&pollInterval, "poll-interval", poller.DefaultInterval, "how often each project scans in_workflow tasks")
+	cmd.Flags().DurationVar(&pollInterval, "poll-interval", poller.DefaultInterval, "how often each project scans work tasks")
 	cmd.Flags().DurationVar(&gcInterval, "gc-interval", 0, "how often each project runs doltlite chunk-store GC (0=default 30m, <0=disabled)")
 	cmd.Flags().StringVar(&piBin, "pi-bin", "", "pi binary (default: 'pi' on PATH)")
 	cmd.Flags().StringVar(&sessionDirRoot, "session-dir-root", "", "literal parent dir for per-job session subdirs, shared across projects (default: <projectRoot>/.autosk/sessions)")
@@ -626,7 +626,7 @@ func newDaemonListCmd() *cobra.Command {
 		},
 	}
 	addClientFlags(cmd, &client)
-	cmd.Flags().StringVar(&statuses, "status", "", "comma-separated list (queued,running,done,failed,cancelled) or 'all'")
+	cmd.Flags().StringVar(&statuses, "status", "", "comma-separated list (queued,running,done,failed,cancel) or 'all'")
 	cmd.Flags().StringVar(&taskID, "task-id", "", "filter by autosk task id")
 	cmd.Flags().IntVar(&limit, "limit", 0, "max rows (0 = unlimited)")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "show every loaded project (aggregated health), not the scoped job list")

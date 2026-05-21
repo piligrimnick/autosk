@@ -25,6 +25,7 @@ type Factory func(t *testing.T) (s store.Store, cleanup func())
 // RunConformance runs every applicable suite against the factory.
 func RunConformance(t *testing.T, f Factory) {
 	t.Helper()
+	t.Run("StatusLengths", AssertStatusLengths)
 	t.Run("Lifecycle", func(t *testing.T) { testLifecycle(t, f) })
 	t.Run("MigrateIdempotent", func(t *testing.T) { testMigrateIdempotent(t, f) })
 	t.Run("RawPassthrough", func(t *testing.T) { testRawPassthrough(t, f) })

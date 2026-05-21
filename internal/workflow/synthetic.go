@@ -25,9 +25,9 @@ func SyntheticName(agentName string) string {
 //	  do:
 //	    agent: <agent>
 //	    next_steps:
-//	      - { task_status: done,           prompt_rule: ... }
-//	      - { task_status: cancelled,      prompt_rule: ... }
-//	      - { task_status: human_feedback, prompt_rule: ... }
+//	      - { task_status: done,   prompt_rule: ... }
+//	      - { task_status: cancel, prompt_rule: ... }
+//	      - { task_status: human,  prompt_rule: ... }
 func (s *Store) EnsureSingle(ctx context.Context, agentName string) (Workflow, error) {
 	if agentName == "" {
 		return Workflow{}, fmt.Errorf("agent name is empty")
@@ -51,8 +51,8 @@ func (s *Store) EnsureSingle(ctx context.Context, agentName string) (Workflow, e
 				AgentName: agentName,
 				NextSteps: []TransitionDef{
 					{TaskStatus: "done", PromptRule: "When the work is complete."},
-					{TaskStatus: "cancelled", PromptRule: "When the task cannot be completed."},
-					{TaskStatus: "human_feedback", PromptRule: "When you need a human decision or input."},
+					{TaskStatus: "cancel", PromptRule: "When the task cannot be completed."},
+					{TaskStatus: "human", PromptRule: "When you need a human decision or input."},
 				},
 			},
 		},

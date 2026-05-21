@@ -11,26 +11,30 @@ import (
 // Status is the lifecycle state of a task. See docs/plans/20260517-Workflows-Plan.md §5.1.
 //
 // Transitions are unconstrained at the SQL layer (subject only to the
-// CHECK that ties `in_workflow` to a non-null `current_step_id`). The CLI
+// CHECK that ties `work` to a non-null `current_step_id`). The CLI
 // and the daemon are responsible for the rest of the lifecycle.
 //
+// Every value is ≤ 7 characters so the TUI status column and `--status`
+// flags can render the strings without ellipsis truncation; see
+// docs/plans/20260521-Short-Statuses.md for the rename rationale.
+//
 // "blocked" is NOT a stored status. A task is blocked iff it has at least
-// one open blocker edge whose blocker is in {new, in_workflow,
-// human_feedback}; this is computed by Ready and by GetTask consumers.
+// one open blocker edge whose blocker is in {new, work, human}; this is
+// computed by Ready and by GetTask consumers.
 type Status string
 
 const (
-	StatusNew           Status = "new"
-	StatusInWorkflow    Status = "in_workflow"
-	StatusHumanFeedback Status = "human_feedback"
-	StatusDone          Status = "done"
-	StatusCancelled     Status = "cancelled"
+	StatusNew    Status = "new"
+	StatusWork   Status = "work"
+	StatusHuman  Status = "human"
+	StatusDone   Status = "done"
+	StatusCancel Status = "cancel"
 )
 
 // Valid reports whether s is one of the five allowed values.
 func (s Status) Valid() bool {
 	switch s {
-	case StatusNew, StatusInWorkflow, StatusHumanFeedback, StatusDone, StatusCancelled:
+	case StatusNew, StatusWork, StatusHuman, StatusDone, StatusCancel:
 		return true
 	}
 	return false
@@ -38,14 +42,14 @@ func (s Status) Valid() bool {
 
 // AllStatuses returns the enum in canonical order.
 func AllStatuses() []Status {
-	return []Status{StatusNew, StatusInWorkflow, StatusHumanFeedback, StatusDone, StatusCancelled}
+	return []Status{StatusNew, StatusWork, StatusHuman, StatusDone, StatusCancel}
 }
 
 // OpenStatuses returns the statuses that count as "open work" — the
 // default filter for `autosk list` and the set that keeps a task blocking
 // its dependents.
 func OpenStatuses() []Status {
-	return []Status{StatusNew, StatusInWorkflow, StatusHumanFeedback}
+	return []Status{StatusNew, StatusWork, StatusHuman}
 }
 
 // MinPriority and MaxPriority bound the priority range (0 = highest).
@@ -58,8 +62,8 @@ const (
 // Task is the core domain object.
 //
 // AuthorID, WorkflowID, CurrentStepID are nullable FKs: empty string
-// means "unset / NULL". The CHECK in 001_init.sql enforces
-// (status='in_workflow' ⇔ current_step_id IS NOT NULL).
+// means "unset / NULL". The SQL CHECK enforces the invariant
+// (status='work' ⇔ current_step_id IS NOT NULL).
 //
 // Metadata is a free-form JSON object (tasks.metadata TEXT column).
 // Nil here means "NULL on disk"; an empty map round-trips back to NULL
@@ -109,7 +113,7 @@ func (p TaskPatch) IsEmpty() bool {
 // ListFilter narrows ListTasks results.
 //
 // Semantics:
-//   - Statuses == nil  → backend default ({new, claimed} — open work).
+//   - Statuses == nil  → backend default ({new, work, human} — open work).
 //   - Statuses == []   → no filter (all statuses).
 //   - Priority == nil  → no priority filter.
 //   - Limit  ==  0     → backend default (typically unlimited or a sane cap).
@@ -187,11 +191,11 @@ type Store interface {
 	Deps(ctx context.Context, id string) (incoming, outgoing []string, err error)
 
 	// IsBlocked is the derived `blocked` flag: true iff id has at least one
-	// incoming blocker edge whose blocker's status is in {new, claimed}.
+	// incoming blocker edge whose blocker's status is in {new, work, human}.
 	IsBlocked(ctx context.Context, id string) (bool, error)
 
 	// Ready returns tasks where status='new' AND no open blocker (open =
-	// blocker in {new, claimed}). Sorted priority ASC, created_at ASC.
+	// blocker in {new, work, human}). Sorted priority ASC, created_at ASC.
 	Ready(ctx context.Context, limit int) ([]Task, error)
 
 	// Raw passthrough for `autosk sql`. Implementations may refuse writes

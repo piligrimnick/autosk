@@ -296,7 +296,7 @@ func scriptedFactory(t *testing.T, stack *e2eStack, decide func(taskID, stepName
 }
 
 // TestE2E_FeatureDev_HumanFeedback walks dev → review → validator and
-// parks at human_feedback. Then we resume back to the validator step and
+// parks at human. Then we resume back to the validator step and
 // verify the engine re-spawns and the task can be advanced again.
 func TestE2E_FeatureDev_HumanFeedback(t *testing.T) {
 	stack := newE2EStack(t)
@@ -312,9 +312,9 @@ func TestE2E_FeatureDev_HumanFeedback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Initial transitions: dev→review, review→validator, validator→human_feedback.
+	// Initial transitions: dev→review, review→validator, validator→human.
 	// After resume (back to validator), we use a different decision rule that
-	// re-routes validator → human_feedback again so we can keep ratcheting.
+	// re-routes validator → human again so we can keep ratcheting.
 	var phase atomic.Int32
 	decide := func(taskID, stepName string) string {
 		_ = phase.Load()
@@ -324,7 +324,7 @@ func TestE2E_FeatureDev_HumanFeedback(t *testing.T) {
 		case "review":
 			return "validator"
 		case "validator":
-			return "human_feedback"
+			return "human"
 		}
 		return ""
 	}
@@ -334,7 +334,7 @@ func TestE2E_FeatureDev_HumanFeedback(t *testing.T) {
 	// Create task in feature-dev at step "dev".
 	tk, err := stack.ts.CreateTask(ctx, store.Task{
 		Title:         "Implement auth",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      1,
 		WorkflowID:    wf.ID,
 		CurrentStepID: wf.FirstStepID,
@@ -343,13 +343,13 @@ func TestE2E_FeatureDev_HumanFeedback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Walk to human_feedback.
-	stack.waitForTaskStatus(t, tk.ID, store.StatusHumanFeedback, 5*time.Second)
+	// Walk to human.
+	stack.waitForTaskStatus(t, tk.ID, store.StatusHuman, 5*time.Second)
 
 	// Check current_step is preserved as "validator" (not cleared).
 	post, _ := stack.ts.GetTask(ctx, tk.ID)
 	if post.CurrentStepID == "" {
-		t.Fatal("current_step_id should be preserved on human_feedback")
+		t.Fatal("current_step_id should be preserved on human")
 	}
 	val, err := stack.wfs.FindStepByID(ctx, post.CurrentStepID)
 	if err != nil {
@@ -359,14 +359,14 @@ func TestE2E_FeatureDev_HumanFeedback(t *testing.T) {
 		t.Fatalf("expected current step to be 'validator', got %q", val.Name)
 	}
 
-	// Resume: flip status back to in_workflow at the same step. The
+	// Resume: flip status back to work at the same step. The
 	// poller picks it up again.
-	stRu := store.StatusInWorkflow
+	stRu := store.StatusWork
 	if _, err := stack.ts.UpdateTask(ctx, tk.ID, store.TaskPatch{Status: &stRu}); err != nil {
 		t.Fatal(err)
 	}
-	// After resume, the scripted agent will pick "human_feedback" again
-	// (same decide map). Wait until we observe a second human_feedback
+	// After resume, the scripted agent will pick "human" again
+	// (same decide map). Wait until we observe a second human
 	// transition. The simplest check: count daemon_runs rows for the task.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -381,8 +381,8 @@ func TestE2E_FeatureDev_HumanFeedback(t *testing.T) {
 	if len(rs) < 4 {
 		t.Fatalf("expected at least 4 daemon_runs rows after resume; got %d", len(rs))
 	}
-	// And the task should be back at human_feedback.
-	stack.waitForTaskStatus(t, tk.ID, store.StatusHumanFeedback, 3*time.Second)
+	// And the task should be back at human.
+	stack.waitForTaskStatus(t, tk.ID, store.StatusHuman, 3*time.Second)
 }
 
 // TestE2E_SingleAgent_Done covers the `--agent NAME` shorthand: the task
@@ -409,7 +409,7 @@ func TestE2E_SingleAgent_Done(t *testing.T) {
 
 	tk, err := stack.ts.CreateTask(ctx, store.Task{
 		Title:         "Bump version",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    syn.ID,
 		CurrentStepID: syn.Steps[0].ID,
@@ -438,7 +438,7 @@ func TestE2E_SingleAgent_Done(t *testing.T) {
 // TestE2E_MaxVisitsLoop_ParksThenReset drives a dev↔review loop
 // (each capped at max_visits=2). After 4 successful advances the 5th
 // must hit step_max_visits_exceeded and park the task to
-// human_feedback. After `metadata reset-visits` + resume the loop can
+// human. After `metadata reset-visits` + resume the loop can
 // continue.
 func TestE2E_MaxVisitsLoop_ParksThenReset(t *testing.T) {
 	stack := newE2EStack(t)
@@ -493,7 +493,7 @@ func TestE2E_MaxVisitsLoop_ParksThenReset(t *testing.T) {
 	// at attempt 5 should hit the cap and park.
 	tk, err := stack.ts.CreateTask(ctx, store.Task{
 		Title:         "loop me",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      1,
 		WorkflowID:    wf.ID,
 		CurrentStepID: devID,
@@ -502,8 +502,8 @@ func TestE2E_MaxVisitsLoop_ParksThenReset(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wait for the cap to fire and park the task to human_feedback.
-	stack.waitForTaskStatus(t, tk.ID, store.StatusHumanFeedback, 8*time.Second)
+	// Wait for the cap to fire and park the task to human.
+	stack.waitForTaskStatus(t, tk.ID, store.StatusHuman, 8*time.Second)
 
 	// Verify the parking shape:
 	//   - current_step_id moves to the TARGET of the failed advance.
@@ -544,7 +544,7 @@ func TestE2E_MaxVisitsLoop_ParksThenReset(t *testing.T) {
 	// for. This exercises the full mapEnterStepError + commitWrite +
 	// audit-commit path that an operator would actually run. The e2e
 	// stack and the CLI both open the same on-disk DB; the daemon's
-	// task is parked (status='human_feedback') so there's no contention.
+	// task is parked (status='human') so there's no contention.
 	dbPath := filepath.Join(stack.projDir, "test.db")
 	if out, err := runRoot(t, stack.projDir, "--db", dbPath, "metadata", "reset-visits", tk.ID); err != nil {
 		t.Fatalf("metadata reset-visits via CLI: %v\n%s", err, out)
@@ -565,7 +565,7 @@ func TestE2E_MaxVisitsLoop_ParksThenReset(t *testing.T) {
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		tkNow, _ := stack.ts.GetTask(ctx, tk.ID)
-		if tkNow.Status == store.StatusHumanFeedback {
+		if tkNow.Status == store.StatusHuman {
 			sv := tkNow.Metadata["step_visits"].(map[string]any)
 			devCount, _ := sv[devID].(float64)
 			revCount, _ := sv[reviewID].(float64)
@@ -600,7 +600,7 @@ func TestE2E_Kickback_FailsAfterMax(t *testing.T) {
 
 	tk, err := stack.ts.CreateTask(ctx, store.Task{
 		Title:         "Will fail",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    syn.ID,
 		CurrentStepID: syn.Steps[0].ID,

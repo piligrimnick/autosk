@@ -75,7 +75,7 @@ func statusOf(t *testing.T, dir, id string) map[string]any {
 
 // TestEnroll_IntoNamedWorkflow_Happy verifies the workflow path:
 //
-//	create (status=new) → enroll --workflow → in_workflow at first step.
+//	create (status=new) → enroll --workflow → work at first step.
 func TestEnroll_IntoNamedWorkflow_Happy(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
@@ -99,8 +99,8 @@ func TestEnroll_IntoNamedWorkflow_Happy(t *testing.T) {
 	}
 
 	got := statusOf(t, dir, id)
-	if got["status"] != "in_workflow" {
-		t.Fatalf("expected status=in_workflow, got %v", got["status"])
+	if got["status"] != "work" {
+		t.Fatalf("expected status=work, got %v", got["status"])
 	}
 	if got["current_step"] != "dev" {
 		t.Fatalf("expected current_step=dev (first step), got %v", got["current_step"])
@@ -161,7 +161,7 @@ func TestEnroll_IntoSingleAgent_AutoCreatesSyntheticWorkflow(t *testing.T) {
 		t.Fatalf("expected synthetic workflow created:\n%s", afterList)
 	}
 	got := statusOf(t, dir, id)
-	if got["status"] != "in_workflow" {
+	if got["status"] != "work" {
 		t.Fatalf("status: %v", got["status"])
 	}
 	if got["current_step"] != "do" {
@@ -170,9 +170,9 @@ func TestEnroll_IntoSingleAgent_AutoCreatesSyntheticWorkflow(t *testing.T) {
 }
 
 // TestEnroll_AlreadyEnrolled_Rejected verifies a second enroll on an
-// already-in_workflow task is refused with a message that points the
+// already-work task is refused with a message that points the
 // user at the engine + cancel/reopen path — NOT at `resume`, which
-// only handles human_feedback (covered by its own test below).
+// only handles human (covered by its own test below).
 func TestEnroll_AlreadyEnrolled_Rejected(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
@@ -195,19 +195,19 @@ func TestEnroll_AlreadyEnrolled_Rejected(t *testing.T) {
 		t.Errorf("error should mention 'already enrolled', got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "cancel") || !strings.Contains(err.Error(), "reopen") {
-		t.Errorf("in_workflow hint should mention cancel+reopen, got: %v", err)
+		t.Errorf("work hint should mention cancel+reopen, got: %v", err)
 	}
-	// `resume` advice is for human_feedback only; it must NOT appear in
-	// the in_workflow rejection (resume.go hard-rejects in_workflow).
+	// `resume` advice is for human only; it must NOT appear in
+	// the work rejection (resume.go hard-rejects work).
 	if strings.Contains(err.Error(), "resume") {
-		t.Errorf("in_workflow hint should NOT advise `resume`, got: %v", err)
+		t.Errorf("work hint should NOT advise `resume`, got: %v", err)
 	}
 }
 
 // TestEnroll_HumanFeedback_Rejected covers the second already-enrolled
-// branch: a task parked at `human_feedback` should be told about
+// branch: a task parked at `human` should be told about
 // `autosk resume --to` rather than the cancel/reopen path that
-// in_workflow gets.
+// work gets.
 func TestEnroll_HumanFeedback_Rejected(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
@@ -221,27 +221,27 @@ func TestEnroll_HumanFeedback_Rejected(t *testing.T) {
 	if _, err := runRoot(t, dir, "enroll", id, "--agent", "@autosk/dev-fixture"); err != nil {
 		t.Fatal(err)
 	}
-	// Park the task in human_feedback the cheap way — raw SQL bypasses
+	// Park the task in human the cheap way — raw SQL bypasses
 	// the daemon/step engine but keeps current_step_id intact (DB CHECK
-	// allows human_feedback with a step set).
-	q := fmt.Sprintf("UPDATE tasks SET status='human_feedback' WHERE id='%s'", id)
+	// allows human with a step set).
+	q := fmt.Sprintf("UPDATE tasks SET status='human' WHERE id='%s'", id)
 	if out, err := runRoot(t, dir, "sql", "--write", q); err != nil {
-		t.Fatalf("force human_feedback: %v\n%s", err, out)
+		t.Fatalf("force human: %v\n%s", err, out)
 	}
 	pre := statusOf(t, dir, id)
-	if pre["status"] != "human_feedback" {
+	if pre["status"] != "human" {
 		t.Fatalf("setup failed: status=%v", pre["status"])
 	}
 
 	_, err := runRoot(t, dir, "enroll", id, "--agent", "@autosk/dev-fixture")
 	if err == nil {
-		t.Fatal("expected enroll on human_feedback task to fail")
+		t.Fatal("expected enroll on human task to fail")
 	}
 	if !strings.Contains(err.Error(), "human feedback") {
 		t.Errorf("error should reference human feedback, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "resume") {
-		t.Errorf("human_feedback hint should mention `resume`, got: %v", err)
+		t.Errorf("human hint should mention `resume`, got: %v", err)
 	}
 }
 
@@ -384,8 +384,8 @@ func TestEnroll_AtSpecificStep_Workflow(t *testing.T) {
 		t.Fatalf("enroll --step: %v\n%s", err, out)
 	}
 	got := statusOf(t, dir, id)
-	if got["status"] != "in_workflow" {
-		t.Errorf("status: want in_workflow, got %v", got["status"])
+	if got["status"] != "work" {
+		t.Errorf("status: want work, got %v", got["status"])
 	}
 	if got["current_step"] != "review" {
 		t.Errorf("current_step: want review (not first_step `dev`), got %v", got["current_step"])
@@ -471,8 +471,8 @@ func TestCreate_AtSpecificStep_Workflow(t *testing.T) {
 		id = id[i+1:]
 	}
 	got := statusOf(t, dir, id)
-	if got["status"] != "in_workflow" {
-		t.Errorf("status: want in_workflow, got %v", got["status"])
+	if got["status"] != "work" {
+		t.Errorf("status: want work, got %v", got["status"])
 	}
 	if got["current_step"] != "review" {
 		t.Errorf("current_step: want review, got %v", got["current_step"])
@@ -534,7 +534,7 @@ func TestEnroll_JSONOutput(t *testing.T) {
 	if got["id"] != id {
 		t.Errorf("id mismatch: %v vs %v", got["id"], id)
 	}
-	if got["status"] != "in_workflow" {
+	if got["status"] != "work" {
 		t.Errorf("status: %v", got["status"])
 	}
 	if got["current_step"] != "do" {

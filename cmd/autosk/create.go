@@ -38,11 +38,11 @@ The task starts in status='new' unless --workflow or --agent (mutually
 exclusive) is given:
 
   --workflow NAME   join an existing workflow at its first_step (status
-                    becomes 'in_workflow'). Pair with --step NAME to
+                    becomes 'work'). Pair with --step NAME to
                     enter at a specific step instead of first_step.
 
   --agent    NAME   shorthand for joining the auto-generated workflow
-                    single:<NAME> (status becomes 'in_workflow').
+                    single:<NAME> (status becomes 'work').
 
   --step     NAME   start the workflow at this step (requires --workflow;
                     incompatible with --agent).

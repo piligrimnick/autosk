@@ -9,11 +9,12 @@ import (
 )
 
 // ValidTaskStatuses is the closed set of `task_status` targets a
-// transition may carry. Mirrors the SQL CHECK in 001_init.sql.
+// transition may carry. Mirrors the SQL CHECK on
+// step_transitions.task_status.
 var ValidTaskStatuses = map[string]struct{}{
-	"human_feedback": {},
-	"done":           {},
-	"cancelled":      {},
+	"human":  {},
+	"done":   {},
+	"cancel": {},
 }
 
 // ValidThinkingLevels mirrors the table in pkgregistry/resolve.go.
@@ -107,7 +108,7 @@ func Validate(ctx context.Context, def Definition, ag *agent.Store, opts Validat
 			}
 			if tr.IsTaskStatus() {
 				if _, ok := ValidTaskStatuses[tr.TaskStatus]; !ok {
-					addf("step %q transition %d: task_status %q is not in {human_feedback,done,cancelled}",
+					addf("step %q transition %d: task_status %q is not in {human,done,cancel}",
 						stepName, i, tr.TaskStatus)
 				}
 				continue

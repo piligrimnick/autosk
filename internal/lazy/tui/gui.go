@@ -783,7 +783,7 @@ func headerLinesForLocked(p panelID, st *state) int {
 //   - Active is the set of tasks with at least one running job. It
 //     drives the animated braille spinner (blue, task-id hue).
 //   - Any is the set of tasks with at least one job in ANY status
-//     (queued / running / done / failed / cancelled). It drives the
+//     (queued / running / done / failed / cancel). It drives the
 //     static ">" marker (magenta, job-id hue) shown when no spinner
 //     is animating.
 //

@@ -24,10 +24,10 @@ const StepArgsSchema = Type.Partial(
 		task_id: Type.String({
 			description: "Task id whose active workflow run should be advanced. Required.",
 		}),
-		/** Transition target: sibling step name OR done|cancelled|human_feedback. */
+		/** Transition target: sibling step name OR done|cancel|human. */
 		to: Type.String({
 			description:
-				"Transition target. Either a sibling step name in the current workflow, or one of {done, cancelled, human_feedback}. Required.",
+				"Transition target. Either a sibling step name in the current workflow, or one of {done, cancel, human}. Required.",
 		}),
 	}),
 );
@@ -56,9 +56,9 @@ args.task_id (req)
 args.to (req)
   Transition target. Either:
     - a sibling step name in the current workflow (advance to that step), or
-    - "done"           — close the task as completed,
-    - "cancelled"      — close the task as cancelled,
-    - "human_feedback" — pause the workflow waiting for a human.
+    - "done"   — close the task as completed,
+    - "cancel" — close the task as cancelled,
+    - "human"  — pause the workflow waiting for a human.
 
 Rules:
 - step next may be called at most once per active run; the daemon rejects a second call.
@@ -71,7 +71,7 @@ const TOOL_PROMPT_SNIPPET =
 	"Record the workflow transition for the active task run via autosk_step.";
 
 const TOOL_PROMPT_GUIDELINES = [
-	"When you finish work inside a workflow step, call `autosk_step` with action:'next' to advance the task; never close in_workflow tasks via `autosk_task` update.",
+	"When you finish work inside a workflow step, call `autosk_step` with action:'next' to advance the task; never close work tasks via `autosk_task` update.",
 	"`autosk_step` next can be called only once per run — if it already fired this run, do not call it again.",
 ] as const;
 
@@ -145,7 +145,7 @@ async function runNext(
 			DOMAIN,
 			"next",
 			"invalid_args",
-			"next requires `to` (sibling step name or one of done|cancelled|human_feedback)",
+			"next requires `to` (sibling step name or one of done|cancel|human)",
 		);
 	}
 	return runAutoskJson<StepSignal>(

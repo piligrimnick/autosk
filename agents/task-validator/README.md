@@ -11,8 +11,8 @@ a human. Third (last) step of the `feature-dev` workflow.
 | `runner` | (none — standard pi-spawn agent) |
 
 Outgoing transitions (in `feature-dev`): `→ dev` (bounce-back), `→
-human_feedback` (clean). There is intentionally no `→ done` — the
-human owns the final close.
+human` (clean). There is intentionally no `→ done` — the human owns
+the final close.
 
 ## Install
 

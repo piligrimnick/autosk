@@ -31,7 +31,7 @@ func testListDefaultsToOpen(t *testing.T, f Factory) {
 	if _, err := s.UpdateTask(ctx, b.ID, store.TaskPatch{Status: &target}); err != nil {
 		t.Fatal(err)
 	}
-	target = store.StatusCancelled
+	target = store.StatusCancel
 	if _, err := s.UpdateTask(ctx, c.ID, store.TaskPatch{Status: &target}); err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func testListDefaultsToOpen(t *testing.T, f Factory) {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].ID != a.ID {
-		t.Fatalf("default list should hide done/cancelled; got %v", taskIDs(got))
+		t.Fatalf("default list should hide done/cancel; got %v", taskIDs(got))
 	}
 }
 

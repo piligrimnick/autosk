@@ -136,7 +136,7 @@ type Signal struct {
 	JobID        string
 	StepID       string
 	StepName     string
-	Target       string // sibling step name OR done|cancelled|human_feedback
+	Target       string // sibling step name OR done|cancel|human
 	AgentID      string
 	AgentName    string
 	CreatedAt    time.Time
@@ -274,7 +274,7 @@ type TaskFilter struct {
 }
 
 // DefaultTaskFilter returns the filter that mirrors `autosk list`
-// default behaviour: open work (new/in_workflow/human_feedback).
+// default behaviour: open work (new/work/human).
 func DefaultTaskFilter() TaskFilter {
 	return TaskFilter{Statuses: store.OpenStatuses()}
 }

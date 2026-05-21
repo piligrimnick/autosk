@@ -103,7 +103,7 @@ func TestRun_Worktree_HappyPath_RemovesDirOnDone(t *testing.T) {
 	tk, err := fx.ts.CreateTask(ctx, store.Task{
 		ID:            "as-iso01",
 		Title:         "isolated",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    wf.ID,
 		CurrentStepID: devID,
@@ -173,7 +173,7 @@ func TestRun_Worktree_Missing_AutoRecover(t *testing.T) {
 	tk, err := fx.ts.CreateTask(ctx, store.Task{
 		ID:            "as-iso02",
 		Title:         "missing wt",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    wf.ID,
 		CurrentStepID: devID,
@@ -249,7 +249,7 @@ func TestRun_Worktree_Stranded_ParksTask(t *testing.T) {
 	tk, err := fx.ts.CreateTask(ctx, store.Task{
 		ID:            "as-iso04",
 		Title:         "stranded wt",
-		Status:        store.StatusInWorkflow,
+		Status:        store.StatusWork,
 		Priority:      2,
 		WorkflowID:    wf.ID,
 		CurrentStepID: devID,
@@ -281,7 +281,7 @@ func TestRun_Worktree_Stranded_ParksTask(t *testing.T) {
 		t.Fatalf("run.Error: %q (want worktree_stranded)", runRow.Error)
 	}
 	tkAfter, _ := fx.ts.GetTask(ctx, tk.ID)
-	if tkAfter.Status != store.StatusHumanFeedback {
+	if tkAfter.Status != store.StatusHuman {
 		t.Fatalf("task should be parked, got %s", tkAfter.Status)
 	}
 }
@@ -307,7 +307,7 @@ func TestRun_Worktree_Concurrent_TwoTasksNoInterference(t *testing.T) {
 		tk, err := fx.ts.CreateTask(ctx, store.Task{
 			ID:            id,
 			Title:         "concurrent " + id,
-			Status:        store.StatusInWorkflow,
+			Status:        store.StatusWork,
 			Priority:      2,
 			WorkflowID:    wf.ID,
 			CurrentStepID: devID,

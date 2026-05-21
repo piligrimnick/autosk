@@ -95,6 +95,14 @@ func CurrentVersion(ctx context.Context, db *sql.DB) (int, error) {
 	return int(v.Int64), nil
 }
 
+// ApplyOptions narrows what Apply / ApplyTo will run.
+type ApplyOptions struct {
+	// Until, when > 0, caps the highest migration version that will be
+	// applied. Migrations with Version > Until are skipped. Until == 0
+	// means "no cap" (apply every embedded migration).
+	Until int
+}
+
 // Apply runs all pending migrations in order. Returns the number applied.
 //
 // Each migration runs in its own transaction. If a migration fails, that
@@ -104,6 +112,19 @@ func CurrentVersion(ctx context.Context, db *sql.DB) (int, error) {
 // Before running anything, Apply checks for v0.1 leftovers and refuses if
 // it finds them — there is no migration path from v0.1 to v0.2.
 func Apply(ctx context.Context, db *sql.DB) (int, error) {
+	return ApplyWith(ctx, db, ApplyOptions{})
+}
+
+// ApplyWith is Apply with caller-provided options. It is the single
+// source of truth for the migration loop; Apply is a thin wrapper that
+// passes a zero ApplyOptions.
+//
+// Tests that need "replay migrations 001..N" semantics (e.g. to seed a
+// pre-N fixture before running migration N+1) use ApplyOptions{Until: N}
+// instead of re-implementing the loop — future hooks on applyOne
+// (logging, dispatch points, schema_migrations columns) stay in sync
+// automatically.
+func ApplyWith(ctx context.Context, db *sql.DB, opts ApplyOptions) (int, error) {
 	if err := CheckV1(ctx, db); err != nil {
 		return 0, err
 	}
@@ -119,6 +140,9 @@ func Apply(ctx context.Context, db *sql.DB) (int, error) {
 	for _, m := range migs {
 		if m.Version <= current {
 			continue
+		}
+		if opts.Until > 0 && m.Version > opts.Until {
+			break
 		}
 		if err := applyOne(ctx, db, m); err != nil {
 			return applied, fmt.Errorf("migration %03d_%s: %w", m.Version, m.Name, err)
@@ -207,6 +231,9 @@ func newAgentID() (string, error) {
 }
 
 func applyOne(ctx context.Context, db *sql.DB, m Migration) error {
+	if hasFKOffDirective(m.SQL) {
+		return applyOneFKOff(ctx, db, m)
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -229,6 +256,124 @@ func applyOne(ctx context.Context, db *sql.DB, m Migration) error {
 		`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`,
 		m.Version, time.Now().Unix())
 	if err != nil {
+		return fmt.Errorf("record schema_migrations: %w", err)
+	}
+	return tx.Commit()
+}
+
+// fkOffDirective is the leading-comment directive that asks applyOne to
+// run the migration with `PRAGMA foreign_keys=OFF`. It MUST be applied
+// outside any transaction (SQLite requirement) and is needed by any
+// migration that rebuilds a table with incoming CASCADE FKs — the
+// canonical "DROP TABLE old" inside the rebuild would otherwise cascade
+// and wipe dependent rows. See 006_short_statuses.sql for the first
+// consumer.
+const fkOffDirective = "autosk-migration: foreign_keys_off"
+
+// hasFKOffDirective reports whether the migration body opens with the
+// `-- autosk-migration: foreign_keys_off` directive. The directive must
+// appear in a leading comment line; once a non-comment SQL statement is
+// seen the scan stops so future directives can't be hidden mid-file.
+func hasFKOffDirective(s string) bool {
+	for _, ln := range strings.Split(s, "\n") {
+		trimmed := strings.TrimSpace(ln)
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "--") {
+			return false
+		}
+		if strings.Contains(trimmed, fkOffDirective) {
+			return true
+		}
+	}
+	return false
+}
+
+// applyOneFKOff runs a migration with `PRAGMA foreign_keys=OFF`. The
+// PRAGMA must live outside any transaction (SQLite enforces this), so
+// we pin a dedicated connection from the pool for the whole sequence:
+//
+//  1. acquire *sql.Conn
+//  2. PRAGMA foreign_keys = OFF
+//  3. BEGIN tx
+//  4. exec migration statements
+//  5. PRAGMA foreign_key_check — abort on any violation
+//  6. record schema_migrations row
+//  7. COMMIT
+//  8. PRAGMA foreign_keys = ON
+//  9. release the conn
+//
+// doltlite pins SetMaxOpenConns(1) so the entire pool funnels through
+// one connection regardless, but acquiring an explicit *sql.Conn keeps
+// the contract robust against future pool-size changes and against
+// callers that pass a vanilla database/sql handle (e.g. tests).
+func applyOneFKOff(ctx context.Context, db *sql.DB, m Migration) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire conn: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("disable foreign keys: %w", err)
+	}
+	// Restore FK enforcement on the way out. The connection is about to
+	// be returned to the pool (or closed by defer) and doltlite's pool
+	// rotates connections within DefaultConnLifetime anyway, but flipping
+	// the pragma back keeps the immediate post-migration window safe.
+	defer func() { _, _ = conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`) }()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, stmt := range splitStatements(m.SQL) {
+		if strings.TrimSpace(stmt) == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("exec %q: %w", firstLine(stmt), err)
+		}
+	}
+
+	// Verify no dangling FK references slipped through the rebuild
+	// before we commit; the alternative is silent breakage the moment
+	// FK enforcement is re-enabled.
+	rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return fmt.Errorf("foreign_key_check: %w", err)
+	}
+	var violations []string
+	for rows.Next() {
+		var (
+			table  sql.NullString
+			rowid  sql.NullInt64
+			parent sql.NullString
+			fkid   sql.NullInt64
+		)
+		if scanErr := rows.Scan(&table, &rowid, &parent, &fkid); scanErr != nil {
+			_ = rows.Close()
+			return fmt.Errorf("foreign_key_check scan: %w", scanErr)
+		}
+		violations = append(violations,
+			fmt.Sprintf("table=%s rowid=%d parent=%s fkid=%d",
+				table.String, rowid.Int64, parent.String, fkid.Int64))
+	}
+	if rerr := rows.Err(); rerr != nil {
+		_ = rows.Close()
+		return fmt.Errorf("foreign_key_check rows: %w", rerr)
+	}
+	_ = rows.Close()
+	if len(violations) > 0 {
+		return fmt.Errorf("foreign_key_check failed: %s", strings.Join(violations, "; "))
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`,
+		m.Version, time.Now().Unix()); err != nil {
 		return fmt.Errorf("record schema_migrations: %w", err)
 	}
 	return tx.Commit()

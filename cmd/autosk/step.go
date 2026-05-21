@@ -41,7 +41,7 @@ func newStepNextCmd() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if to == "" {
-				return errors.New("--to NAME is required (sibling step name, or done|cancelled|human_feedback)")
+				return errors.New("--to NAME is required (sibling step name, or done|cancel|human)")
 			}
 			s, closeFn, err := openStore(cmd.Context(), true)
 			if err != nil {
@@ -67,7 +67,7 @@ func newStepNextCmd() *cobra.Command {
 			return emitStepSignal(emitted)
 		},
 	}
-	cmd.Flags().StringVar(&to, "to", "", "transition target: sibling step name OR done|cancelled|human_feedback")
+	cmd.Flags().StringVar(&to, "to", "", "transition target: sibling step name OR done|cancel|human")
 	return cmd
 }
 

@@ -27,7 +27,7 @@ const run: RunAgent = async (ctx) => {
 
   // 3. Close the run by picking a transition. The set of valid targets
   //    is in ctx.transitions — for a single:<agent> workflow we always
-  //    have done/cancelled/human_feedback.
+  //    have done/cancel/human.
   await ctx.stepNext("done");
 };
 

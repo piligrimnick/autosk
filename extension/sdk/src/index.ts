@@ -19,7 +19,7 @@ export interface TaskSnapshot {
   id: string;
   title: string;
   description: string;
-  status: "in_workflow";
+  status: "work";
   priority: number;
   workflow_id: string;
   current_step_id: string;
@@ -55,9 +55,9 @@ export interface CommentSnapshot {
  */
 export interface Transition {
   /** "step" means a sibling step within the same workflow; "task_status"
-   * means one of the terminal states (done|cancelled|human_feedback). */
+   * means one of the terminal states (done|cancel|human). */
   kind: "step" | "task_status";
-  /** The target name: sibling step name, or one of done|cancelled|human_feedback. */
+  /** The target name: sibling step name, or one of done|cancel|human. */
   target: string;
   /** Author-supplied natural-language rule describing when this transition applies. */
   prompt_rule: string;

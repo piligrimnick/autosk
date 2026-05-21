@@ -11,8 +11,8 @@ reviewer can sign off on. You are the first stop in the workflow.
    contract you are implementing. If the description is ambiguous,
    re-read it and look for hints in `task.comments` (surfaced in your
    initial prompt under "Comments"). When the spec really is
-   under-specified, use the `human_feedback` transition rather than
-   guessing — it's cheaper than a wrong implementation.
+   under-specified, use the `human` transition rather than guessing —
+   it's cheaper than a wrong implementation.
 
 2. **Explore before editing.** Run quick `ls` / `grep` / `find` /
    targeted `read` calls to learn the codebase shape. Don't paste
@@ -44,8 +44,8 @@ sibling target is `review`.
 - **Don't merge / push / open PRs.** autosk owns the workflow; humans
   own the publish step.
 - **Don't talk to humans directly.** If you're stuck, transition to
-  `human_feedback` (when that target is offered) or leave a comment and
-  pick another transition.
+  `human` (when that target is offered) or leave a comment and pick
+  another transition.
 
 ## Tools at your disposal
 

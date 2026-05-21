@@ -64,7 +64,7 @@ type taskStore interface {
 //     MaxVisitsExceededError; the transaction rolls back, so neither
 //     the counter nor the task pointer move.
 //  4. Otherwise bump the counter to visits+1 and write the metadata +
-//     patch (current_step_id = step.ID, status = 'in_workflow', and
+//     patch (current_step_id = step.ID, status = 'work', and
 //     when WorkflowID was set on the input also workflow_id) in one
 //     UPDATE. Counter bump and pointer move land together — no
 //     partial-success window between two transactions.
@@ -92,7 +92,7 @@ func EnterStep(ctx context.Context, tasks taskStore, wfs *Store, in EnterStepInp
 	// Build the task pointer patch: status, current_step_id, and
 	// (when caller asked for it) workflow_id. The metadata mutation
 	// happens inside the closure so the whole thing lands in one tx.
-	status := store.StatusInWorkflow
+	status := store.StatusWork
 	patch := store.TaskPatch{
 		Status:        &status,
 		CurrentStepID: &stepRow.ID,

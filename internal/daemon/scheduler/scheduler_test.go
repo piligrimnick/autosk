@@ -191,7 +191,7 @@ func TestScheduler_CancelInterruptsExecutor(t *testing.T) {
 		}
 	}
 	got, _ := fx.runs.GetRun(ctx, id)
-	if got.Status != runstore.StatusCancelled {
+	if got.Status != runstore.StatusCancel {
 		t.Fatalf("expected cancelled, got %+v", got)
 	}
 }

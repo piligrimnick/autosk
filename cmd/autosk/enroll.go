@@ -23,13 +23,13 @@ import (
 // tasks that were created without a workflow (status='new').
 //
 // Status guard:
-//   - `new`              → enroll succeeds.
-//   - `in_workflow`      → already owned by the engine; rejection points
+//   - `new`            → enroll succeeds.
+//   - `work`           → already owned by the engine; rejection points
 //     the user at cancel+reopen+enroll for a workflow switch (the
 //     daemon will otherwise advance it on its own).
-//   - `human_feedback`   → parked for human input; rejection points the
+//   - `human`          → parked for human input; rejection points the
 //     user at `autosk resume --to STEP`.
-//   - `done` / `cancelled` → terminal; rejection points the user at
+//   - `done` / `cancel` → terminal; rejection points the user at
 //     `autosk reopen <id>`.
 func newEnrollCmd() *cobra.Command {
 	var (
@@ -53,9 +53,8 @@ into a workflow without recreating it. Exactly one of --workflow /
 --agent is required; they are mutually exclusive.
 
   --workflow NAME   enroll into the named workflow at its first step
-                    (status becomes 'in_workflow'). Pair with --step
-                    NAME to enter at a specific step instead of
-                    first_step.
+                    (status becomes 'work'). Pair with --step NAME
+                    to enter at a specific step instead of first_step.
 
   --agent    NAME   shorthand for --workflow single:<NAME>; the
                     synthetic single:<NAME> workflow is auto-created
@@ -67,12 +66,12 @@ into a workflow without recreating it. Exactly one of --workflow /
                     only have one step).
 
 Only tasks in status='new' can be enrolled:
-  - in_workflow      → the daemon will advance this task; to put it
-                       into a different workflow, cancel + reopen +
-                       enroll.
-  - human_feedback   → use 'autosk resume --to STEP' to move the task
-                       within its current workflow.
-  - done / cancelled → use 'autosk reopen <id>' first.
+  - work          → the daemon will advance this task; to put it
+                    into a different workflow, cancel + reopen +
+                    enroll.
+  - human         → use 'autosk resume --to STEP' to move the task
+                    within its current workflow.
+  - done / cancel → use 'autosk reopen <id>' first.
 
 Examples:
 
@@ -207,26 +206,26 @@ Examples:
 // checkEnrollable returns nil when `t` is in a state that admits enroll
 // (currently: only status='new'). Otherwise it returns a CLI-style error
 // pointing the user at the right verb to make progress. The two
-// already-enrolled states get distinct hints: `human_feedback` can be
-// unparked with `autosk resume --to`, while `in_workflow` is owned by
-// the engine — switching workflows means cancel+reopen+enroll.
+// already-enrolled states get distinct hints: `human` can be unparked
+// with `autosk resume --to`, while `work` is owned by the engine —
+// switching workflows means cancel+reopen+enroll.
 func checkEnrollable(ctx context.Context, wfs *workflow.Store, t store.Task) error {
 	switch t.Status {
 	case store.StatusNew:
 		return nil
-	case store.StatusInWorkflow:
+	case store.StatusWork:
 		wfRef, stepRef := refsForLocation(ctx, wfs, t)
 		return fmt.Errorf(
 			"task already enrolled in workflow %s at step %s; the daemon will advance it — to switch workflows, cancel + reopen + enroll",
 			wfRef, stepRef,
 		)
-	case store.StatusHumanFeedback:
+	case store.StatusHuman:
 		wfRef, stepRef := refsForLocation(ctx, wfs, t)
 		return fmt.Errorf(
 			"task is parked in workflow %s at step %s for human feedback; use 'autosk resume %s [--to STEP]' to put it back into the workflow",
 			wfRef, stepRef, t.ID,
 		)
-	case store.StatusDone, store.StatusCancelled:
+	case store.StatusDone, store.StatusCancel:
 		return fmt.Errorf("task is terminal (%s); reopen first ('autosk reopen %s')", t.Status, t.ID)
 	default:
 		return fmt.Errorf("cannot enroll task in status %q", t.Status)

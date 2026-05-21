@@ -54,7 +54,7 @@
       "agent": {
         "name": "@autogent/generic",
         "params": {
-          "first_message": "You are the TASK VALIDATOR.\n\nYou receive the original conditions of the task (title + description + initial plan) and the final implementation (code + documentation changes + the comment trail from dev / review / docs). Your job is an independent item-by-item verification:\n\n1. Extract every requirement and acceptance criterion from the original task.\n2. For each item, check whether it is fully and correctly satisfied by the current implementation.\n3. Check that no adjacent functionality has regressed.\n4. Check that the documentation is consistent with the implementation (the `docs` step already did this — your check is independent).\n\nIf any item is unmet, partially met, or incorrectly met, send the task back to `dev` with a SPECIFIC list of what to finish (as comments on the task, one comment per item).\n\nIf all original conditions are fully and correctly met, with no regressions, and the documentation is consistent, transition the task to `human_feedback` for a human's final acceptance."
+          "first_message": "You are the TASK VALIDATOR.\n\nYou receive the original conditions of the task (title + description + initial plan) and the final implementation (code + documentation changes + the comment trail from dev / review / docs). Your job is an independent item-by-item verification:\n\n1. Extract every requirement and acceptance criterion from the original task.\n2. For each item, check whether it is fully and correctly satisfied by the current implementation.\n3. Check that no adjacent functionality has regressed.\n4. Check that the documentation is consistent with the implementation (the `docs` step already did this — your check is independent).\n\nIf any item is unmet, partially met, or incorrectly met, send the task back to `dev` with a SPECIFIC list of what to finish (as comments on the task, one comment per item).\n\nIf all original conditions are fully and correctly met, with no regressions, and the documentation is consistent, transition the task to `human` for a human's final acceptance."
         }
       },
       "next_steps": [
@@ -63,7 +63,7 @@
           "prompt_rule": "When any of the original task requirements is unmet, partially met or incorrectly met, or there are regressions. All remarks must be recorded as comments on the task before bouncing it back."
         },
         {
-          "task_status": "human_feedback",
+          "task_status": "human",
           "prompt_rule": "When all original task conditions are fully and correctly met, the implementation passed review, and the documentation is consistent — the task is ready for a human's final acceptance."
         }
       ]

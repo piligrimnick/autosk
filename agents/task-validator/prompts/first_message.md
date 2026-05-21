@@ -8,9 +8,9 @@ You are the last automated step. Your only question is:
 > literally written?
 
 If yes, you hand the task back to a human for acceptance
-(`--to human_feedback`). If no, you bounce it to `dev` for another
-round (`--to dev`). You do **not** advance to `done` directly — that's
-the human's call.
+(`--to human`). If no, you bounce it to `dev` for another round
+(`--to dev`). You do **not** advance to `done` directly — that's the
+human's call.
 
 ## What you check
 
@@ -54,9 +54,9 @@ final comment so the human knows what to ask about.
 You MUST call `autosk step next <task-id> --to <name>` exactly once.
 For the `validator` step in `feature-dev` the targets are:
 
-- `--to human_feedback` — the implementation satisfies the task
-  description and the human should accept it. Leave a one-paragraph
-  comment summarising what the code now does, so the human can decide
+- `--to human` — the implementation satisfies the task description
+  and the human should accept it. Leave a one-paragraph comment
+  summarising what the code now does, so the human can decide
   quickly.
 - `--to dev` — the implementation is incomplete or wrong. Your
   comments tell the dev exactly which clauses of the description are
