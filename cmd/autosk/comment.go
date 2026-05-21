@@ -15,6 +15,7 @@ import (
 	"autosk/internal/agent"
 	"autosk/internal/comments"
 	"autosk/internal/store/doltlite"
+	"autosk/internal/timeformat"
 )
 
 func newCommentCmd() *cobra.Command {
@@ -141,8 +142,11 @@ func emitComment(c comments.Comment) error {
 	if flagJSON {
 		return json.NewEncoder(os.Stdout).Encode(toCommentJSON(c))
 	}
+	// Human text output: local TZ + 'YYYY-MM-DD HH:MM:SS'. The JSON
+	// form (toCommentJSON) and the LLM-facing comments.RenderForPrompt
+	// stay on RFC3339 UTC — see internal/comments/store.go.
 	fmt.Printf("[%s@%s] (id=%d):\n%s\n",
-		c.AuthorName, c.CreatedAt.Format(time.RFC3339), c.ID, c.Text)
+		c.AuthorName, timeformat.FormatDateTime(c.CreatedAt), c.ID, c.Text)
 	return nil
 }
 
@@ -166,7 +170,7 @@ func emitComments(cs []comments.Comment) error {
 			text = text[:77] + "…"
 		}
 		fmt.Fprintf(w, "%d\t%s\t%s\t%s\n",
-			c.ID, c.AuthorName, c.CreatedAt.Format("2006-01-02 15:04:05"), text)
+			c.ID, c.AuthorName, timeformat.FormatDateTime(c.CreatedAt), text)
 	}
 	return w.Flush()
 }

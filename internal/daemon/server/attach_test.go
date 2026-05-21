@@ -891,7 +891,11 @@ func readSSE(t *testing.T, body io.Reader, out chan<- parsedSSE) {
 	t.Helper()
 	defer close(out)
 	sc := bufio.NewScanner(body)
-	sc.Buffer(make([]byte, 0, 1<<14), 1<<20)
+	// SSE frames replay full transcripts (the entire MessageEvent goes
+	// into a single `data:` line) and pi can legitimately emit JSON
+	// objects >>1 MiB on long sessions. Keep this in sync with the
+	// production client (internal/daemon/client/stream.go).
+	sc.Buffer(make([]byte, 0, 1<<14), 1<<22)
 	var cur parsedSSE
 	for sc.Scan() {
 		line := sc.Text()

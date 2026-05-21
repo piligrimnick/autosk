@@ -15,6 +15,7 @@ import (
 	"autosk/internal/agent"
 	"autosk/internal/render"
 	"autosk/internal/store/doltlite"
+	"autosk/internal/timeformat"
 	"autosk/internal/workflow"
 )
 
@@ -359,7 +360,9 @@ func emitWorkflow(w workflow.Workflow, withSteps bool) error {
 	if w.Isolation != "" && w.Isolation != workflow.IsolationNone {
 		fmt.Printf("isolation:    %s\n", w.Isolation)
 	}
-	fmt.Printf("created_at:   %s\n", w.CreatedAt.Format("2006-01-02T15:04:05Z"))
+	// Text output uses the operator's local TZ; the JSON form
+	// (toWorkflowJSON above) keeps the RFC3339 UTC string.
+	fmt.Printf("created_at:   %s\n", timeformat.FormatDateTime(w.CreatedAt))
 	if withSteps && len(w.Steps) > 0 {
 		fmt.Println("steps:")
 		for _, st := range w.Steps {

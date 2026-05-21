@@ -9,6 +9,21 @@
 //	FAKEPI_SCENARIO      — "ok" (default), "no_agent_end" (drop agent_end),
 //	                       "prompt_error" (reply success=false to prompt),
 //	                       "dialog" (emit a select extension_ui_request)
+//	FAKEPI_HUGE_PAYLOAD_BYTES — when >0, emit an extra message_end carrying
+//	                       a text block of approximately this many bytes
+//	                       before agent_end (used by runner tests to
+//	                       exercise the no-per-line-cap path). The exact
+//	                       event type doesn't matter for the reader test;
+//	                       message_end is convenient because the regular
+//	                       turn already emits one and reusing the shape
+//	                       keeps the fakepi switch small.
+//	FAKEPI_INJECT_GARBAGE_LINE — when non-empty, write the literal value
+//	                       (followed by '\n') as its own line on stdout
+//	                       between message_end and turn_end. The runner's
+//	                       reader is expected to surface it as a single
+//	                       KindOther event and keep parsing subsequent
+//	                       lines (used by runner tests to lock the
+//	                       line-oriented resync contract).
 //
 // fakepi exits 0 on stdin EOF or SIGTERM.
 package main
@@ -16,10 +31,13 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -44,6 +62,18 @@ func emit(v any) {
 	_ = writer.Flush()
 }
 
+// emitRawLine writes s followed by '\n' to stdout, bypassing json.Encoder.
+// Used by FAKEPI_INJECT_GARBAGE_LINE to feed deliberately malformed bytes
+// to the runner's reader so tests can pin the line-oriented resync
+// behaviour.
+func emitRawLine(s string) {
+	outMu.Lock()
+	defer outMu.Unlock()
+	_, _ = writer.WriteString(s)
+	_ = writer.WriteByte('\n')
+	_ = writer.Flush()
+}
+
 func main() {
 	// Trap SIGTERM/SIGINT — flush any pending writes and exit cleanly.
 	sigC := make(chan os.Signal, 1)
@@ -59,25 +89,31 @@ func main() {
 	sessID := envOr("FAKEPI_SESSION_ID", "sess-fake")
 	sessFile := envOr("FAKEPI_SESSION_FILE", "/tmp/fakepi/session.jsonl")
 	delay := envIntMS("FAKEPI_AGENT_END_DELAY_MS", 0)
+	hugePayload := envInt("FAKEPI_HUGE_PAYLOAD_BYTES", 0)
+	garbageLine := os.Getenv("FAKEPI_INJECT_GARBAGE_LINE")
 
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
+	// JSON Lines on stdin. json.Decoder streams without the per-token
+	// cap bufio.Scanner imposes — fine here because the daemon only
+	// writes well-formed JSON to fakepi's stdin, so the no-resync
+	// behaviour of json.Decoder is never observable. (The runner-side
+	// reader uses bufio.Reader.ReadBytes for a different reason: pi's
+	// stdout in the wild needs the resync property; see runner.go.)
+	dec := json.NewDecoder(os.Stdin)
+	for {
 		var c cmd
-		if err := json.Unmarshal(line, &c); err != nil {
+		if err := dec.Decode(&c); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
 			emit(map[string]any{"type": "response", "id": "", "command": "?", "success": false, "error": fmt.Sprintf("parse: %v", err)})
 			continue
 		}
-		handle(c, scenario, sessID, sessFile, delay)
+		handle(c, scenario, sessID, sessFile, delay, hugePayload, garbageLine)
 	}
 	// stdin closed → exit cleanly.
 }
 
-func handle(c cmd, scenario, sessID, sessFile string, delay time.Duration) {
+func handle(c cmd, scenario, sessID, sessFile string, delay time.Duration, hugePayload int, garbageLine string) {
 	switch c.Type {
 	case "get_state":
 		emit(map[string]any{
@@ -117,6 +153,23 @@ func handle(c cmd, scenario, sessID, sessFile string, delay time.Duration) {
 				"type":    "message_end",
 				"message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": "ack: " + prompt}}, "timestamp": time.Now().UnixMilli()},
 			})
+			if hugePayload > 0 {
+				// Emit a single >hugePayload-byte JSON line to exercise
+				// the runner's no-per-line-cap reader path. The text
+				// block carries the bulk; with JSON escaping + envelope
+				// the line is always >= hugePayload bytes.
+				big := strings.Repeat("x", hugePayload)
+				emit(map[string]any{
+					"type":    "message_end",
+					"message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": big}}, "timestamp": time.Now().UnixMilli()},
+				})
+			}
+			if garbageLine != "" {
+				// Inject a non-JSON line between two valid frames. The
+				// runner's reader must surface this as a single KindOther
+				// event and keep parsing subsequent lines normally.
+				emitRawLine(garbageLine)
+			}
 			emit(map[string]any{"type": "turn_end", "message": map[string]any{}, "toolResults": []any{}})
 
 			if scenario == "no_agent_end" {
@@ -157,4 +210,16 @@ func envIntMS(k string, def int) time.Duration {
 		return time.Duration(def) * time.Millisecond
 	}
 	return time.Duration(n) * time.Millisecond
+}
+
+func envInt(k string, def int) int {
+	v := os.Getenv(k)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
 }

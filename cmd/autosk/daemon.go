@@ -24,6 +24,7 @@ import (
 	"autosk/internal/daemon/compactor"
 	"autosk/internal/daemon/poller"
 	"autosk/internal/daemon/uds"
+	"autosk/internal/timeformat"
 )
 
 // defaultSockPath returns the default ~/.autosk/daemon.sock for the
@@ -489,10 +490,11 @@ func newDaemonMessagesCmd() *cobra.Command {
 }
 
 func printEvent(e api.MessageEvent) {
-	ts := ""
-	if !e.TS.IsZero() {
-		ts = e.TS.Format("15:04:05")
-	}
+	// Local-TZ HH:MM:SS for the operator. The JSON wire shape (the
+	// daemon HTTP API in internal/daemon/api/types.go) keeps RFC3339
+	// via stdlib time.Time marshaling — that does NOT route through
+	// timeformat.
+	ts := timeformat.FormatTime(e.TS)
 	switch e.Kind {
 	case "assistant_text", "user_text":
 		fmt.Printf("%-9s [%s] %s\n", e.Kind, ts, oneLine(e.Text))
@@ -587,7 +589,7 @@ func newDaemonListCmd() *cobra.Command {
 				for _, p := range h.Projects {
 					fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\n",
 						p.Root, p.DBPath, p.Queued, p.Running,
-						p.OpenedAt.Format("15:04:05"))
+						timeformat.FormatTime(p.OpenedAt))
 				}
 				_ = w.Flush()
 				return nil

@@ -11,6 +11,7 @@ import (
 	"autosk/internal/daemon/runstore"
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/store"
+	"autosk/internal/timeformat"
 )
 
 // openInspector switches viewState to Inspector for the given job.
@@ -576,14 +577,13 @@ func renderInspectorSignals(sigs []datasource.Signal, comments []datasource.Comm
 		b.WriteString(styleMuted.Render("(no signals)") + "\n")
 	} else {
 		for _, s := range sigs {
-			// RFC3339 carries the date so a kickback loop straddling
-			// midnight (or a run from yesterday opened today) is
-			// readable. 15:04:05-only timestamps lose that context.
-			// Entity-coloured columns let the operator scan signals by
-			// hue: purple step → purple-or-status target, cyan agent
-			// in parens.
+			// Full local DateTime so a kickback loop straddling midnight
+			// (or a run from yesterday opened today) is readable. A
+			// time-only stamp would lose that context. Entity-coloured
+			// columns let the operator scan signals by hue: purple
+			// step → purple-or-status target, cyan agent in parens.
 			fmt.Fprintf(&b, "  %s  %s → %s  (%s)\n",
-				s.CreatedAt.Format(time.RFC3339),
+				timeformat.FormatDateTime(s.CreatedAt),
 				renderStepName(s.StepName),
 				renderSignalTarget(s.Target),
 				renderAgentName(s.AgentName))
@@ -595,7 +595,7 @@ func renderInspectorSignals(sigs []datasource.Signal, comments []datasource.Comm
 	} else {
 		for _, c := range comments {
 			fmt.Fprintf(&b, "  %s  %s: %s\n",
-				c.CreatedAt.Format(time.RFC3339),
+				timeformat.FormatDateTime(c.CreatedAt),
 				renderAgentName(c.AuthorName),
 				truncate(c.Text, 80))
 		}

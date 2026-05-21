@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"autosk/internal/lazy/datasource"
+	"autosk/internal/timeformat"
 )
 
 // panelID is the identifier of one of the four dashboard list
@@ -375,10 +376,10 @@ func (s *state) selectedAgentLocked() (datasource.Agent, bool) {
 	return s.selectedAgent()
 }
 
-// appendLog adds a one-line entry to the command log with a relative
-// timestamp.
+// appendLog adds a one-line entry to the command log. The stamp is
+// HH:MM:SS in the operator's local timezone — see internal/timeformat.
 func (s *state) appendLog(line string) {
-	stamp := time.Now().Format("15:04")
+	stamp := timeformat.FormatTime(time.Now())
 	s.logBuf = append(s.logBuf, stamp+" "+line)
 	if len(s.logBuf) > 200 {
 		s.logBuf = s.logBuf[len(s.logBuf)-200:]

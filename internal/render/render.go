@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"autosk/internal/store"
+	"autosk/internal/timeformat"
 )
 
 // TaskJSON is the wire shape for a single task. The derived `blocked`
@@ -196,8 +197,10 @@ func Task(w io.Writer, t store.Task, opts ...Option) error {
 	}
 	fmt.Fprintf(w, "blocked_by:    %s\n", joinOrDash(wire.BlockedBy))
 	fmt.Fprintf(w, "blocks:        %s\n", joinOrDash(wire.Blocks))
-	fmt.Fprintf(w, "created_at:    %s\n", wire.CreatedAt.Format(time.RFC3339))
-	fmt.Fprintf(w, "updated_at:    %s\n", wire.UpdatedAt.Format(time.RFC3339))
+	// Human text output: local TZ + 'YYYY-MM-DD HH:MM:SS'. The JSON
+	// wire shape (TaskJSON above) keeps RFC3339 UTC.
+	fmt.Fprintf(w, "created_at:    %s\n", timeformat.FormatDateTime(wire.CreatedAt))
+	fmt.Fprintf(w, "updated_at:    %s\n", timeformat.FormatDateTime(wire.UpdatedAt))
 	if wire.visitsSummary != "" {
 		fmt.Fprintf(w, "visits:        %s\n", wire.visitsSummary)
 	}
