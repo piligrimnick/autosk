@@ -407,9 +407,15 @@ func TestRenderTaskDetail_StatsRow(t *testing.T) {
 	// as the smart-format reference. To keep the assertion stable
 	// across CI clocks we use the formatted time string and check the
 	// row contains it (instead of pinning a literal HH:MM:SS).
+	// Use a CreatedAt anchored at noon local-today so the
+	// FormatDateTimeSmart "today" branch fires deterministically
+	// regardless of when the test is run (a now-30m offset breaks
+	// across local midnight).
+	now := time.Now().In(time.Local)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.Local)
 	task := datasource.Task{
 		ID: "as-a261", Status: store.StatusNew,
-		CreatedAt:    time.Now().Add(-30 * time.Minute),
+		CreatedAt:    today,
 		CommentCount: 12,
 	}
 	out := renderTaskDetail(task, nil, nil, 80)
@@ -421,7 +427,7 @@ func TestRenderTaskDetail_StatsRow(t *testing.T) {
 	}
 	// Today branch: the rendered stamp has no date dashes.
 	if strings.Contains(wantStamp, "-") {
-		t.Fatalf("test fixture broken: smart stamp for now-30m should be time-only, got %q", wantStamp)
+		t.Fatalf("test fixture broken: smart stamp for local noon today should be time-only, got %q", wantStamp)
 	}
 }
 
@@ -532,6 +538,86 @@ func TestRenderTaskDetail_SignalsTargetColored(t *testing.T) {
 		want := styleForTaskStatus(st).Render(string(st))
 		if !strings.Contains(out, want) {
 			t.Errorf("lifecycle terminal %q not styled with task-status hue\nwant substring: %q\n         in: %q", st, want, out)
+		}
+	}
+}
+
+// TestRenderTaskDetail_SignalsStacked pins the per-column layout of
+// the signals box:
+//
+//	<datetime>  <source>  →  <target>
+//
+// Two literal spaces between every column. Datetime is right-aligned
+// in a 19-cell column sized for "YYYY-MM-DD HH:MM:SS"; today's events
+// render time-only and pad on the LEFT so the HH:MM:SS portion lines
+// up under the time half of older full stamps. The source column is
+// padded to the longest step name across all rows so the arrow lands
+// at the same x on every line.
+func TestRenderTaskDetail_SignalsStacked(t *testing.T) {
+	// All fixture timestamps fall on the same local day so
+	// FormatDateTimeSmart's today/not-today branch is deterministic
+	// w.r.t. each other (every row is in the same branch as the
+	// reference "now"). We can't pin time.Now() from here, but we
+	// can pin the relative layout: pick a stamp old enough that the
+	// smart format is guaranteed to emit the full datetime form.
+	old := time.Now().Add(-72 * time.Hour)
+	signals := []datasource.Signal{
+		{StepName: "validate", Target: "human", CreatedAt: old.Add(2 * time.Hour)},
+		{StepName: "docs", Target: "validate", CreatedAt: old.Add(1 * time.Hour)},
+		{StepName: "review", Target: "docs", CreatedAt: old.Add(30 * time.Minute)},
+		{StepName: "dev", Target: "review", CreatedAt: old},
+	}
+	task := datasource.Task{ID: "as-sig", Status: store.StatusWork, CreatedAt: old}
+	out := renderTaskDetail(task, nil, signals, 80)
+	visible := ansiutil.Strip(out)
+
+	// Find the body lines inside the signals box (the ones with the
+	// arrow). Strip the box frame so we look at raw column layout.
+	var rows []string
+	for _, ln := range strings.Split(visible, "\n") {
+		if !strings.HasPrefix(ln, "│ ") || !strings.HasSuffix(ln, " │") {
+			continue
+		}
+		if !strings.Contains(ln, "→") {
+			continue
+		}
+		inner := strings.TrimSuffix(strings.TrimPrefix(ln, "│ "), " │")
+		rows = append(rows, strings.TrimRight(inner, " "))
+	}
+	if len(rows) != 4 {
+		t.Fatalf("expected 4 signal rows; got %d: %q", len(rows), rows)
+	}
+
+	// Every row must have the arrow at the same x — the source
+	// column is padded to the longest step name.
+	arrowX := strings.Index(rows[0], "→")
+	for i, r := range rows {
+		if x := strings.Index(r, "→"); x != arrowX {
+			t.Errorf("row %d: arrow not aligned (x=%d, want %d): %q", i, x, arrowX, r)
+		}
+	}
+
+	// Two-space separators around the arrow and between datetime
+	// and source.
+	for i, r := range rows {
+		if !strings.Contains(r, "  →  ") {
+			t.Errorf("row %d: missing \" ─→─ \" with 2-space gutters: %q", i, r)
+		}
+	}
+
+	// Datetime column is exactly 19 cells: the longest stamp form
+	// ("YYYY-MM-DD HH:MM:SS"). For older rows the full stamp
+	// already occupies the 19-cell column; subsequent assertions
+	// pin that the source column starts at the same x.
+	for i, r := range rows {
+		// Take the substring up to (and including) the 2-space
+		// separator before the source column.
+		parts := strings.SplitN(r, "  ", 2)
+		if len(parts) != 2 {
+			t.Fatalf("row %d: cannot split on \"  \" gutter: %q", i, r)
+		}
+		if w := utf8.RuneCountInString(parts[0]); w != 19 {
+			t.Errorf("row %d: datetime column width %d, want 19: %q", i, w, parts[0])
 		}
 	}
 }

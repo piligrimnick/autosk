@@ -681,17 +681,44 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 	// the box renders inside a scrollable pane so a tall list isn't
 	// a usability problem. SignalsForTask returns newest-first.
 	if len(signals) > 0 {
+		// Stack signals as a four-column table:
+		//
+		//	<datetime>  <source>  →  <target>
+		//
+		// with two literal spaces between every column. Datetime is
+		// right-aligned in a 19-cell column sized for the full
+		// "YYYY-MM-DD HH:MM:SS" form; today's events render time-only
+		// (8 cells) so they fall under the time half of yesterday's
+		// full stamps with the date half left blank. The source
+		// column is padded to the longest step name across all rows
+		// so the arrow lands in the same place on every line.
+		//
+		// Both sides of the arrow wear their entity colour: the
+		// source is always a step name (purple), the target is
+		// either a sibling step name (purple) or a lifecycle
+		// terminal (done/cancel/human), which picks up its
+		// task-status hue via renderSignalTarget. Same per-token
+		// strategy renderWorkflowDetail uses on the step graph.
+		//
+		// Padding is emitted as PLAIN spaces outside the styled
+		// spans so trailing whitespace doesn't pick up the entity
+		// hue (purely cosmetic on whitespace, but it keeps the
+		// rendered escapes tight in case the operator copies the
+		// pane out).
+		const dateW = 19 // len("2006-01-02 15:04:05")
+		srcW := 1
+		for _, s := range signals {
+			if w := utf8.RuneCountInString(s.StepName); w > srcW {
+				srcW = w
+			}
+		}
 		lines := make([]string, 0, len(signals))
 		for _, s := range signals {
-			// Both sides of the arrow wear their entity colour: the
-			// source is always a step name (purple), the target is
-			// either a sibling step name (purple) or a lifecycle
-			// terminal (done/cancel/human), which picks up its
-			// task-status hue via renderSignalTarget. Same per-token
-			// strategy renderWorkflowDetail uses on the step graph.
-			lines = append(lines, fmt.Sprintf("%s %s → %s",
-				timeformat.FormatDateTimeSmart(s.CreatedAt),
-				renderStepName(s.StepName),
+			stamp := fmt.Sprintf("%*s", dateW, timeformat.FormatDateTimeSmart(s.CreatedAt))
+			srcPad := strings.Repeat(" ", srcW-utf8.RuneCountInString(s.StepName))
+			lines = append(lines, fmt.Sprintf("%s  %s%s  →  %s",
+				stamp,
+				renderStepName(s.StepName), srcPad,
 				renderSignalTarget(s.Target)))
 		}
 		label := styleMuted.Render(fmt.Sprintf("Recent signals (%d)", len(signals)))
