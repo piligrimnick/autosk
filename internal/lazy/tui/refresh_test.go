@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"autosk/internal/lazy/ansiutil"
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/store"
 )
@@ -425,31 +426,13 @@ func TestRenderWorkflowStep(t *testing.T) {
 	}
 }
 
-// stripANSI removes ANSI CSI escape sequences from s. Pure-Go
-// implementation good enough for tests — we only need to compare
-// visible content, not validate the escape grammar.
-func stripANSI(s string) string {
-	var b strings.Builder
-	inEsc := false
-	for _, r := range s {
-		if inEsc {
-			if r == 'm' || (r >= 0x40 && r <= 0x7e) {
-				inEsc = false
-			}
-			continue
-		}
-		if r == 0x1b { // ESC
-			inEsc = true
-			continue
-		}
-		if r == '[' && b.Len() > 0 {
-			// Common follow-up to ESC; the ESC branch above already
-			// consumed the ESC, so a bare '[' here is real content.
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
+// stripANSI is a thin shim around the canonical ansiutil.Strip so
+// existing call sites in this test file (and across render_test.go)
+// keep their short name. The implementation moved to
+// internal/lazy/ansiutil so the markdown package's tests share the
+// exact same fixer — see the as-a261 review comment trail for the
+// drift that led to the dedup.
+func stripANSI(s string) string { return ansiutil.Strip(s) }
 
 // TestClampCursor pins the cursor-stability behaviour used after
 // refresh swaps a panel's slice underneath the cursor.

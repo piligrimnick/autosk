@@ -94,18 +94,34 @@ type Palette struct {
 // default is TokyoNight().
 var active = TokyoNight()
 
+// version is a monotonic counter that ticks every time SetActive
+// swaps the active palette. Downstream caches that snapshot the
+// palette (lipgloss styles in tui/render.go, the glamour TermRenderer
+// in lazy/markdown) compare against Version() to decide whether to
+// rebuild. The counter is process-local — concurrent SetActive calls
+// from tests are protected by the model lock in the TUI; in
+// production palette swaps come from a single goroutine.
+var version uint64
+
 // Active returns the currently-installed palette.
 func Active() Palette { return active }
+
+// Version returns the monotonic palette generation counter. It is
+// bumped by SetActive; downstream caches (lipgloss styles, glamour
+// TermRenderer) compare against it to decide whether to rebuild.
+func Version() uint64 { return version }
 
 // SetActive installs p as the active palette. Returns the previous
 // palette so the caller can restore it (test pattern: defer SetActive(prev)).
 //
-// Note: Lipgloss styles cached at package-load time in tui/render.go
-// snapshot the palette they were built against. Callers wanting the
-// switch to take effect on already-running renders need to rebuild
-// those styles (tui exposes RebuildStyles for exactly that).
+// Bumps Version() so downstream caches notice the swap. Note: caches
+// that snapshot the palette (lipgloss styles cached at package-load
+// time in tui/render.go, the glamour TermRenderer in lazy/markdown)
+// still need an explicit RebuildStyles call to pick the new palette
+// up on the next frame.
 func SetActive(p Palette) Palette {
 	prev := active
 	active = p
+	version++
 	return prev
 }

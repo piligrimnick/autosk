@@ -436,7 +436,7 @@ func (gu *Gui) renderViews() {
 		gu.writeView(winAgents, "[4] Agents", agBody)
 		gu.applyRowHighlight(winAgents, agHdr, gu.st.agentCursor, len(gu.st.agents), focused == panelAgents)
 
-		gu.writeView(winDetail, "[0] Detail", renderDetail(gu.st))
+		gu.writeView(winDetail, "[0] Detail", renderDetail(gu.st, gu.innerWidth(winDetail)))
 		gu.writeView(winLog, "log", renderCommandLog(gu.st.logBuf, gu.st.flash))
 		gu.writeView(winStatusBar, "", renderStatusBar(gu.st, gu.opts.ProjectRoot))
 		if gu.st.view == StateInspector {

@@ -10,6 +10,7 @@ import (
 
 	"autosk/internal/daemon/runstore"
 	"autosk/internal/lazy/datasource"
+	"autosk/internal/lazy/markdown"
 	"autosk/internal/lazy/theme"
 	"autosk/internal/store"
 	"autosk/internal/timeformat"
@@ -65,7 +66,12 @@ func init() { RebuildStyles() }
 // active theme.Palette. Call after theme.SetActive(...) so a runtime
 // palette switch picks up on the next frame; tests use it to scope a
 // palette swap to one test case.
+//
+// Also invalidates the cached glamour renderer in lazy/markdown so a
+// theme swap flips both caches in lockstep. The renderer is rebuilt
+// lazily on the next markdown.Render call against the new palette.
 func RebuildStyles() {
+	markdown.RebuildStyles()
 	p := theme.Active()
 	styleHeader = lipgloss.NewStyle().Bold(true).Foreground(p.Header.Lipgloss())
 	styleMuted = lipgloss.NewStyle().Foreground(p.Muted.Lipgloss())
@@ -510,11 +516,19 @@ func renderAgentsPanel(ags []datasource.Agent, _ int, filter string) (string, in
 //
 // The caller already holds the model's RLock; s.comments[t.ID] and
 // s.signals[t.ID] are read directly here to avoid re-locking.
-func renderDetail(s *state) string {
+//
+// width is the inner cell width of the detail view (innerWidth of
+// winDetail). It's forwarded to renderTaskDetail / renderWorkflowDetail
+// so the markdown render of task.Description / workflow.Description /
+// comment.Text can wrap at the pane's width. A width of 0 means the
+// gocui view hasn't been sized yet (first layout pass before the
+// Manager wires the view); markdown.Render handles that by emitting
+// the raw text instead of running glamour at width=0.
+func renderDetail(s *state, width int) string {
 	switch s.focused {
 	case panelTasks:
 		if t, ok := s.selectedTask(); ok {
-			return renderTaskDetail(t, s.comments[t.ID], s.signals[t.ID])
+			return renderTaskDetail(t, s.comments[t.ID], s.signals[t.ID], width)
 		}
 	case panelJobs:
 		if j, ok := s.selectedJob(); ok {
@@ -522,7 +536,7 @@ func renderDetail(s *state) string {
 		}
 	case panelWorkflows:
 		if w, ok := s.selectedWorkflow(); ok {
-			return renderWorkflowDetail(w)
+			return renderWorkflowDetail(w, width)
 		}
 	case panelAgents:
 		if a, ok := s.selectedAgent(); ok {
@@ -532,7 +546,7 @@ func renderDetail(s *state) string {
 	return styleMuted.Render("(nothing selected)")
 }
 
-func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals []datasource.Signal) string {
+func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals []datasource.Signal, width int) string {
 	var b strings.Builder
 	// Header line: "task <id-blue>  <status-coloured>  P<n>". The label
 	// "task" stays bold-blue (styleHeader) so the line still reads as
@@ -557,11 +571,14 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 	// UTC and intentionally do NOT route through timeformat.
 	fmt.Fprintf(&b, "created: %s\n", timeformat.FormatDateTime(t.CreatedAt))
 	b.WriteString(styleMuted.Render("─ description ─") + "\n")
-	desc := t.Description
-	if desc == "" {
-		desc = styleMuted.Render("(no description)")
+	if t.Description == "" {
+		// Keep the placeholder exactly as before — acceptance criterion
+		// #4 pins this verbatim, and routing the empty string through
+		// glamour would just give us a blank pane.
+		b.WriteString(styleMuted.Render("(no description)") + "\n")
+	} else {
+		b.WriteString(markdown.Render(t.Description, width) + "\n")
 	}
-	b.WriteString(desc + "\n")
 	if len(t.BlockedBy) > 0 {
 		b.WriteString("\n" + styleMuted.Render(fmt.Sprintf("─ blocked by (%d) ─", len(t.BlockedBy))) + "\n")
 		for _, id := range t.BlockedBy {
@@ -575,6 +592,13 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 		}
 	}
 	// Design plan §4: Tasks detail pane includes the last ≤5 comments.
+	// Each comment renders as a header line (time + author in agent
+	// hue) followed by the body run through glamour. Comments are no
+	// longer clipped to 70 chars (acceptance criterion #3); the body
+	// wraps at width-2 to leave room for the 2-cell indent that
+	// nests the body under the header line. The "last 5" cap is
+	// preserved — long comment chains stay browsable from the
+	// Tasks panel without scrolling past the rest of the pane.
 	if len(comments) > 0 {
 		n := len(comments)
 		start := 0
@@ -582,12 +606,33 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 			start = n - 5
 		}
 		b.WriteString("\n" + styleMuted.Render(fmt.Sprintf("─ comments (%d) ─", n)) + "\n")
+		bodyWidth := width - 2
+		if bodyWidth < 1 {
+			bodyWidth = 0 // markdown.Render falls back to raw text at width<=0
+		}
 		for _, c := range comments[start:] {
 			// Smart timeline: time-only for today's events, full datetime
 			// for anything older so a comment from yesterday is still
 			// readable when the operator opens the pane mid-morning.
-			fmt.Fprintf(&b, "  %s %s: %s\n",
-				timeformat.FormatDateTimeSmart(c.CreatedAt), c.AuthorName, truncate(c.Text, 70))
+			fmt.Fprintf(&b, "  %s %s\n",
+				timeformat.FormatDateTimeSmart(c.CreatedAt),
+				renderAgentName(c.AuthorName))
+			body := markdown.Render(c.Text, bodyWidth)
+			// Defensive: markdown.Render("", _) returns "", and
+			// strings.Split("", "\n") yields [""] — which would emit a
+			// wasted blank indented line under the header. autosk_comment
+			// rejects empty bodies upstream, but rendering still has to
+			// behave sanely if a comment row ever lands here with no text.
+			if body == "" {
+				continue
+			}
+			// Indent every line of the rendered body by 2 cells so the
+			// comment block visually nests under its header. Trailing
+			// empty line (if any) is dropped so two comments don't get
+			// double-spaced.
+			for _, line := range strings.Split(body, "\n") {
+				b.WriteString("  " + line + "\n")
+			}
 		}
 	}
 	// Design plan §4: Tasks detail pane includes the tail of the last
@@ -637,7 +682,7 @@ func renderJobDetail(j datasource.Job) string {
 	return b.String()
 }
 
-func renderWorkflowDetail(w datasource.Workflow) string {
+func renderWorkflowDetail(w datasource.Workflow, width int) string {
 	var b strings.Builder
 	fmt.Fprintln(&b,
 		styleHeader.Render("workflow")+" "+renderWorkflowName(w.Name))
@@ -645,7 +690,11 @@ func renderWorkflowDetail(w datasource.Workflow) string {
 		fmt.Fprintln(&b, styleMuted.Render("synthetic single-step workflow"))
 	}
 	if w.Description != "" {
-		fmt.Fprintln(&b, w.Description)
+		// Workflow.Description is operator-authored markdown (same
+		// shape as Task.Description). Render it through the same
+		// glamour pipeline so headings / lists / code fences match
+		// the visual language of the task pane.
+		fmt.Fprintln(&b, markdown.Render(w.Description, width))
 	}
 	fmt.Fprintf(&b, "first step: %s\n", renderStepName(w.FirstStep))
 	fmt.Fprintf(&b, "tasks: %d\n", w.TaskCount)
