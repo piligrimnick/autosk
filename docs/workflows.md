@@ -144,8 +144,8 @@ The shipped example:
   "description": "Implement, review, validate, then ask the human.",
   "first_step": "dev",
   "steps": {
-    "dev":       { "agent": { "name": "developer" },     "next_steps": [{"step":"review", "prompt_rule":"…"}] },
-    "review":    { "agent": { "name": "code-reviewer" }, "next_steps": [
+    "dev":       { "agent": { "name": "developer" },     "max_visits": 5, "next_steps": [{"step":"review", "prompt_rule":"…"}] },
+    "review":    { "agent": { "name": "code-reviewer" }, "max_visits": 5, "next_steps": [
                      {"step":"validator", "prompt_rule":"…"},
                      {"step":"dev",       "prompt_rule":"…"}
                    ]},
@@ -166,6 +166,133 @@ same workflow) or a `task_status` (one of `done`, `cancelled`,
 `human_feedback`), never both. `prompt_rule` is natural-language guidance
 shown to the agent in its prompt — the agent uses it to decide which
 transition to emit.
+
+### Visit limits (`max_visits`)
+
+A workflow that loops (`dev → review → dev → …`) can churn indefinitely
+if its agents keep bouncing the task back. Each step block accepts an
+optional `max_visits: N` cap so the engine can fail loudly and escalate
+to a human instead of burning tokens forever.
+
+```jsonc
+"review": {
+  "agent":      { "name": "@autosk/code-reviewer" },
+  "max_visits": 5,
+  "next_steps": [ /* … */ ]
+}
+```
+
+Semantics:
+
+- **What counts as a visit.** Every transition INTO the step bumps the
+  counter — including the very first entry when a task is created
+  (`autosk create … --workflow X`) or enrolled (`autosk enroll …
+  --workflow X`) at this step. The cap is checked *before* the
+  counter is bumped, so the Nth visit is allowed and the (N+1)th
+  fails.
+- **`autosk resume <id>` without `--to` does NOT count.** It just flips
+  `human_feedback → in_workflow` and the same step keeps its current
+  counter — there was no transition. `autosk resume <id> --to STEP`
+  DOES count, even when `STEP` is the step the task currently sits on:
+  that's a deliberate re-entry and is treated as one.
+- **`max_visits: 0` or absent → unlimited.** The counter still ticks,
+  but the engine never compares it to anything. Synthetic
+  `single:<agent>` workflows always have `max_visits = 0`.
+- **What happens when the cap fires.** The current run is failed with
+  `daemon_runs.status = 'failed'` and
+  `daemon_runs.error = 'step_max_visits_exceeded: step "…" reached
+  visits=N max=N'`. The task is parked to `status = 'human_feedback'`
+  via the same `parkTaskOnFailure` path used by any other terminal
+  failure. **`current_step_id` moves to the TARGET step** — the one
+  the run was trying to enter when the cap fired (e.g. on a
+  `dev → review` advance that breaches `review.max_visits`, the task
+  parks on `review`, not on `dev`). After resetting the counter,
+  `autosk resume <id>` (no `--to`) lands on the same target step so
+  the loop can continue from there. This rule is specific to
+  `advanceTask` failures — every other failure mode (pi crash,
+  runner timeout, SendPrompt error, shutdown error,
+  `agent_did_not_emit_transition`) leaves `current_step_id`
+  untouched on the source step, because the run died before the
+  target was known.
+- **Counters live in `tasks.metadata.step_visits`** as a JSON object
+  keyed by `step_id` (the engine-managed schema; see
+  [Task metadata](#task-metadata) below).
+- **Resets are humans-only.** Nothing auto-clears counters — not
+  `reopen`, not `enroll`, not the daemon. Use
+  `autosk metadata reset-visits <id>` (optionally with
+  `--step NAME` or `--step-id ID`) as the escape hatch.
+- **Validation.** Negative `max_visits` is rejected at workflow import
+  time with `step %q: max_visits must be >= 0`.
+
+Typical cap-fire recovery:
+
+```bash
+# Task is parked because review hit max_visits = 5.
+autosk show as-bea9
+# status: human_feedback
+# current_step: review   <-- TARGET of the failed advance (the
+#                            cap fired on the dev→review transition,
+#                            so the task parks on review and `resume`
+#                            without --to resumes there once the
+#                            counter is cleared)
+# visits: dev 4/5, review 5/5*
+
+autosk daemon messages <job-id>
+# … error: step_max_visits_exceeded: step "review" reached visits=5 max=5
+
+# Inspect, decide, reset the counter you want to clear:
+autosk metadata reset-visits as-bea9 --step review
+# … and continue the loop:
+autosk resume as-bea9
+```
+
+### Task metadata
+
+Every task carries a free-form JSON `metadata` blob (the
+`tasks.metadata` column, nullable). The engine reserves the top-level
+key `step_visits` for the per-step visit counters used by
+`max_visits`; every other key is user-defined and untouched by the
+engine.
+
+The `autosk metadata` verb tree is the human-facing surface:
+
+```bash
+autosk metadata show <id> [--visits-pretty]
+autosk metadata set   <id> --key K  [--value V | --json-value FILE]
+autosk metadata unset <id> --key K
+autosk metadata reset-visits <id> [--step NAME | --step-id ID]
+```
+
+A few notes:
+
+- `--key` is a dotted JSON object path (e.g. `tags`, `notes.tmp`,
+  `step_visits.st-abcd`). Array indexing is not supported.
+- `--value V` parses V as a JSON literal when V starts with one of
+  `[`, `{`, `"`, `t`, `f`, `n`, `-`, or `0..9`; otherwise V is treated
+  as a plain string. `--json-value FILE` (or `-` for stdin) reads a
+  raw JSON value. Exactly one of `--value` / `--json-value` is
+  required.
+- Writes under `step_visits` are validated against the engine's typed
+  shape (object of `step_id → non-negative integer`); attempts to set
+  it to anything else fail before any DB write lands. This guards the
+  engine from human-driven corruption.
+- `metadata reset-visits` with no flag clears the entire
+  `step_visits` map; with `--step NAME` it resolves the name against
+  the task's current workflow and removes only that entry; with
+  `--step-id ID` it removes the entry for that step id directly
+  (handy for orphaned counters left behind when a workflow was
+  recreated).
+- No-op writes are detected — `metadata unset --key missing` or
+  `reset-visits` on a task with no counters does not bump `updated_at`
+  and does not produce a dolt commit.
+- `autosk show <id>` (human renderer) surfaces a one-line
+  `visits: dev 3/5, review 5/5*, validator 1` summary inline when the
+  task has `step_visits`. The `*` marker flags steps at or over their
+  cap; bare `N` (no denominator) means the step is uncapped.
+  `autosk show --json` includes the raw `metadata` object verbatim.
+
+See [`docs/notes/workflow-example.json`](notes/workflow-example.json)
+for a working example with caps.
 
 ### Per-step agent overrides
 
@@ -388,6 +515,12 @@ human. Humans can:
   has `is_human=0`, so these verbs never race with the engine.
 - **Reopen**: `autosk reopen <id>` — done/cancelled → new. Clears
   `current_step_id`; preserves `workflow_id` for audit.
+- **Inspect / edit metadata**: `autosk metadata show <id>` (add
+  `--visits-pretty` for a labelled visit-counter view),
+  `autosk metadata set/unset <id> --key K …`, and
+  `autosk metadata reset-visits <id> [--step NAME | --step-id ID]`
+  — the escape hatch after a `step_max_visits_exceeded` park. See
+  [Visit limits](#visit-limits-max_visits) above.
 
 `autosk update --status` is rejected on `in_workflow` tasks: those
 transitions are owned by the workflow engine.

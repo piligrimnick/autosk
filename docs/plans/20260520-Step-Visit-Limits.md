@@ -44,7 +44,66 @@ These were settled with the user; do not relitigate.
 | Counter key shape | `metadata.step_visits[<step_id>] = int` | `step_id` is globally unique; if a workflow is dropped + re-created the new step ids are fresh and old counters become orphans (acceptable — they’re ignored). |
 | Automatic resets | None. Counters are sticky; only humans clear them via CLI. | This matches "fail-loud, escalate to human" intent. |
 | CLI surface | New verb `autosk metadata {show,set,unset,reset-visits}`. | `update` is left alone; `show` is extended to surface visit counters. |
-| Failure mode | Hard fail. `daemon_runs.status=failed`, `error='step_max_visits_exceeded'`, task → `human_feedback`, `current_step_id` **preserved**. | Reuses existing `parkTaskOnFailure`. No agent kickback, no auto-comment. |
+| Failure mode | Hard fail. `daemon_runs.status=failed`, `error='step_max_visits_exceeded'`, task → `human_feedback`. `current_step_id` moves to the **target** step (the one the run was about to enter) for `advanceTask`-cap fires; every other failure mode preserves the source step. See §2.1 for the rationale and the amendment history. | Reuses existing `parkTaskOnFailure`. No agent kickback, no auto-comment. |
+
+### 2.1 Amendment 2026-05-21 — park on the TARGET step (as-9ab8)
+
+The original v1 of this plan, and the v1 implementation, parked
+cap-fire tasks with `current_step_id` **preserved on the source
+step** (the one the run had just finished on). In practice this
+meant an operator running `autosk resume <id>` without `--to` would
+launch the same already-finished agent again, burning a turn before
+the agent re-emitted its `step next --to <target>` and re-hit the
+cap. The user had to remember to `resume <id> --to <target>` on top
+of `metadata reset-visits` for the resume to be useful.
+
+Task **as-9ab8** flips that single rule, scoped to `advanceTask`
+cap-fires (and any other failure surfaced inside
+`executor.advanceTask`'s sibling-step branch). Concretely:
+
+- `executor.advanceTask` wraps any error from its
+  `sig.NextStepName != ""` branch with an internal
+  `advanceTargetError{TargetStepID, Err}` envelope. The next step
+  id is already known from the `FindStepByName` call done earlier
+  in `advanceTask`, so threading it through is cheap.
+- `parkTaskOnFailure` walks the cause chain with `errors.As`; when
+  it finds an `advanceTargetError` it patches
+  `current_step_id = target_step.ID` alongside the status flip to
+  `human_feedback`.
+- Every other failure mode (`pi exit`, `SendPrompt` failure,
+  `shutdown` failure, `agent_did_not_emit_transition`,
+  `agent_config_invalid`, kickback bookkeeping errors, runner
+  timeout, …) never produces the wrapper and therefore still
+  preserves the source step. Those runs died *before* the agent
+  emitted `step next`, so the target is unknown and the safest
+  landing is exactly where the run was.
+- The `Run()` errors.As(err, &MaxVisitsExceededError{}) lookup that
+  surfaces the verbatim `step_max_visits_exceeded:` prefix on
+  `daemon_runs.error` still resolves through the wrapper, because
+  `advanceTargetError.Unwrap()` returns the typed cause.
+
+As a side-effect of as-9ab8, the lazy TUI's `Enroll`,
+`EnrollAgent`, and `Resume(--to)` paths in
+`internal/lazy/datasource/offline.go` now route through
+`workflow.EnterStep` (same shape as the CLI verbs in
+`cmd/autosk/{enroll,resume,assign,create}.go`), so the
+`step_visits[first_step]` counter is bumped on lazy enroll/resume
+instead of being silently skipped. A new
+`workflow.MapEnterStepError(taskID, err)` helper produces the same
+`cannot enter step "X": already at max_visits=N; reset with …`
+hint everywhere; the CLI's `cmd/autosk/enterstep_err.go` and the
+lazy file each delegate to it. The shared helper returns a typed
+`workflow.EnterStepHint{Msg, Wrapped}` wrapper so `errors.As`
+through the friendly message still finds the underlying
+`MaxVisitsExceededError`.
+
+Docs touched in this amendment: this table row, §6.2/§6.6 below,
+`docs/workflows.md` “Visit limits”, and the README v0.2 status
+blurb. The original wording (“current_step_id preserved”) is
+retained in §6.2/§6.6 with a strikethrough-style note so the
+amendment is auditable.
+
+---
 
 The deliberate non-features (out of scope for this plan):
 
@@ -183,9 +242,11 @@ never compares it to anything).
 - "0 / absent = unlimited"
 - "when a task hits the cap, the run is failed with
   `step_max_visits_exceeded`, the task is parked to
-  `human_feedback`, and `current_step_id` is preserved so
-  `autosk resume` returns you to the same step once you've reset the
-  counter"
+  `human_feedback`, and `current_step_id` is moved to the **target**
+  step (the one the failed advance was trying to enter) so
+  `autosk resume` (no `--to`) lands on that step once you've reset
+  the counter. Other failure modes preserve the source step — see
+  §2.1"
 - pointer at `autosk metadata reset-visits` as the escape hatch
 
 ---
@@ -377,14 +438,25 @@ and returns it up to `Run`, where `failTerminal` ⇒ `MarkFailed` +
   is still `in_workflow` at the moment of failure).
 - `tasks.current_step_id` is **preserved** (we never moved it).
 
-Note: when we hit the cap, we are *one step away from the
-over-limit step*. The executor is finishing the run on step **A**
-and the agent chose to move to step **B** (the one with the cap).
-The user's intent is "park the task at A". Since the run for A
-itself succeeded, `parkTaskOnFailure` parking with
-`current_step_id = A` is exactly correct. After the human resets
-visits, `autosk resume <id>` resumes at A and the same agent gets
-a chance to pick a different transition.
+Note (superseded by §2.1, 2026-05-21 — kept for context):
+~~when we hit the cap, we are *one step away from the over-limit
+step*. The executor is finishing the run on step **A** and the
+agent chose to move to step **B** (the one with the cap). The
+user's intent is "park the task at A". Since the run for A itself
+succeeded, `parkTaskOnFailure` parking with `current_step_id = A`
+is exactly correct. After the human resets visits, `autosk resume
+<id>` resumes at A and the same agent gets a chance to pick a
+different transition.~~
+
+The actual behaviour today (post-as-9ab8): the run for A having
+succeeded does NOT mean A is the right landing for `resume` —
+`resume <id>` (no `--to`) would re-run the already-finished A and
+burn a turn before the agent re-picks B and re-hits the cap. We
+therefore park with `current_step_id = B` instead, so `resume
+<id>` without `--to` after `metadata reset-visits <id> --step B`
+drops the human straight onto B where the actual work is. Other
+failure modes (which can't name a target) continue to preserve
+A. See §2.1.
 
 **`enroll` / `create --workflow` / `resume --to`.**
 
@@ -482,12 +554,16 @@ Concrete sequence on a typical bounce loop:
    step \"review\" reached visits=5 max=5")` and
    `parkTaskOnFailure(...)`.
 6. `parkTaskOnFailure` reads the task: status is still
-   `in_workflow` (we never moved it past `dev`), so it patches
-   `status=human_feedback`. `current_step_id` stays `dev`.
+   `in_workflow` (the `EnterStep` rollback left `current_step_id`
+   on `dev`), so it patches `status=human_feedback`. The cause is
+   wrapped in `advanceTargetError{TargetStepID: review.ID}` (see
+   §2.1), so the patch also sets `current_step_id = review.ID`.
 7. Daemon stops touching the task. Human runs `autosk show $id` and
-   sees status=human_feedback, current_step=dev. `autosk daemon
-   list` (or lazy) shows the failed run with
-   `error=step_max_visits_exceeded:…`.
+   sees status=human_feedback, current_step=**review**. `autosk
+   daemon list` (or lazy) shows the failed run with
+   `error=step_max_visits_exceeded:…`. Once the human resets the
+   counter, `autosk resume $id` (no `--to`) re-enters `review`
+   directly — no wasted re-run of `dev`.
 
 Human now has three options:
 

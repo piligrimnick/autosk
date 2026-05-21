@@ -23,8 +23,15 @@ priority:    1
 
 **v0.2.** Tasks are now first-class citizens of a small workflow engine:
 agents, workflows, comments, and a daemon poller that drives tasks
-through step transitions. An interactive TUI (`autosk lazy`) renders
-all four entity kinds plus an SSE-backed job inspector. See:
+through step transitions. Workflows can cap how many times a task may
+enter a given step (per-step `max_visits`); when the cap fires the
+run is failed with `daemon_runs.error = 'step_max_visits_exceeded: …'`,
+the task is parked to `human_feedback` on the **target** step (the
+one the run was about to enter), and the human clears the counter
+with `autosk metadata reset-visits <id> [--step NAME]` before
+resuming.
+An interactive TUI (`autosk lazy`) renders all four entity kinds plus
+an SSE-backed job inspector. See:
 
 - Workflows plan: [`docs/plans/20260517-Workflows-Plan.md`](docs/plans/20260517-Workflows-Plan.md).
 - Agent packages plan: [`docs/plans/20260518-Agent-Packages.md`](docs/plans/20260518-Agent-Packages.md).
@@ -105,6 +112,12 @@ Lifecycle
   autosk done <id>                   # direct; also clears current_step_id
   autosk cancel <id>                 # direct; also clears current_step_id
   autosk reopen <id>                 # done|cancelled → new (preserves workflow_id)
+
+Task metadata (free-form JSON; engine-reserved `step_visits` counters)
+  autosk metadata show         <id> [--visits-pretty]
+  autosk metadata set          <id> --key K [--value V | --json-value FILE]
+  autosk metadata unset        <id> --key K
+  autosk metadata reset-visits <id> [--step NAME | --step-id ID]
 
 Agents (npm-package-based)
   autosk agent install <npm-name> [--version SPEC]
