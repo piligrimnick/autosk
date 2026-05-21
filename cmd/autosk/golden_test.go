@@ -68,6 +68,62 @@ func TestGolden_Empty(t *testing.T) {
 	compareGolden(t, "empty.golden.json", buf.Bytes())
 }
 
+// withFixedLocal pins time.Local for the duration of a sub-test so
+// the human-mode renderer (which converts UTC → local through
+// internal/timeformat) produces a stable golden. t.Setenv("TZ", ...)
+// can't reach time.Local, which is initialised once at package load.
+func withFixedLocal(t *testing.T, name string) {
+	t.Helper()
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		t.Skipf("tzdata %q not available: %v", name, err)
+	}
+	orig := time.Local
+	time.Local = loc
+	t.Cleanup(func() { time.Local = orig })
+}
+
+// TestGolden_ShowText pins TZ=Europe/Moscow and verifies that the
+// human-mode `task show` output renders created_at/updated_at in the
+// operator's local timezone with the YYYY-MM-DD HH:MM:SS layout that
+// internal/timeformat defines. This is the text-side counterpart of
+// TestGolden_ShowJSON — the JSON wire shape must remain RFC3339 UTC.
+func TestGolden_ShowText(t *testing.T) {
+	withFixedLocal(t, "Europe/Moscow")
+	var buf bytes.Buffer
+	if err := render.Task(&buf, fixedTask(),
+		render.WithBlocked(false, nil, []string{"as-3c4d"})); err != nil {
+		t.Fatal(err)
+	}
+	compareGoldenText(t, "show.golden.txt", buf.Bytes())
+}
+
+// compareGoldenText compares (or rewrites with -update) a text
+// golden file under testdata/. Unlike compareGolden it does no JSON
+// canonicalisation — byte-for-byte (after trailing-newline trim).
+func compareGoldenText(t *testing.T, name string, got []byte) {
+	t.Helper()
+	path := filepath.Join("testdata", name)
+	if *updateGolden {
+		if err := os.MkdirAll("testdata", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, got, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("updated %s", path)
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v  (run with -update to create)", path, err)
+	}
+	if !bytes.Equal(bytes.TrimRight(want, "\n"), bytes.TrimRight(got, "\n")) {
+		t.Errorf("golden mismatch %s:\n--- want ---\n%s\n--- got ---\n%s\n(run `go test -tags libsqlite3 ./cmd/autosk -update` to refresh)",
+			path, string(want), string(got))
+	}
+}
+
 // compareGolden compares (or rewrites with -update) a golden file under
 // testdata/.
 func compareGolden(t *testing.T, name string, got []byte) {

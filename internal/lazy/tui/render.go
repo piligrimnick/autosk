@@ -12,6 +12,7 @@ import (
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/lazy/theme"
 	"autosk/internal/store"
+	"autosk/internal/timeformat"
 )
 
 // Styles are derived from the active theme.Palette at package-load
@@ -553,7 +554,10 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 		fmt.Fprintf(&b, "author: %s\n", renderAgentName(t.AuthorName))
 	}
 	fmt.Fprintf(&b, "blocked: %v   comments: %d\n", t.Blocked, t.CommentCount)
-	fmt.Fprintf(&b, "created: %s\n", t.CreatedAt.Format(time.RFC3339))
+	// Local-TZ DateTime for the operator. Machine-facing wire formats
+	// (JSON output, daemon HTTP API, RunContextSeed) stay on RFC3339
+	// UTC and intentionally do NOT route through timeformat.
+	fmt.Fprintf(&b, "created: %s\n", timeformat.FormatDateTime(t.CreatedAt))
 	b.WriteString(styleMuted.Render("─ description ─") + "\n")
 	desc := t.Description
 	if desc == "" {
@@ -581,8 +585,11 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 		}
 		b.WriteString("\n" + styleMuted.Render(fmt.Sprintf("─ comments (%d) ─", n)) + "\n")
 		for _, c := range comments[start:] {
+			// Smart timeline: time-only for today's events, full datetime
+			// for anything older so a comment from yesterday is still
+			// readable when the operator opens the pane mid-morning.
 			fmt.Fprintf(&b, "  %s %s: %s\n",
-				c.CreatedAt.Format("15:04"), c.AuthorName, truncate(c.Text, 70))
+				timeformat.FormatDateTimeSmart(c.CreatedAt), c.AuthorName, truncate(c.Text, 70))
 		}
 	}
 	// Design plan §4: Tasks detail pane includes the tail of the last
@@ -598,7 +605,7 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 		b.WriteString("\n" + styleMuted.Render(fmt.Sprintf("─ recent signals (%d) ─", n)) + "\n")
 		for _, s := range signals[:end] {
 			fmt.Fprintf(&b, "  %s %s → %s\n",
-				s.CreatedAt.Format("15:04"), s.StepName, s.Target)
+				timeformat.FormatDateTimeSmart(s.CreatedAt), s.StepName, s.Target)
 		}
 	}
 	return b.String()
@@ -619,12 +626,12 @@ func renderJobDetail(j datasource.Job) string {
 	if j.PID != nil {
 		fmt.Fprintf(&b, "pid: %d\n", *j.PID)
 	}
-	fmt.Fprintf(&b, "created: %s\n", j.CreatedAt.Format(time.RFC3339))
+	fmt.Fprintf(&b, "created: %s\n", timeformat.FormatDateTime(j.CreatedAt))
 	if j.StartedAt != nil {
-		fmt.Fprintf(&b, "started: %s\n", j.StartedAt.Format(time.RFC3339))
+		fmt.Fprintf(&b, "started: %s\n", timeformat.FormatDateTime(*j.StartedAt))
 	}
 	if j.FinishedAt != nil {
-		fmt.Fprintf(&b, "finished: %s\n", j.FinishedAt.Format(time.RFC3339))
+		fmt.Fprintf(&b, "finished: %s\n", timeformat.FormatDateTime(*j.FinishedAt))
 	}
 	if j.Error != "" {
 		b.WriteString(styleErr.Render("error: "+j.Error) + "\n")
@@ -821,7 +828,8 @@ func renderTranscript(events []datasource.MessageEvent) string {
 	for _, e := range events {
 		stamp := ""
 		if !e.TS.IsZero() {
-			stamp = e.TS.Format("15:04:05") + " "
+			// Smart timeline: today → time only, older → full datetime.
+			stamp = timeformat.FormatDateTimeSmart(e.TS) + " "
 		}
 		head := styleHeader.Render(stamp + e.Kind)
 		if e.Name != "" {

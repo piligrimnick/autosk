@@ -17,6 +17,7 @@ import (
 	"autosk/internal/agent/pkgregistry"
 	"autosk/internal/render"
 	"autosk/internal/store/doltlite"
+	"autosk/internal/timeformat"
 )
 
 // envAgentName is the env var that names the agent invoking the CLI.
@@ -402,7 +403,8 @@ func emitAgent(a agent.Agent) error {
 	}
 	fmt.Printf("%s\n", render.BracketedRef(a.ID, a.Name))
 	fmt.Printf("is_human:   %t\n", a.IsHuman)
-	fmt.Printf("created_at: %s\n", a.CreatedAt.Format("2006-01-02T15:04:05Z"))
+	// Text output uses operator's local TZ; toJSON keeps RFC3339 UTC.
+	fmt.Printf("created_at: %s\n", timeformat.FormatDateTime(a.CreatedAt))
 	return nil
 }
 
@@ -501,7 +503,8 @@ func emitAgentDetailed(name string, a agent.Agent, inDB bool, e pkgregistry.Entr
 	if inDB {
 		fmt.Printf("agent_id:   %s\n", a.ID)
 		fmt.Printf("is_human:   %t\n", a.IsHuman)
-		fmt.Printf("created_at: %s\n", a.CreatedAt.Format("2006-01-02T15:04:05Z"))
+		// Text output uses operator's local TZ; toJSON keeps RFC3339 UTC.
+		fmt.Printf("created_at: %s\n", timeformat.FormatDateTime(a.CreatedAt))
 	} else {
 		fmt.Println("(not in DB)")
 	}

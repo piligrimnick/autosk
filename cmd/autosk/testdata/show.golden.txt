@@ -1,0 +1,14 @@
+[as-a1b2]: Wire up doltlite store
+status:        in_workflow
+priority:      1
+workflow:      -
+current_step:  -
+current_agent: -
+author:        -
+blocked:       no
+blocked_by:    -
+blocks:        as-3c4d
+created_at:    2026-05-13 13:00:00
+updated_at:    2026-05-13 14:42:13
+description:
+  Implement Open/Close/Migrate and the smoke test.
