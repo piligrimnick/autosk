@@ -1,7 +1,6 @@
 package pi
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -350,27 +349,44 @@ func IsWaitTimeout(err error) bool { return errors.Is(err, errWaitTimeout) }
 func (r *Runner) readLoop() {
 	defer close(r.readDone)
 	defer close(r.events)
-	scanner := bufio.NewScanner(r.stdout)
-	// Long lines tolerated: 1 MiB. pi rarely emits anything close to that.
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	// pi speaks JSON Lines. We use json.Decoder rather than bufio.Scanner
+	// because Scanner has a hard per-token size cap (MaxScanTokenSize,
+	// default 64 KiB; even an explicit 1 MiB cap is not enough on long
+	// sessions where pi can legitimately emit a single JSON line >>1 MiB:
+	// large tool_result payloads, extension-RPC blobs, set_editor_text
+	// with the entire buffer, etc.). Hitting that cap used to crash the
+	// reader with bufio.ErrTooLong, which then fanned out into
+	// MarkFailed + parkTaskOnFailure even when the agent had already
+	// recorded a valid step_signal — see fix: "daemon pi runner падает
+	// на длинных сессиях с 'bufio.Scanner: token too long'".
+	//
+	// json.Decoder streams JSON values directly off the reader with no
+	// per-value cap and handles inter-value whitespace (incl. JSON Lines'
+	// newlines) correctly.
+	dec := json.NewDecoder(r.stdout)
+	var readErr error
+	for {
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			if !errors.Is(err, io.EOF) {
+				readErr = err
+			}
+			break
 		}
-		// Copy so the buffer reuse in Scanner doesn't bite us.
-		raw := append([]byte(nil), line...)
+		// json.Decoder allocates a fresh slice per Decode call, so the
+		// bytes are safe to retain in Event.Raw.
 		var msg inboundMessage
 		if err := json.Unmarshal(raw, &msg); err != nil {
-			// Malformed line — treat as KindOther but log via stderr is too
-			// noisy; preserve the raw bytes in the event payload.
+			// Well-formed JSON value but not a shape we recognise (e.g.
+			// a bare string / number / null). Preserve the raw bytes in
+			// the event payload and keep reading.
 			r.emit(Event{Kind: KindOther, Raw: raw, ReceivedAt: time.Now().UTC()})
 			continue
 		}
 		r.handle(msg, raw)
 	}
 	r.mu.Lock()
-	r.readErr = scanner.Err()
+	r.readErr = readErr
 	r.closed = true
 	// Fail any still-pending responses.
 	for id, ch := range r.pending {

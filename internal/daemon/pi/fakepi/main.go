@@ -9,6 +9,10 @@
 //	FAKEPI_SCENARIO      — "ok" (default), "no_agent_end" (drop agent_end),
 //	                       "prompt_error" (reply success=false to prompt),
 //	                       "dialog" (emit a select extension_ui_request)
+//	FAKEPI_HUGE_PAYLOAD_BYTES — when >0, emit a message_start with a text
+//	                       block of approximately this many bytes before
+//	                       agent_end (used by runner tests to exercise the
+//	                       no-per-line-cap path).
 //
 // fakepi exits 0 on stdin EOF or SIGTERM.
 package main
@@ -16,10 +20,13 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -59,25 +66,26 @@ func main() {
 	sessID := envOr("FAKEPI_SESSION_ID", "sess-fake")
 	sessFile := envOr("FAKEPI_SESSION_FILE", "/tmp/fakepi/session.jsonl")
 	delay := envIntMS("FAKEPI_AGENT_END_DELAY_MS", 0)
+	hugePayload := envInt("FAKEPI_HUGE_PAYLOAD_BYTES", 0)
 
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
+	// JSON Lines on stdin. json.Decoder streams without the
+	// per-token cap bufio.Scanner imposes, matching the runner-side fix.
+	dec := json.NewDecoder(os.Stdin)
+	for {
 		var c cmd
-		if err := json.Unmarshal(line, &c); err != nil {
+		if err := dec.Decode(&c); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
 			emit(map[string]any{"type": "response", "id": "", "command": "?", "success": false, "error": fmt.Sprintf("parse: %v", err)})
 			continue
 		}
-		handle(c, scenario, sessID, sessFile, delay)
+		handle(c, scenario, sessID, sessFile, delay, hugePayload)
 	}
 	// stdin closed → exit cleanly.
 }
 
-func handle(c cmd, scenario, sessID, sessFile string, delay time.Duration) {
+func handle(c cmd, scenario, sessID, sessFile string, delay time.Duration, hugePayload int) {
 	switch c.Type {
 	case "get_state":
 		emit(map[string]any{
@@ -117,6 +125,17 @@ func handle(c cmd, scenario, sessID, sessFile string, delay time.Duration) {
 				"type":    "message_end",
 				"message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": "ack: " + prompt}}, "timestamp": time.Now().UnixMilli()},
 			})
+			if hugePayload > 0 {
+				// Emit a single >hugePayload-byte JSON line to exercise
+				// the runner's no-per-line-cap reader path. The text
+				// block carries the bulk; with JSON escaping + envelope
+				// the line is always >= hugePayload bytes.
+				big := strings.Repeat("x", hugePayload)
+				emit(map[string]any{
+					"type":    "message_end",
+					"message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": big}}, "timestamp": time.Now().UnixMilli()},
+				})
+			}
 			emit(map[string]any{"type": "turn_end", "message": map[string]any{}, "toolResults": []any{}})
 
 			if scenario == "no_agent_end" {
@@ -157,4 +176,16 @@ func envIntMS(k string, def int) time.Duration {
 		return time.Duration(def) * time.Millisecond
 	}
 	return time.Duration(n) * time.Millisecond
+}
+
+func envInt(k string, def int) int {
+	v := os.Getenv(k)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
 }

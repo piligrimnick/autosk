@@ -2,6 +2,7 @@ package pi_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -152,6 +153,25 @@ func TestRunner_CleanShutdownOnStdinClose(t *testing.T) {
 	}
 	if code != 0 {
 		t.Errorf("exit code: %d", code)
+	}
+}
+
+// TestRunner_LargePayloadDoesNotCrashReader exercises the reader on a
+// JSON line significantly larger than bufio.Scanner's old 1 MiB cap.
+// The historical reader (bufio.Scanner with a 1 MiB buffer) would
+// fail this with bufio.ErrTooLong; the json.Decoder-based reader has
+// no per-token cap and must stream the message through to the consumer
+// before emitting agent_end.
+func TestRunner_LargePayloadDoesNotCrashReader(t *testing.T) {
+	const payloadBytes = 4 << 20 // 4 MiB
+	r := newRunner(t, fmt.Sprintf("FAKEPI_HUGE_PAYLOAD_BYTES=%d", payloadBytes))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := r.SendPrompt(ctx, "big"); err != nil {
+		t.Fatalf("SendPrompt: %v", err)
+	}
+	if err := r.WaitForAgentEnd(ctx); err != nil {
+		t.Fatalf("WaitForAgentEnd: %v", err)
 	}
 }
 

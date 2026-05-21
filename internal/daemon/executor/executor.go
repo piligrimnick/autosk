@@ -391,6 +391,21 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 		werr := runner.WaitForAgentEnd(turnCtx)
 		turnCancel()
 		if werr != nil {
+			// Defensive: if the agent recorded its transition before the
+			// pi pipe died (read error / unexpected EOF / extension-RPC
+			// payload too large for the reader / etc.), honour the
+			// signal rather than parking the task. Without this, a
+			// successful agent run can still end up in human_feedback
+			// just because stdout closed before the executor noticed
+			// agent_end. We skip the lookup when the executor itself is
+			// cancelled — cancellation routes through handleRunError's
+			// cancel-aware cleanup and explicitly does NOT advance.
+			if ctx.Err() == nil && !errors.Is(werr, context.Canceled) {
+				if sig, gerr := e.deps.Signals.GetForRun(ctx, jobID); gerr == nil {
+					signaled = sig
+					break
+				}
+			}
 			return e.handleRunError(ctx, bg, jobID, runner, werr)
 		}
 		sig, gerr := e.deps.Signals.GetForRun(ctx, jobID)
