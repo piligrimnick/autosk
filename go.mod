@@ -9,6 +9,7 @@ require (
 	github.com/jesseduffield/gocui v0.3.1-0.20260331125330-c81715e95462
 	github.com/jesseduffield/lazycore v0.0.0-20221023210126-718a4caea996
 	github.com/mattn/go-sqlite3 v1.14.37
+	github.com/muesli/termenv v0.16.0
 	github.com/spf13/cobra v1.10.1
 )
 
@@ -31,7 +32,6 @@ require (
 	github.com/mattn/go-runewidth v0.0.17 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/muesli/reflow v0.3.0 // indirect
-	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/samber/lo v1.31.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect

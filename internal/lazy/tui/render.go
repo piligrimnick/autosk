@@ -683,9 +683,16 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 	if len(signals) > 0 {
 		lines := make([]string, 0, len(signals))
 		for _, s := range signals {
+			// Both sides of the arrow wear their entity colour: the
+			// source is always a step name (purple), the target is
+			// either a sibling step name (purple) or a lifecycle
+			// terminal (done/cancel/human), which picks up its
+			// task-status hue via renderSignalTarget. Same per-token
+			// strategy renderWorkflowDetail uses on the step graph.
 			lines = append(lines, fmt.Sprintf("%s %s → %s",
 				timeformat.FormatDateTimeSmart(s.CreatedAt),
-				renderStepName(s.StepName), s.Target))
+				renderStepName(s.StepName),
+				renderSignalTarget(s.Target)))
 		}
 		label := styleMuted.Render(fmt.Sprintf("Recent signals (%d)", len(signals)))
 		b.WriteString("\n" + drawLabeledBox(label, strings.Join(lines, "\n"), width) + "\n")

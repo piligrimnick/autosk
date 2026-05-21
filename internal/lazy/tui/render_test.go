@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"autosk/internal/lazy/ansiutil"
 	"autosk/internal/lazy/datasource"
@@ -18,6 +19,27 @@ import (
 // Tiny alias around lipgloss.Width so the box-dimensions test reads
 // the way the prose narrative talks about "visible width".
 func lipglossWidth(s string) int { return lipgloss.Width(s) }
+
+// forceTrueColor pins the lipgloss color profile to TrueColor for
+// tests that need to verify styled output. Under `go test` the
+// default renderer auto-detects a non-TTY stdout and degrades to
+// the Ascii profile (no SGR escapes), which would make every
+// "is this string styled?" assertion silently pass against an
+// unstyled output. Call from TestMain or via t.Cleanup to scope
+// the side effect.
+func forceTrueColor(t *testing.T) {
+	t.Helper()
+	prev := lipgloss.DefaultRenderer().ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	// Styles cache the renderer's profile at creation time, so swap
+	// the profile FIRST and then rebuild so the cached styles in
+	// this package pick the new profile up.
+	RebuildStyles()
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(prev)
+		RebuildStyles()
+	})
+}
 
 // stripANSI is defined in refresh_test.go (a thin alias over
 // ansiutil.Strip) and shared across render-pane tests so substring
@@ -472,28 +494,44 @@ func TestRenderTaskDetail_SignalsBoxAll(t *testing.T) {
 // the right-hand side of each signal arrow wears its canonical
 // entity colour: a sibling step name gets the step-name hue, while
 // a lifecycle terminal (done/cancel/human) gets its task-status hue.
+//
+// Forces TrueColor so lipgloss actually emits SGR escapes under
+// `go test` (where stdout is a pipe and the renderer would
+// otherwise degrade to Ascii). The previous incarnation of this
+// test was a false-positive on that exact issue — the assertion
+// hit a substring that happened to be in the output regardless of
+// styling because lipgloss wasn't emitting any escapes at all.
 func TestRenderTaskDetail_SignalsTargetColored(t *testing.T) {
+	forceTrueColor(t)
 	task := datasource.Task{
 		ID: "as-sig", Status: store.StatusWork, CreatedAt: fixedTime,
 	}
 	signals := []datasource.Signal{
-		{StepName: "developer", Target: "validator", CreatedAt: fixedTime},
-		{StepName: "validator", Target: "done", CreatedAt: fixedTime},
-		{StepName: "developer", Target: "cancel", CreatedAt: fixedTime},
-		{StepName: "developer", Target: "human", CreatedAt: fixedTime},
+		// Each signal pairs a source unique to the row with a target
+		// of the same name appearing only on the target side, so a
+		// substring search for "\u001b...<target>\u001b" finds the
+		// target's styling and nothing else.
+		{StepName: "src1", Target: "validator", CreatedAt: fixedTime},
+		{StepName: "src2", Target: "done", CreatedAt: fixedTime},
+		{StepName: "src3", Target: "cancel", CreatedAt: fixedTime},
+		{StepName: "src4", Target: "human", CreatedAt: fixedTime},
 	}
 	out := renderTaskDetail(task, nil, signals, 80)
 
 	// Step-name target wears renderStepName's hue.
-	if !strings.Contains(out, renderStepName("validator")) {
-		t.Errorf("step-name target \"validator\" not styled with step-name hue: %q", out)
+	wantStep := renderStepName("validator")
+	if !strings.Contains(out, "\x1b") {
+		t.Fatalf("output carries no ANSI escapes at all — forceTrueColor did not take effect: %q", out)
+	}
+	if !strings.Contains(out, wantStep) {
+		t.Errorf("step-name target \"validator\" not styled with step-name hue\nwant substring: %q\n         in: %q", wantStep, out)
 	}
 	// Lifecycle-terminal targets wear their task-status hue (same
 	// styling renderWorkflowDetail uses on the step graph).
 	for _, st := range []store.Status{store.StatusDone, store.StatusCancel, store.StatusHuman} {
 		want := styleForTaskStatus(st).Render(string(st))
 		if !strings.Contains(out, want) {
-			t.Errorf("lifecycle terminal %q not styled with task-status hue: out=%q", st, out)
+			t.Errorf("lifecycle terminal %q not styled with task-status hue\nwant substring: %q\n         in: %q", st, want, out)
 		}
 	}
 }
