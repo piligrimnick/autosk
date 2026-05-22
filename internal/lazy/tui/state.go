@@ -9,6 +9,42 @@ import (
 	"autosk/internal/timeformat"
 )
 
+// jobTranscriptCacheMax bounds state.jobTranscript so a long lazy
+// session that visits many jobs doesn't grow it unbounded. ~3MB worst
+// case at 100KB/entry.
+const jobTranscriptCacheMax = 32
+
+// jobTranscriptTerminalTTL is the per-entry TTL for terminal jobs:
+// after this window the next selection refetches the archive (so
+// late-flushed events appear). Running jobs are kept fresh by SSE
+// alone, no TTL refetch.
+const jobTranscriptTerminalTTL = 30 * time.Second
+
+// jobLiveDebounce is the keystroke-debounce window before
+// scheduleJobLive actually opens an SSE subscription. j/k-spam across
+// running jobs within this window collapses into one StreamLive call
+// against the final-resting cursor row.
+const jobLiveDebounce = 2 * time.Second
+
+// jobLiveBufCap is the soft cap on the per-job live transcript event
+// slice. Past this we drop the oldest 25% in one allocation and set
+// te.truncated=true. ~2000 events is roughly an hour of pi traffic.
+const jobLiveBufCap = 2000
+
+// jobTranscriptEntry is one entry in state.jobTranscript: the
+// archive + live event slice for a single job, plus per-event
+// pre-rendered drawLabeledBox strings, plus the width they were
+// rendered at (so a pane resize triggers a rebuild).
+type jobTranscriptEntry struct {
+	events        []datasource.MessageEvent // archive + live appends, oldest first
+	renderedBoxes []string                  // pre-rendered drawLabeledBox per event
+	renderedWidth int                       // contentW used when boxes were built; invalidates on resize
+	loadedAt      time.Time                 // for TTL on terminal jobs
+	runningSeen   bool                      // last-observed Streaming/Status
+	truncated     bool                      // hit live cap, dropped oldest 25%
+	err           error                     // last archive load error (renders as plashka)
+}
+
 // panelID is the identifier of one of the four dashboard list
 // contexts. Used by the focus stack + the scope helper.
 type panelID int
@@ -51,30 +87,6 @@ func (p panelID) window() string {
 		return winDetail
 	}
 	return ""
-}
-
-// inspectorTab is the inspector's current focused tab.
-type inspectorTab int
-
-const (
-	tabLive inspectorTab = iota
-	tabArchive
-	tabMeta
-	tabSignals
-)
-
-func (t inspectorTab) String() string {
-	switch t {
-	case tabLive:
-		return "Live"
-	case tabArchive:
-		return "Archive"
-	case tabMeta:
-		return "Meta"
-	case tabSignals:
-		return "Signals"
-	}
-	return "?"
 }
 
 // agentRel selects which agent relation an agent-scope chip refers
@@ -173,29 +185,6 @@ type popupState struct {
 	OnComposeAccept func(summary, description string) error
 }
 
-// inspectorState carries everything the inspector view needs.
-type inspectorState struct {
-	JobID          string
-	Tab            inspectorTab
-	Job            datasource.Job
-	Streaming      bool
-	TerminalAtOpen bool
-	// Live tab plumbing.
-	live          *datasource.LiveHandle
-	liveCancel    context.CancelFunc
-	liveBuf       []string // pre-rendered transcript lines (oldest→newest)
-	liveTruncated bool     // true once liveBuf hit its cap and was trimmed
-	liveInput     string   // textarea contents (single-line in v1 — risk #3)
-	// Archive tab plumbing.
-	archive       []datasource.MessageEvent
-	archiveLoaded bool
-	archiveErr    error // non-nil → hydrate failed; UI shows a plashka instead of (loading…)
-	// Meta + Signals.
-	signals  []datasource.Signal
-	comments []datasource.Comment
-	scrollY  int
-}
-
 // flashState is the ephemeral toast line. CreatedAt makes the layout
 // loop drop the toast after a short timeout.
 type flashState struct {
@@ -208,11 +197,10 @@ type flashState struct {
 //
 // Most writes are funnelled through g.Update closures (which run on
 // the gocui main thread), but a handful of OnWorker-spawned
-// goroutines also mutate state directly — see inspector.go's
-// startLiveStream / stopLiveStream, which write to st.insp.live and
-// st.insp.liveCancel from a worker goroutine. The RWMutex is what
-// makes that safe; do NOT drop it without untangling the worker
-// writes first.
+// goroutines also mutate state directly — see jobdetail.go's SSE
+// pump, which writes into state.jobTranscript from a worker
+// goroutine. The RWMutex is what makes that safe; do NOT drop it
+// without untangling the worker writes first.
 type state struct {
 	mu sync.RWMutex
 
@@ -245,10 +233,29 @@ type state struct {
 	scope   scope
 	filter  filterState
 	popup   popupState
-	insp    inspectorState
 	flash   flashState
 	logBuf  []string
 	logHide bool
+
+	// jobTranscript is a per-jobID cache of the transcript shown in
+	// the Detail pane. Bounded at jobTranscriptCacheMax entries via
+	// LRU eviction (same pattern as state.comments).
+	jobTranscript map[string]*jobTranscriptEntry
+
+	// jobLive* hold the single active SSE subscription. Exactly one
+	// job at a time may be streaming into the Detail pane;
+	// switching selection to a different running job cancels the
+	// current handle after the jobLiveDebounce timer expires.
+	jobLiveJobID  string
+	jobLiveHandle *datasource.LiveHandle
+	jobLiveCancel context.CancelFunc
+	jobLiveTimer  *time.Timer // debounce timer; reset on every selection change
+
+	// jobInput is the cached contents of winJobInput's textarea.
+	// The view's Buffer() is authoritative once the view exists;
+	// this is the model-side snapshot the renderer seeds the view
+	// from on first creation and reads back on dispatch.
+	jobInput string
 
 	health datasource.Health
 
@@ -280,12 +287,13 @@ const commentsCacheMax = 64
 // newState seeds an empty model with sensible defaults.
 func newState() *state {
 	return &state{
-		focused:  panelTasks,
-		view:     StateDashboard,
-		logBuf:   []string{"lazy started"},
-		health:   datasource.Health{Daemon: "down"},
-		comments: map[string][]datasource.Comment{},
-		signals:  map[string][]datasource.Signal{},
+		focused:       panelTasks,
+		view:          StateDashboard,
+		logBuf:        []string{"lazy started"},
+		health:        datasource.Health{Daemon: "down"},
+		comments:      map[string][]datasource.Comment{},
+		signals:       map[string][]datasource.Signal{},
+		jobTranscript: map[string]*jobTranscriptEntry{},
 	}
 }
 

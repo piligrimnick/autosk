@@ -12,12 +12,10 @@ const (
 	winWorkflows    = "workflows"
 	winAgents       = "agents"
 	winDetail       = "main"
+	winJobInput     = "jobInput"
 	winLog          = "extras"
 	winStatusBar    = "statusbar"
 	winFlash        = "flash" // popup flash line (toast)
-	winInspector    = "inspectorMain"
-	winInspectorHdr = "inspectorHeader"
-	winInspectorIn  = "inspectorInput"
 	winPopupMenu    = "popupMenu"
 	winPopupConfirm = "popupConfirm"
 	winPopupPrompt  = "popupPrompt"
@@ -39,12 +37,25 @@ var allPopupWindows = []string{
 	winTaskComposeDescription,
 }
 
+// allDashboardWindows is every window name owned by the dashboard
+// arrangement (excluding popups and the status bar). The layout
+// garbage-collects entries not present in the current frame's
+// boxlayout output.
+var allDashboardWindows = []string{
+	winTasks, winJobs, winWorkflows, winAgents,
+	winDetail, winJobInput, winLog,
+}
+
 // ViewState distinguishes the two top-level arrangements.
+//
+// Kept as an enum (even though only StateDashboard is in use after
+// the Inspector removal) so a future second top-level state (e.g.
+// a dedicated workflow editor) doesn't have to re-introduce the
+// type.
 type ViewState int
 
 const (
 	StateDashboard ViewState = iota
-	StateInspector
 )
 
 // arrangeArgs is the input to a window-arrangement function. Only the
@@ -54,6 +65,10 @@ type arrangeArgs struct {
 	focusedSide   string // one of winTasks / winJobs / winWorkflows / winAgents
 	state         ViewState
 	logHidden     bool
+	// showJobInput, when true, allocates winJobInput as a fixed-size
+	// box under winDetail. Layout pass computes this from the
+	// selected job's running status — see layout.go.
+	showJobInput bool
 }
 
 // dashboardArrangement returns the Box tree for the standard
@@ -61,14 +76,31 @@ type arrangeArgs struct {
 // status bar across the bottom. The focused side panel grows.
 //
 // Frame=false views (the status bar) eat 2 cells of padding (see the
-// inspectorArrangement comment) so the status bar gets Size:3 to fit
-// its single line of content.
+// pre-redesign inspector comment for the gocui-side rationale) so
+// the status bar gets Size:3 to fit its single line of content.
+//
+// When showJobInput is true, a 6-row winJobInput box is inserted
+// directly under winDetail (above winLog). The size is fixed at 6
+// rows (1 frame top + 1 padding + ~2 content lines + 1 padding + 1
+// frame bottom) — same magic number used for the previous
+// inspector-input slot.
 func dashboardArrangement(a arrangeArgs) *boxlayout.Box {
 	logSize := 8
 	if a.logHidden {
 		logSize = 0
 	}
 	side := sideStack(a.focusedSide)
+
+	rightChildren := []*boxlayout.Box{
+		{Window: winDetail, Weight: 3},
+	}
+	if a.showJobInput {
+		rightChildren = append(rightChildren, &boxlayout.Box{Window: winJobInput, Size: 6})
+	}
+	if logSize > 0 {
+		rightChildren = append(rightChildren, &boxlayout.Box{Window: winLog, Size: logSize})
+	}
+
 	return &boxlayout.Box{
 		Direction: boxlayout.ROW,
 		Children: []*boxlayout.Box{
@@ -80,10 +112,7 @@ func dashboardArrangement(a arrangeArgs) *boxlayout.Box {
 					{
 						Direction: boxlayout.ROW,
 						Weight:    2,
-						Children: []*boxlayout.Box{
-							{Window: winDetail, Weight: 3},
-							{Window: winLog, Size: logSize},
-						},
+						Children:  rightChildren,
 					},
 				},
 			},
@@ -109,40 +138,9 @@ func sideStack(focused string) []*boxlayout.Box {
 	}
 }
 
-// inspectorArrangement is the fullscreen-job-inspector layout: one
-// short header at the top (tab strip + run id), one large main view,
-// one optional bottom input (Live tab), status bar.
-//
-// gocui's Frame=false views still cost 2 cells of padding (see the
-// "weirdness" comment on view.InnerSize): a Size:2 view ends up with
-// InnerHeight=0 and draws nothing. So we allocate 4 rows for the
-// 2-line header (1-cell padding top + 2 content lines + 1-cell
-// padding bottom) and 3 rows for the 1-line status bar.
-func inspectorArrangement(a arrangeArgs, showInput bool) *boxlayout.Box {
-	inputSize := 0
-	if showInput {
-		inputSize = 6
-	}
-	children := []*boxlayout.Box{
-		{Window: winInspectorHdr, Size: 4},
-		{Window: winInspector, Weight: 1},
-	}
-	if inputSize > 0 {
-		children = append(children, &boxlayout.Box{Window: winInspectorIn, Size: inputSize})
-	}
-	children = append(children, &boxlayout.Box{Window: winStatusBar, Size: 3})
-	return &boxlayout.Box{Direction: boxlayout.ROW, Children: children}
-}
-
 // arrange runs boxlayout on the chosen tree and returns the window
 // dimensions map. Pure function; testable in isolation.
-func arrange(a arrangeArgs, showLiveInput bool) map[string]boxlayout.Dimensions {
-	var box *boxlayout.Box
-	switch a.state {
-	case StateInspector:
-		box = inspectorArrangement(a, showLiveInput)
-	default:
-		box = dashboardArrangement(a)
-	}
+func arrange(a arrangeArgs) map[string]boxlayout.Dimensions {
+	box := dashboardArrangement(a)
 	return boxlayout.ArrangeWindows(box, 0, 0, a.width, a.height)
 }

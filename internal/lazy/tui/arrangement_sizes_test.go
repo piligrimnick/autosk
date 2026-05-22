@@ -25,7 +25,7 @@ func TestDashboardArrangement_Sizes(t *testing.T) {
 				height:      tc.h,
 				focusedSide: winTasks,
 				state:       StateDashboard,
-			}, false)
+			})
 			required := []string{winTasks, winJobs, winWorkflows, winAgents, winDetail, winStatusBar}
 			for _, w := range required {
 				d, ok := dims[w]
@@ -49,39 +49,47 @@ func TestDashboardArrangement_Sizes(t *testing.T) {
 	}
 }
 
-// TestInspectorArrangement_Sizes runs the same gauntlet against the
-// inspector layout, both with and without the Live-tab input area.
-func TestInspectorArrangement_Sizes(t *testing.T) {
+// TestDashboardArrangement_Sizes_WithJobInput runs the same
+// 4-size gauntlet against the with-input branch: every required
+// dashboard window must be present, no negative dimensions, AND
+// winDetail must still have enough vertical room (>= 4 lines)
+// after winJobInput claims its 6-row slot. Without the floor a
+// portrait/narrow viewport could shrink winDetail to zero and the
+// transcript would disappear.
+func TestDashboardArrangement_Sizes_WithJobInput(t *testing.T) {
 	cases := []struct {
-		name   string
-		w, h   int
-		withIn bool
+		name string
+		w, h int
 	}{
-		{"min_no_input", 80, 24, false},
-		{"min_with_input", 80, 24, true},
-		{"mid_with_input", 120, 40, true},
-		{"large_with_input", 200, 60, true},
-		{"portrait_with_input", 60, 80, true},
+		{"min_80x24", 80, 24},
+		{"mid_120x40", 120, 40},
+		{"large_200x60", 200, 60},
+		{"portrait_60x80", 60, 80},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			dims := arrange(arrangeArgs{width: tc.w, height: tc.h, state: StateInspector}, tc.withIn)
-			required := []string{winInspectorHdr, winInspector, winStatusBar}
+			dims := arrange(arrangeArgs{
+				width:        tc.w,
+				height:       tc.h,
+				focusedSide:  winJobs,
+				state:        StateDashboard,
+				showJobInput: true,
+			})
+			required := []string{winTasks, winJobs, winWorkflows, winAgents, winDetail, winJobInput, winStatusBar}
 			for _, w := range required {
 				d, ok := dims[w]
 				if !ok {
-					t.Errorf("%s: missing %q", tc.name, w)
+					t.Errorf("%s: missing window %q", tc.name, w)
 					continue
 				}
 				if d.X1 < d.X0 || d.Y1 < d.Y0 {
-					t.Errorf("%s: %s neg dims %+v", tc.name, w, d)
+					t.Errorf("%s: %s has negative dimensions %+v", tc.name, w, d)
 				}
 			}
-			if _, ok := dims[winInspectorIn]; tc.withIn && !ok {
-				t.Errorf("%s: expected input slot", tc.name)
-			}
-			if _, ok := dims[winInspectorIn]; !tc.withIn && ok {
-				t.Errorf("%s: did not expect input slot", tc.name)
+			if d, ok := dims[winDetail]; ok {
+				if h := d.Y1 - d.Y0; h < 4 {
+					t.Errorf("%s: winDetail too thin after winJobInput takes its slot: h=%d", tc.name, h)
+				}
 			}
 		})
 	}

@@ -3,6 +3,7 @@ package tui
 import (
 	"github.com/jesseduffield/gocui"
 
+	"autosk/internal/daemon/runstore"
 	"autosk/internal/lazy/theme"
 )
 
@@ -46,46 +47,49 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 
 	// Snapshot every state field we touch in this layout pass under
 	// the RLock. After the snapshot we don't read st.* directly:
-	// concurrent g.Update closures + worker-side mutations (inspector
-	// SSE) would otherwise race against these reads under -race.
+	// concurrent g.Update closures + worker-side mutations (jobdetail
+	// SSE pump) would otherwise race against these reads under -race.
 	var (
-		state      ViewState
-		focused    string
-		logHidden  bool
-		currentTab inspectorTab
-		focusedWin string
+		focusedWin   string
+		logHidden    bool
+		showJobInput bool
 	)
 	gu.st.withRLock(func() {
-		state = gu.st.view
 		focusedWin = gu.st.focused.window()
 		logHidden = gu.st.logHide
-		currentTab = gu.st.insp.Tab
+		// showJobInput is "selected job is running" — does NOT depend
+		// on which view is currently focused. The Jobs cursor sitting
+		// on a running job is enough; the input stays pinned even
+		// when the operator is reading the transcript above with the
+		// Detail pane focused.
+		if j, ok := gu.st.selectedJob(); ok {
+			if runstore.RunStatus(j.Status) == runstore.StatusRunning {
+				showJobInput = true
+			}
+		}
 	})
-	focused = focusedWin
-	if state == StateInspector {
-		focused = ""
-	}
 	args := arrangeArgs{
-		width:       w,
-		height:      h,
-		focusedSide: focused,
-		state:       state,
-		logHidden:   logHidden,
+		width:        w,
+		height:       h,
+		focusedSide:  focusedWin,
+		state:        StateDashboard,
+		logHidden:    logHidden,
+		showJobInput: showJobInput,
 	}
-	showLiveInput := state == StateInspector && currentTab == tabLive
-	dims := arrange(args, showLiveInput)
+	dims := arrange(args)
 
-	// In dashboard state, hide inspector views; in inspector state,
-	// hide dashboard views. We only delete views that are NOT in the
-	// current arrangement so we don't churn through a delete+create
-	// on every flush (gocui doesn't react gracefully to that — a
+	// Garbage-collect any dashboard window that doesn't appear in the
+	// current arrangement (e.g. winJobInput when the selected job is
+	// terminal). We only delete views that are NOT in the current
+	// arrangement so we don't churn through a delete+create on every
+	// flush (gocui doesn't react gracefully to that — a
 	// SetCurrentView landing between the delete and the create
 	// surfaces as ErrUnknownView, which MainLoop propagates).
 	active := map[string]bool{}
 	for name := range dims {
 		active[name] = true
 	}
-	for _, name := range []string{winTasks, winJobs, winWorkflows, winAgents, winDetail, winLog, winInspectorHdr, winInspector, winInspectorIn} {
+	for _, name := range allDashboardWindows {
 		if !active[name] {
 			_ = g.DeleteView(name)
 			// The view (and its internal buffer) is gone — the next
@@ -119,8 +123,6 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 		switch win {
 		case winStatusBar, winFlash:
 			v.Frame = false
-		case winInspectorHdr:
-			v.Frame = false
 		default:
 			v.Frame = true
 			v.FrameRunes = roundedFrameRunes
@@ -129,44 +131,31 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 		// retains the last-set FrameColor/TitleColor on the View object
 		// across layout passes (SetView returns the same view, it doesn't
 		// reset attrs), so the else branches are load-bearing: without
-		// them a panel that lost focus would stay tinted forever — same
-		// goes for any panel that was focused before the inspector
-		// opened and then dashboard came back.
+		// them a panel that lost focus would stay tinted forever.
 		//
 		// Title color is kept in sync with the frame on purpose: the
 		// "[N] Title" string is the visual marker for which panel owns
-		// the cursor right now. Per-panel tab labels rendered INSIDE the
-		// body (when we add them) live in the view buffer and are not
-		// touched by TitleColor — they stay default-coloured by design.
+		// the cursor right now.
 		focusAttr := theme.Active().Focus.Gocui()
-		if state == StateDashboard && win == focusedWin {
+		if win == focusedWin {
 			v.FrameColor = focusAttr
 			v.TitleColor = focusAttr
 		} else {
 			v.FrameColor = gocui.ColorDefault
 			v.TitleColor = gocui.ColorDefault
 		}
-		if win == winInspectorIn {
+		if win == winJobInput {
 			v.Editable = true
 			v.Editor = gocui.EditorFunc(gu.liveEditor)
 		}
 	}
 
-	// Set the active view (current focus) so key events route correctly.
-	switch state {
-	case StateInspector:
-		if showLiveInput {
-			if _, err := g.SetCurrentView(winInspectorIn); err != nil && !isUnknownView(err) {
-				return err
-			}
-		} else {
-			if _, err := g.SetCurrentView(winInspector); err != nil && !isUnknownView(err) {
-				return err
-			}
-		}
-	default:
-		if _, err := g.SetCurrentView(focusedWin); err != nil && !isUnknownView(err) {
-			// best-effort; views may not exist yet on first frame
+	// Set the active view (current focus) so key events route
+	// correctly. Best-effort: views may not exist yet on first
+	// frame, and isUnknownView is the only error we expect.
+	if _, err := g.SetCurrentView(focusedWin); err != nil {
+		if !isUnknownView(err) {
+			dlog("SetCurrentView(%s): %v", focusedWin, err)
 		}
 	}
 
@@ -182,11 +171,9 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 	// gocui's drawing function only paints a terminal cursor when
 	// g.Cursor=true (gocui/gui.go::draw), and it defaults to false.
 	// Without this sync the text-input fields — compose summary /
-	// description, prompt popup, inspector live input — all looked
-	// like static panes; the user typed and saw text appear but no
-	// blinking cursor, no caret position. Re-syncing here (instead
-	// of at every SetCurrentView site) makes it impossible for a
-	// future Editable view to forget the cursor.
+	// description, prompt popup, jobInput textarea — all look like
+	// static panes; the user types and sees text appear but no
+	// blinking cursor, no caret position.
 	if cv := g.CurrentView(); cv != nil {
 		g.Cursor = cv.Editable && cv.Mask == ""
 	} else {

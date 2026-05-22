@@ -211,7 +211,7 @@ func (gu *Gui) popupCursor(step int) func(*gocui.Gui, *gocui.View) error {
 }
 
 // layoutPopup draws whatever popup is active. Centered, with overlap
-// over the dashboard / inspector underneath.
+// over the dashboard underneath.
 //
 // Popup-view lifetime is load-bearing for the prompt: the typed text
 // lives in the view's TextArea, and gocui's NewView constructor

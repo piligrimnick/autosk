@@ -9,6 +9,7 @@ import (
 
 	"github.com/jesseduffield/gocui"
 
+	"autosk/internal/daemon/runstore"
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/store"
 )
@@ -217,24 +218,64 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 // applyRefreshLocked mutates the model from a refreshResult. Must be
 // called inside a g.Update closure (which is the only place gocui
 // allows touching view state). Held under st.mu.Lock.
+//
+// Detail-pane side effects:
+//
+//   - When the currently-selected job transitions from running to
+//     terminal between snapshots, its transcript entry's loadedAt
+//     is zeroed so the next selection-driven hydration refetches
+//     the archive (so final-flushed events appear). The schedule
+//     is queued AFTER the lock is released, via OnWorker, so we
+//     don't block the apply path on the refetch.
+//   - When state.jobLiveJobID no longer appears in the jobs slice
+//     (filter / scope removed it), stopJobLive tears down the
+//     subscription.
 func (gu *Gui) applyRefreshLocked(r refreshResult) {
+	var (
+		refetchJobID string
+		stopLive     bool
+	)
 	gu.st.withLock(func() {
 		if r.terr == nil {
-			// The datasource already applied tasksFilter.Search
-			// (post-facet free-text). Do NOT re-filter with the raw
-			// expression here: that would re-apply 'p:1' or 'wf:foo'
-			// as substring matches against id+title and empty the
-			// panel. Use the parsed Search remainder only.
 			gu.st.tasks = sortTasksByRecency(applyTaskSearch(r.tasks, r.taskSearch))
 			gu.st.taskCursor = clampCursor(gu.st.taskCursor, len(gu.st.tasks))
 		}
 		if r.jerr == nil {
+			// Detect running→terminal transition for the currently-
+			// selected job BEFORE we swap the jobs slice.
+			prevJob, hadPrev := gu.st.selectedJob()
 			gu.st.jobs = applyJobSearch(r.jobs, r.jobsSearch)
 			gu.st.jobCursor = clampCursor(gu.st.jobCursor, len(gu.st.jobs))
-			// Index is taken from the TaskID-unfiltered allJobs slice
-			// upstream; it must move alongside gu.st.jobs even when
-			// the panel slice gets narrowed by a search string.
 			gu.st.taskJobIdx = r.taskJobIdx
+			if hadPrev {
+				if cur, ok := gu.st.selectedJob(); ok && cur.JobID == prevJob.JobID {
+					wasRunning := runstore.RunStatus(prevJob.Status) == runstore.StatusRunning
+					isRunning := runstore.RunStatus(cur.Status) == runstore.StatusRunning
+					if wasRunning && !isRunning {
+						if te, ok := gu.st.jobTranscript[cur.JobID]; ok {
+							te.loadedAt = time.Time{}
+							te.runningSeen = false
+						}
+						refetchJobID = cur.JobID
+					}
+				}
+			}
+			// If the streamed job vanished from the slice (e.g. a
+			// filter just removed it), tear down the subscription so
+			// we're not holding an open SSE for a job the operator
+			// can't see.
+			if gu.st.jobLiveJobID != "" {
+				found := false
+				for i := range gu.st.jobs {
+					if gu.st.jobs[i].JobID == gu.st.jobLiveJobID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					stopLive = true
+				}
+			}
 		}
 		if r.werr == nil {
 			gu.st.workflows = applyWfSearch(r.visibleWorkflows, r.workflowSearch)
@@ -256,6 +297,16 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 			gu.st.signals[r.selectedTaskID] = r.selectedSignals
 		}
 	})
+	if stopLive {
+		gu.stopJobLive()
+	}
+	if refetchJobID != "" && gu.g != nil {
+		jobID := refetchJobID
+		gu.g.OnWorker(func(_ gocui.Task) error {
+			gu.loadJobArchive(jobID)
+			return nil
+		})
+	}
 }
 
 // evictCacheIfNeeded drops one arbitrary non-key entry from m if the

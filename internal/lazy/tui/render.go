@@ -164,7 +164,8 @@ func renderStepName(name string) string {
 	return styleStepName.Render(name)
 }
 
-// (renderSignalTarget lives in inspector.go and is reused here.)
+// (renderSignalTarget lives further down in this file and is reused
+// by the signals box in renderTaskDetail.)
 
 // partitionBlockers splits a blocker list into (active, closed),
 // preserving the original order inside each group. Active is anything
@@ -547,16 +548,18 @@ func renderAgentsPanel(ags []datasource.Agent, _ int, filter string) (string, in
 
 // renderDetail renders the right detail pane for whatever is focused.
 //
-// The caller already holds the model's RLock; s.comments[t.ID] and
-// s.signals[t.ID] are read directly here to avoid re-locking.
+// The caller already holds the model's RLock; s.comments[t.ID],
+// s.signals[t.ID], and s.jobTranscript[j.JobID] are read directly
+// here to avoid re-locking.
 //
 // width is the inner cell width of the detail view (innerWidth of
 // winDetail). It's forwarded to renderTaskDetail / renderWorkflowDetail
-// so the markdown render of task.Description / workflow.Description /
-// comment.Text can wrap at the pane's width. A width of 0 means the
-// gocui view hasn't been sized yet (first layout pass before the
-// Manager wires the view); markdown.Render handles that by emitting
-// the raw text instead of running glamour at width=0.
+// / renderJobDetail so the markdown render of task.Description /
+// workflow.Description / comment.Text / assistant_text events can
+// wrap at the pane's width. A width of 0 means the gocui view
+// hasn't been sized yet (first layout pass before the Manager
+// wires the view); markdown.Render handles that by emitting the
+// raw text instead of running glamour at width=0.
 func renderDetail(s *state, width int) string {
 	switch s.focused {
 	case panelTasks:
@@ -565,7 +568,7 @@ func renderDetail(s *state, width int) string {
 		}
 	case panelJobs:
 		if j, ok := s.selectedJob(); ok {
-			return renderJobDetail(j)
+			return renderJobDetail(j, s.jobTranscript[j.JobID], width)
 		}
 	case panelWorkflows:
 		if w, ok := s.selectedWorkflow(); ok {
@@ -909,32 +912,150 @@ func wrapPlain(s string, width int) string {
 	return strings.Join(out, "\n")
 }
 
-func renderJobDetail(j datasource.Job) string {
+// renderJobDetail renders the Job Detail pane: structured header
+// (jobID, status glyph, wf:step, agent, timestamps, corrections,
+// session) followed by one drawLabeledBox per transcript event.
+//
+// te may be nil (the cache hasn't been seeded yet — the worker is
+// about to fetch). When te is nil the header is still emitted and
+// the transcript section shows a muted "(loading...)" line.
+//
+// width is the OUTER width of the detail pane (the same value
+// renderTaskDetail receives). When width <= 0 (first layout pass)
+// we fall back to a plain-text dump that mirrors the previous
+// renderJobDetail shape — enough to not panic, and the next frame
+// will redraw with the real width.
+func renderJobDetail(j datasource.Job, te *jobTranscriptEntry, width int) string {
 	var b strings.Builder
-	fmt.Fprintln(&b,
-		styleHeader.Render("job")+" "+renderJobID(j.JobID)+
-			"  "+j.Status)
-	fmt.Fprintf(&b, "task: %s\n", renderTaskID(j.TaskID))
-	fmt.Fprintf(&b, "wf:step: %s   agent: %s\n",
-		renderWorkflowStep(j.WorkflowName, j.StepName),
-		renderAgentName(j.AgentName))
-	fmt.Fprintf(&b, "streaming: %v   attached: %d\n", j.Streaming, j.AttachCount)
-	fmt.Fprintf(&b, "corrections: %d/%d\n", j.CorrectionsUsed, j.MaxCorrections)
-	fmt.Fprintf(&b, "session: %s\n", j.SessionPath)
+
+	// ---- header --------------------------------------------------
+
+	// Row 1: jobID  status-glyph  wf:step  agent.
+	scan := []string{}
+	if id := renderJobID(j.JobID); id != "" {
+		scan = append(scan, id)
+	}
+	if glyph := renderJobStatusGlyph(j); glyph != "" {
+		scan = append(scan, glyph)
+	}
+	if j.WorkflowName != "" {
+		scan = append(scan, renderWorkflowStep(j.WorkflowName, j.StepName))
+	}
+	if j.AgentName != "" {
+		scan = append(scan, "agent="+renderAgentName(j.AgentName))
+	}
+	if len(scan) > 0 {
+		b.WriteString(strings.Join(scan, "  ") + "\n")
+	}
+
+	// Row 2: created / started / finished smart timestamps.
+	times := []string{styleMuted.Render("created ") + timeformat.FormatDateTimeSmart(j.CreatedAt)}
+	if j.StartedAt != nil && !j.StartedAt.IsZero() {
+		times = append(times, styleMuted.Render("started ")+timeformat.FormatDateTimeSmart(*j.StartedAt))
+	}
+	if j.FinishedAt != nil && !j.FinishedAt.IsZero() {
+		times = append(times, styleMuted.Render("finished ")+timeformat.FormatDateTimeSmart(*j.FinishedAt))
+	}
+	b.WriteString(strings.Join(times, "  ") + "\n")
+
+	// Row 3: attached / corrections / pid.
+	meta := []string{
+		styleMuted.Render("attached ") + fmt.Sprintf("%d", j.AttachCount),
+		styleMuted.Render("corrections ") + fmt.Sprintf("%d/%d", j.CorrectionsUsed, j.MaxCorrections),
+	}
 	if j.PID != nil {
-		fmt.Fprintf(&b, "pid: %d\n", *j.PID)
+		meta = append(meta, styleMuted.Render("pid ")+fmt.Sprintf("%d", *j.PID))
 	}
-	fmt.Fprintf(&b, "created: %s\n", timeformat.FormatDateTime(j.CreatedAt))
-	if j.StartedAt != nil {
-		fmt.Fprintf(&b, "started: %s\n", timeformat.FormatDateTime(*j.StartedAt))
+	b.WriteString(strings.Join(meta, "  ") + "\n")
+
+	// Row 4: session path — whole row muted.
+	if j.SessionPath != "" {
+		b.WriteString(styleMuted.Render("session "+j.SessionPath) + "\n")
 	}
-	if j.FinishedAt != nil {
-		fmt.Fprintf(&b, "finished: %s\n", timeformat.FormatDateTime(*j.FinishedAt))
-	}
+
+	// Optional error row.
 	if j.Error != "" {
-		b.WriteString(styleErr.Render("error: "+j.Error) + "\n")
+		b.WriteString(styleErr.Render("error "+j.Error) + "\n")
+	}
+
+	// ---- transcript ---------------------------------------------
+
+	// First-frame fallback: width<=0 means the view hasn't been sized
+	// yet. Dump a plain-text approximation so the pane shows something
+	// without panicking; the next frame will redraw with real width.
+	if width <= 0 {
+		if te == nil {
+			b.WriteString("\n" + styleMuted.Render("(loading...)") + "\n")
+			return b.String()
+		}
+		b.WriteString("\n" + renderTranscript(te.events))
+		return b.String()
+	}
+
+	contentW := width - 4
+	if contentW < 1 {
+		contentW = 1
+	}
+
+	// Transcript states. Order matches the acceptance criteria:
+	//   te==nil OR te.loadedAt zero → (loading...)
+	//   te.err != nil + events empty → archive-failed plashka
+	//   events empty + loadedAt set + no err → (no transcript events yet)
+	//   events present → truncated note (if any) + boxes
+	if te == nil || (te.loadedAt.IsZero() && len(te.events) == 0) {
+		b.WriteString("\n" + styleMuted.Render("(loading...)") + "\n")
+		return b.String()
+	}
+	if te.err != nil && len(te.events) == 0 {
+		b.WriteString("\n" + styleErr.Render(fmt.Sprintf("(archive load failed: %v)", te.err)) + "\n")
+		return b.String()
+	}
+	if len(te.events) == 0 {
+		b.WriteString("\n" + styleMuted.Render("(no transcript events yet)") + "\n")
+		return b.String()
+	}
+
+	// renderedBoxes is the cache the SSE pump appends into; rebuild
+	// if the pane width changed (resize) OR the slice is missing /
+	// stale.
+	if te.renderedWidth != contentW || len(te.renderedBoxes) != len(te.events) {
+		rebuildTranscriptBoxes(te, contentW)
+	}
+
+	if te.truncated {
+		b.WriteString("\n" + styleMuted.Render("(transcript truncated; older events dropped to cap memory)") + "\n")
+	}
+	for _, box := range te.renderedBoxes {
+		b.WriteString("\n" + box + "\n")
 	}
 	return b.String()
+}
+
+// renderJobStatusGlyph paints glyphForJobStatus's text in the
+// matching task-status hue. The status enum is mapped onto the
+// existing styleStatus* slots so a green DONE row in Tasks reads
+// as a green "done" glyph in Job Detail.
+func renderJobStatusGlyph(j datasource.Job) string {
+	txt := glyphForJobStatus(j)
+	if txt == "" {
+		return ""
+	}
+	switch runstore.RunStatus(j.Status) {
+	case runstore.StatusRunning:
+		if j.Streaming {
+			return styleOK.Render(txt)
+		}
+		return styleStatusWork.Render(txt)
+	case runstore.StatusQueued:
+		return styleMuted.Render(txt)
+	case runstore.StatusDone:
+		return styleOK.Render(txt)
+	case runstore.StatusFailed:
+		return styleErr.Render(txt)
+	case runstore.StatusCancel:
+		return styleMuted.Render(txt)
+	}
+	return txt
 }
 
 func renderWorkflowDetail(w datasource.Workflow, width int) string {
@@ -1145,28 +1266,22 @@ func renderTranscript(events []datasource.MessageEvent) string {
 	return b.String()
 }
 
-// renderInspectorHeader renders the tab strip + run-id line.
-func renderInspectorHeader(insp inspectorState) string {
-	tabs := []string{tabLive.String(), tabArchive.String(), tabMeta.String(), tabSignals.String()}
-	rendered := make([]string, len(tabs))
-	for i, name := range tabs {
-		mark := "[" + name + "]"
-		if inspectorTab(i) == insp.Tab {
-			rendered[i] = styleAccent.Render(mark)
-		} else {
-			rendered[i] = styleMuted.Render(mark)
-		}
+// renderSignalTarget colours a step_signals.target value: a target
+// that names a sibling step gets the StepName hue (purple); a
+// lifecycle terminal (done / cancel / human) gets its task-status
+// hue so the kickback chain reads as "step → status" with each half
+// visually grounded in its panel counterpart.
+//
+// Originally lived in inspector.go (since deleted with the
+// fullscreen inspector); the helper is reused by
+// renderTaskDetail's signals box.
+func renderSignalTarget(target string) string {
+	if target == "" {
+		return ""
 	}
-	stream := ""
-	if insp.Streaming {
-		stream = " " + styleOK.Render("streaming")
+	switch store.Status(target) {
+	case store.StatusDone, store.StatusCancel, store.StatusHuman:
+		return styleForTaskStatus(store.Status(target)).Render(target)
 	}
-	// Two lines: first line is "run <id-purple>  <status>", second
-	// line is the tab strip. Lipgloss renders inline ANSI here (the
-	// gocui view passes ANSI through). The label "run" stays bold-blue
-	// so the pane header reads as a header; the id picks up styleJobID
-	// to match the Jobs panel column.
-	head := styleHeader.Render("run") + " " + renderJobID(insp.JobID)
-	hdr := fmt.Sprintf("%s  %s%s\n%s", head, insp.Job.Status, stream, strings.Join(rendered, " "))
-	return hdr
+	return renderStepName(target)
 }

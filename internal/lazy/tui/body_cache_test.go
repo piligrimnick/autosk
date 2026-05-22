@@ -5,6 +5,9 @@ import (
 	"testing"
 
 	"github.com/jesseduffield/gocui"
+
+	"autosk/internal/daemon/api"
+	"autosk/internal/lazy/datasource"
 )
 
 // newHeadlessGui wires up a Headless gocui.Gui big enough to host the
@@ -184,49 +187,71 @@ func TestWriteView_Cache_InvalidatedOnResize(t *testing.T) {
 
 // TestWriteView_Cache_InvalidatedByLayoutDeleteView is the
 // integration-style counterpart to the recreate test: drive the real
-// layout function through a transition from dashboard to inspector
-// state and back, and verify writeView still works on the panels
-// that were torn down. The bug we're guarding against is the
-// regression where layout drops the view but forgets to drop the
-// cache entry — in which case the writeView at the end of the next
-// frame short-circuits against the stale cache and the pane stays
-// blank.
+// layout function through a transition that adds + removes a view
+// (winJobInput, which only exists when the selected job is running)
+// and verify writeView still works on the panel that was torn down.
+// The bug we're guarding against is the regression where layout
+// drops the view but forgets to drop the cache entry — in which case
+// the writeView at the end of the next frame short-circuits against
+// the stale cache and the pane stays blank.
 func TestWriteView_Cache_InvalidatedByLayoutDeleteView(t *testing.T) {
 	gu := newHeadlessGui(t, 120, 40)
+	gu.ds = &refreshFakeDS{}
 
-	// First layout pass in dashboard state: tasks panel gets created.
-	gu.st.withLock(func() { gu.st.view = StateDashboard })
+	// Step 1: dashboard with no running job — winJobInput must NOT
+	// be allocated.
 	if err := gu.layout(gu.g); err != nil {
 		t.Fatalf("layout dashboard #1: %v", err)
 	}
-	if _, err := gu.g.View(winTasks); err != nil {
-		t.Fatalf("dashboard layout should have created winTasks: %v", err)
+	if _, err := gu.g.View(winJobInput); err == nil {
+		t.Fatalf("layout without running job should not create winJobInput")
 	}
 
-	// Switch to inspector state. The Tasks panel gets deleted; the
-	// next dashboard layout must recreate it with an empty buffer and
-	// the body cache must NOT skip the writeView.
+	// Step 2: seed a running job and re-layout — winJobInput appears.
 	gu.st.withLock(func() {
-		gu.st.view = StateInspector
-		gu.st.insp = inspectorState{}
+		gu.st.jobs = []datasource.Job{{JobResponse: api.JobResponse{JobID: "j-1", Status: "running"}}}
+		gu.st.jobCursor = 0
+		gu.st.focused = panelJobs
 	})
-	if err := gu.layout(gu.g); err != nil {
-		t.Fatalf("layout inspector: %v", err)
-	}
-	if _, err := gu.g.View(winTasks); err == nil {
-		t.Fatalf("inspector layout should have deleted winTasks")
-	}
-
-	// Back to dashboard: the panel must come back populated.
-	gu.st.withLock(func() { gu.st.view = StateDashboard })
 	if err := gu.layout(gu.g); err != nil {
 		t.Fatalf("layout dashboard #2: %v", err)
 	}
-	v, err := gu.g.View(winTasks)
-	if err != nil {
-		t.Fatalf("dashboard layout #2 should have re-created winTasks: %v", err)
+	if _, err := gu.g.View(winJobInput); err != nil {
+		t.Fatalf("layout should have created winJobInput for running job: %v", err)
 	}
-	if v.Buffer() == "" {
-		t.Errorf("re-created winTasks ended up empty \u2014 body cache short-circuited a write into a freshly-empty view")
+
+	// Step 3: flip job to terminal — winJobInput must be deleted on
+	// the next layout pass AND the body cache for that view must be
+	// invalidated so a future re-creation doesn't get short-circuited.
+	gu.st.withLock(func() {
+		gu.st.jobs[0].Status = "done"
+	})
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout dashboard #3: %v", err)
+	}
+	if _, err := gu.g.View(winJobInput); err == nil {
+		t.Fatalf("layout should have deleted winJobInput for terminal job")
+	}
+
+	// Step 4: flip back to running — winJobInput must come back
+	// populated (not stuck blank from a stale body-cache entry).
+	gu.st.withLock(func() { gu.st.jobs[0].Status = "running" })
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout dashboard #4: %v", err)
+	}
+	v, err := gu.g.View(winJobInput)
+	if err != nil {
+		t.Fatalf("layout dashboard #4 should have re-created winJobInput: %v", err)
+	}
+	// jobInput buffer can be empty (no typed text yet); the assertion
+	// is that writeView wasn't skipped due to stale cache. We force
+	// a non-empty buffer by seeding st.jobInput and laying out once
+	// more.
+	gu.st.withLock(func() { gu.st.jobInput = "typed text" })
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout dashboard #5: %v", err)
+	}
+	if !strings.Contains(v.Buffer(), "typed text") {
+		t.Errorf("winJobInput body missing after re-creation: %q", v.Buffer())
 	}
 }
