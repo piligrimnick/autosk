@@ -1,3 +1,5 @@
+![autosk lazy dashboard](docs/lazy-mode.png)
+
 ## What is autosk?
 
 1. **task tracker**: small, local, file-based. One DB per repo. You can use it to scope agent attention to concrete context.
