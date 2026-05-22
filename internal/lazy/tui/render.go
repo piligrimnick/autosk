@@ -561,7 +561,16 @@ func renderAgentsPanel(ags []datasource.Agent, _ int, filter string) (string, in
 // wires the view); markdown.Render handles that by emitting the
 // raw text instead of running glamour at width=0.
 func renderDetail(s *state, width int) string {
-	switch s.focused {
+	// When focus is on panelDetail (e.g. via '0' or via jobsEnter on a
+	// terminal job), the renderer needs to know which side panel's
+	// entity is being inspected. We consult state.detailFocus — which
+	// is captured eagerly on every transition INTO panelDetail —
+	// instead of falling through to "(nothing selected)".
+	active := s.focused
+	if active == panelDetail {
+		active = s.detailFocus
+	}
+	switch active {
 	case panelTasks:
 		if t, ok := s.selectedTask(); ok {
 			return renderTaskDetail(t, s.comments[t.ID], s.signals[t.ID], width)
@@ -1245,7 +1254,10 @@ func humanAge(t time.Time) string {
 }
 
 // renderTranscript turns a list of MessageEvents into a single-string
-// block. Used by both the Archive and Live tabs.
+// block. Used only by renderJobDetail's width<=0 first-frame
+// fallback now — the inspector tabs that originally consumed it
+// are gone; the regular per-event boxed renderer in
+// renderTranscriptEventBox covers every other code path.
 func renderTranscript(events []datasource.MessageEvent) string {
 	var b strings.Builder
 	for _, e := range events {

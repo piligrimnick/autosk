@@ -215,8 +215,44 @@ func TestRenderJobDetail_Truncated(t *testing.T) {
 	}
 }
 
+// TestRenderDetail_PanelDetailFocus_KeepsJobBody pins the
+// regression review flagged: when focused == panelDetail (via '0'
+// or jobsEnter on a terminal job), renderDetail must keep emitting
+// the Job Detail body — not fall through to "(nothing selected)".
+//
+// The mechanism is state.detailFocus: every transition INTO
+// panelDetail stashes the previous focus, and renderDetail consults
+// that field whenever focused reads panelDetail.
+func TestRenderDetail_PanelDetailFocus_KeepsJobBody(t *testing.T) {
+	s := newState()
+	s.jobs = []datasource.Job{makeRunningJob("job-panel-det")}
+	s.jobCursor = 0
+	s.focused = panelJobs
+
+	// Snapshot the body with focus on Jobs (baseline).
+	before := renderDetail(s, 100)
+	if !strings.Contains(ansiutil.Strip(before), "job-panel-det") {
+		t.Fatalf("baseline panelJobs body missing jobID: %q", before)
+	}
+
+	// Simulate focus moving to Detail via jobsEnter (terminal-job
+	// branch). The state field detailFocus must carry the source
+	// panel so renderDetail can keep emitting the same body.
+	s.detailFocus = panelJobs
+	s.focused = panelDetail
+	after := renderDetail(s, 100)
+	if !strings.Contains(ansiutil.Strip(after), "job-panel-det") {
+		t.Errorf("panelDetail focus dropped Job body: %q", after)
+	}
+	if strings.Contains(after, "(nothing selected)") {
+		t.Errorf("panelDetail focus fell through to (nothing selected) plashka")
+	}
+}
+
 // TestRenderJobDetail_ZeroWidth: width==0 falls back to a plain-text
-// dump without panicking even when te is non-nil.
+// dump without panicking. Both te==nil and te-with-events branches
+// are exercised (the latter routes through renderTranscript, not
+// the per-event boxed renderer).
 func TestRenderJobDetail_ZeroWidth(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -224,11 +260,37 @@ func TestRenderJobDetail_ZeroWidth(t *testing.T) {
 		}
 	}()
 	j := makeRunningJob("job-ii99")
+
+	// Branch 1: te == nil → (loading...) placeholder.
 	out := renderJobDetail(j, nil, 0)
 	if !strings.Contains(ansiutil.Strip(out), "job-ii99") {
-		t.Errorf("zero-width output missing jobID header: %q", out)
+		t.Errorf("zero-width nil-te output missing jobID header: %q", out)
 	}
 	if !strings.Contains(ansiutil.Strip(out), "(loading...)") {
 		t.Errorf("zero-width nil-te output missing (loading...): %q", out)
+	}
+
+	// Branch 2: te with events → plain-text dump via renderTranscript.
+	te := &jobTranscriptEntry{
+		events: []datasource.MessageEvent{
+			{Kind: "user_text", TS: jobDetailFixedTS, Text: "hello-world-payload"},
+			{Kind: "assistant_text", TS: jobDetailFixedTS, Text: "acknowledged-reply"},
+		},
+		loadedAt: time.Now(),
+	}
+	out2 := renderJobDetail(j, te, 0)
+	visible2 := ansiutil.Strip(out2)
+	if !strings.Contains(visible2, "job-ii99") {
+		t.Errorf("zero-width te-events output missing jobID header: %q", visible2)
+	}
+	if !strings.Contains(visible2, "hello-world-payload") {
+		t.Errorf("zero-width te-events output missing first event body: %q", visible2)
+	}
+	if !strings.Contains(visible2, "acknowledged-reply") {
+		t.Errorf("zero-width te-events output missing second event body: %q", visible2)
+	}
+	// The plain-text fallback must NOT route through drawLabeledBox.
+	if strings.Contains(out2, "╭") {
+		t.Errorf("zero-width fallback emitted a labeled box (rounded-corner rune): %q", out2)
 	}
 }

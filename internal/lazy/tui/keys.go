@@ -226,12 +226,19 @@ func (gu *Gui) bindKeys() error {
 // is visible — the user may have wheel-scrolled it out of view
 // during the previous visit and now expects to see where they were.
 // Matches lazygit's HandleFocus(ScrollSelectionIntoView=true).
+//
+// When p is panelDetail we also stash the OUTGOING focus into
+// state.detailFocus so renderDetail can keep rendering the right
+// entity body (the panelDetail arm itself has nothing to draw).
 func (gu *Gui) focusPanel(p panelID) func(*gocui.Gui, *gocui.View) error {
 	return func(*gocui.Gui, *gocui.View) error {
 		changed := false
 		gu.st.withLock(func() {
 			if gu.st.focused != p {
 				changed = true
+			}
+			if p == panelDetail && gu.st.focused != panelDetail {
+				gu.st.detailFocus = gu.st.focused
 			}
 			gu.st.focused = p
 		})
@@ -358,9 +365,15 @@ func (gu *Gui) afterCursorMove(p panelID) {
 		gu.scheduleRefresh()
 		if j, ok := gu.st.selectedJobLocked(); ok {
 			running := isJobRunning(j)
+			// Discard any input draft that belongs to a different job
+			// BEFORE we kick the live/archive scheduling — the next
+			// renderViews pass will repopulate the view from
+			// state.jobInput, which is now empty for this job.
+			gu.clearJobInputIfStale(j.JobID)
 			gu.scheduleJobLive(j.JobID, running)
 			gu.scheduleJobArchive(j.JobID, running)
 		} else {
+			gu.clearJobInputIfStale("")
 			gu.stopJobLive()
 		}
 	default:
@@ -549,6 +562,16 @@ func (gu *Gui) agentsEnter(*gocui.Gui, *gocui.View) error {
 //   - running job → winJobInput (caret blinks inside the textarea).
 //   - terminal job → logical focus to panelDetail so j/k scroll
 //     the transcript above.
+//
+// On the terminal-job branch we also stash detailFocus = panelJobs
+// so renderDetail keeps emitting the Job Detail body even though
+// focused now reads panelDetail.
+//
+// SetCurrentView is called synchronously (it's thread-safe inside
+// gocui via ViewsMutex). The previous g.Update wrap was vestigial
+// and made jobsEnter unobservable from tests — with the direct
+// call, TestLayout_EnterFocusesJobInput can assert the current
+// view changes without driving a MainLoop flush.
 func (gu *Gui) jobsEnter(*gocui.Gui, *gocui.View) error {
 	j, ok := gu.st.selectedJobLocked()
 	if !ok {
@@ -558,13 +581,13 @@ func (gu *Gui) jobsEnter(*gocui.Gui, *gocui.View) error {
 		if gu.g == nil {
 			return nil
 		}
-		gu.g.Update(func(g *gocui.Gui) error {
-			_, _ = g.SetCurrentView(winJobInput)
-			return nil
-		})
+		_, _ = gu.g.SetCurrentView(winJobInput)
 		return nil
 	}
-	gu.st.withLock(func() { gu.st.focused = panelDetail })
+	gu.st.withLock(func() {
+		gu.st.detailFocus = panelJobs
+		gu.st.focused = panelDetail
+	})
 	return nil
 }
 

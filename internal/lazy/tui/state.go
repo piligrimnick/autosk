@@ -35,12 +35,16 @@ const jobLiveBufCap = 2000
 // archive + live event slice for a single job, plus per-event
 // pre-rendered drawLabeledBox strings, plus the width they were
 // rendered at (so a pane resize triggers a rebuild).
+//
+// touchedAt is the last time this entry was touched via
+// ensureTranscriptEntryLocked (read or write). The LRU eviction
+// scans the cache for the minimum touchedAt to pick a victim.
 type jobTranscriptEntry struct {
 	events        []datasource.MessageEvent // archive + live appends, oldest first
 	renderedBoxes []string                  // pre-rendered drawLabeledBox per event
 	renderedWidth int                       // contentW used when boxes were built; invalidates on resize
 	loadedAt      time.Time                 // for TTL on terminal jobs
-	runningSeen   bool                      // last-observed Streaming/Status
+	touchedAt     time.Time                 // last access; drives LRU eviction
 	truncated     bool                      // hit live cap, dropped oldest 25%
 	err           error                     // last archive load error (renders as plashka)
 }
@@ -211,6 +215,14 @@ type state struct {
 	focused      panelID
 	focusedStack []panelID // for Esc-pop semantics (popups remember the side panel)
 
+	// detailFocus is the side panel whose entity renderDetail should
+	// render when focused == panelDetail. Without this, focusing the
+	// Detail pane (via '0' or jobsEnter on a terminal job) would
+	// land on the empty `panelDetail` switch arm in renderDetail and
+	// wipe the pane to "(nothing selected)". Captured eagerly on
+	// transitions INTO panelDetail; ignored otherwise.
+	detailFocus panelID
+
 	// Data caches. The View() is the source of truth for rendered
 	// content — these are the most recent slice from the datasource so
 	// the cursor positions are stable across re-renders.
@@ -239,7 +251,9 @@ type state struct {
 
 	// jobTranscript is a per-jobID cache of the transcript shown in
 	// the Detail pane. Bounded at jobTranscriptCacheMax entries via
-	// LRU eviction (same pattern as state.comments).
+	// LRU eviction: every ensureTranscriptEntryLocked call stamps the
+	// entry's touchedAt, and evictTranscriptIfNeeded picks the
+	// minimum-stamp victim when the cap is hit.
 	jobTranscript map[string]*jobTranscriptEntry
 
 	// jobLive* hold the single active SSE subscription. Exactly one
@@ -255,7 +269,15 @@ type state struct {
 	// The view's Buffer() is authoritative once the view exists;
 	// this is the model-side snapshot the renderer seeds the view
 	// from on first creation and reads back on dispatch.
-	jobInput string
+	//
+	// jobInputOwner is the jobID whose draft is currently held in
+	// jobInput. Cursor moves between running jobs detect a mismatch
+	// (via afterCursorMove / applyRefreshLocked) and clear both
+	// fields so a draft typed for job-A doesn't leak into job-B's
+	// textarea — nor get silently dispatched to the wrong job on
+	// Ctrl-D.
+	jobInput      string
+	jobInputOwner string
 
 	health datasource.Health
 
@@ -287,7 +309,11 @@ const commentsCacheMax = 64
 // newState seeds an empty model with sensible defaults.
 func newState() *state {
 	return &state{
-		focused:       panelTasks,
+		focused: panelTasks,
+		// detailFocus mirrors focused initially — if the user presses
+		// '0' before navigating anywhere, renderDetail still has a
+		// sensible side panel to consult.
+		detailFocus:   panelTasks,
 		view:          StateDashboard,
 		logBuf:        []string{"lazy started"},
 		health:        datasource.Health{Daemon: "down"},

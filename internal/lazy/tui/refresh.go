@@ -234,6 +234,8 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 	var (
 		refetchJobID string
 		stopLive     bool
+		curJobID     string
+		haveCurJob   bool
 	)
 	gu.st.withLock(func() {
 		if r.terr == nil {
@@ -247,14 +249,15 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 			gu.st.jobs = applyJobSearch(r.jobs, r.jobsSearch)
 			gu.st.jobCursor = clampCursor(gu.st.jobCursor, len(gu.st.jobs))
 			gu.st.taskJobIdx = r.taskJobIdx
-			if hadPrev {
-				if cur, ok := gu.st.selectedJob(); ok && cur.JobID == prevJob.JobID {
+			if cur, ok := gu.st.selectedJob(); ok {
+				curJobID = cur.JobID
+				haveCurJob = true
+				if hadPrev && cur.JobID == prevJob.JobID {
 					wasRunning := runstore.RunStatus(prevJob.Status) == runstore.StatusRunning
 					isRunning := runstore.RunStatus(cur.Status) == runstore.StatusRunning
 					if wasRunning && !isRunning {
 						if te, ok := gu.st.jobTranscript[cur.JobID]; ok {
 							te.loadedAt = time.Time{}
-							te.runningSeen = false
 						}
 						refetchJobID = cur.JobID
 					}
@@ -299,6 +302,15 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 	})
 	if stopLive {
 		gu.stopJobLive()
+	}
+	// Discard the jobInput draft if the selected job changed since
+	// the draft was last touched. Mirrors afterCursorMove's clear so
+	// a refresh-driven re-cursor (filter / scope changed, etc.)
+	// can't smuggle the draft into a new job.
+	if haveCurJob {
+		gu.clearJobInputIfStale(curJobID)
+	} else {
+		gu.clearJobInputIfStale("")
 	}
 	if refetchJobID != "" && gu.g != nil {
 		jobID := refetchJobID

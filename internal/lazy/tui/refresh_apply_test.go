@@ -5,7 +5,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"autosk/internal/daemon/api"
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/store"
 )
@@ -239,3 +241,93 @@ type fallbackFakeDS struct {
 }
 
 func (f *fallbackFakeDS) Fallbacks() uint64 { return f.count }
+
+// TestRefreshApply_RunningToTerminalInvalidatesArchive pins the
+// hand-wired transition path in applyRefreshLocked: when the
+// currently-selected job's status flips from running to terminal
+// between refresh snapshots, the existing transcript cache entry
+// must have its loadedAt zeroed so the next selection-driven
+// hydration (or the queued OnWorker dispatch) re-fetches the
+// archive.
+func TestRefreshApply_RunningToTerminalInvalidatesArchive(t *testing.T) {
+	gu := &Gui{st: newState()}
+	gu.ds = &refreshFakeDS{}
+	const jobID = "job-trans-XYZ"
+
+	// Seed: jobs slice has one running job, cursor on it, cache
+	// entry exists with a non-zero loadedAt.
+	gu.st.withLock(func() {
+		gu.st.jobs = []datasource.Job{{
+			JobResponse: api.JobResponse{JobID: jobID, Status: "running"},
+		}}
+		gu.st.jobCursor = 0
+		gu.st.focused = panelJobs
+		te := gu.ensureTranscriptEntryLocked(jobID)
+		te.loadedAt = time.Now().Add(-time.Second) // already loaded
+	})
+
+	// Drive applyRefreshLocked with a refreshResult that flips the
+	// status to terminal.
+	r := refreshResult{
+		jobs: []datasource.Job{{
+			JobResponse: api.JobResponse{JobID: jobID, Status: "done"},
+		}},
+		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
+	}
+	gu.applyRefreshLocked(r)
+
+	var loadedAt time.Time
+	gu.st.withRLock(func() {
+		te := gu.st.jobTranscript[jobID]
+		if te != nil {
+			loadedAt = te.loadedAt
+		}
+	})
+	if !loadedAt.IsZero() {
+		t.Errorf("running→terminal transition did not zero loadedAt; got %v", loadedAt)
+	}
+	// jobArchiveStale must report the entry as stale now.
+	if !gu.jobArchiveStale(jobID, false) {
+		t.Errorf("entry should report stale after loadedAt zeroing")
+	}
+}
+
+// TestRefreshApply_NoTransitionPreservesArchive is the inverse:
+// when the selected job's status DOESN'T change (still running
+// across two snapshots, or still terminal), the cache entry's
+// loadedAt must NOT be zeroed.
+func TestRefreshApply_NoTransitionPreservesArchive(t *testing.T) {
+	gu := &Gui{st: newState()}
+	gu.ds = &refreshFakeDS{}
+	const jobID = "job-stable"
+	loadedAt := time.Now().Add(-time.Second)
+
+	gu.st.withLock(func() {
+		gu.st.jobs = []datasource.Job{{
+			JobResponse: api.JobResponse{JobID: jobID, Status: "running"},
+		}}
+		gu.st.jobCursor = 0
+		gu.st.focused = panelJobs
+		te := gu.ensureTranscriptEntryLocked(jobID)
+		te.loadedAt = loadedAt
+	})
+
+	r := refreshResult{
+		jobs: []datasource.Job{{
+			JobResponse: api.JobResponse{JobID: jobID, Status: "running"},
+		}},
+		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
+	}
+	gu.applyRefreshLocked(r)
+
+	var got time.Time
+	gu.st.withRLock(func() {
+		te := gu.st.jobTranscript[jobID]
+		if te != nil {
+			got = te.loadedAt
+		}
+	})
+	if !got.Equal(loadedAt) {
+		t.Errorf("unchanged-status refresh clobbered loadedAt; got=%v want=%v", got, loadedAt)
+	}
+}

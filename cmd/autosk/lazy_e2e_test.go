@@ -4,7 +4,6 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,7 +22,6 @@ import (
 // the TUI does against the project DB.
 type fakeDS struct {
 	*datasource.Offline
-	streamed atomic.Bool
 }
 
 func (f *fakeDS) Healthz(_ context.Context) (datasource.Health, error) {

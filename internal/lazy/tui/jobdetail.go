@@ -57,26 +57,22 @@ func (gu *Gui) scheduleJobLive(jobID string, running bool) {
 		gu.stopJobLive()
 		return
 	}
-	var (
-		sameJob   bool
-		hasHandle bool
-	)
+	// Stop any pending timer + arm the new one in ONE critical
+	// section so a concurrent scheduleJobLive on a different job
+	// can't slip its timer between our Stop and our Set —
+	// time.AfterFunc is non-blocking, so it's safe to call under
+	// the lock.
 	gu.st.withLock(func() {
 		if gu.st.jobLiveTimer != nil {
 			gu.st.jobLiveTimer.Stop()
 			gu.st.jobLiveTimer = nil
 		}
-		sameJob = gu.st.jobLiveJobID == jobID
-		hasHandle = gu.st.jobLiveHandle != nil
+		if gu.st.jobLiveJobID == jobID && gu.st.jobLiveHandle != nil {
+			// Already streaming the right job — nothing to do.
+			return
+		}
+		gu.st.jobLiveTimer = time.AfterFunc(jobLiveDebounce, func() { gu.openJobLive(jobID) })
 	})
-	if sameJob && hasHandle {
-		// Already streaming the right job — nothing to do.
-		return
-	}
-	// Arm the debounce. AfterFunc runs the callback on its own
-	// goroutine when the timer fires.
-	t := time.AfterFunc(jobLiveDebounce, func() { gu.openJobLive(jobID) })
-	gu.st.withLock(func() { gu.st.jobLiveTimer = t })
 }
 
 // openJobLive opens the SSE subscription for jobID after the debounce
@@ -180,8 +176,11 @@ func (gu *Gui) pumpJobLive(ctx context.Context, ownerJobID string, h *datasource
 					case "message":
 						appendTranscriptEvent(te, ev.Message, contentW)
 					case "status", "done":
-						te.runningSeen = ev.Status.Streaming ||
-							runstore.RunStatus(ev.Status.Status) == runstore.StatusRunning
+						// Status / done envelopes don't carry transcript
+						// content; the running→terminal transition is
+						// detected in applyRefreshLocked via the
+						// prevJob/cur comparison. We just ignore them
+						// here.
 					case "error":
 						te.err = ev.Err
 					}
@@ -254,19 +253,72 @@ func timerC(t *time.Timer) <-chan time.Time {
 
 // ---- archive hydration --------------------------------------------------
 
+// jobArchiveStale reports whether jobID's transcript cache entry
+// needs a fresh Messages() fetch. The single predicate consulted
+// by both scheduleJobArchive (before enqueueing a worker) and
+// loadJobArchive (at the top of the worker, as the in-flight
+// coalesce guard) so cursor-bounce can't enqueue more than one
+// fetch per cache-miss-window. MUST be called WITHOUT holding
+// state.mu — we acquire it inside.
+//
+// Policy:
+//   - Miss            → stale (need fetch).
+//   - Hit, loadedAt zero (cleared by refresh.go's running→terminal
+//     transition path, or never loaded yet) → stale.
+//   - Hit, running    → fresh (SSE keeps it current; no TTL refetch).
+//   - Hit, terminal   → stale only if older than jobTranscriptTerminalTTL.
+func (gu *Gui) jobArchiveStale(jobID string, running bool) bool {
+	var stale bool
+	gu.st.withLock(func() {
+		te, ok := gu.st.jobTranscript[jobID]
+		if !ok {
+			stale = true
+			return
+		}
+		if te.loadedAt.IsZero() {
+			stale = true
+			return
+		}
+		if !running && time.Since(te.loadedAt) > jobTranscriptTerminalTTL {
+			stale = true
+		}
+	})
+	return stale
+}
+
 // loadJobArchive fetches the archive for jobID and merges it into the
 // per-job transcript cache. Always runs on a worker goroutine.
 //
-// Cache policy:
-//   - Hit + fresh (terminal job within TTL OR running job): no-op.
-//   - Hit + stale (terminal job past TTL): refetch.
-//   - Miss: fetch and seed the entry.
+// Coalesce: re-checks jobArchiveStale at the top under the lock. If
+// another worker just populated the entry between the scheduler's
+// decision and this worker actually running, we bail without a
+// duplicate Messages() call. The freshness check is the same
+// predicate scheduleJobArchive uses, so the contract
+// ("back-to-back schedules don't pile on requests") holds even
+// when worker_2 is enqueued before worker_1 returns: worker_2 sees
+// loadedAt set and short-circuits.
 //
 // Merge policy: the archive snapshot replaces the prefix; any live
 // events whose TS strictly post-dates the archive's last TS are
 // preserved so a slow Messages() response doesn't lose the live tail.
 func (gu *Gui) loadJobArchive(jobID string) {
 	if jobID == "" {
+		return
+	}
+	// Determine the job's running state so the staleness predicate
+	// can honour the running-vs-terminal-TTL split. A missing job
+	// (e.g. cursor moved away during scheduling) treats running=false,
+	// which keeps the TTL gate active.
+	running := false
+	gu.st.withRLock(func() {
+		for i := range gu.st.jobs {
+			if gu.st.jobs[i].JobID == jobID {
+				running = isJobRunning(gu.st.jobs[i])
+				return
+			}
+		}
+	})
+	if !gu.jobArchiveStale(jobID, running) {
 		return
 	}
 	ctx, cancel := hydrateContext(gu.ctx, gu.opts.Refresh)
@@ -294,39 +346,14 @@ func (gu *Gui) loadJobArchive(jobID string) {
 }
 
 // scheduleJobArchive queues loadJobArchive for jobID on the worker
-// pool, coalesced through a per-jobID inflight set so back-to-back
-// cursor moves on the same job don't pile on requests.
-//
-// Coalesce behaviour: while a load is in flight for jobID, additional
-// calls flip the "pending" bit but don't spawn a new worker. When the
-// active worker finishes it checks the pending bit and re-runs once
-// more — same trailing-edge pattern scheduleRefreshWith uses. The
-// pending set lives in state.jobArchiveInFlight (initialised lazily).
+// pool. loadJobArchive itself re-checks jobArchiveStale at the top
+// (under the model lock) so back-to-back schedules that overlap a
+// running worker collapse into one actual fetch.
 func (gu *Gui) scheduleJobArchive(jobID string, running bool) {
 	if jobID == "" {
 		return
 	}
-	// Decide up-front whether to schedule based on cache freshness.
-	var fetch bool
-	gu.st.withLock(func() {
-		te, ok := gu.st.jobTranscript[jobID]
-		if !ok {
-			fetch = true
-			return
-		}
-		// Stale entry: re-fetch.
-		if te.loadedAt.IsZero() {
-			fetch = true
-			return
-		}
-		if !running {
-			// Terminal: honour TTL.
-			if time.Since(te.loadedAt) > jobTranscriptTerminalTTL {
-				fetch = true
-			}
-		}
-	})
-	if !fetch {
+	if !gu.jobArchiveStale(jobID, running) {
 		return
 	}
 	if gu.g == nil {
@@ -378,13 +405,18 @@ func (gu *Gui) detailScroll(step int) func(*gocui.Gui, *gocui.View) error {
 }
 
 // detailScrollPage scrolls by one screen of the detail view.
+//
+// Uses InnerSize (not Size): gocui's origin oy indexes into the
+// view's inner content area, so paging by the outer height would
+// undershoot by the 2-cell frame each page. Mirrors the same fix
+// writeViewSticky applies for the tail anchor.
 func (gu *Gui) detailScrollPage(dir int) func(*gocui.Gui, *gocui.View) error {
 	return func(_ *gocui.Gui, _ *gocui.View) error {
 		v, err := gu.g.View(winDetail)
 		if err != nil || v == nil {
 			return nil
 		}
-		_, h := v.Size()
+		_, h := v.InnerSize()
 		if h < 1 {
 			h = 1
 		}
@@ -394,6 +426,9 @@ func (gu *Gui) detailScrollPage(dir int) func(*gocui.Gui, *gocui.View) error {
 
 // detailScrollTo jumps to the top (g) or bottom (G) of the detail
 // pane.
+//
+// Uses InnerSize for the bottom-anchor math (see detailScrollPage)
+// so G lands on the actual last line, not 2 lines short.
 func (gu *Gui) detailScrollTo(bottom bool) func(*gocui.Gui, *gocui.View) error {
 	return func(_ *gocui.Gui, _ *gocui.View) error {
 		v, err := gu.g.View(winDetail)
@@ -406,7 +441,7 @@ func (gu *Gui) detailScrollTo(bottom bool) func(*gocui.Gui, *gocui.View) error {
 			return nil
 		}
 		lines := strings.Count(v.Buffer(), "\n")
-		_, h := v.Size()
+		_, h := v.InnerSize()
 		if h < 1 {
 			h = 1
 		}
@@ -420,7 +455,8 @@ func (gu *Gui) detailScrollTo(bottom bool) func(*gocui.Gui, *gocui.View) error {
 }
 
 // scrollViewByLines moves the named view's origin by step lines,
-// clamping to [0, max(0, totalLines-height)].
+// clamping to [0, max(0, totalLines-innerHeight)]. Uses InnerSize
+// for the same reason detailScrollPage / detailScrollTo do.
 func (gu *Gui) scrollViewByLines(name string, step int) error {
 	v, err := gu.g.View(name)
 	if err != nil || v == nil {
@@ -431,7 +467,7 @@ func (gu *Gui) scrollViewByLines(name string, step int) error {
 	if ny < 0 {
 		ny = 0
 	}
-	_, h := v.Size()
+	_, h := v.InnerSize()
 	if h < 1 {
 		h = 1
 	}
@@ -463,9 +499,17 @@ func (gu *Gui) currentJobID() string {
 // liveEditor is the gocui editor on the job-input view. Defers to
 // the default editor for most keys; Ctrl-* shortcuts are caught by
 // SetKeybinding before they reach this editor.
+//
+// Every keystroke also stamps jobInputOwner with the currently-
+// selected job id, so the model has an authoritative record of
+// whose draft this is for the next selection-change-driven clear.
 func (gu *Gui) liveEditor(v *gocui.View, key gocui.Key, ch rune, mod gocui.Modifier) bool {
 	handled := gocui.DefaultEditor.Edit(v, key, ch, mod)
-	gu.st.withLock(func() { gu.st.jobInput = v.Buffer() })
+	owner := gu.currentJobID()
+	gu.st.withLock(func() {
+		gu.st.jobInput = v.Buffer()
+		gu.st.jobInputOwner = owner
+	})
 	return handled
 }
 
@@ -504,7 +548,10 @@ func (gu *Gui) liveDispatch(v *gocui.View, behavior string) error {
 	}
 	v.Clear()
 	v.SetCursor(0, 0)
-	gu.st.withLock(func() { gu.st.jobInput = "" })
+	gu.st.withLock(func() {
+		gu.st.jobInput = ""
+		gu.st.jobInputOwner = ""
+	})
 	gu.g.OnWorker(func(_ gocui.Task) error {
 		disp, err := gu.ds.SendInput(gu.ctx, jobID, msg, behavior)
 		if err != nil {
@@ -517,12 +564,43 @@ func (gu *Gui) liveDispatch(v *gocui.View, behavior string) error {
 	return nil
 }
 
+// clearJobInputIfStale wipes the cached jobInput buffer when its
+// recorded owner (jobInputOwner) no longer matches the currently-
+// selected job. Called from afterCursorMove(panelJobs) and from
+// applyRefreshLocked after the jobs slice swap so a draft typed
+// for job-A never leaks into job-B's textarea.
+//
+// The view's Buffer() is also cleared so the next layout pass
+// doesn't read the stale content back out of gocui's internal
+// buffer (writeView seeds it from gu.st.jobInput on entry, but
+// gocui keeps the View across layouts unless we DeleteView).
+//
+// MUST be called WITHOUT holding state.mu — we acquire it inside.
+func (gu *Gui) clearJobInputIfStale(curJobID string) {
+	var cleared bool
+	gu.st.withLock(func() {
+		if gu.st.jobInputOwner != "" && gu.st.jobInputOwner != curJobID {
+			gu.st.jobInput = ""
+			gu.st.jobInputOwner = ""
+			cleared = true
+		}
+	})
+	if !cleared || gu.g == nil {
+		return
+	}
+	if v, err := gu.g.View(winJobInput); err == nil && v != nil {
+		v.Clear()
+		v.SetCursor(0, 0)
+	}
+}
+
 // jobInputEscape is bound to Esc on winJobInput. It moves focus back
 // to the Jobs panel and clears the cached buffer so a returning user
 // doesn't see leftover text from a previous compose session.
 func (gu *Gui) jobInputEscape(*gocui.Gui, *gocui.View) error {
 	gu.st.withLock(func() {
 		gu.st.jobInput = ""
+		gu.st.jobInputOwner = ""
 		gu.st.focused = panelJobs
 	})
 	// Clear the view's TextArea / buffer too so the next layout pass

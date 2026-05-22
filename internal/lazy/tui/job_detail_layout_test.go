@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"autosk/internal/daemon/api"
@@ -8,11 +10,16 @@ import (
 )
 
 // jobDetailLayoutFixture wires a headless gui with a refreshFakeDS
-// so the layout pass has somewhere to read from.
+// so the layout pass has somewhere to read from. A background
+// context is attached so handlers that schedule refreshes can
+// derive timeouts without panicking on a nil parent.
 func jobDetailLayoutFixture(t *testing.T) *Gui {
 	t.Helper()
 	gu := newHeadlessGui(t, 120, 40)
 	gu.ds = &refreshFakeDS{}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	gu.ctx = ctx
 	return gu
 }
 
@@ -37,6 +44,66 @@ func seedTerminalJob(gu *Gui, jobID string) {
 		gu.st.jobCursor = 0
 		gu.st.focused = panelJobs
 	})
+}
+
+// TestJobInput_DoesNotLeakAcrossJobs pins the regression review
+// flagged: drafting text against job-A and then moving the cursor
+// to job-B must NOT leave job-A's text in winJobInput. The
+// jobInputOwner field is the contract — clearJobInputIfStale
+// drops the cached buffer when the owner doesn't match the new
+// cursor row.
+func TestJobInput_DoesNotLeakAcrossJobs(t *testing.T) {
+	gu := jobDetailLayoutFixture(t)
+	// Seed two running jobs.
+	gu.st.withLock(func() {
+		gu.st.jobs = []datasource.Job{
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-B", Status: "running"}},
+		}
+		gu.st.jobCursor = 0
+		gu.st.focused = panelJobs
+		// Pretend the user has typed "hello to A" into job-A's input.
+		gu.st.jobInput = "hello to A"
+		gu.st.jobInputOwner = "job-A"
+	})
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout (cursor on job-A): %v", err)
+	}
+	v, err := gu.g.View(winJobInput)
+	if err != nil {
+		t.Fatalf("winJobInput missing: %v", err)
+	}
+	if !strings.Contains(v.Buffer(), "hello to A") {
+		t.Fatalf("setup: job-A draft missing from view buffer: %q", v.Buffer())
+	}
+
+	// Flip the cursor to job-B and call afterCursorMove (what cursorDown
+	// would do). The draft must be discarded before the next layout.
+	gu.st.withLock(func() { gu.st.jobCursor = 1 })
+	gu.afterCursorMove(panelJobs)
+
+	var input, owner string
+	gu.st.withRLock(func() {
+		input = gu.st.jobInput
+		owner = gu.st.jobInputOwner
+	})
+	if input != "" {
+		t.Errorf("state.jobInput not cleared on cursor move; got %q", input)
+	}
+	if owner != "" {
+		t.Errorf("state.jobInputOwner not cleared; got %q", owner)
+	}
+
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout (cursor on job-B): %v", err)
+	}
+	v2, _ := gu.g.View(winJobInput)
+	if v2 == nil {
+		t.Fatalf("winJobInput missing for job-B")
+	}
+	if strings.Contains(v2.Buffer(), "hello to A") {
+		t.Errorf("job-A draft leaked into job-B's input view: %q", v2.Buffer())
+	}
 }
 
 // TestLayout_JobInputAppears_WhenSelectedJobRunning pins acceptance
@@ -93,22 +160,27 @@ func TestLayout_EnterFocusesJobInput(t *testing.T) {
 		if err := gu.layout(gu.g); err != nil {
 			t.Fatalf("layout: %v", err)
 		}
-		// jobsEnter dispatches via g.Update on a real gui; pump it.
+		// Move the current view somewhere else first so we can
+		// observe jobsEnter's SetCurrentView actually firing
+		// (rather than passing trivially because winJobInput was
+		// already current after the layout pass).
+		if _, err := gu.g.SetCurrentView(winJobs); err != nil {
+			t.Fatalf("setup: SetCurrentView winJobs: %v", err)
+		}
+
 		if err := gu.jobsEnter(nil, nil); err != nil {
 			t.Fatalf("jobsEnter: %v", err)
 		}
-		// The dispatched closure runs on the next g.Update flush.
-		// Drive a flush by calling layout again — gocui processes
-		// queued user-events between MainLoop iterations, but
-		// in tests we re-enter layout directly. The
-		// g.Update queued closure runs from MainLoop, so we just
-		// SetCurrentView directly here to verify the intended state.
-		if _, err := gu.g.SetCurrentView(winJobInput); err != nil {
-			t.Fatalf("SetCurrentView winJobInput: %v", err)
-		}
+		// jobsEnter applies SetCurrentView synchronously now — the
+		// previous g.Update wrap was vestigial. The current view
+		// must already be winJobInput by the time jobsEnter returns.
 		cv := gu.g.CurrentView()
 		if cv == nil || cv.Name() != winJobInput {
-			t.Errorf("current view = %v, want %q", cv, winJobInput)
+			name := "<nil>"
+			if cv != nil {
+				name = cv.Name()
+			}
+			t.Errorf("current view after jobsEnter = %q, want %q", name, winJobInput)
 		}
 	})
 	t.Run("terminal_focuses_detail", func(t *testing.T) {

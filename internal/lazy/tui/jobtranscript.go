@@ -7,6 +7,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/lazy/markdown"
@@ -15,9 +16,10 @@ import (
 
 // ensureTranscriptEntryLocked returns the cache entry for jobID,
 // creating one if needed. Eviction policy: when the map is at
-// jobTranscriptCacheMax AND jobID is not already present, drop one
-// arbitrary non-key entry to make room (same shape as
-// evictCacheIfNeeded for the comments / signals caches).
+// jobTranscriptCacheMax AND jobID is not already present, drop the
+// least-recently-touched non-key entry (LRU). Every call — hit OR
+// miss — stamps the entry's touchedAt with time.Now() so a return
+// visit to a cached job refreshes its LRU rank.
 //
 // MUST be called with state.mu held (read+write — we mutate the
 // map). The "Locked" suffix mirrors the selectedTaskLocked /
@@ -27,18 +29,25 @@ func (gu *Gui) ensureTranscriptEntryLocked(jobID string) *jobTranscriptEntry {
 	if gu.st.jobTranscript == nil {
 		gu.st.jobTranscript = map[string]*jobTranscriptEntry{}
 	}
+	now := time.Now()
 	if te, ok := gu.st.jobTranscript[jobID]; ok {
+		te.touchedAt = now
 		return te
 	}
 	evictTranscriptIfNeeded(gu.st.jobTranscript, jobID, jobTranscriptCacheMax)
-	te := &jobTranscriptEntry{}
+	te := &jobTranscriptEntry{touchedAt: now}
 	gu.st.jobTranscript[jobID] = te
 	return te
 }
 
-// evictTranscriptIfNeeded drops one arbitrary non-key entry from m
-// if the map is at maxLen AND key isn't already present. Mirrors
-// evictCacheIfNeeded scoped to the transcript map.
+// evictTranscriptIfNeeded drops the least-recently-touched non-key
+// entry from m if the map is at maxLen AND key isn't already present.
+//
+// The scan is O(N) but N is capped at jobTranscriptCacheMax (32) so
+// the cost is trivial — cheaper than maintaining an ordered list
+// alongside the map. A zero touchedAt sorts as "oldest" so a freshly
+// allocated entry whose stamp wasn't set (defensive path) evicts
+// before genuinely-used entries.
 func evictTranscriptIfNeeded(m map[string]*jobTranscriptEntry, key string, maxLen int) {
 	if _, exists := m[key]; exists {
 		return
@@ -46,12 +55,21 @@ func evictTranscriptIfNeeded(m map[string]*jobTranscriptEntry, key string, maxLe
 	if len(m) < maxLen {
 		return
 	}
-	for k := range m {
+	var victim string
+	var victimAt time.Time
+	first := true
+	for k, te := range m {
 		if k == key {
 			continue
 		}
-		delete(m, k)
-		return
+		if first || te.touchedAt.Before(victimAt) {
+			victim = k
+			victimAt = te.touchedAt
+			first = false
+		}
+	}
+	if !first {
+		delete(m, victim)
 	}
 }
 
@@ -59,6 +77,18 @@ func evictTranscriptIfNeeded(m map[string]*jobTranscriptEntry, key string, maxLe
 // corresponding pre-rendered drawLabeledBox to te.renderedBoxes.
 // When te.events would exceed jobLiveBufCap, the oldest 25% are
 // dropped in one allocation and te.truncated is set.
+//
+// te.renderedWidth is INTENTIONALLY not touched here — it remains
+// authoritative for the last rebuildTranscriptBoxes pass. If
+// contentW differs from te.renderedWidth (mid-stream resize race),
+// the existing boxes are at the OLD width while the new box would
+// be at the NEW width; keeping renderedWidth pinned to the old
+// value means renderJobDetail's `renderedWidth != contentW` guard
+// fires on the next frame and rebuilds the whole slice at the
+// current width. In the steady state contentW always equals
+// te.renderedWidth (pumpJobLive reads gu.innerWidth at append time
+// and that matches the value rebuildTranscriptBoxes was last fed),
+// so the rebuild only fires when a real resize happened.
 func appendTranscriptEvent(te *jobTranscriptEntry, ev datasource.MessageEvent, contentW int) {
 	if te == nil {
 		return
@@ -66,7 +96,6 @@ func appendTranscriptEvent(te *jobTranscriptEntry, ev datasource.MessageEvent, c
 	te.events = append(te.events, ev)
 	box := renderTranscriptEventBox(ev, contentW)
 	te.renderedBoxes = append(te.renderedBoxes, box)
-	te.renderedWidth = contentW
 	if n := len(te.events); n > jobLiveBufCap {
 		keep := jobLiveBufCap - jobLiveBufCap/4 // drop oldest 25%
 		newEvs := make([]datasource.MessageEvent, keep)

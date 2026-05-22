@@ -10,23 +10,34 @@ import (
 
 // TestEnsureTranscriptEntry_NewAndLRU pins the cache-init + LRU
 // eviction contract: on miss we allocate; at jobTranscriptCacheMax
-// we evict one arbitrary non-key entry to make room. The exact
-// victim is implementation-defined (Go's map iteration is
-// randomised), but the post-condition is fixed: len(map) ==
-// jobTranscriptCacheMax AND the just-touched key is present.
+// we evict the LEAST-RECENTLY-TOUCHED non-key entry. Both branches
+// (cap + actual LRU victim) are asserted explicitly so a future
+// regression to random eviction fails this test.
 func TestEnsureTranscriptEntry_NewAndLRU(t *testing.T) {
 	gu := &Gui{st: newState()}
-	// Fill the cache to capacity.
+	// Fill the cache to capacity, stamping touchedAt by hand so the
+	// LRU order is deterministic (job-000 is oldest, job-NN-1 newest).
+	base := time.Now()
 	for i := 0; i < jobTranscriptCacheMax; i++ {
+		k := fmt.Sprintf("job-%03d", i)
 		gu.st.withLock(func() {
-			gu.ensureTranscriptEntryLocked(fmt.Sprintf("job-%03d", i))
+			te := gu.ensureTranscriptEntryLocked(k)
+			te.touchedAt = base.Add(time.Duration(i) * time.Second)
 		})
 	}
 	if got := len(gu.st.jobTranscript); got != jobTranscriptCacheMax {
 		t.Fatalf("len after fill = %d, want %d", got, jobTranscriptCacheMax)
 	}
 
-	// One more (a NEW key) must evict one of the existing entries.
+	// Touch job-005 so it's no longer the oldest — the next eviction
+	// must pick job-000 (still untouched since base).
+	gu.st.withLock(func() {
+		te := gu.ensureTranscriptEntryLocked("job-005")
+		te.touchedAt = base.Add(2 * time.Hour) // explicitly newest
+	})
+
+	// One more (a NEW key) must evict the least-recently-touched
+	// existing entry. With the stamps above that's job-000.
 	newKey := "job-new"
 	gu.st.withLock(func() { gu.ensureTranscriptEntryLocked(newKey) })
 	if got := len(gu.st.jobTranscript); got != jobTranscriptCacheMax {
@@ -35,8 +46,14 @@ func TestEnsureTranscriptEntry_NewAndLRU(t *testing.T) {
 	if _, ok := gu.st.jobTranscript[newKey]; !ok {
 		t.Errorf("just-touched key %q missing from cache", newKey)
 	}
+	if _, ok := gu.st.jobTranscript["job-000"]; ok {
+		t.Errorf("LRU victim job-000 still present — LRU policy did not run")
+	}
+	if _, ok := gu.st.jobTranscript["job-005"]; !ok {
+		t.Errorf("recently-touched job-005 was wrongly evicted — LRU picked the wrong victim")
+	}
 
-	// Hitting an existing entry doesn't evict — len stays put.
+	// Hitting an existing entry doesn't grow the cache.
 	existing := newKey
 	gu.st.withLock(func() { gu.ensureTranscriptEntryLocked(existing) })
 	if got := len(gu.st.jobTranscript); got != jobTranscriptCacheMax {
@@ -126,11 +143,10 @@ func TestRebuildTranscriptBoxes_OnResize(t *testing.T) {
 }
 
 // TestTerminalTTL_TriggersRefetch pins the staleness rule for
-// terminal-job cache entries: scheduleJobArchive must mark stale
-// when loadedAt is older than jobTranscriptTerminalTTL and skip
-// otherwise. We exercise the inline predicate that scheduleJobArchive
-// would consult; the worker dispatch itself is wired through
-// gu.g.OnWorker which needs no testing here.
+// terminal-job cache entries via the shared jobArchiveStale
+// predicate (the same one scheduleJobArchive + loadJobArchive
+// consult). Calling the production helper directly means a future
+// policy drift here is caught — no parallel copy to keep in sync.
 func TestTerminalTTL_TriggersRefetch(t *testing.T) {
 	gu := &Gui{st: newState()}
 	const jobID = "job-terminal"
@@ -139,21 +155,21 @@ func TestTerminalTTL_TriggersRefetch(t *testing.T) {
 		te := gu.ensureTranscriptEntryLocked(jobID)
 		te.loadedAt = time.Now()
 	})
-	if shouldRefetchJobArchive(gu, jobID, false) {
+	if gu.jobArchiveStale(jobID, false) {
 		t.Errorf("fresh terminal entry should not refetch")
 	}
 	// Age it past the TTL.
 	gu.st.withLock(func() {
 		gu.st.jobTranscript[jobID].loadedAt = time.Now().Add(-2 * jobTranscriptTerminalTTL)
 	})
-	if !shouldRefetchJobArchive(gu, jobID, false) {
+	if !gu.jobArchiveStale(jobID, false) {
 		t.Errorf("stale terminal entry should refetch")
 	}
 	// Running jobs ignore TTL.
 	gu.st.withLock(func() {
 		gu.st.jobTranscript[jobID].loadedAt = time.Now().Add(-2 * jobTranscriptTerminalTTL)
 	})
-	if shouldRefetchJobArchive(gu, jobID, true) {
+	if gu.jobArchiveStale(jobID, true) {
 		t.Errorf("running entry should not refetch on TTL alone")
 	}
 }
@@ -168,44 +184,16 @@ func TestRunningToTerminalTransition(t *testing.T) {
 	gu.st.withLock(func() {
 		te := gu.ensureTranscriptEntryLocked(jobID)
 		te.loadedAt = time.Now()
-		te.runningSeen = true
 	})
-	// Simulate the transition handler: zero loadedAt + clear runningSeen.
+	// Simulate the transition handler: zero loadedAt.
 	gu.st.withLock(func() {
 		te := gu.st.jobTranscript[jobID]
 		te.loadedAt = time.Time{}
-		te.runningSeen = false
 	})
 	gu.st.withRLock(func() {
 		te := gu.st.jobTranscript[jobID]
 		if !te.loadedAt.IsZero() {
 			t.Errorf("loadedAt not zeroed: %v", te.loadedAt)
 		}
-		if te.runningSeen {
-			t.Errorf("runningSeen not cleared")
-		}
 	})
-}
-
-// shouldRefetchJobArchive mirrors the inline predicate from
-// scheduleJobArchive so the cache-staleness rule can be tested
-// without spinning up a real gocui.Gui. Keep this in lock-step
-// with scheduleJobArchive's logic.
-func shouldRefetchJobArchive(gu *Gui, jobID string, running bool) bool {
-	var fetch bool
-	gu.st.withLock(func() {
-		te, ok := gu.st.jobTranscript[jobID]
-		if !ok {
-			fetch = true
-			return
-		}
-		if te.loadedAt.IsZero() {
-			fetch = true
-			return
-		}
-		if !running && time.Since(te.loadedAt) > jobTranscriptTerminalTTL {
-			fetch = true
-		}
-	})
-	return fetch
 }
