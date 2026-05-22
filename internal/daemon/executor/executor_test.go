@@ -951,8 +951,8 @@ func TestRun_WaitErrorAfterSignal_HonoursSignal(t *testing.T) {
 		t.Errorf("transition_id should be recorded: %v", run.TransitionID)
 	}
 	tk, _ := fx.ts.GetTask(ctx, taskID)
-	if tk.Status != store.StatusInWorkflow {
-		t.Fatalf("task should have advanced (in_workflow), got %s", tk.Status)
+	if tk.Status != store.StatusWork {
+		t.Fatalf("task should have advanced (work), got %s", tk.Status)
 	}
 	rev, err := fx.deps.Workflows.FindStepByName(ctx, fx.wf.ID, "review")
 	if err != nil {
@@ -1031,8 +1031,8 @@ func TestRun_IdleTimeoutWithSignal_HonoursSignal(t *testing.T) {
 		t.Errorf("transition_id should be recorded: %v", run.TransitionID)
 	}
 	tk, _ := fx.ts.GetTask(ctx, taskID)
-	if tk.Status != store.StatusInWorkflow {
-		t.Fatalf("task should have advanced (in_workflow), got %s", tk.Status)
+	if tk.Status != store.StatusWork {
+		t.Fatalf("task should have advanced (work), got %s", tk.Status)
 	}
 	rev, err := fx.deps.Workflows.FindStepByName(ctx, fx.wf.ID, "review")
 	if err != nil {
