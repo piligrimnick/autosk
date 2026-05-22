@@ -51,6 +51,15 @@ type jobTranscriptEntry struct {
 
 // panelID is the identifier of one of the four dashboard list
 // contexts. Used by the focus stack + the scope helper.
+//
+// panelJobInput is a synthetic focus identity that represents the
+// job-input textarea (winJobInput). It is never a target of Tab
+// cycling or the numeric panel keys (1..4, 0); the only path that
+// lands on it is jobsEnter's running-job branch. We need it as a
+// distinct focus value so layout's `g.SetCurrentView(focused.window())`
+// keeps the current view pinned on winJobInput across redraws —
+// without it, every layout pass would yank focus back to winJobs
+// (the previous focused panel) within ~100ms.
 type panelID int
 
 const (
@@ -58,7 +67,8 @@ const (
 	panelJobs
 	panelWorkflows
 	panelAgents
-	panelDetail // the right detail pane (cursor land for j/k scroll)
+	panelDetail   // the right detail pane (cursor land for j/k scroll)
+	panelJobInput // synthetic: caret lives in winJobInput
 )
 
 func (p panelID) String() string {
@@ -73,6 +83,8 @@ func (p panelID) String() string {
 		return "Agents"
 	case panelDetail:
 		return "Detail"
+	case panelJobInput:
+		return "JobInput"
 	}
 	return "?"
 }
@@ -89,8 +101,22 @@ func (p panelID) window() string {
 		return winAgents
 	case panelDetail:
 		return winDetail
+	case panelJobInput:
+		return winJobInput
 	}
 	return ""
+}
+
+// normalizeForDetail collapses panelJobInput onto panelJobs for
+// rendering / row-highlight purposes: the Detail pane above the
+// input still shows Job Detail, and the Jobs panel's row
+// highlight stays on while the operator is typing. Identity on
+// every other value.
+func (p panelID) normalizeForDetail() panelID {
+	if p == panelJobInput {
+		return panelJobs
+	}
+	return p
 }
 
 // agentRel selects which agent relation an agent-scope chip refers

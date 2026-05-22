@@ -230,6 +230,10 @@ func (gu *Gui) bindKeys() error {
 // When p is panelDetail we also stash the OUTGOING focus into
 // state.detailFocus so renderDetail can keep rendering the right
 // entity body (the panelDetail arm itself has nothing to draw).
+// The stash normalises panelJobInput → panelJobs so a transition
+// from the input flow into the Detail pane still renders Job
+// Detail (renderDetail also normalises on the read side, but the
+// model field stays sensible this way too).
 func (gu *Gui) focusPanel(p panelID) func(*gocui.Gui, *gocui.View) error {
 	return func(*gocui.Gui, *gocui.View) error {
 		changed := false
@@ -238,7 +242,7 @@ func (gu *Gui) focusPanel(p panelID) func(*gocui.Gui, *gocui.View) error {
 				changed = true
 			}
 			if p == panelDetail && gu.st.focused != panelDetail {
-				gu.st.detailFocus = gu.st.focused
+				gu.st.detailFocus = gu.st.focused.normalizeForDetail()
 			}
 			gu.st.focused = p
 		})
@@ -563,25 +567,30 @@ func (gu *Gui) agentsEnter(*gocui.Gui, *gocui.View) error {
 //   - terminal job → logical focus to panelDetail so j/k scroll
 //     the transcript above.
 //
-// On the terminal-job branch we also stash detailFocus = panelJobs
-// so renderDetail keeps emitting the Job Detail body even though
-// focused now reads panelDetail.
+// On the running-job branch we set state.focused = panelJobInput
+// (a synthetic focus identity whose window() is winJobInput). The
+// layout pass calls g.SetCurrentView(focused.window()) on every
+// frame; without recording the focus in the model the next layout
+// would yank current-view back to winJobs within ~100ms (spinner
+// tick cadence) and the caret would jump out of the textarea.
 //
-// SetCurrentView is called synchronously (it's thread-safe inside
-// gocui via ViewsMutex). The previous g.Update wrap was vestigial
-// and made jobsEnter unobservable from tests — with the direct
-// call, TestLayout_EnterFocusesJobInput can assert the current
-// view changes without driving a MainLoop flush.
+// On the terminal-job branch we stash detailFocus = panelJobs so
+// renderDetail keeps emitting the Job Detail body even though
+// focused now reads panelDetail.
 func (gu *Gui) jobsEnter(*gocui.Gui, *gocui.View) error {
 	j, ok := gu.st.selectedJobLocked()
 	if !ok {
 		return nil
 	}
 	if isJobRunning(j) {
-		if gu.g == nil {
-			return nil
+		gu.st.withLock(func() { gu.st.focused = panelJobInput })
+		// Also SetCurrentView synchronously so tests that don't
+		// drive a layout pass between jobsEnter and the assertion
+		// observe the focus change immediately. The layout pass
+		// would otherwise be the one to actually move the caret.
+		if gu.g != nil {
+			_, _ = gu.g.SetCurrentView(winJobInput)
 		}
-		_, _ = gu.g.SetCurrentView(winJobInput)
 		return nil
 	}
 	gu.st.withLock(func() {

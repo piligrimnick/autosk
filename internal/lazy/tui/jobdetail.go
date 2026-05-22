@@ -564,8 +564,30 @@ func (gu *Gui) liveAbort(_ *gocui.Gui, _ *gocui.View) error {
 	return nil
 }
 
+// liveDispatch routes the buffered draft to the job that authored
+// it (state.jobInputOwner), NOT the job under the cursor right now.
+// The two can drift after a refresh-driven reshuffle of the jobs
+// slice: applyRefreshLocked deliberately preserves the draft across
+// such shifts (see refresh.go's Note: block), so reading
+// currentJobID() here would silently dispatch text typed against
+// job-A to whatever job ended up under the cursor after the
+// reshuffle. jobInputOwner is the authored target the operator
+// actually typed against.
+//
+// Fallback: if jobInputOwner is empty (no draft yet — the textarea
+// is empty so this Ctrl-D / Ctrl-F is a no-op anyway), we fall
+// through to the current cursor as a defensive default.
 func (gu *Gui) liveDispatch(v *gocui.View, behavior string) error {
-	jobID := gu.currentJobID()
+	var jobID string
+	gu.st.withRLock(func() {
+		if gu.st.jobInputOwner != "" {
+			jobID = gu.st.jobInputOwner
+			return
+		}
+		if j, ok := gu.st.selectedJob(); ok {
+			jobID = j.JobID
+		}
+	})
 	if jobID == "" {
 		return nil
 	}
@@ -593,9 +615,14 @@ func (gu *Gui) liveDispatch(v *gocui.View, behavior string) error {
 
 // clearJobInputIfStale wipes the cached jobInput buffer when its
 // recorded owner (jobInputOwner) no longer matches the currently-
-// selected job. Called from afterCursorMove(panelJobs) and from
-// applyRefreshLocked after the jobs slice swap so a draft typed
-// for job-A never leaks into job-B's textarea.
+// selected job.
+//
+// Called from afterCursorMove(panelJobs) on explicit j/k cursor
+// moves — the only authored event we want anchoring the clear.
+// Refresh-driven cursor shifts (e.g. a new job inserts at index 0
+// and pushes the previously-cursored row to index 1) intentionally
+// preserve the draft; see applyRefreshLocked's `Note:` block for
+// the rationale.
 //
 // The view's Buffer() is also cleared so the next layout pass
 // doesn't read the stale content back out of gocui's internal

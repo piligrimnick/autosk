@@ -566,9 +566,15 @@ func renderDetail(s *state, width int) string {
 	// entity is being inspected. We consult state.detailFocus — which
 	// is captured eagerly on every transition INTO panelDetail —
 	// instead of falling through to "(nothing selected)".
-	active := s.focused
+	//
+	// panelJobInput collapses onto panelJobs in both directions: when
+	// the caret lives in the input view we still want Job Detail
+	// above; and if the operator presses '0' from the input flow,
+	// detailFocus will hold panelJobInput which we likewise map to
+	// panelJobs here.
+	active := s.focused.normalizeForDetail()
 	if active == panelDetail {
-		active = s.detailFocus
+		active = s.detailFocus.normalizeForDetail()
 	}
 	switch active {
 	case panelTasks:

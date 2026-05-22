@@ -3,7 +3,9 @@ package tui
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"autosk/internal/daemon/api"
 	"autosk/internal/lazy/datasource"
@@ -213,6 +215,274 @@ func TestLayout_JobInputDisappears_WhenSelectedJobTerminal(t *testing.T) {
 	}
 	if _, err := gu.g.View(winJobInput); err == nil {
 		t.Errorf("winJobInput should be deleted for terminal job")
+	}
+}
+
+// TestFocusPanel_DetailStashesPreviousFocus pins the focusPanel
+// write side that TestRenderDetail_PanelDetailFocus_KeepsJobBody
+// only exercises on the read side: pressing '0' from one of the
+// side panels must record that panel into state.detailFocus so
+// renderDetail can keep emitting the matching entity body.
+//
+// Without this stash, the panelDetail switch arm in renderDetail
+// would fall through to "(nothing selected)" — the original
+// blocking regression from the first review pass.
+func TestFocusPanel_DetailStashesPreviousFocus(t *testing.T) {
+	gu := jobDetailLayoutFixture(t)
+	// Set focused = panelWorkflows so the outgoing focus is
+	// distinct from the default panelTasks seed.
+	gu.st.withLock(func() { gu.st.focused = panelWorkflows })
+	if err := gu.focusPanel(panelDetail)(nil, nil); err != nil {
+		t.Fatalf("focusPanel(panelDetail): %v", err)
+	}
+	var focused, detailFocus panelID
+	gu.st.withRLock(func() {
+		focused = gu.st.focused
+		detailFocus = gu.st.detailFocus
+	})
+	if focused != panelDetail {
+		t.Errorf("focused = %v, want panelDetail", focused)
+	}
+	if detailFocus != panelWorkflows {
+		t.Errorf("detailFocus = %v, want panelWorkflows (the outgoing focus)", detailFocus)
+	}
+}
+
+// TestFocusPanel_DetailRepeatedPressPreservesStash pins the guard
+// in focusPanel: pressing '0' twice in a row must NOT re-stash
+// `panelDetail` into detailFocus (which would later make
+// renderDetail render itself recursively and fall through to
+// "(nothing selected)"). The first press records the source
+// panel; the second press finds focused == panelDetail already
+// and skips the stash.
+func TestFocusPanel_DetailRepeatedPressPreservesStash(t *testing.T) {
+	gu := jobDetailLayoutFixture(t)
+	gu.st.withLock(func() { gu.st.focused = panelJobs })
+	// First press: stashes panelJobs.
+	if err := gu.focusPanel(panelDetail)(nil, nil); err != nil {
+		t.Fatalf("first focusPanel(panelDetail): %v", err)
+	}
+	// Second press: focused is already panelDetail; guard must
+	// prevent overwriting detailFocus to panelDetail.
+	if err := gu.focusPanel(panelDetail)(nil, nil); err != nil {
+		t.Fatalf("second focusPanel(panelDetail): %v", err)
+	}
+	var detailFocus panelID
+	gu.st.withRLock(func() { detailFocus = gu.st.detailFocus })
+	if detailFocus != panelJobs {
+		t.Errorf("detailFocus = %v after two presses, want panelJobs (original source preserved)", detailFocus)
+	}
+}
+
+// TestFocusPanel_DetailFromJobInputNormalises pins the
+// panelJobInput → panelJobs normalisation in focusPanel's stash
+// path. If the operator is in the input textarea and presses '0',
+// detailFocus must hold panelJobs (not panelJobInput) so the next
+// renderDetail call can find its switch arm. The renderer has its
+// own normalisation as a defence-in-depth, but storing the model
+// field already normalised keeps the persisted state sensible.
+func TestFocusPanel_DetailFromJobInputNormalises(t *testing.T) {
+	gu := jobDetailLayoutFixture(t)
+	gu.st.withLock(func() { gu.st.focused = panelJobInput })
+	if err := gu.focusPanel(panelDetail)(nil, nil); err != nil {
+		t.Fatalf("focusPanel(panelDetail): %v", err)
+	}
+	var detailFocus panelID
+	gu.st.withRLock(func() { detailFocus = gu.st.detailFocus })
+	if detailFocus != panelJobs {
+		t.Errorf("detailFocus = %v, want panelJobs (panelJobInput must normalise)", detailFocus)
+	}
+}
+
+// TestJobInput_FocusPersistsAcrossLayout pins the regression
+// the third-round review flagged: after jobsEnter on a running
+// job sets the current view to winJobInput, the next layout
+// pass MUST NOT yank focus back to winJobs (the previous
+// focused panel).
+//
+// The fix is the synthetic panelJobInput focus identity:
+// jobsEnter sets state.focused = panelJobInput, and layout's
+// `g.SetCurrentView(focused.window())` then re-asserts the
+// input view as current on every redraw — even at the 100ms
+// spinner-tick cadence — instead of fighting it back.
+func TestJobInput_FocusPersistsAcrossLayout(t *testing.T) {
+	gu := jobDetailLayoutFixture(t)
+	seedRunningJob(gu, "job-run")
+	// Layout #1: create the views (current view defaults to
+	// winJobs because state.focused == panelJobs from the seed).
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout #1: %v", err)
+	}
+	if err := gu.jobsEnter(nil, nil); err != nil {
+		t.Fatalf("jobsEnter: %v", err)
+	}
+	if cv := gu.g.CurrentView(); cv == nil || cv.Name() != winJobInput {
+		name := "<nil>"
+		if cv != nil {
+			name = cv.Name()
+		}
+		t.Fatalf("after jobsEnter, current view = %q, want %q", name, winJobInput)
+	}
+	// Also assert the model field: state.focused must reflect
+	// the synthetic input panel, not panelJobs (otherwise the
+	// next layout would override SetCurrentView back to winJobs).
+	var focused panelID
+	gu.st.withRLock(func() { focused = gu.st.focused })
+	if focused != panelJobInput {
+		t.Fatalf("state.focused = %v after jobsEnter, want panelJobInput", focused)
+	}
+
+	// Layout #2: simulates the next spinner tick / refresh tick
+	// redrawing the dashboard. SetCurrentView is called inside
+	// layout unconditionally; the input view MUST still be
+	// current afterwards.
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout #2: %v", err)
+	}
+	if cv := gu.g.CurrentView(); cv == nil || cv.Name() != winJobInput {
+		name := "<nil>"
+		if cv != nil {
+			name = cv.Name()
+		}
+		t.Errorf("after layout #2, current view = %q, want %q (focus did not persist across redraw)", name, winJobInput)
+	}
+
+	// One more layout pass for good measure.
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout #3: %v", err)
+	}
+	if cv := gu.g.CurrentView(); cv == nil || cv.Name() != winJobInput {
+		name := "<nil>"
+		if cv != nil {
+			name = cv.Name()
+		}
+		t.Errorf("after layout #3, current view = %q, want %q", name, winJobInput)
+	}
+}
+
+// TestJobInput_EscRestoresJobsFocus pins the Esc handler contract:
+// jobInputEscape (bound to Esc on winJobInput) returns state.focused
+// to panelJobs so the next layout pass moves the caret back to
+// the Jobs panel — mirroring the operator's mental model of
+// "close the textarea, back to navigating jobs".
+func TestJobInput_EscRestoresJobsFocus(t *testing.T) {
+	gu := jobDetailLayoutFixture(t)
+	seedRunningJob(gu, "job-run")
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout: %v", err)
+	}
+	// Enter the input.
+	if err := gu.jobsEnter(nil, nil); err != nil {
+		t.Fatalf("jobsEnter: %v", err)
+	}
+	var focused panelID
+	gu.st.withRLock(func() { focused = gu.st.focused })
+	if focused != panelJobInput {
+		t.Fatalf("setup: state.focused = %v, want panelJobInput", focused)
+	}
+	// Esc.
+	if err := gu.jobInputEscape(nil, nil); err != nil {
+		t.Fatalf("jobInputEscape: %v", err)
+	}
+	gu.st.withRLock(func() { focused = gu.st.focused })
+	if focused != panelJobs {
+		t.Errorf("state.focused after Esc = %v, want panelJobs", focused)
+	}
+}
+
+// dispatchFakeDS captures SendInput calls so
+// TestLiveDispatch_AfterReshuffle_DispatchesToOwner can assert
+// the dispatch target.
+type dispatchFakeDS struct {
+	refreshFakeDS
+	calls   atomic.Int32
+	lastJob atomic.Value // string
+	lastMsg atomic.Value // string
+}
+
+func (f *dispatchFakeDS) SendInput(_ context.Context, jobID, msg, _ string) (string, error) {
+	f.calls.Add(1)
+	f.lastJob.Store(jobID)
+	f.lastMsg.Store(msg)
+	return "ok", nil
+}
+
+// TestLiveDispatch_AfterReshuffle_DispatchesToOwner pins the
+// regression the third-round review flagged: a refresh-driven
+// reshuffle of the jobs slice preserves the draft text (per the
+// previous review's option-(a)), but the dispatch must still
+// target the AUTHORED job — not whatever job ended up under
+// the cursor after the reshuffle.
+//
+// Scenario:
+//
+//  1. Operator drafts "plan: refactor X" against job-A.
+//  2. Refresh tick reshuffles the jobs slice so job-Z is at
+//     index 0 and job-A at index 1; jobCursor stays at 0, so
+//     the selected job is now job-Z.
+//  3. Operator presses Ctrl-D (liveSend / liveDispatch).
+//  4. SendInput must be called with jobID == "job-A" (the
+//     authored target, recorded in jobInputOwner), NOT
+//     "job-Z" (the post-reshuffle current cursor).
+func TestLiveDispatch_AfterReshuffle_DispatchesToOwner(t *testing.T) {
+	gu := jobDetailLayoutFixture(t)
+	ds := &dispatchFakeDS{}
+	gu.ds = ds
+
+	// Seed: cursor on job-A, draft typed against job-A.
+	gu.st.withLock(func() {
+		gu.st.jobs = []datasource.Job{
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+		}
+		gu.st.jobCursor = 0
+		gu.st.focused = panelJobs
+		gu.st.jobInput = "plan: refactor X"
+		gu.st.jobInputOwner = "job-A"
+	})
+
+	// Refresh-driven reshuffle: job-Z lands at index 0, job-A at index 1.
+	// jobCursor pinned at 0 → selected job is now job-Z.
+	r := refreshResult{
+		jobs: []datasource.Job{
+			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+		},
+		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
+	}
+	gu.applyRefreshLocked(r)
+
+	// Layout so winJobInput exists with the draft text.
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout: %v", err)
+	}
+	v, err := gu.g.View(winJobInput)
+	if err != nil {
+		t.Fatalf("winJobInput missing: %v", err)
+	}
+	if !strings.Contains(v.Buffer(), "plan: refactor X") {
+		t.Fatalf("setup: draft text not in view buffer: %q", v.Buffer())
+	}
+
+	// Press Ctrl-D → liveSend → liveDispatch. We invoke directly to
+	// avoid the keybinding plumbing.
+	if err := gu.liveSend(gu.g, v); err != nil {
+		t.Fatalf("liveSend: %v", err)
+	}
+
+	// liveDispatch dispatches inside g.OnWorker; the headless gui
+	// doesn't drain workers automatically. Poll for up to a second.
+	deadline := time.Now().Add(1 * time.Second)
+	for ds.calls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := ds.calls.Load(); got != 1 {
+		t.Fatalf("SendInput calls = %d, want 1", got)
+	}
+	if got, _ := ds.lastJob.Load().(string); got != "job-A" {
+		t.Errorf("SendInput target jobID = %q, want %q (the authored target, NOT the post-reshuffle cursor)", got, "job-A")
+	}
+	if got, _ := ds.lastMsg.Load().(string); got != "plan: refactor X" {
+		t.Errorf("SendInput msg = %q, want %q", got, "plan: refactor X")
 	}
 }
 

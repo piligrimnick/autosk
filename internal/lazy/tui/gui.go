@@ -444,7 +444,11 @@ func (gu *Gui) renderViews() {
 
 		jobsBody, jobsHdr := renderJobsPanel(gu.st.jobs, gu.st.jobCursor, gu.st.scope, gu.st.filter.Jobs)
 		gu.writeView(winJobs, "[2] Jobs", jobsBody)
-		gu.applyRowHighlight(winJobs, jobsHdr, gu.st.jobCursor, len(gu.st.jobs), focused == panelJobs)
+		// Keep the Jobs row highlight on while the caret is in
+		// winJobInput (panelJobInput) — the operator is still working
+		// the selected running job, just typing instead of navigating.
+		jobsHighlighted := focused == panelJobs || focused == panelJobInput
+		gu.applyRowHighlight(winJobs, jobsHdr, gu.st.jobCursor, len(gu.st.jobs), jobsHighlighted)
 
 		wfBody, wfHdr := renderWorkflowsPanel(gu.st.workflows, gu.st.workflowCursor, gu.st.filter.Workflows)
 		gu.writeView(winWorkflows, "[3] Workflows", wfBody)

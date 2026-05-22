@@ -51,11 +51,17 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 	// SSE pump) would otherwise race against these reads under -race.
 	var (
 		focusedWin   string
+		focusedSide  string
 		logHidden    bool
 		showJobInput bool
 	)
 	gu.st.withRLock(func() {
 		focusedWin = gu.st.focused.window()
+		// focusedSide drives the side-stack accordion (which side
+		// panel grows). When the caret is in winJobInput we still
+		// want the Jobs column to be the wide one above, so
+		// normalize panelJobInput → winJobs for that calculation.
+		focusedSide = gu.st.focused.normalizeForDetail().window()
 		logHidden = gu.st.logHide
 		// showJobInput is "selected job is running" — does NOT depend
 		// on which view is currently focused. The Jobs cursor sitting
@@ -71,7 +77,7 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 	args := arrangeArgs{
 		width:        w,
 		height:       h,
-		focusedSide:  focusedWin,
+		focusedSide:  focusedSide,
 		state:        StateDashboard,
 		logHidden:    logHidden,
 		showJobInput: showJobInput,
