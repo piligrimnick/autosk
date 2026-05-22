@@ -198,24 +198,70 @@ func TestLayout_JobInputAppears_WhenSelectedJobRunning(t *testing.T) {
 
 // TestLayout_JobInputDisappears_WhenSelectedJobTerminal pins the
 // running→terminal teardown: a terminal selected job means
-// winJobInput is deleted.
+// winJobInput is deleted. Also exercises the
+// focused=panelJobInput case where the input view goes away
+// while it still owned current view — layout must not leave the
+// caret in phantom-focus on a deleted view.
 func TestLayout_JobInputDisappears_WhenSelectedJobTerminal(t *testing.T) {
-	gu := jobDetailLayoutFixture(t)
-	seedRunningJob(gu, "job-run")
-	if err := gu.layout(gu.g); err != nil {
-		t.Fatalf("layout (running): %v", err)
-	}
-	if _, err := gu.g.View(winJobInput); err != nil {
-		t.Fatalf("setup: winJobInput should exist for running job: %v", err)
-	}
-	// Flip to terminal.
-	gu.st.withLock(func() { gu.st.jobs[0].Status = "done" })
-	if err := gu.layout(gu.g); err != nil {
-		t.Fatalf("layout (terminal): %v", err)
-	}
-	if _, err := gu.g.View(winJobInput); err == nil {
-		t.Errorf("winJobInput should be deleted for terminal job")
-	}
+	t.Run("focus_on_jobs", func(t *testing.T) {
+		gu := jobDetailLayoutFixture(t)
+		seedRunningJob(gu, "job-run")
+		if err := gu.layout(gu.g); err != nil {
+			t.Fatalf("layout (running): %v", err)
+		}
+		if _, err := gu.g.View(winJobInput); err != nil {
+			t.Fatalf("setup: winJobInput should exist for running job: %v", err)
+		}
+		// Flip to terminal.
+		gu.st.withLock(func() { gu.st.jobs[0].Status = "done" })
+		if err := gu.layout(gu.g); err != nil {
+			t.Fatalf("layout (terminal): %v", err)
+		}
+		if _, err := gu.g.View(winJobInput); err == nil {
+			t.Errorf("winJobInput should be deleted for terminal job")
+		}
+	})
+	t.Run("focus_on_jobInput", func(t *testing.T) {
+		// The operator was typing in winJobInput (focused ==
+		// panelJobInput). The job finishes mid-typing. The next
+		// layout pass deletes winJobInput; without the
+		// applyRefreshLocked focus-revert, layout's
+		// SetCurrentView(focused.window() == winJobInput) would
+		// fail with ErrUnknownView and leave the caret in
+		// phantom-focus. After the running→terminal transition
+		// is detected in applyRefreshLocked, focused must read
+		// panelJobs so the next layout lands the caret somewhere
+		// real.
+		gu := jobDetailLayoutFixture(t)
+		seedRunningJob(gu, "job-run")
+		gu.st.withLock(func() { gu.st.focused = panelJobInput })
+		if err := gu.layout(gu.g); err != nil {
+			t.Fatalf("layout (running): %v", err)
+		}
+		// Drive applyRefreshLocked with a status-flip refreshResult
+		// (that's where the focus revert lives).
+		r := refreshResult{
+			jobs: []datasource.Job{{
+				JobResponse: api.JobResponse{JobID: "job-run", Status: "done"},
+			}},
+			taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
+		}
+		gu.applyRefreshLocked(r)
+		var focused panelID
+		gu.st.withRLock(func() { focused = gu.st.focused })
+		if focused != panelJobs {
+			t.Errorf("focused after running→terminal = %v, want panelJobs (input view goes away; revert focus)", focused)
+		}
+		if err := gu.layout(gu.g); err != nil {
+			t.Fatalf("layout (terminal): %v", err)
+		}
+		if _, err := gu.g.View(winJobInput); err == nil {
+			t.Errorf("winJobInput should be deleted for terminal job")
+		}
+		if cv := gu.g.CurrentView(); cv != nil && cv.Name() == winJobInput {
+			t.Errorf("current view = winJobInput after running→terminal; should be on a real view")
+		}
+	})
 }
 
 // TestFocusPanel_DetailStashesPreviousFocus pins the focusPanel
@@ -390,14 +436,16 @@ func TestJobInput_EscRestoresJobsFocus(t *testing.T) {
 	}
 }
 
-// dispatchFakeDS captures SendInput calls so
-// TestLiveDispatch_AfterReshuffle_DispatchesToOwner can assert
-// the dispatch target.
+// dispatchFakeDS captures SendInput / AbortJob calls so the
+// TestLiveDispatch_* / TestLiveAbort_* tests can assert the
+// target jobID.
 type dispatchFakeDS struct {
 	refreshFakeDS
-	calls   atomic.Int32
-	lastJob atomic.Value // string
-	lastMsg atomic.Value // string
+	calls        atomic.Int32
+	lastJob      atomic.Value // string
+	lastMsg      atomic.Value // string
+	abortCalls   atomic.Int32
+	abortLastJob atomic.Value // string
 }
 
 func (f *dispatchFakeDS) SendInput(_ context.Context, jobID, msg, _ string) (string, error) {
@@ -405,6 +453,12 @@ func (f *dispatchFakeDS) SendInput(_ context.Context, jobID, msg, _ string) (str
 	f.lastJob.Store(jobID)
 	f.lastMsg.Store(msg)
 	return "ok", nil
+}
+
+func (f *dispatchFakeDS) AbortJob(_ context.Context, jobID string) error {
+	f.abortCalls.Add(1)
+	f.abortLastJob.Store(jobID)
+	return nil
 }
 
 // TestLiveDispatch_AfterReshuffle_DispatchesToOwner pins the
@@ -483,6 +537,184 @@ func TestLiveDispatch_AfterReshuffle_DispatchesToOwner(t *testing.T) {
 	}
 	if got, _ := ds.lastMsg.Load().(string); got != "plan: refactor X" {
 		t.Errorf("SendInput msg = %q, want %q", got, "plan: refactor X")
+	}
+}
+
+// TestLiveDispatch_AfterReshuffleAndKeystroke_DispatchesToOwner
+// pins the regression review flagged: even if the operator types
+// one more character AFTER a refresh-driven reshuffle of the
+// jobs slice, the dispatch target must remain the authored job
+// (jobInputOwner), NOT the post-reshuffle cursor's job.
+//
+// The previous round's TestLiveDispatch_AfterReshuffle_
+// DispatchesToOwner passed accidentally because it dispatched
+// immediately after the reshuffle, with no intervening keystroke.
+// The earlier liveEditor implementation re-stamped jobInputOwner
+// on EVERY keystroke, so a single character pressed between the
+// reshuffle and Ctrl-D would flip ownership to the wrong job and
+// silently route the draft there. The fix: liveEditor only
+// stamps jobInputOwner when it is currently empty (i.e. on the
+// first keystroke of a new draft).
+func TestLiveDispatch_AfterReshuffleAndKeystroke_DispatchesToOwner(t *testing.T) {
+	gu := jobDetailLayoutFixture(t)
+	ds := &dispatchFakeDS{}
+	gu.ds = ds
+
+	// Seed: cursor on job-A, draft typed against job-A.
+	gu.st.withLock(func() {
+		gu.st.jobs = []datasource.Job{
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+		}
+		gu.st.jobCursor = 0
+		gu.st.focused = panelJobs
+		gu.st.jobInput = "hello"
+		gu.st.jobInputOwner = "job-A"
+	})
+
+	// Refresh-driven reshuffle: job-Z lands at index 0, job-A at index 1.
+	r := refreshResult{
+		jobs: []datasource.Job{
+			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+		},
+		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
+	}
+	gu.applyRefreshLocked(r)
+
+	// Layout so winJobInput exists with the draft text.
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout: %v", err)
+	}
+	v, err := gu.g.View(winJobInput)
+	if err != nil {
+		t.Fatalf("winJobInput missing: %v", err)
+	}
+
+	// One more keystroke AFTER the reshuffle. The operator appends
+	// '!' to their existing draft. With currentJobID() now resolving
+	// to job-Z, the broken liveEditor would re-stamp jobInputOwner
+	// to job-Z and silently redirect the dispatch.
+	gu.liveEditor(v, 0, '!', 0)
+
+	// Verify the stamp survived the keystroke.
+	var owner string
+	gu.st.withRLock(func() { owner = gu.st.jobInputOwner })
+	if owner != "job-A" {
+		t.Errorf("jobInputOwner re-attributed by liveEditor after keystroke: %q (want job-A)", owner)
+	}
+
+	// Dispatch.
+	if err := gu.liveSend(gu.g, v); err != nil {
+		t.Fatalf("liveSend: %v", err)
+	}
+	deadline := time.Now().Add(1 * time.Second)
+	for ds.calls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := ds.calls.Load(); got != 1 {
+		t.Fatalf("SendInput calls = %d, want 1", got)
+	}
+	if got, _ := ds.lastJob.Load().(string); got != "job-A" {
+		t.Errorf("SendInput target jobID = %q, want %q (the authored target, NOT the post-keystroke cursor)", got, "job-A")
+	}
+}
+
+// TestLiveAbort_AfterReshuffle_TargetsOwner mirrors
+// TestLiveDispatch_AfterReshuffle_DispatchesToOwner for the
+// Ctrl-A handler: a refresh-driven reshuffle that shifts the
+// cursor's underlying jobID must NOT silently redirect a Ctrl-A
+// to the wrong job. The handler must use jobInputOwner (the
+// operator's authored target), with currentJobID() only as the
+// fallback when no draft has been authored yet.
+func TestLiveAbort_AfterReshuffle_TargetsOwner(t *testing.T) {
+	gu := jobDetailLayoutFixture(t)
+	ds := &dispatchFakeDS{}
+	gu.ds = ds
+
+	// Seed: cursor on job-A with an authored draft.
+	gu.st.withLock(func() {
+		gu.st.jobs = []datasource.Job{
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+		}
+		gu.st.jobCursor = 0
+		gu.st.focused = panelJobs
+		gu.st.jobInput = "about to escalate"
+		gu.st.jobInputOwner = "job-A"
+	})
+
+	// Refresh reshuffle: job-Z at index 0, job-A at index 1.
+	r := refreshResult{
+		jobs: []datasource.Job{
+			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+		},
+		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
+	}
+	gu.applyRefreshLocked(r)
+
+	if err := gu.liveAbort(gu.g, nil); err != nil {
+		t.Fatalf("liveAbort: %v", err)
+	}
+	deadline := time.Now().Add(1 * time.Second)
+	for ds.abortCalls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := ds.abortCalls.Load(); got != 1 {
+		t.Fatalf("AbortJob calls = %d, want 1", got)
+	}
+	if got, _ := ds.abortLastJob.Load().(string); got != "job-A" {
+		t.Errorf("AbortJob target = %q, want %q (the authored target)", got, "job-A")
+	}
+
+	// Fallback path: no authored draft → abort targets the current
+	// cursor (job-Z, still at index 0 in this fixture).
+	gu.st.withLock(func() {
+		gu.st.jobInput = ""
+		gu.st.jobInputOwner = ""
+	})
+	ds.abortCalls.Store(0)
+	ds.abortLastJob.Store("")
+	if err := gu.liveAbort(gu.g, nil); err != nil {
+		t.Fatalf("liveAbort fallback: %v", err)
+	}
+	deadline = time.Now().Add(1 * time.Second)
+	for ds.abortCalls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got, _ := ds.abortLastJob.Load().(string); got != "job-Z" {
+		t.Errorf("AbortJob fallback target = %q, want %q (current cursor when no draft)", got, "job-Z")
+	}
+}
+
+// TestCyclePanel_FromJobInput_StartsFromJobs pins the
+// source-side normalisation in cyclePanel: Tab from
+// panelJobInput must NOT skip the Jobs column (the visual
+// anchor of the input). The expected behaviour is to first
+// restore the cycle source to panelJobs and then step from
+// there, so Tab→panelWorkflows and Shift-Tab→panelTasks.
+func TestCyclePanel_FromJobInput_StartsFromJobs(t *testing.T) {
+	gu := jobDetailLayoutFixture(t)
+	seedRunningJob(gu, "job-run")
+	gu.st.withLock(func() { gu.st.focused = panelJobInput })
+
+	if err := gu.cyclePanel(+1)(nil, nil); err != nil {
+		t.Fatalf("cyclePanel(+1): %v", err)
+	}
+	var focused panelID
+	gu.st.withRLock(func() { focused = gu.st.focused })
+	if focused != panelWorkflows {
+		t.Errorf("Tab from panelJobInput landed on %v, want panelWorkflows", focused)
+	}
+
+	// Reset and verify Shift-Tab (step=-1) symmetrically lands on
+	// panelTasks (the panel BEFORE panelJobs in the cycle).
+	gu.st.withLock(func() { gu.st.focused = panelJobInput })
+	if err := gu.cyclePanel(-1)(nil, nil); err != nil {
+		t.Fatalf("cyclePanel(-1): %v", err)
+	}
+	gu.st.withRLock(func() { focused = gu.st.focused })
+	if focused != panelTasks {
+		t.Errorf("Shift-Tab from panelJobInput landed on %v, want panelTasks", focused)
 	}
 }
 

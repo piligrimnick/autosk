@@ -264,26 +264,10 @@ func TestApplyArchiveLoad_ResetsTruncated(t *testing.T) {
 	}
 }
 
-// TestRunningToTerminalTransition pins the contract that an entry
-// whose run just went terminal gets its loadedAt zeroed (so the
-// applyRefreshLocked-driven scheduler will refetch on the next
-// pass).
-func TestRunningToTerminalTransition(t *testing.T) {
-	gu := &Gui{st: newState()}
-	const jobID = "job-trans"
-	gu.st.withLock(func() {
-		te := gu.ensureTranscriptEntryLocked(jobID)
-		te.loadedAt = time.Now()
-	})
-	// Simulate the transition handler: zero loadedAt.
-	gu.st.withLock(func() {
-		te := gu.st.jobTranscript[jobID]
-		te.loadedAt = time.Time{}
-	})
-	gu.st.withRLock(func() {
-		te := gu.st.jobTranscript[jobID]
-		if !te.loadedAt.IsZero() {
-			t.Errorf("loadedAt not zeroed: %v", te.loadedAt)
-		}
-	})
-}
+// (Tautological TestRunningToTerminalTransition removed: the
+// previous version asserted that time.Time{} is zero after
+// manually setting it to time.Time{}. The end-to-end contract —
+// applyRefreshLocked zeroes loadedAt on a running→terminal
+// transition — is pinned by
+// TestRefreshApply_RunningToTerminalInvalidatesArchive in
+// refresh_apply_test.go.)

@@ -512,30 +512,37 @@ func (gu *Gui) scrollViewByLines(name string, step int) error {
 
 // ---- job-input textarea -------------------------------------------------
 
-// currentJobID returns the currently-selected job id, or "".
-func (gu *Gui) currentJobID() string {
-	var id string
-	gu.st.withRLock(func() {
-		if j, ok := gu.st.selectedJob(); ok {
-			id = j.JobID
-		}
-	})
-	return id
-}
+// (currentJobID helper removed: the three input-handler keys
+// (Ctrl-D / Ctrl-F / Ctrl-A) all resolve their target via
+// jobInputOwner (with a state.selectedJob fallback for the
+// no-draft case), so no helper currently reads "just the
+// selected job's id". The doc comments on liveDispatch /
+// liveAbort still reference it by name to explain WHY the
+// shorthand path was rejected.)
 
 // liveEditor is the gocui editor on the job-input view. Defers to
 // the default editor for most keys; Ctrl-* shortcuts are caught by
 // SetKeybinding before they reach this editor.
 //
-// Every keystroke also stamps jobInputOwner with the currently-
-// selected job id, so the model has an authoritative record of
-// whose draft this is for the next selection-change-driven clear.
+// jobInputOwner is stamped on the FIRST keystroke only (when it's
+// empty), so the draft's authored target is sticky for the lifetime
+// of the draft. Stamping on EVERY keystroke would silently re-
+// attribute the buffer to whatever job the cursor now points at —
+// which after a refresh-driven reshuffle of the jobs slice can be
+// a different job than the one the operator originally typed for.
+// The ownership-clear paths (clearJobInputIfStale, liveDispatch,
+// jobInputEscape) all reset jobInputOwner alongside jobInput, so
+// empty-owner ≡ empty-buffer is the canonical "no draft" state
+// the next keystroke can safely claim.
 func (gu *Gui) liveEditor(v *gocui.View, key gocui.Key, ch rune, mod gocui.Modifier) bool {
 	handled := gocui.DefaultEditor.Edit(v, key, ch, mod)
-	owner := gu.currentJobID()
 	gu.st.withLock(func() {
 		gu.st.jobInput = v.Buffer()
-		gu.st.jobInputOwner = owner
+		if gu.st.jobInputOwner == "" {
+			if j, ok := gu.st.selectedJob(); ok {
+				gu.st.jobInputOwner = j.JobID
+			}
+		}
 	})
 	return handled
 }
@@ -548,8 +555,34 @@ func (gu *Gui) liveFollowUp(_ *gocui.Gui, v *gocui.View) error {
 	return gu.liveDispatch(v, "follow_up")
 }
 
+// liveAbort routes Ctrl-A to the same target liveDispatch uses:
+// jobInputOwner (the job that authored the draft), falling back
+// to the current cursor when no draft is in flight.
+//
+// The three input-handler keys (Ctrl-D send, Ctrl-F follow_up,
+// Ctrl-A abort) MUST be symmetric on target selection: a refresh-
+// driven reshuffle of the jobs slice silently shifts the cursor's
+// underlying jobID without closing the input view, so reading
+// currentJobID() here would let Ctrl-A abort the wrong job
+// (typically a brand-new one inserted at index 0). jobInputOwner
+// is the operator-authored target the textarea is dispatching
+// against; abort follows the same anchor.
+//
+// The fallback covers the no-draft case (operator opens the input
+// and immediately presses Ctrl-A): jobInputOwner is only stamped
+// on the first keystroke, so an empty-owner state falls through
+// to the current cursor unchanged.
 func (gu *Gui) liveAbort(_ *gocui.Gui, _ *gocui.View) error {
-	jobID := gu.currentJobID()
+	var jobID string
+	gu.st.withRLock(func() {
+		if gu.st.jobInputOwner != "" {
+			jobID = gu.st.jobInputOwner
+			return
+		}
+		if j, ok := gu.st.selectedJob(); ok {
+			jobID = j.JobID
+		}
+	})
 	if jobID == "" {
 		return nil
 	}

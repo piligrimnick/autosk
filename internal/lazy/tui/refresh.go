@@ -266,6 +266,18 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 							te.loadedAt = time.Time{}
 						}
 						refetchJobID = cur.JobID
+						// The input view (winJobInput) goes away with
+						// the running state — the next layout pass GC's
+						// it because showJobInput now reads false. If the
+						// operator was typing in it (state.focused ==
+						// panelJobInput), send them back to the Jobs panel
+						// so they don't end up in phantom-focus on a
+						// deleted view (caret invisible, keystrokes
+						// routed nowhere because the per-view bindings
+						// on winJobInput no longer match anything).
+						if gu.st.focused == panelJobInput {
+							gu.st.focused = panelJobs
+						}
 					}
 				}
 			}

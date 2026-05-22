@@ -292,6 +292,77 @@ func TestRefreshApply_RunningToTerminalInvalidatesArchive(t *testing.T) {
 	}
 }
 
+// TestRefreshApply_RunningToTerminal_RevertsFocusFromJobInput
+// pins the second-half of the running→terminal transition: if the
+// operator was typing in winJobInput when the job finished
+// (state.focused == panelJobInput), the layout pass that follows
+// will delete the input view because showJobInput now reads false.
+// applyRefreshLocked must therefore also revert focused to
+// panelJobs so SetCurrentView lands the caret on a view that
+// still exists, instead of leaving it in phantom-focus on a
+// deleted view.
+func TestRefreshApply_RunningToTerminal_RevertsFocusFromJobInput(t *testing.T) {
+	gu := &Gui{st: newState()}
+	gu.ds = &refreshFakeDS{}
+	const jobID = "job-typing"
+
+	gu.st.withLock(func() {
+		gu.st.jobs = []datasource.Job{{
+			JobResponse: api.JobResponse{JobID: jobID, Status: "running"},
+		}}
+		gu.st.jobCursor = 0
+		gu.st.focused = panelJobInput // operator is typing
+	})
+
+	r := refreshResult{
+		jobs: []datasource.Job{{
+			JobResponse: api.JobResponse{JobID: jobID, Status: "done"},
+		}},
+		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
+	}
+	gu.applyRefreshLocked(r)
+
+	var focused panelID
+	gu.st.withRLock(func() { focused = gu.st.focused })
+	if focused != panelJobs {
+		t.Errorf("focused after running→terminal = %v, want panelJobs (input view goes away; revert)", focused)
+	}
+}
+
+// TestRefreshApply_RunningToTerminal_PreservesNonInputFocus: the
+// focus-revert is gated on focused == panelJobInput specifically.
+// If the operator wasn't in the input (e.g. focused == panelJobs
+// or panelTasks) the running→terminal transition must NOT spuriously
+// alter focus — only the actual phantom-focus case needs the
+// revert.
+func TestRefreshApply_RunningToTerminal_PreservesNonInputFocus(t *testing.T) {
+	gu := &Gui{st: newState()}
+	gu.ds = &refreshFakeDS{}
+	const jobID = "job-typing"
+
+	gu.st.withLock(func() {
+		gu.st.jobs = []datasource.Job{{
+			JobResponse: api.JobResponse{JobID: jobID, Status: "running"},
+		}}
+		gu.st.jobCursor = 0
+		gu.st.focused = panelTasks // not in the input
+	})
+
+	r := refreshResult{
+		jobs: []datasource.Job{{
+			JobResponse: api.JobResponse{JobID: jobID, Status: "done"},
+		}},
+		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
+	}
+	gu.applyRefreshLocked(r)
+
+	var focused panelID
+	gu.st.withRLock(func() { focused = gu.st.focused })
+	if focused != panelTasks {
+		t.Errorf("focused = %v after running→terminal, want panelTasks (unrelated; should not change)", focused)
+	}
+}
+
 // TestRefreshApply_NoTransitionPreservesArchive is the inverse:
 // when the selected job's status DOESN'T change (still running
 // across two snapshots, or still terminal), the cache entry's

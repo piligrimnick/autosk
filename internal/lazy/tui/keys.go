@@ -254,13 +254,36 @@ func (gu *Gui) focusPanel(p panelID) func(*gocui.Gui, *gocui.View) error {
 }
 
 // cyclePanel cycles through the four side panels by step.
+//
+// Source-side normalisation: cyclePanel may fire from any view,
+// including the synthetic panelJobInput (caret in winJobInput) and
+// panelDetail (focus parked on the right pane via '0'). Neither is
+// in the 0..3 cycle range, so we normalise them first —
+// panelJobInput→panelJobs (predictable: the operator was working a
+// running job, so Tab steps OFF the job they were composing for to
+// the next side panel), panelDetail→detailFocus (the side panel
+// that owned the selection before '0' was pressed). Without this
+// normalisation, (int(panelJobInput=5) + 1) % 4 = 2 = panelWorkflows
+// would skip the Jobs column entirely on Tab from the input — a
+// UX regression vs. the pre-redesign state where Tab inside the
+// fullscreen inspector was scoped to inspector-tab cycling.
 func (gu *Gui) cyclePanel(step int) func(*gocui.Gui, *gocui.View) error {
 	return func(*gocui.Gui, *gocui.View) error {
 		var landed panelID
 		changed := false
 		gu.st.withLock(func() {
+			src := gu.st.focused
+			switch src {
+			case panelJobInput:
+				src = panelJobs
+			case panelDetail:
+				src = gu.st.detailFocus.normalizeForDetail()
+				if src == panelDetail {
+					src = panelTasks
+				}
+			}
 			n := 4
-			next := (int(gu.st.focused) + step + n) % n
+			next := (int(src) + step + n) % n
 			if int(gu.st.focused) != next {
 				changed = true
 			}
