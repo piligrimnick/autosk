@@ -9,6 +9,7 @@ import (
 
 	"github.com/jesseduffield/gocui"
 
+	"autosk/internal/daemon/runstore"
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/store"
 )
@@ -217,24 +218,101 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 // applyRefreshLocked mutates the model from a refreshResult. Must be
 // called inside a g.Update closure (which is the only place gocui
 // allows touching view state). Held under st.mu.Lock.
+//
+// Detail-pane side effects:
+//
+//   - When the currently-selected job transitions from running to
+//     terminal between snapshots, its transcript entry's loadedAt
+//     is zeroed so the next selection-driven hydration refetches
+//     the archive (so final-flushed events appear). The schedule
+//     is queued AFTER the lock is released, via OnWorker, so we
+//     don't block the apply path on the refetch.
+//   - When state.jobLiveJobID no longer appears in the jobs slice
+//     (filter / scope removed it), stopJobLive tears down the
+//     subscription.
+//
+// Note: this path INTENTIONALLY does NOT call clearJobInputIfStale.
+// The selected job's jobID can shift between snapshots without any
+// operator action (e.g. a new job inserted at index 0 shoves the
+// previously-cursored row down to index 1 while jobCursor stays
+// pinned to 0). Wiping the draft on that shift would silently
+// discard mid-typing text the operator never asked us to touch.
+// The anti-leak guarantee is enforced on the operator-driven
+// explicit cursor move via afterCursorMove(panelJobs), which is
+// the only authored event we want anchoring the clear.
 func (gu *Gui) applyRefreshLocked(r refreshResult) {
+	var (
+		refetchJobID string
+		stopLive     bool
+	)
 	gu.st.withLock(func() {
 		if r.terr == nil {
-			// The datasource already applied tasksFilter.Search
-			// (post-facet free-text). Do NOT re-filter with the raw
-			// expression here: that would re-apply 'p:1' or 'wf:foo'
-			// as substring matches against id+title and empty the
-			// panel. Use the parsed Search remainder only.
 			gu.st.tasks = sortTasksByRecency(applyTaskSearch(r.tasks, r.taskSearch))
 			gu.st.taskCursor = clampCursor(gu.st.taskCursor, len(gu.st.tasks))
 		}
 		if r.jerr == nil {
+			// Detect transitions for the currently-selected job
+			// BEFORE we swap the jobs slice. Two effects:
+			//
+			//   running→terminal (same job, status moved): zero the
+			//     transcript loadedAt so the next archive load picks
+			//     up final-flushed events.
+			//   focused == panelJobInput, post-swap selected job not
+			//     live: revert focus to panelJobs so the layout-pass
+			//     SetCurrentView lands on a real view. This branch
+			//     fires whether the SAME job went terminal under the
+			//     operator, OR the cursor's jobID drifted to a
+			//     different (terminal) job because the jobs slice
+			//     reshuffled (e.g. a new queued job lands at index 0,
+			//     pushing the previously-cursored row down). Both
+			//     paths would otherwise leave the caret in
+			//     phantom-focus on a deleted view.
+			prevJob, hadPrev := gu.st.selectedJob()
 			gu.st.jobs = applyJobSearch(r.jobs, r.jobsSearch)
 			gu.st.jobCursor = clampCursor(gu.st.jobCursor, len(gu.st.jobs))
-			// Index is taken from the TaskID-unfiltered allJobs slice
-			// upstream; it must move alongside gu.st.jobs even when
-			// the panel slice gets narrowed by a search string.
 			gu.st.taskJobIdx = r.taskJobIdx
+			if cur, ok := gu.st.selectedJob(); ok {
+				if hadPrev && cur.JobID == prevJob.JobID {
+					wasRunning := runstore.RunStatus(prevJob.Status) == runstore.StatusRunning
+					isRunning := runstore.RunStatus(cur.Status) == runstore.StatusRunning
+					if wasRunning && !isRunning {
+						if te, ok := gu.st.jobTranscript[cur.JobID]; ok {
+							te.loadedAt = time.Time{}
+						}
+						refetchJobID = cur.JobID
+					}
+				}
+				// General phantom-focus guard: any time the operator
+				// is in the input but the (post-swap) selected job
+				// is no longer live, revert to panelJobs. Covers
+				// both same-job running→terminal AND reshuffle to
+				// a different non-live job.
+				if gu.st.focused == panelJobInput && !isJobLive(cur) {
+					gu.st.focused = panelJobs
+				}
+			} else if gu.st.focused == panelJobInput {
+				// Jobs slice emptied / filtered out entirely while
+				// the operator was in the input. Same phantom-focus
+				// risk — the input view will be deleted on the next
+				// layout pass.
+				gu.st.focused = panelJobs
+			}
+			// If the streamed job vanished from the slice (e.g. a
+			// filter just removed it), tear down the subscription so
+			// we're not holding an open SSE for a job the operator
+			// can't see.
+			if gu.st.jobLiveJobID != "" {
+				found := false
+				for i := range gu.st.jobs {
+					if gu.st.jobs[i].JobID == gu.st.jobLiveJobID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					stopLive = true
+				}
+			}
 		}
 		if r.werr == nil {
 			gu.st.workflows = applyWfSearch(r.visibleWorkflows, r.workflowSearch)
@@ -256,6 +334,16 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 			gu.st.signals[r.selectedTaskID] = r.selectedSignals
 		}
 	})
+	if stopLive {
+		gu.stopJobLive()
+	}
+	if refetchJobID != "" && gu.g != nil {
+		jobID := refetchJobID
+		gu.g.OnWorker(func(_ gocui.Task) error {
+			gu.loadJobArchive(jobID)
+			return nil
+		})
+	}
 }
 
 // evictCacheIfNeeded drops one arbitrary non-key entry from m if the

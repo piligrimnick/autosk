@@ -1,13 +1,15 @@
 # `autosk lazy` — interactive TUI
 
 `autosk lazy` is a lazygit-style terminal dashboard for the autosk
-world: **tasks, jobs, workflows, and agents** in one process, with a
-fullscreen job inspector that fuses a live agent-session mirror
-(SSE) with an offline `session.jsonl` archive view.
+world: **tasks, jobs, workflows, and agents** in one process.
+Selecting a job in the Jobs panel renders its transcript (offline
+`session.jsonl` archive + live SSE tail) directly in the Detail
+pane, one labelled box per event. For a running job a textarea
+appears below Detail with `Ctrl-D send` / `Ctrl-F follow_up` /
+`Ctrl-A abort` — same contract `autosk attach` had.
 
 ```bash
 autosk lazy                    # dashboard
-autosk lazy --job run-9ab1     # deep-link straight into the inspector
 ```
 
 It doesn't replace any subcommand — every read and most writes are
@@ -18,6 +20,10 @@ The design contract lives in
 [`docs/plans/20260519-Lazy-Plan.md`](plans/20260519-Lazy-Plan.md);
 the implementation plan and risk register live in
 [`docs/plans/20260520-Lazy-Impl-Plan.md`](plans/20260520-Lazy-Impl-Plan.md).
+The Detail-pane redesign that removed the fullscreen Inspector and
+folded the transcript / input into the dashboard's Detail column
+lives in
+[`docs/plans/20260522-job-detail-redesign.md`](plans/20260522-job-detail-redesign.md).
 This page is the user-facing recipe.
 
 ---
@@ -26,40 +32,49 @@ This page is the user-facing recipe.
 
 ```bash
 cd ~/your/project
-autosk daemon serve &                     # optional but recommended (Live tab needs it)
+autosk daemon serve &                     # optional but recommended (live SSE needs it)
 autosk lazy                               # opens the dashboard
 ```
 
 Without the daemon the dashboard still works: Tasks / Jobs /
 Workflows / Agents render from `.autosk/db`, write hotkeys still
-mutate the DB, and the inspector's Archive / Meta / Signals tabs
-work against the stored session. The Live tab is the one piece that
-needs `autosk daemon serve` — see [§ Graceful degradation](#graceful-degradation).
+mutate the DB, and the Detail-pane transcript renders against the
+stored `session.jsonl` archive. The live SSE stream + live-input
+textarea are the pieces that need `autosk daemon serve` — see
+[§ Graceful degradation](#graceful-degradation).
 
 ---
 
 ## Replaces `autosk attach`
 
-The standalone `autosk attach` command is **gone** in this release.
-There is no shim, no alias — running it prints cobra's
-unknown-command error. To open a job's live mirror from the command
-line use:
+The standalone `autosk attach` command is **gone**. There is no
+shim, no alias — running it prints cobra's unknown-command error.
+To open a job's live mirror, run `autosk lazy`, focus the Jobs
+panel (`2`), move the cursor onto the job. The transcript renders
+inline in the Detail pane (right column); for a running job the
+textarea pinned below Detail carries the same hotkey contract
+`autosk attach` had — `Ctrl-D` send, `Ctrl-F` follow_up, `Ctrl-A`
+abort, `Esc` returns focus to the Jobs panel.
 
-```bash
-autosk lazy --job <job-id>
-```
-
-`Esc` (or `Ctrl-O`) inside the inspector returns to the dashboard
-with the same job still selected. The Live tab carries the same
-hotkey contract `autosk attach` had: `Ctrl-D` send, `Ctrl-F`
-follow_up, `Ctrl-A` abort.
+The previous `--job <id>` deep-link flag is gone with the
+fullscreen Inspector it used to launch; selecting the job in the
+Jobs panel is the only path now.
 
 ---
 
 ## Layout
 
+The dashboard always shows the four side panels on the left and the
+Detail pane on the right. The Detail pane reflects the focused side
+panel — a Tasks row renders task-detail (description + recent jobs
++ comments + signals); a Jobs row renders the job header +
+per-event transcript boxes (described below); Workflows / Agents
+render their own detail.
+
+With a **Tasks** row focused the Detail pane is the task sheet:
+
 ```
-┌─[1] Tasks ──────────────────────────────┬─[0] Detail / Inspector ────────────┐
+┌─[1] Tasks ──────────────────────────────┬─[0] Detail ────────────────────────┐
 │ ask-a1b2c3 ●P1 work   ▶dev   Refactor   │ task ask-a1b2c3  work              │
 │ ask-c3d4e5  P1 work   ▶rev   Add CLI    │ wf=feature-dev step=dev (developer)│
 │ ask-e5f617  P2 done          Bump ver   │ author: @autosk/developer          │
@@ -82,15 +97,69 @@ follow_up, `Ctrl-A` abort.
  autosk · /Users/me/proj  daemon=ok  workers=2 q=0 r=1  scope: task=ask-a1b2c3  ?=help
 ```
 
+With a **running Jobs** row focused, the Detail pane carries the
+job header + transcript boxes and a small `input` textarea is
+pinned below it. Terminal jobs are identical but without the
+textarea — the Detail pane reclaims its space:
+
+```
+┌─[2] Jobs ───────────────────────────────┬─[0] Detail ────────────────────────┐
+│ ◐ run-9ab1 stream feature-dev:dev   3m  │ run-9ab1 ◐ feature-dev:dev         │
+│ ◯ run-77a2 done   feature-dev:rev  12m  │ agent=@autosk/developer            │
+│ ✗ run-0c12 failed single:dev        1h  │ created 09:14:02  started 09:14:03 │
+│   (filtered by task ask-a1b2c3)         │ attached 1  corrections 0/3  pid…  │
+│                                         │ session: /tmp/autosk/run-9ab1/se…  │
+│                                         │                                    │
+│                                         │ ┌ 09:14:03 session ──────────────┐ │
+│                                         │ │ cwd /Users/me/proj             │ │
+│                                         │ └────────────────────────────────┘ │
+│                                         │ ┌ 09:14:09 assistant_text ───────┐ │
+│                                         │ │ Looking at the auth flow now…  │ │
+│                                         │ └────────────────────────────────┘ │
+│                                         │ ┌ 09:14:11 tool_call [Read] ─────┐ │
+│                                         │ │ path=internal/auth/middlew…    │ │
+│ (other side panels collapsed)           │ └────────────────────────────────┘ │
+│                                         ├─ input (Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort  Esc cancel) ─┐
+│                                         │ plan: refactor the middleware       │
+└─────────────────────────────────────────┴─────────────────────────────────────┘
+ autosk · /Users/me/proj  daemon=ok  workers=2 q=0 r=1  scope: —  ?=help
+```
+
+The **job Detail pane** carries:
+
+1. A structured header: `jobID` · status glyph · `workflow:step` ·
+   `agent=<name>`, a meta row with `created` / `started` /
+   `finished` smart-formatted timestamps, a third row with
+   `attached` / `corrections` / `pid` (when set), a muted `session:`
+   row, and an `error:` row in error style when `job.Error` is
+   non-empty.
+2. The transcript as one labelled box per event — archive +
+   live-tail merged, oldest first. Box label:
+   `<smart-datetime> <kind> [<name>]`. Assistant events
+   (`assistant_text`, `assistant_thinking`, plus any future
+   `assistant_*` variants) render through the markdown renderer;
+   every other kind (`user_text`, `tool_call`, `tool_result`,
+   `session`, `session_info`, `model_change`,
+   `thinking_level_change`, `compaction`, `branch_summary`, `label`,
+   `custom`, `other`) renders as plain text. Events with empty text
+   render as just the label + frame.
+3. A 6-row `input` textarea, only when the selected job is
+   running. Its contents persist while the cursor stays on the same
+   job (cleared on dispatch via `Ctrl-D` / `Ctrl-F`, on `Esc`, or
+   when the cursor moves to a different job).
+
 The focused side panel grows accordion-style so the selected row is
 always visible. `@` toggles the command log; the bottom bar shows
 project root, daemon health, worker stats, active scope chips, and a
 `flaky+N` chip when the live datasource has fallen back to the DB
 since the previous tick.
 
-`Enter` on a **Jobs** row hides the dashboard and opens a near-
-fullscreen inspector. `Esc` (or `Ctrl-O`) restores the dashboard
-with the same job still selected.
+`Enter` on a **Jobs** row routes by status: for a **running** job
+the caret moves into the `input` textarea (start typing immediately);
+for a **terminal** job logical focus moves to the Detail pane so
+`j` / `k` / `g` / `G` / `Ctrl-F` / `Ctrl-B` scroll the transcript.
+`Esc` from the input textarea returns focus to the Jobs panel and
+clears the buffer.
 
 ---
 
@@ -101,10 +170,10 @@ with the same job still selected.
 | Key | Action |
 |---|---|
 | `1` … `4` | Focus left panel by number. |
-| `0` | Focus the right detail (enables `j/k` scroll on Tasks detail). |
+| `0` | Focus the Detail pane (enables `j/k/g/G/Ctrl-F/Ctrl-B/PgUp/PgDn` scroll on whichever entity's detail is showing). |
 | `Tab` | Cycle left panels. |
-| `Enter` | Drill into the focused row. On Jobs → fullscreen inspector. |
-| `Esc` | Pop one level: inspector → dashboard; popup → close; filter chip → drop. |
+| `Enter` | Drill into the focused row. On a Jobs row: running → focus the input textarea; terminal → focus the Detail pane. |
+| `Esc` | Pop one level: input textarea → Jobs panel (also clears the buffer); popup → close; filter chip → drop. |
 | `?` | Help cheatsheet. |
 | `:` | Command palette. Verbs from every panel: `task new`, `task edit`, `task done`, `task cancel`, `task reopen`, `task priority`, `task resume`, `task enroll`, `task block`, `task unblock`, `task comment`, `task metadata`, `workflow create`, `workflow delete`, `job cancel`, `scope clear`, `refresh`, `quit`. |
 | `/` | Filter the focused panel. See [§ Filter language](#filter-language). |
@@ -141,10 +210,15 @@ into a workflow.
 
 | Key | Action |
 |---|---|
-| `Enter` / `a` | Open inspector at the default tab (Live for non-terminal runs, Archive for terminal). `a` always picks Live. |
-| `s` | Open inspector at the Archive tab. |
-| `i` | Open inspector at the Meta tab. |
+| `Enter` | Running job → caret jumps into the `input` textarea. Terminal job → logical focus moves to the Detail pane (`j`/`k` scroll the transcript). |
 | `K` | Cancel job (`DELETE /v1/jobs/{id}`; confirms). |
+
+Cursor moves on a running job open a Live SSE subscription after a
+2 s debounce so back-to-back `j`/`k` keystrokes don't churn the
+stream. The archive (`Messages(jobID, full=true)`) loads on every
+cursor change without debounce — it's cheap and benefits from the
+per-job cache. See [§ Job Detail pane](#job-detail-pane) for the
+full contract.
 
 ### Workflows `[3]`
 
@@ -160,29 +234,43 @@ installs from inside the TUI; install / uninstall from the CLI
 with `autosk agent install <pkg>` and `autosk agent uninstall
 <pkg>`.
 
-### Inspector
+### Detail pane (any entity)
+
+Applies to the Detail viewport whenever it has focus — task-detail
+and job-detail share the same scroll bindings.
 
 | Key | Action |
 |---|---|
-| `[` / `]` | Cycle tabs. |
-| `1..4` | Jump to a tab (1 Live · 2 Archive · 3 Meta · 4 Signals). |
-| `Esc` / `Ctrl-O` | Back to dashboard. |
-| `j` / `k` / `↑` / `↓` | Scroll body (when the input view is **not** focused). |
-| `Ctrl-F` / `Ctrl-B` / `PgUp` / `PgDn` | Page-forward / page-back the body. |
-| `g` / `G` | Top / bottom of the body. |
+| `j` / `k` / `↑` / `↓` | Line scroll. |
+| `Ctrl-F` / `Ctrl-B` / `PgDn` / `PgUp` | Page scroll. |
+| `g` / `G` | Jump to top / bottom. |
+| wheel | One line per tick. |
 
-#### Live tab (textarea focus)
+### Job input (running job only)
+
+The 6-row `input` textarea pinned under the Detail pane for a
+running job. Same hotkey contract `autosk attach` had.
 
 | Key | Action |
 |---|---|
-| `Ctrl-D` | Send the textarea contents as a prompt/steer. |
+| `Ctrl-D` | Send the textarea contents to the agent (the daemon picks prompt vs steer). |
 | `Ctrl-F` | Send the contents as a `follow_up` (queued for the next agent turn). |
 | `Ctrl-A` | Abort the in-flight agent turn. |
-| `Ctrl-B` / `PgUp` / `PgDn` | Scroll back through the transcript above. |
+| `Esc` | Return focus to the Jobs panel; clear the buffer. |
+| `Ctrl-B` / `PgUp` / `PgDn` | Page-scroll the Detail pane **above** without losing the input's text. |
+| wheel | Scroll the Detail pane above. |
 
-`Ctrl-F` is overloaded by view focus: in the body it pages forward
-through the transcript; in the Live input textarea it dispatches
-`follow_up`. The `?` overlay disambiguates the two by focus context.
+Dispatch targets the job the input was authored against, not the
+current cursor. After a refresh-driven reshuffle silently shifts the
+cursor to a different running job, `Ctrl-D` / `Ctrl-F` / `Ctrl-A`
+still route to the job whose draft the operator was typing. The
+authored target is captured on the first keystroke and held until
+the buffer is cleared.
+
+`Ctrl-F` is overloaded by view focus: in the Detail pane it pages
+forward through the transcript; in the `input` textarea it
+dispatches `follow_up`. The `?` overlay disambiguates the two by
+focus context.
 
 ---
 
@@ -237,6 +325,11 @@ formatted ANSI rather than raw text. This applies to:
   with the "last 5" cap preserved.
 - `Workflow.Description` (the right pane when a Workflows row is
   focused).
+- Assistant transcript events in the **job Detail pane** — any event
+  whose `kind` starts with `"assistant"` (`assistant_text`,
+  `assistant_thinking`, future `assistant_*` variants). Every other
+  transcript kind (`user_text`, `tool_call`, `tool_result`,
+  `session`, …) renders as plain text inside its box.
 
 Supported constructs are stock CommonMark: ATX headings (`#`..`######`),
 `**bold**` / `*italic*`, ordered and unordered lists, blockquotes,
@@ -270,60 +363,96 @@ markdown text rather than crashing or blanking the pane.
 
 ---
 
-## Inspector tabs
+## Job Detail pane
 
-`Enter` on a job opens the inspector. The default tab depends on the
-job's terminal status: **Live** for `queued`/`running`, **Archive**
-for `done`/`failed`/`cancel`. Use `1..4` or `[ ` / `]` to switch.
+Selecting a Jobs row renders the job in the right-hand Detail pane:
+structured header (jobID + status glyph + `workflow:step` + agent +
+timestamps + attached/corrections/pid + session/error) on top,
+followed by one labelled box per transcript event. There are no
+tabs, no fullscreen modal — the Detail pane is the only surface.
 
-### Live
+### Transcript merge (archive + live)
 
-SSE replay + tail of the in-flight session. Daemon required. Carries
-the same hotkey contract `autosk attach` had — `Ctrl-D` send,
-`Ctrl-F` follow_up, `Ctrl-A` abort, plus `Ctrl-B` / `PgUp` / `PgDn`
-to scroll back through earlier transcript.
+The transcript section combines two sources:
 
-The SSE pump throttles render updates with a 30 ms coalesce window
-(lazygit's `pkg/tasks/tasks.go` pattern) and keeps the last 2000
-events in a ring buffer. When the buffer overflows the Live body
-shows a one-line `(truncated)` indicator at the top.
+- **Archive** — `Messages(jobID, full=true)` against the daemon
+  when reachable; the on-disk `session.jsonl` otherwise. Loaded on
+  every cursor change, but coalesced per-job through a freshness
+  check so back-to-back cursor moves on the same job don't pile on
+  requests.
+- **Live tail** — SSE subscription opened after a 2 s debounce
+  whenever the cursor settles on a running job. Same throttle the
+  previous inspector used (lazygit's `pkg/tasks/tasks.go` pattern,
+  ~30 ms coalesce on render). A bounded ring buffer keeps the last
+  ~2000 events; on overflow a muted
+  `(transcript truncated; older events dropped to cap memory)`
+  line precedes the boxes. Re-fetching the archive (e.g. on a
+  running→terminal transition) drops the truncation flag once the
+  full set arrives.
 
-When `lazy` runs without the daemon, the Live tab is disabled and
-flashes a hint to `Archive` instead.
+The two streams are merged by timestamp — archive replaces the
+prefix, and any live event with `TS` strictly after the archive's
+last event is preserved. Re-selecting a previously-visited job
+renders instantly from a per-job in-memory cache (capped at 32
+entries; least-recently-touched victim on overflow; terminal entries
+refetch after 30 s).
 
-### Archive
+### Event boxes
 
-Read-only renderer of the job's `session.jsonl` on disk. Pulled via
-`GET /v1/jobs/{id}/messages?full=true` when the daemon is up; read
-directly when it's down. No SSE, no input. `g`/`G` jump to
-top/bottom, `Ctrl-F`/`Ctrl-B` page, `j`/`k` line scroll.
+Each event renders as one `drawLabeledBox`:
 
-### Meta
+- **Label.** `<smart-datetime> <kind> [<name>]`. `<kind>` is
+  bold-styled in the header hue; `<name>` (the tool name on
+  `tool_call` / `tool_result`, optional on other kinds) is appended
+  in the accent hue.
+- **Body.** Assistant events (anything whose `kind` starts with
+  `"assistant"` — currently `assistant_text` and
+  `assistant_thinking`, plus any future variants) render through the
+  markdown renderer used by the Tasks-detail pane. Every other kind
+  (`user_text`, `tool_call`, `tool_result`, `session`,
+  `session_info`, `model_change`, `thinking_level_change`,
+  `compaction`, `branch_summary`, `label`, `custom`,
+  `custom_message`, `other`) renders as plain text. An event with
+  empty `Text` renders as just the label + frame.
+- **Width.** Each box is rebuilt when the pane width changes (window
+  resize). Within a single width the rendered string is cached on
+  the per-job entry so spinner ticks and refresh-driven redraws
+  reuse the existing strings instead of re-laying out the markdown.
 
-A static key/value sheet rendered from `api.JobResponse`: job_id,
-task, workflow:step, agent, status, streaming, attached count,
-corrections, session path, PID, creation/start/finish timestamps,
-duration, error, exit code.
+There are no signals / comments-since-run sections in the job
+Detail pane — those still live in the task-detail pane (focus the
+Tasks panel and move the cursor to the parent task).
 
-### Signals
+### Sticky tail
 
-Two stacked sub-regions:
+When the operator's viewport is at the bottom of the Detail pane,
+new live events scroll the viewport so the new event is visible.
+When they've scrolled up, the viewport origin stays put across
+live-append + refresh redraws. A first-frame default (empty buffer
+→ newly populated) starts at the bottom.
 
-1. **Step signals for this run** (`step_signals` rows whose
-   `run_id` matches the inspected job). The Signals tab is keyed by
-   job-id — rows from earlier kickback runs of the same task do
-   *not* bleed in.
-2. **Comments observed during this run** — task comments filtered
-   to `created_at >= job.StartedAt`. When the run hasn't started yet
-   (queued / dispatched) the cutoff is dropped and all comments
-   render.
+### Live input semantics
 
-Timestamps render as the full local `YYYY-MM-DD HH:MM:SS` (via
-`internal/timeformat.FormatDateTime`) so a kickback chain spanning
-midnight, or a run from yesterday opened today, is unambiguous. The
-dashboard task-detail timeline (which usually shows today's events)
-uses the smart variant — bare `HH:MM:SS` when the event is today in
-the operator's TZ, full datetime otherwise.
+The `input` textarea below the Detail pane (running jobs only):
+
+- The buffer text persists while the cursor stays on the same
+  running job. Cleared by `Ctrl-D` / `Ctrl-F` dispatch, by `Esc`,
+  and when the operator moves the cursor (explicit `j`/`k`) to a
+  different job.
+- Refresh-driven cursor shifts (the datasource inserts a brand-new
+  job at index 0, pushing the previously-cursored row down) do **not**
+  clear the draft — they're not operator-authored so the draft
+  survives, and dispatch still targets the originally-authored job.
+- A running→terminal transition removes the textarea on the next
+  layout pass; focus reverts to the Jobs panel so the operator
+  doesn't end up on a deleted view.
+
+### Hard reset (`Ctrl-R`)
+
+In addition to dropping the pooled doltlite connection (see
+[§ Cross-process freshness](#cross-process-freshness)), `Ctrl-R`
+clears the entire job-transcript cache and tears down the live SSE
+subscription. The next selection re-hydrates from scratch.
 
 ---
 
@@ -333,9 +462,9 @@ the operator's TZ, full datetime otherwise.
 
 | State | Status bar | Effect |
 |---|---|---|
-| **daemon ok** | `daemon=ok workers=N q=N r=N` | Jobs panel from `GET /v1/jobs` (includes `Streaming` / `AttachCount`); Live tab opens SSE; cancel-job works. |
+| **daemon ok** | `daemon=ok workers=N q=N r=N` | Jobs panel from `GET /v1/jobs` (includes `Streaming` / `AttachCount`); live SSE attaches when the cursor settles on a running job; cancel-job works. |
 | **daemon stale** | `daemon=stale` | UDS dials but `/v1/healthz` 5xx. Same surface as `down`. |
-| **daemon down** | `daemon=down` | Jobs panel reads `daemon_runs` from `.autosk/db`. Live tab disabled with a flash hint. Archive still works. Cancel-job returns `ErrDaemonRequired`. |
+| **daemon down** | `daemon=down` | Jobs panel reads `daemon_runs` from `.autosk/db`. Live SSE is disabled; the Detail pane still renders the archive transcript. The `input` textarea is hidden when the daemon is down (no dispatch surface). Cancel-job returns `ErrDaemonRequired`. |
 
 When the live datasource read errors transiently (timeout, 5xx,
 malformed body) the verb falls back to the offline base for that
@@ -386,9 +515,13 @@ writers; tracked as future work.
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--job <id>` | unset | Deep-link: open the inspector directly on this job; `Esc` returns to the dashboard. |
 | `--sock <path>` | `$AUTOSK_SOCK` or `~/.autosk/daemon.sock` | Daemon UDS path. |
 | `--refresh <dur>` | `2s` | Panel refresh cadence. |
+
+The previous `--job <id>` deep-link flag was removed together with
+the fullscreen Inspector it used to launch. To open a job's
+transcript from the command line, run `autosk lazy`, press `2` to
+focus the Jobs panel, and move the cursor onto the job.
 
 The global `--db <path>` and `AUTOSK_DB` env var work the same way
 they do for every other write-capable verb (override DB discovery).
@@ -400,22 +533,32 @@ they do for every other write-capable verb (override DB discovery).
 | Symptom | Likely cause |
 |---|---|
 | `daemon=down` but `autosk daemon list` works | Stale socket path. Pass `--sock` or set `AUTOSK_SOCK`. |
-| Live tab flashes `daemon required (try Archive)` | Daemon isn't running or doesn't have the SSE / attach hubs wired. `autosk daemon serve`. |
-| Agents panel has no `i` / `u` hotkeys | By design — `lazy` can't fork npm installs from inside the TUI. Quit and run `autosk agent install <pkg>` / `autosk agent uninstall <pkg>`. |
-| Help screen lists `Ctrl-F` twice | Same chord, two view-scoped meanings — page-forward on the inspector body, `follow_up` dispatch in the Live textarea. The `?` overlay labels each by focus. |
-| Inspector tab shows `(no signals)` for a run you know emitted one | Confirm you're on the right run — the Signals tab is jobID-scoped, not taskID-scoped. Earlier kickback runs of the same task render in their own inspector. |
+| No `input` textarea on a job you know is running | Daemon down or the live datasource flipped the job to a terminal status mid-frame. `autosk daemon serve` restores SSE; the textarea reappears on the next layout pass. |
+| `i` on Agents only flashes a message | By design — `lazy` can't fork npm installs from inside the TUI. Quit and run `autosk agent install <pkg>`. |
+| Help screen lists `Ctrl-F` twice | Same chord, two view-scoped meanings — page-forward on the Detail pane, `follow_up` dispatch in the `input` textarea. The `?` overlay labels each by focus. |
+| Detail pane shows `(loading...)` and stays there | Archive load is in flight; if it doesn't resolve, check the daemon log or `Ctrl-R` to drop the cache and retry. `(archive load failed: ...)` in error style means the underlying fetch errored — retry with `Ctrl-R`. |
+| Signals / comments-since-run not visible for a job | They live on the **task** detail now, not the job detail. Focus the Tasks panel (`1`), move the cursor onto the parent task. |
 
 ---
 
 ## Out of scope (v1)
 
-Same as the design plan §10: no `--all-projects`, no mouse, no
-custom keymaps / config file / theming, no demo-mode / GIF capture,
-no reconnect/backoff in the SSE client, no half/full/normal screen
-modes. The flat Dashboard ↔ Inspector switch is enough.
+Same as the design plan §10: no `--all-projects`, no mouse selection
+(wheel scroll only), no custom keymaps / config file / theming, no
+demo-mode / GIF capture, no reconnect/backoff in the SSE client, no
+half/full/normal screen modes. The flat Dashboard layout is enough.
+
+Not pursued in the Detail-pane redesign either:
+
+- Filtering transcript content by event kind (e.g. "hide tool_call").
+- An in-transcript search prompt.
+- A dedicated Detail pane for Workflows / Agents — only the Job
+  Detail surface changed in this redesign.
+- Persisting the `input` textarea contents to disk across `q`.
 
 See the design contract
 [`docs/plans/20260519-Lazy-Plan.md`](plans/20260519-Lazy-Plan.md) §10/§12
-and the impl plan
-[`docs/plans/20260520-Lazy-Impl-Plan.md`](plans/20260520-Lazy-Impl-Plan.md) §11
-for the canonical list.
+and the impl plans
+[`docs/plans/20260520-Lazy-Impl-Plan.md`](plans/20260520-Lazy-Impl-Plan.md) §11 +
+[`docs/plans/20260522-job-detail-redesign.md`](plans/20260522-job-detail-redesign.md)
+for the canonical lists.

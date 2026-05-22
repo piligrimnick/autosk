@@ -23,12 +23,10 @@ import (
 //   - Constructs a datasource.Compose that probes the daemon every
 //     --refresh interval; when the daemon is reachable, Jobs come
 //     from the live HTTP API (with Streaming/AttachCount), otherwise
-//     they come from .autosk/db (and the Live tab is disabled).
-//   - When --job <id> is set, the TUI starts in the inspector on that
-//     job rather than the dashboard. Esc returns to the dashboard.
+//     they come from .autosk/db (and the live SSE subscription is
+//     disabled).
 func newLazyCmd() *cobra.Command {
 	var (
-		jobID   string
 		sock    string
 		refresh time.Duration
 	)
@@ -36,10 +34,8 @@ func newLazyCmd() *cobra.Command {
 		Use:   "lazy",
 		Short: "Interactive TUI for tasks, jobs, workflows, and agents",
 		Long: "lazy is a lazygit-style terminal dashboard for the autosk world.\n" +
-			"Tasks, Jobs, Workflows, and Agents in one process, with a fullscreen\n" +
-			"job inspector (Live / Archive / Meta / Signals tabs).\n\n" +
-			"With --job <id>, lazy opens straight into the inspector on that job;\n" +
-			"Esc returns to the dashboard.",
+			"Tasks, Jobs, Workflows, and Agents in one process; selecting a job\n" +
+			"renders its transcript (live + archive) directly in the Detail pane.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			store, closeFn, err := openStore(ctx, true)
@@ -79,11 +75,9 @@ func newLazyCmd() *cobra.Command {
 				Datasource:  comp,
 				ProjectRoot: cwd,
 				Refresh:     refresh,
-				InitialJob:  jobID,
 			})
 		},
 	}
-	cmd.Flags().StringVar(&jobID, "job", "", "open the inspector directly on this job id")
 	cmd.Flags().StringVar(&sock, "sock", "", "daemon socket path (default $AUTOSK_SOCK or ~/.autosk/daemon.sock)")
 	cmd.Flags().DurationVar(&refresh, "refresh", 2*time.Second, "panel refresh interval")
 	return cmd

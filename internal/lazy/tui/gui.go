@@ -1,10 +1,11 @@
 // Package tui is the gocui-backed TUI for `autosk lazy`.
 //
 // The package is small on purpose. Lazygit's split (35+ contexts) is
-// overkill for v1 — autosk lazy only needs a 4-panel dashboard, a
-// 4-tab inspector, and a handful of popups. The architecture still
-// mirrors the lazygit shape (gui + state + arrangement + helpers +
-// render) but in fewer files.
+// overkill for v1 — autosk lazy only needs a 4-panel dashboard, an
+// inline Job Detail pane (header + per-event transcript boxes + an
+// optional input textarea for running jobs), and a handful of
+// popups. The architecture still mirrors the lazygit shape (gui +
+// state + arrangement + helpers + render) but in fewer files.
 //
 // The only seam between the TUI and the rest of autosk is
 // internal/lazy/datasource. Nothing in this package imports
@@ -32,9 +33,6 @@ type Options struct {
 	Datasource  datasource.Datasource
 	ProjectRoot string
 	Refresh     time.Duration
-	// InitialJob, when non-empty, opens the inspector on that job
-	// instead of the dashboard. The dashboard is reachable via Esc.
-	InitialJob string
 	// Headless makes the gocui screen a tcell simulation screen so
 	// the TUI can be driven by tests without a real terminal.
 	Headless bool
@@ -101,6 +99,18 @@ type Gui struct {
 	// from the gocui main goroutine (layout → renderViews →
 	// writeView), so no mutex is needed.
 	bodyCache map[string]bodyCacheEntry
+
+	// lastDetailKey is the "kind:id" identifier of whatever entity
+	// was rendered into winDetail on the previous renderViews pass.
+	// When it changes between frames, renderViews resets winDetail's
+	// viewport origin so the new entity shows from its natural
+	// anchor (top for task / workflow / agent, bottom for job via
+	// writeViewSticky). When it's unchanged (same entity, just a
+	// repaint), the origin is preserved so the operator's scroll
+	// position survives spinner ticks / refresh updates / live
+	// event arrivals. Read & written only from the gocui main
+	// goroutine (same as bodyCache), so no mutex is needed.
+	lastDetailKey string
 }
 
 // bodyCacheEntry is one entry in Gui.bodyCache: the body string and
@@ -188,7 +198,7 @@ func Run(ctx context.Context, opts Options) error {
 	// Mouse=true unlocks wheel-scroll bindings (MouseWheelUp/Down).
 	// Without this gocui swallows wheel events at the tcell layer and
 	// the per-view scroll handlers never fire — which is exactly the
-	// bug operators hit on the Detail pane and inspector transcript:
+	// bug operators hit on the Detail pane and (pre-redesign) inspector transcript:
 	// content overflowed the viewport, j/k worked, the wheel didn't.
 	g.Mouse = true
 
@@ -215,14 +225,6 @@ func Run(ctx context.Context, opts Options) error {
 	go gu.adaptiveTickLoop(opts.Refresh)
 	go gu.spinnerLoop()
 
-	// --job <id> deep-link.
-	if opts.InitialJob != "" {
-		g.OnWorker(func(_ gocui.Task) error {
-			gu.openInspector(opts.InitialJob)
-			return nil
-		})
-	}
-
 	// gocui's MainLoop is hostile to non-fatal mid-flush errors: a
 	// SetView / SetCurrentView call against a still-being-rebuilt view
 	// can surface ErrUnknownView, which we'd rather log-and-continue
@@ -238,10 +240,12 @@ func Run(ctx context.Context, opts Options) error {
 	if mainErr != nil && mainErr != gocui.ErrQuit && !errors.Is(mainErr, gocui.ErrQuit) {
 		cancel()
 		close(gu.stopRefresh)
+		gu.stopJobLive()
 		return mainErr
 	}
 	cancel()
 	close(gu.stopRefresh)
+	gu.stopJobLive()
 	return nil
 }
 
@@ -452,7 +456,11 @@ func (gu *Gui) renderViews() {
 
 		jobsBody, jobsHdr := renderJobsPanel(gu.st.jobs, gu.st.jobCursor, gu.st.scope, gu.st.filter.Jobs)
 		gu.writeView(winJobs, "[2] Jobs", jobsBody)
-		gu.applyRowHighlight(winJobs, jobsHdr, gu.st.jobCursor, len(gu.st.jobs), focused == panelJobs)
+		// Keep the Jobs row highlight on while the caret is in
+		// winJobInput (panelJobInput) — the operator is still working
+		// the selected running job, just typing instead of navigating.
+		jobsHighlighted := focused == panelJobs || focused == panelJobInput
+		gu.applyRowHighlight(winJobs, jobsHdr, gu.st.jobCursor, len(gu.st.jobs), jobsHighlighted)
 
 		wfBody, wfHdr := renderWorkflowsPanel(gu.st.workflows, gu.st.workflowCursor, gu.st.filter.Workflows)
 		gu.writeView(winWorkflows, "[3] Workflows", wfBody)
@@ -462,14 +470,57 @@ func (gu *Gui) renderViews() {
 		gu.writeView(winAgents, "[4] Agents", agBody)
 		gu.applyRowHighlight(winAgents, agHdr, gu.st.agentCursor, len(gu.st.agents), focused == panelAgents)
 
-		gu.writeView(winDetail, "[0] Detail", renderDetail(gu.st, gu.innerWidth(winDetail)))
+		// Detail pane: writeViewSticky's bottom-anchor behaviour is
+		// the right policy ONLY for the live job transcript — it auto-
+		// tails new events as they arrive. For Task / Workflow / Agent
+		// detail the same policy would wrongly scroll past the title /
+		// description on the very first render (the first frame's
+		// prevLines==0 path always fires sticky), so use a plain
+		// writeView for those branches.
+		//
+		// When the entity rendered into the pane changes between
+		// frames (cursor moves to a different task, focus flips from
+		// Tasks to Jobs, etc.), clear winDetail's buffer + reset its
+		// origin to (0,0) so the new entity starts from its natural
+		// anchor: top for non-job, bottom for job (writeViewSticky
+		// snaps to bottom because prevLines is now 0). Clearing the
+		// buffer also matters for the sticky-tail computation:
+		// without it, leftover lines from the previous entity would
+		// fail the "at bottom" predicate and the new job's transcript
+		// would land at the top instead of tailing the latest events.
+		curDetailKey := detailEntityKey(gu.st)
+		isJobDetail := detailShowsJob(gu.st)
+		if curDetailKey != gu.lastDetailKey {
+			if v, err := gu.g.View(winDetail); err == nil && v != nil {
+				v.Clear()
+				v.SetOrigin(0, 0)
+			}
+			gu.invalidateBodyCache(winDetail)
+			gu.lastDetailKey = curDetailKey
+		}
+		detailBody := renderDetail(gu.st, gu.innerWidth(winDetail))
+		if isJobDetail {
+			gu.writeViewSticky(winDetail, "[0] Detail", detailBody)
+		} else {
+			gu.writeView(winDetail, "[0] Detail", detailBody)
+		}
 		gu.writeView(winLog, "log", renderCommandLog(gu.st.logBuf, gu.st.flash))
 		gu.writeView(winStatusBar, "", renderStatusBar(gu.st, gu.opts.ProjectRoot))
-		if gu.st.view == StateInspector {
-			gu.writeView(winInspectorHdr, "", renderInspectorHeader(gu.st.insp))
-			gu.writeView(winInspector, "", gu.renderInspectorBody())
-			if gu.st.insp.Tab == tabLive {
-				gu.writeView(winInspectorIn, "input", gu.st.insp.liveInput)
+
+		// Job-input textarea is allocated by layout whenever the
+		// selected job is non-terminal AND the Detail pane is
+		// currently showing that job. The Detail-pane gate matters:
+		// when the operator is on the Tasks panel (Detail shows the
+		// task), the input must NOT appear just because the Jobs
+		// panel's cursor happens to point at a live job. renderViews
+		// mirrors layout's gate so writeView doesn't poke at a view
+		// that doesn't exist this frame. When the job is terminal
+		// the input view is absent and the Detail pane uses its full
+		// inner height for the transcript.
+		if isJobDetail {
+			if j, ok := gu.st.selectedJob(); ok && isJobLive(j) {
+				title := "input — Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort  Esc cancel"
+				gu.writeView(winJobInput, title, gu.st.jobInput)
 			}
 		}
 	})
@@ -914,6 +965,103 @@ func (gu *Gui) writeView(name, title, body string) {
 // DeleteView.
 func (gu *Gui) invalidateBodyCache(name string) {
 	delete(gu.bodyCache, name)
+}
+
+// viewBufferLineCount returns the number of lines that gocui's
+// renderer will draw for the view's current buffer. The naive
+// approach (`strings.Count(v.Buffer(), "\n")`) is off by one:
+// gocui's linesToString joins v.lines with '\n' WITHOUT a
+// trailing separator (see gocui/view.go::linesToString), so a
+// buffer holding N visible lines reports N-1 newlines. Using the
+// raw count for the bottom-anchor / scroll-clamp math leaves the
+// viewport positioned one row higher than it should be, which
+// visibly clips the very last line of content — in the Detail
+// pane that's the bottom border of the last drawLabeledBox.
+//
+// Returns 0 for an empty buffer (the +1 doesn't apply when there
+// are no lines at all).
+func viewBufferLineCount(v *gocui.View) int {
+	buf := v.Buffer()
+	if buf == "" {
+		return 0
+	}
+	return strings.Count(buf, "\n") + 1
+}
+
+// writeViewSticky is writeView + a sticky-tail behaviour: if the
+// view was scrolled to the bottom BEFORE the new body landed (or the
+// view was empty / freshly created), the viewport origin is moved
+// after the write so the tail stays visible. If the user had scrolled
+// up, the origin is left alone so wheel/PgUp positions are preserved
+// across live-event appends and 2s refresh ticks.
+//
+// Used by winDetail only. Tasks / Jobs / Workflows / Agents already
+// manage their origin via the cursor-highlight loop, and applying
+// sticky-tail there would break the wheel-scroll-keeps-its-place
+// affordance.
+//
+// For winDetail the at-bottom check uses the FULL inner height
+// (v.InnerSize), not detailEffectiveInnerH; the post-write target
+// uses detailEffectiveInnerH.
+//
+// The split matters when the winJobInput overlay APPEARS between
+// frames (e.g. a queued job promotes to running; or the selection
+// crosses into a non-terminal row from a terminal one). The user
+// was "at the bottom" of the previous viewport — with the overlay
+// absent, the full inner height was visible. Using the new
+// (smaller) effective inner height for the threshold would
+// mis-classify them as "scrolled up" and the overlay would silently
+// hide the last few rows of content they were just looking at.
+// Using the full inner height for the threshold preserves the
+// at-bottom anchor across the overlay-appears transition.
+func (gu *Gui) writeViewSticky(name, title, body string) {
+	v, err := gu.g.View(name)
+	if err != nil || v == nil {
+		return
+	}
+	// Snapshot the BEFORE state before writeView's potential clear.
+	ox, oy := v.Origin()
+	// Threshold uses the FULL inner height (overlay-agnostic): we want
+	// to know whether the user was at the bottom of the underlying
+	// content viewport regardless of whether an overlay is/was/will-be
+	// covering some of it.
+	_, fullH := v.InnerSize()
+	if fullH < 1 {
+		fullH = 1
+	}
+	prevLines := viewBufferLineCount(v)
+	// First frame OR user is at (or past) the bottom → sticky.
+	// `oy + fullH >= prevLines` is true exactly when the visible
+	// region [oy, oy+fullH) already covers the last line index
+	// (prevLines-1). Using prevLines as a true line count (rather
+	// than the off-by-one newline count) is required for both this
+	// predicate AND the post-write target below.
+	beforeSticky := prevLines == 0 || oy+fullH >= prevLines
+
+	gu.writeView(name, title, body)
+
+	if !beforeSticky {
+		return
+	}
+	// writeView may have short-circuited (body unchanged); in that
+	// case the buffer is still the previous body and the origin is
+	// already where the user wanted it, so the recompute below is a
+	// no-op. When the body did change, we recompute the bottom-anchor
+	// origin against the NEW line count. The TARGET uses effective
+	// inner height so the last line of content lands just above the
+	// overlay (if any).
+	var h int
+	if name == winDetail {
+		h = gu.detailEffectiveInnerH()
+	} else {
+		h = fullH
+	}
+	newLines := viewBufferLineCount(v)
+	target := newLines - h
+	if target < 0 {
+		target = 0
+	}
+	v.SetOrigin(ox, target)
 }
 
 // truncateLines crops a string to at most n lines (helps small views).

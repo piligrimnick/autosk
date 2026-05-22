@@ -6,7 +6,7 @@ import "testing"
 // panel ends up with roughly 3x the height of an unfocused one.
 func TestDashboardArrangement_FocusedSideGrows(t *testing.T) {
 	a := arrangeArgs{width: 120, height: 40, focusedSide: winTasks, state: StateDashboard}
-	dims := arrange(a, false)
+	dims := arrange(a)
 
 	tasks, ok := dims[winTasks]
 	if !ok {
@@ -21,37 +21,57 @@ func TestDashboardArrangement_FocusedSideGrows(t *testing.T) {
 }
 
 // TestDashboardArrangement_AllWindowsPresent ensures every named
-// window gets a slot.
+// window gets a slot in the boxlayout tree. winJobInput is NOT in
+// the boxlayout — it is overlaid on top of winDetail's bottom rows
+// by layout.go when the selected job is live. The overlay's
+// presence is exercised in job_detail_layout_test.go.
 func TestDashboardArrangement_AllWindowsPresent(t *testing.T) {
-	dims := arrange(arrangeArgs{width: 120, height: 40, focusedSide: winTasks}, false)
+	dims := arrange(arrangeArgs{width: 120, height: 40, focusedSide: winTasks})
 	for _, w := range []string{winTasks, winJobs, winWorkflows, winAgents, winDetail, winLog, winStatusBar} {
 		if _, ok := dims[w]; !ok {
 			t.Errorf("missing window %q", w)
 		}
 	}
-}
-
-// TestInspectorArrangement_NoInputWhenNotLive — inspector at Archive/
-// Meta/Signals must NOT allocate the textarea region.
-func TestInspectorArrangement_NoInputWhenNotLive(t *testing.T) {
-	dims := arrange(arrangeArgs{width: 120, height: 40, state: StateInspector}, false)
-	if _, ok := dims[winInspectorIn]; ok {
-		t.Fatalf("expected no input window in non-live inspector, got %v", dims)
-	}
-	if _, ok := dims[winInspector]; !ok {
-		t.Fatalf("expected inspector main, got %v", dims)
+	// winJobInput must never appear in the boxlayout tree — it is
+	// overlaid by layout.go on top of winDetail's bottom rows.
+	if _, ok := dims[winJobInput]; ok {
+		t.Errorf("winJobInput must not be returned by boxlayout (it is overlaid in layout.go)")
 	}
 }
 
-// TestInspectorArrangement_LiveHasInput exercises the Live-tab layout
-// with the textarea slot present.
-func TestInspectorArrangement_LiveHasInput(t *testing.T) {
-	dims := arrange(arrangeArgs{width: 120, height: 40, state: StateInspector}, true)
-	in, ok := dims[winInspectorIn]
-	if !ok {
-		t.Fatalf("expected input window in live inspector")
+// TestAllDashboardWindows_OverlayOrder pins the load-bearing
+// invariant the layout pass depends on: winDetail must appear
+// before winJobInput in allDashboardWindows, because the layout
+// visits views in this order when creating them and gocui draws
+// views in creation order (last-created on top). If winJobInput
+// were created before winDetail, detail's frame would paint over
+// the input overlay every frame.
+//
+// A future contributor reordering allDashboardWindows (e.g.
+// alphabetising) would silently break the overlay z-order without
+// any other test failing — the containment check in
+// TestLayout_JobInputAppears_WhenSelectedJobLive passes regardless
+// of which view paints on top. This test exists specifically to
+// catch that class of refactor.
+func TestAllDashboardWindows_OverlayOrder(t *testing.T) {
+	detailIdx := -1
+	inputIdx := -1
+	for i, n := range allDashboardWindows {
+		if n == winDetail {
+			detailIdx = i
+		}
+		if n == winJobInput {
+			inputIdx = i
+		}
 	}
-	if (in.Y1 - in.Y0) < 3 {
-		t.Fatalf("input region too small: %+v", in)
+	if detailIdx < 0 {
+		t.Fatalf("winDetail missing from allDashboardWindows: %v", allDashboardWindows)
+	}
+	if inputIdx < 0 {
+		t.Fatalf("winJobInput missing from allDashboardWindows: %v", allDashboardWindows)
+	}
+	if detailIdx >= inputIdx {
+		t.Errorf("winDetail (index %d) must appear before winJobInput (index %d) in allDashboardWindows so the overlay draws on top: %v",
+			detailIdx, inputIdx, allDashboardWindows)
 	}
 }

@@ -25,7 +25,7 @@ func TestDashboardArrangement_Sizes(t *testing.T) {
 				height:      tc.h,
 				focusedSide: winTasks,
 				state:       StateDashboard,
-			}, false)
+			})
 			required := []string{winTasks, winJobs, winWorkflows, winAgents, winDetail, winStatusBar}
 			for _, w := range required {
 				d, ok := dims[w]
@@ -49,40 +49,8 @@ func TestDashboardArrangement_Sizes(t *testing.T) {
 	}
 }
 
-// TestInspectorArrangement_Sizes runs the same gauntlet against the
-// inspector layout, both with and without the Live-tab input area.
-func TestInspectorArrangement_Sizes(t *testing.T) {
-	cases := []struct {
-		name   string
-		w, h   int
-		withIn bool
-	}{
-		{"min_no_input", 80, 24, false},
-		{"min_with_input", 80, 24, true},
-		{"mid_with_input", 120, 40, true},
-		{"large_with_input", 200, 60, true},
-		{"portrait_with_input", 60, 80, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			dims := arrange(arrangeArgs{width: tc.w, height: tc.h, state: StateInspector}, tc.withIn)
-			required := []string{winInspectorHdr, winInspector, winStatusBar}
-			for _, w := range required {
-				d, ok := dims[w]
-				if !ok {
-					t.Errorf("%s: missing %q", tc.name, w)
-					continue
-				}
-				if d.X1 < d.X0 || d.Y1 < d.Y0 {
-					t.Errorf("%s: %s neg dims %+v", tc.name, w, d)
-				}
-			}
-			if _, ok := dims[winInspectorIn]; tc.withIn && !ok {
-				t.Errorf("%s: expected input slot", tc.name)
-			}
-			if _, ok := dims[winInspectorIn]; !tc.withIn && ok {
-				t.Errorf("%s: did not expect input slot", tc.name)
-			}
-		})
-	}
-}
+// (The previous TestDashboardArrangement_Sizes_WithJobInput was
+// retired alongside the boxlayout-based winJobInput allocation:
+// the input view no longer participates in the box tree at all.
+// Its overlay-on-detail positioning is exercised at the layout
+// level in job_detail_layout_test.go.)

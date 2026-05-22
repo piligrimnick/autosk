@@ -2,7 +2,7 @@ package tui
 
 // debugLog, when non-nil, is invoked by the TUI from places where a
 // breakpoint-via-printf is useful (refresh errors, popup transitions,
-// inspector SSE pump). Tests install t.Logf via SetDebugLogger;
+// job-detail SSE pump). Tests install t.Logf via SetDebugLogger;
 // production leaves it nil and dlog is a no-op.
 var debugLog func(format string, args ...any)
 

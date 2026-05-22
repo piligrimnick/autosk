@@ -9,8 +9,57 @@ import (
 	"autosk/internal/timeformat"
 )
 
+// jobTranscriptCacheMax bounds state.jobTranscript so a long lazy
+// session that visits many jobs doesn't grow it unbounded. ~3MB worst
+// case at 100KB/entry.
+const jobTranscriptCacheMax = 32
+
+// jobTranscriptTerminalTTL is the per-entry TTL for terminal jobs:
+// after this window the next selection refetches the archive (so
+// late-flushed events appear). Running jobs are kept fresh by SSE
+// alone, no TTL refetch.
+const jobTranscriptTerminalTTL = 30 * time.Second
+
+// jobLiveDebounce is the keystroke-debounce window before
+// scheduleJobLive actually opens an SSE subscription. j/k-spam across
+// running jobs within this window collapses into one StreamLive call
+// against the final-resting cursor row.
+const jobLiveDebounce = 2 * time.Second
+
+// jobLiveBufCap is the soft cap on the per-job live transcript event
+// slice. Past this we drop the oldest 25% in one allocation and set
+// te.truncated=true. ~2000 events is roughly an hour of pi traffic.
+const jobLiveBufCap = 2000
+
+// jobTranscriptEntry is one entry in state.jobTranscript: the
+// archive + live event slice for a single job, plus per-event
+// pre-rendered drawLabeledBox strings, plus the width they were
+// rendered at (so a pane resize triggers a rebuild).
+//
+// touchedAt is the last time this entry was touched via
+// ensureTranscriptEntryLocked (read or write). The LRU eviction
+// scans the cache for the minimum touchedAt to pick a victim.
+type jobTranscriptEntry struct {
+	events        []datasource.MessageEvent // archive + live appends, oldest first
+	renderedBoxes []string                  // pre-rendered drawLabeledBox per event
+	renderedWidth int                       // contentW used when boxes were built; invalidates on resize
+	loadedAt      time.Time                 // for TTL on terminal jobs
+	touchedAt     time.Time                 // last access; drives LRU eviction
+	truncated     bool                      // hit live cap, dropped oldest 25%
+	err           error                     // last archive load error (renders as plashka)
+}
+
 // panelID is the identifier of one of the four dashboard list
 // contexts. Used by the focus stack + the scope helper.
+//
+// panelJobInput is a synthetic focus identity that represents the
+// job-input textarea (winJobInput). It is never a target of Tab
+// cycling or the numeric panel keys (1..4, 0); the only path that
+// lands on it is jobsEnter's running-job branch. We need it as a
+// distinct focus value so layout's `g.SetCurrentView(focused.window())`
+// keeps the current view pinned on winJobInput across redraws —
+// without it, every layout pass would yank focus back to winJobs
+// (the previous focused panel) within ~100ms.
 type panelID int
 
 const (
@@ -18,7 +67,8 @@ const (
 	panelJobs
 	panelWorkflows
 	panelAgents
-	panelDetail // the right detail pane (cursor land for j/k scroll)
+	panelDetail   // the right detail pane (cursor land for j/k scroll)
+	panelJobInput // synthetic: caret lives in winJobInput
 )
 
 func (p panelID) String() string {
@@ -33,6 +83,8 @@ func (p panelID) String() string {
 		return "Agents"
 	case panelDetail:
 		return "Detail"
+	case panelJobInput:
+		return "JobInput"
 	}
 	return "?"
 }
@@ -49,32 +101,72 @@ func (p panelID) window() string {
 		return winAgents
 	case panelDetail:
 		return winDetail
+	case panelJobInput:
+		return winJobInput
 	}
 	return ""
 }
 
-// inspectorTab is the inspector's current focused tab.
-type inspectorTab int
-
-const (
-	tabLive inspectorTab = iota
-	tabArchive
-	tabMeta
-	tabSignals
-)
-
-func (t inspectorTab) String() string {
-	switch t {
-	case tabLive:
-		return "Live"
-	case tabArchive:
-		return "Archive"
-	case tabMeta:
-		return "Meta"
-	case tabSignals:
-		return "Signals"
+// normalizeForDetail collapses panelJobInput onto panelJobs for
+// rendering / row-highlight purposes: the Detail pane above the
+// input still shows Job Detail, and the Jobs panel's row
+// highlight stays on while the operator is typing. Identity on
+// every other value.
+func (p panelID) normalizeForDetail() panelID {
+	if p == panelJobInput {
+		return panelJobs
 	}
-	return "?"
+	return p
+}
+
+// detailDrivingPanel returns the panelID whose entity is currently
+// rendered into the Detail pane, mirroring renderDetail's focus /
+// detailFocus switch (with the same normalizeForDetail collapses).
+// Callers must already hold state.mu (R)Lock — the function reads
+// state.focused / state.detailFocus directly.
+func detailDrivingPanel(s *state) panelID {
+	active := s.focused.normalizeForDetail()
+	if active == panelDetail {
+		active = s.detailFocus.normalizeForDetail()
+	}
+	return active
+}
+
+// detailEntityKey returns a stable "kind:id" identifier for the
+// entity currently rendered into the Detail pane, or the empty
+// string when there's nothing to show. renderViews uses it to
+// detect when the Detail pane should reset its viewport origin
+// (entity changed → start from the natural anchor) versus preserve
+// it (same entity re-rendered → keep the operator's scroll
+// position). Callers must already hold state.mu (R)Lock.
+func detailEntityKey(s *state) string {
+	switch detailDrivingPanel(s) {
+	case panelTasks:
+		if t, ok := s.selectedTask(); ok {
+			return "task:" + t.ID
+		}
+	case panelJobs:
+		if j, ok := s.selectedJob(); ok {
+			return "job:" + j.JobID
+		}
+	case panelWorkflows:
+		if w, ok := s.selectedWorkflow(); ok {
+			return "workflow:" + w.ID
+		}
+	case panelAgents:
+		if a, ok := s.selectedAgent(); ok {
+			return "agent:" + a.Name
+		}
+	}
+	return ""
+}
+
+// detailShowsJob reports whether the Detail pane is currently
+// rendering a job (Job Detail). Used to gate (a) the
+// winJobInput overlay and (b) the writeViewSticky vs writeView
+// branch in renderViews. Callers must already hold state.mu (R)Lock.
+func detailShowsJob(s *state) bool {
+	return detailDrivingPanel(s) == panelJobs
 }
 
 // agentRel selects which agent relation an agent-scope chip refers
@@ -187,29 +279,6 @@ type popupState struct {
 	Hint string
 }
 
-// inspectorState carries everything the inspector view needs.
-type inspectorState struct {
-	JobID          string
-	Tab            inspectorTab
-	Job            datasource.Job
-	Streaming      bool
-	TerminalAtOpen bool
-	// Live tab plumbing.
-	live          *datasource.LiveHandle
-	liveCancel    context.CancelFunc
-	liveBuf       []string // pre-rendered transcript lines (oldest→newest)
-	liveTruncated bool     // true once liveBuf hit its cap and was trimmed
-	liveInput     string   // textarea contents (single-line in v1 — risk #3)
-	// Archive tab plumbing.
-	archive       []datasource.MessageEvent
-	archiveLoaded bool
-	archiveErr    error // non-nil → hydrate failed; UI shows a plashka instead of (loading…)
-	// Meta + Signals.
-	signals  []datasource.Signal
-	comments []datasource.Comment
-	scrollY  int
-}
-
 // flashState is the ephemeral toast line. CreatedAt makes the layout
 // loop drop the toast after a short timeout.
 type flashState struct {
@@ -222,11 +291,10 @@ type flashState struct {
 //
 // Most writes are funnelled through g.Update closures (which run on
 // the gocui main thread), but a handful of OnWorker-spawned
-// goroutines also mutate state directly — see inspector.go's
-// startLiveStream / stopLiveStream, which write to st.insp.live and
-// st.insp.liveCancel from a worker goroutine. The RWMutex is what
-// makes that safe; do NOT drop it without untangling the worker
-// writes first.
+// goroutines also mutate state directly — see jobdetail.go's SSE
+// pump, which writes into state.jobTranscript from a worker
+// goroutine. The RWMutex is what makes that safe; do NOT drop it
+// without untangling the worker writes first.
 type state struct {
 	mu sync.RWMutex
 
@@ -236,6 +304,14 @@ type state struct {
 	// Focus.
 	focused      panelID
 	focusedStack []panelID // for Esc-pop semantics (popups remember the side panel)
+
+	// detailFocus is the side panel whose entity renderDetail should
+	// render when focused == panelDetail. Without this, focusing the
+	// Detail pane (via '0' or jobsEnter on a terminal job) would
+	// land on the empty `panelDetail` switch arm in renderDetail and
+	// wipe the pane to "(nothing selected)". Captured eagerly on
+	// transitions INTO panelDetail; ignored otherwise.
+	detailFocus panelID
 
 	// Data caches. The View() is the source of truth for rendered
 	// content — these are the most recent slice from the datasource so
@@ -259,10 +335,39 @@ type state struct {
 	scope   scope
 	filter  filterState
 	popup   popupState
-	insp    inspectorState
 	flash   flashState
 	logBuf  []string
 	logHide bool
+
+	// jobTranscript is a per-jobID cache of the transcript shown in
+	// the Detail pane. Bounded at jobTranscriptCacheMax entries via
+	// LRU eviction: every ensureTranscriptEntryLocked call stamps the
+	// entry's touchedAt, and evictTranscriptIfNeeded picks the
+	// minimum-stamp victim when the cap is hit.
+	jobTranscript map[string]*jobTranscriptEntry
+
+	// jobLive* hold the single active SSE subscription. Exactly one
+	// job at a time may be streaming into the Detail pane;
+	// switching selection to a different running job cancels the
+	// current handle after the jobLiveDebounce timer expires.
+	jobLiveJobID  string
+	jobLiveHandle *datasource.LiveHandle
+	jobLiveCancel context.CancelFunc
+	jobLiveTimer  *time.Timer // debounce timer; reset on every selection change
+
+	// jobInput is the cached contents of winJobInput's textarea.
+	// The view's Buffer() is authoritative once the view exists;
+	// this is the model-side snapshot the renderer seeds the view
+	// from on first creation and reads back on dispatch.
+	//
+	// jobInputOwner is the jobID whose draft is currently held in
+	// jobInput. Cursor moves between running jobs detect a mismatch
+	// (via afterCursorMove / applyRefreshLocked) and clear both
+	// fields so a draft typed for job-A doesn't leak into job-B's
+	// textarea — nor get silently dispatched to the wrong job on
+	// Ctrl-D.
+	jobInput      string
+	jobInputOwner string
 
 	health datasource.Health
 
@@ -294,12 +399,17 @@ const commentsCacheMax = 64
 // newState seeds an empty model with sensible defaults.
 func newState() *state {
 	return &state{
-		focused:  panelTasks,
-		view:     StateDashboard,
-		logBuf:   []string{"lazy started"},
-		health:   datasource.Health{Daemon: "down"},
-		comments: map[string][]datasource.Comment{},
-		signals:  map[string][]datasource.Signal{},
+		focused: panelTasks,
+		// detailFocus mirrors focused initially — if the user presses
+		// '0' before navigating anywhere, renderDetail still has a
+		// sensible side panel to consult.
+		detailFocus:   panelTasks,
+		view:          StateDashboard,
+		logBuf:        []string{"lazy started"},
+		health:        datasource.Health{Daemon: "down"},
+		comments:      map[string][]datasource.Comment{},
+		signals:       map[string][]datasource.Signal{},
+		jobTranscript: map[string]*jobTranscriptEntry{},
 	}
 }
 

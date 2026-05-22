@@ -19,7 +19,8 @@ import (
 //
 //   - globals (quit, tab switching, palette, filter, help, scope clear)
 //   - per-panel (Tasks/Jobs/Workflows/Agents list nav + write verbs)
-//   - inspector (tab cycling, Live tab Ctrl-D/F/A, scrolling)
+//   - Detail pane scroll (winDetail) + Job-input textarea
+//     (winJobInput) when a running job is selected
 func (gu *Gui) bindKeys() error {
 	type binding struct {
 		view string
@@ -112,46 +113,54 @@ func (gu *Gui) bindKeys() error {
 		{winWorkflows, 'n', gocui.ModNone, gu.workflowNew},
 		{winWorkflows, 'D', gocui.ModNone, gu.workflowDelete},
 
-		// Agents panel is read-only inside lazy: package install /
-		// uninstall happens via the `autosk agent` CLI, no hotkeys.
+		// Agents "write" verbs are intentionally informational only:
+		// the daemon has no /v1/agents endpoint in v1, so both keys
+		// flash a toast directing the operator at the corresponding
+		// `autosk agent {install|uninstall} <pkg>` CLI invocation. The
+		// bindings stay so the help screen's 'i install / u uninstall'
+		// row is honest and discoverable.
+		{winAgents, 'i', gocui.ModNone, gu.agentInstall},
+		{winAgents, 'u', gocui.ModNone, gu.agentUninstall},
 
 		// Jobs hotkeys.
-		{winJobs, 'a', gocui.ModNone, gu.jobAttachLive},
-		{winJobs, 's', gocui.ModNone, gu.jobOpenArchive},
-		{winJobs, 'i', gocui.ModNone, gu.jobOpenMeta},
 		{winJobs, 'K', gocui.ModNone, gu.jobCancel},
 
-		// Inspector tab cycling + Live tab dispatch.
-		{winInspector, '[', gocui.ModNone, gu.inspectorCycleTab(-1)},
-		{winInspector, ']', gocui.ModNone, gu.inspectorCycleTab(+1)},
-		{winInspector, '1', gocui.ModNone, gu.inspectorJumpTab(tabLive)},
-		{winInspector, '2', gocui.ModNone, gu.inspectorJumpTab(tabArchive)},
-		{winInspector, '3', gocui.ModNone, gu.inspectorJumpTab(tabMeta)},
-		{winInspector, '4', gocui.ModNone, gu.inspectorJumpTab(tabSignals)},
-		{winInspector, gocui.KeyEsc, gocui.ModNone, gu.inspectorClose},
-		{winInspector, gocui.KeyCtrlO, gocui.ModNone, gu.inspectorClose},
-
-		// Inspector scroll bindings (design plan §6.2): j/k single line,
-		// Ctrl-F/Ctrl-B page, g/G start/end. Hooked on the body view.
-		{winInspector, 'j', gocui.ModNone, gu.inspectorScroll(+1)},
-		{winInspector, 'k', gocui.ModNone, gu.inspectorScroll(-1)},
-		{winInspector, gocui.KeyArrowDown, gocui.ModNone, gu.inspectorScroll(+1)},
-		{winInspector, gocui.KeyArrowUp, gocui.ModNone, gu.inspectorScroll(-1)},
-		{winInspector, gocui.KeyCtrlF, gocui.ModNone, gu.inspectorScrollPage(+1)},
-		{winInspector, gocui.KeyCtrlB, gocui.ModNone, gu.inspectorScrollPage(-1)},
-		{winInspector, gocui.KeyPgdn, gocui.ModNone, gu.inspectorScrollPage(+1)},
-		{winInspector, gocui.KeyPgup, gocui.ModNone, gu.inspectorScrollPage(-1)},
-		{winInspector, 'g', gocui.ModNone, gu.inspectorScrollTo(false)},
-		{winInspector, 'G', gocui.ModNone, gu.inspectorScrollTo(true)},
-
-		// J/K on the detail pane scroll the Tasks detail viewport.
+		// Detail pane scroll bindings. Same shape that used to live on
+		// the Inspector body view — j/k single line, Ctrl-F/Ctrl-B page,
+		// g/G start/end. Applies to BOTH task-detail and job-detail
+		// content (the pane is one view; the renderer picks the body
+		// based on focused panel).
 		{winDetail, 'j', gocui.ModNone, gu.detailScroll(+1)},
 		{winDetail, 'k', gocui.ModNone, gu.detailScroll(-1)},
+		{winDetail, gocui.KeyArrowDown, gocui.ModNone, gu.detailScroll(+1)},
+		{winDetail, gocui.KeyArrowUp, gocui.ModNone, gu.detailScroll(-1)},
+		{winDetail, gocui.KeyCtrlF, gocui.ModNone, gu.detailScrollPage(+1)},
+		{winDetail, gocui.KeyCtrlB, gocui.ModNone, gu.detailScrollPage(-1)},
+		{winDetail, gocui.KeyPgdn, gocui.ModNone, gu.detailScrollPage(+1)},
+		{winDetail, gocui.KeyPgup, gocui.ModNone, gu.detailScrollPage(-1)},
+		{winDetail, 'g', gocui.ModNone, gu.detailScrollTo(false)},
+		{winDetail, 'G', gocui.ModNone, gu.detailScrollTo(true)},
+
+		// Job-input bindings (relocated from the old fullscreen-inspector input view).
+		// Bound only on winJobInput; the view itself only exists when
+		// the selected job is running, so these bindings are dormant
+		// otherwise.
+		{winJobInput, gocui.KeyCtrlD, gocui.ModNone, gu.liveSend},
+		{winJobInput, gocui.KeyCtrlF, gocui.ModNone, gu.liveFollowUp},
+		{winJobInput, gocui.KeyCtrlA, gocui.ModNone, gu.liveAbort},
+		{winJobInput, gocui.KeyEsc, gocui.ModNone, gu.jobInputEscape},
+		{winJobInput, gocui.KeyCtrlC, gocui.ModNone, gu.quit},
+		// Scroll the Detail pane above without leaving the textarea.
+		{winJobInput, gocui.KeyCtrlB, gocui.ModNone, gu.detailScrollPage(-1)},
+		{winJobInput, gocui.KeyPgup, gocui.ModNone, gu.detailScrollPage(-1)},
+		{winJobInput, gocui.KeyPgdn, gocui.ModNone, gu.detailScrollPage(+1)},
+		{winJobInput, gocui.MouseWheelDown, gocui.ModNone, gu.detailScroll(+1)},
+		{winJobInput, gocui.MouseWheelUp, gocui.ModNone, gu.detailScroll(-1)},
 
 		// Mouse-wheel scroll bindings. gocui surfaces wheel events as
 		// MouseWheelUp/Down keys per-view; without these bindings the
 		// terminal's wheel forwarding is dropped on the floor and
-		// overflowing content (Tasks detail, inspector transcript) is
+		// overflowing content (Detail-pane transcripts, lists) is
 		// only reachable via j/k or PgUp/PgDn.
 		//
 		// Side panels: wheel scrolls the VIEWPORT without moving the
@@ -168,35 +177,13 @@ func (gu *Gui) bindKeys() error {
 		{winAgents, gocui.MouseWheelDown, gocui.ModNone, gu.panelScroll(panelAgents, +panelScrollStep)},
 		{winAgents, gocui.MouseWheelUp, gocui.ModNone, gu.panelScroll(panelAgents, -panelScrollStep)},
 
-		// Detail pane + inspector transcript: wheel scrolls the
-		// viewport (no cursor concept on these views). Inspector input
-		// also forwards the wheel to the body so the user can scroll
-		// the transcript without leaving the textarea — same affordance
-		// the Ctrl-B / PageUp bindings above already provide.
+		// Detail pane: wheel scrolls the viewport (no cursor concept).
 		{winDetail, gocui.MouseWheelDown, gocui.ModNone, gu.detailScroll(+1)},
 		{winDetail, gocui.MouseWheelUp, gocui.ModNone, gu.detailScroll(-1)},
-		{winInspector, gocui.MouseWheelDown, gocui.ModNone, gu.inspectorScroll(+1)},
-		{winInspector, gocui.MouseWheelUp, gocui.ModNone, gu.inspectorScroll(-1)},
-		{winInspectorIn, gocui.MouseWheelDown, gocui.ModNone, gu.inspectorScroll(+1)},
-		{winInspectorIn, gocui.MouseWheelUp, gocui.ModNone, gu.inspectorScroll(-1)},
 
 		// Popup menus also benefit from wheel-driven cursor motion.
 		{winPopupMenu, gocui.MouseWheelDown, gocui.ModNone, gu.popupCursor(+1)},
 		{winPopupMenu, gocui.MouseWheelUp, gocui.ModNone, gu.popupCursor(-1)},
-
-		// Live tab dispatch — bound on the input view.
-		{winInspectorIn, gocui.KeyCtrlD, gocui.ModNone, gu.liveSend},
-		{winInspectorIn, gocui.KeyCtrlF, gocui.ModNone, gu.liveFollowUp},
-		{winInspectorIn, gocui.KeyCtrlA, gocui.ModNone, gu.liveAbort},
-		{winInspectorIn, gocui.KeyEsc, gocui.ModNone, gu.inspectorClose},
-		{winInspectorIn, gocui.KeyCtrlC, gocui.ModNone, gu.quit},
-		// Live tab scroll-back: the body view (winInspector) isn't
-		// current while the textarea has focus, so Ctrl-B / PageUp /
-		// PageDown have to bind on the input view too. (j / k / g / G
-		// would collide with text input and stay body-only.)
-		{winInspectorIn, gocui.KeyCtrlB, gocui.ModNone, gu.inspectorScrollPage(-1)},
-		{winInspectorIn, gocui.KeyPgup, gocui.ModNone, gu.inspectorScrollPage(-1)},
-		{winInspectorIn, gocui.KeyPgdn, gocui.ModNone, gu.inspectorScrollPage(+1)},
 
 		// Popup keys.
 		{winPopupMenu, 'j', gocui.ModNone, gu.popupCursor(+1)},
@@ -259,15 +246,23 @@ func (gu *Gui) bindKeys() error {
 // is visible — the user may have wheel-scrolled it out of view
 // during the previous visit and now expects to see where they were.
 // Matches lazygit's HandleFocus(ScrollSelectionIntoView=true).
+//
+// When p is panelDetail we also stash the OUTGOING focus into
+// state.detailFocus so renderDetail can keep rendering the right
+// entity body (the panelDetail arm itself has nothing to draw).
+// The stash normalises panelJobInput → panelJobs so a transition
+// from the input flow into the Detail pane still renders Job
+// Detail (renderDetail also normalises on the read side, but the
+// model field stays sensible this way too).
 func (gu *Gui) focusPanel(p panelID) func(*gocui.Gui, *gocui.View) error {
 	return func(*gocui.Gui, *gocui.View) error {
 		changed := false
 		gu.st.withLock(func() {
-			if gu.st.view == StateInspector {
-				return
-			}
 			if gu.st.focused != p {
 				changed = true
+			}
+			if p == panelDetail && gu.st.focused != panelDetail {
+				gu.st.detailFocus = gu.st.focused.normalizeForDetail()
 			}
 			gu.st.focused = p
 		})
@@ -279,16 +274,36 @@ func (gu *Gui) focusPanel(p panelID) func(*gocui.Gui, *gocui.View) error {
 }
 
 // cyclePanel cycles through the four side panels by step.
+//
+// Source-side normalisation: cyclePanel may fire from any view,
+// including the synthetic panelJobInput (caret in winJobInput) and
+// panelDetail (focus parked on the right pane via '0'). Neither is
+// in the 0..3 cycle range, so we normalise them first —
+// panelJobInput→panelJobs (predictable: the operator was working a
+// running job, so Tab steps OFF the job they were composing for to
+// the next side panel), panelDetail→detailFocus (the side panel
+// that owned the selection before '0' was pressed). Without this
+// normalisation, (int(panelJobInput=5) + 1) % 4 = 2 = panelWorkflows
+// would skip the Jobs column entirely on Tab from the input — a
+// UX regression vs. the pre-redesign state where Tab inside the
+// fullscreen inspector was scoped to inspector-tab cycling.
 func (gu *Gui) cyclePanel(step int) func(*gocui.Gui, *gocui.View) error {
 	return func(*gocui.Gui, *gocui.View) error {
 		var landed panelID
 		changed := false
 		gu.st.withLock(func() {
-			if gu.st.view == StateInspector {
-				return
+			src := gu.st.focused
+			switch src {
+			case panelJobInput:
+				src = panelJobs
+			case panelDetail:
+				src = gu.st.detailFocus.normalizeForDetail()
+				if src == panelDetail {
+					src = panelTasks
+				}
 			}
 			n := 4
-			next := (int(gu.st.focused) + step + n) % n
+			next := (int(src) + step + n) % n
 			if int(gu.st.focused) != next {
 				changed = true
 			}
@@ -377,20 +392,37 @@ func (gu *Gui) cursorUp(p panelID) func(*gocui.Gui, *gocui.View) error {
 // Per-panel contract:
 //
 //   - panelTasks: schedule a refresh so the detail pane picks up
-//     the highlighted task's comments and signals. Scope is NOT
-//     mutated here; cursor-driven re-filtering was noisy in
-//     practice. Use Space to commit (stay on Tasks) or Enter to
-//     commit + jump to the Jobs panel.
+//     the highlighted task's comments and signals.
 //   - panelWorkflows: applyScope so the Tasks panel auto-filters
-//     to the highlighted workflow. The lazygit-style cross-link
-//     operators expect; opt out via *.
-//   - panelJobs / panelAgents: scheduleRefresh only — highlighting
-//     a different row paints a different detail pane on the next
-//     layout pass, no scope mutation needed.
+//     to the highlighted workflow.
+//   - panelJobs: scheduleRefresh + (debounced) SSE subscription
+//     for the highlighted job + (eager) archive hydration so the
+//     Detail pane has events to render. The chain is:
+//     afterCursorMove(panelJobs)
+//     → scheduleJobLive (debounced timer)
+//     → scheduleJobArchive (eager OnWorker dispatch, coalesced).
+//     The Detail pane reads state.jobTranscript[jobID] every
+//     frame; the SSE pump appends into it.
+//   - panelAgents: scheduleRefresh only.
 func (gu *Gui) afterCursorMove(p panelID) {
 	switch p {
 	case panelWorkflows:
 		gu.applyScope()
+	case panelJobs:
+		gu.scheduleRefresh()
+		if j, ok := gu.st.selectedJobLocked(); ok {
+			running := isJobRunning(j)
+			// Discard any input draft that belongs to a different job
+			// BEFORE we kick the live/archive scheduling — the next
+			// renderViews pass will repopulate the view from
+			// state.jobInput, which is now empty for this job.
+			gu.clearJobInputIfStale(j.JobID)
+			gu.scheduleJobLive(j.JobID, running)
+			gu.scheduleJobArchive(j.JobID, running)
+		} else {
+			gu.clearJobInputIfStale("")
+			gu.stopJobLive()
+		}
 	default:
 		gu.scheduleRefresh()
 	}
@@ -458,13 +490,19 @@ func (gu *Gui) handleRefresh(*gocui.Gui, *gocui.View) error {
 }
 
 // handleForceReconnect is the Ctrl-R handler: drop any pooled
-// *sqlite3.SQLiteConn inside the doltlite store and schedule a
-// refresh. The reconnect happens on a worker so the UI thread
-// stays responsive (the Ping inside Reconnect blocks until the
-// fresh conn handshakes). On error we still fall through to
+// *sqlite3.SQLiteConn inside the doltlite store, clear the per-job
+// transcript cache (so the next selection re-hydrates from a fresh
+// archive read), tear down any active SSE subscription, and
+// schedule a refresh. The reconnect happens on a worker so the UI
+// thread stays responsive (the Ping inside Reconnect blocks until
+// the fresh conn handshakes). On error we still fall through to
 // scheduleRefresh — a stale read is better than no read.
 func (gu *Gui) handleForceReconnect(*gocui.Gui, *gocui.View) error {
 	gu.flashf("info", "reconnect")
+	gu.stopJobLive()
+	gu.st.withLock(func() {
+		gu.st.jobTranscript = map[string]*jobTranscriptEntry{}
+	})
 	gu.g.OnWorker(func(_ gocui.Task) error {
 		ctx, cancel := context.WithTimeout(gu.ctx, 5*time.Second)
 		defer cancel()
@@ -481,24 +519,18 @@ func (gu *Gui) handleForceReconnect(*gocui.Gui, *gocui.View) error {
 	return nil
 }
 
-// handleEsc closes the active popup or inspector; falls back to
-// clearing filter chips.
+// handleEsc closes the active popup; falls back to clearing filter
+// chips. Esc on winJobInput is bound directly to jobInputEscape so
+// it doesn't route through here.
 func (gu *Gui) handleEsc(g *gocui.Gui, v *gocui.View) error {
-	// Snapshot popup.Kind + view under the lock so concurrent
-	// mutations from g.Update closures don't race against these reads.
-	var (
-		popupKind popupKind
-		view      ViewState
-	)
+	// Snapshot popup.Kind under the lock so concurrent mutations
+	// from g.Update closures don't race against the read.
+	var popupKind popupKind
 	gu.st.withRLock(func() {
 		popupKind = gu.st.popup.Kind
-		view = gu.st.view
 	})
 	if popupKind != popupNone {
 		return gu.popupClose(g, v)
-	}
-	if view == StateInspector {
-		return gu.inspectorClose(g, v)
 	}
 	// Otherwise: clear the focused panel's filter.
 	gu.st.withLock(func() {
@@ -573,23 +605,51 @@ func (gu *Gui) agentsEnter(*gocui.Gui, *gocui.View) error {
 	return nil
 }
 
-// jobsEnter opens the inspector on the highlighted job.
+// jobsEnter focuses the appropriate view for the highlighted job:
+//   - non-terminal job (queued or running, daemon accepts SendInput)
+//     → winJobInput, caret blinks inside the textarea.
+//   - terminal job (no SendInput dispatch surface) → logical focus
+//     to panelDetail so j/k scroll the transcript above.
+//
+// The visibility predicate (isJobLive) intentionally mirrors the
+// layout-pass gate on winJobInput: Enter only routes to the input
+// view when that view actually exists this frame.
+//
+// On the live-job branch we set state.focused = panelJobInput
+// (a synthetic focus identity whose window() is winJobInput). The
+// layout pass calls g.SetCurrentView(focused.window()) on every
+// frame; without recording the focus in the model the next layout
+// would yank current-view back to winJobs within ~100ms (spinner
+// tick cadence) and the caret would jump out of the textarea.
+//
+// On the terminal-job branch we stash detailFocus = panelJobs so
+// renderDetail keeps emitting the Job Detail body even though
+// focused now reads panelDetail.
 func (gu *Gui) jobsEnter(*gocui.Gui, *gocui.View) error {
 	j, ok := gu.st.selectedJobLocked()
 	if !ok {
 		return nil
 	}
-	gu.openInspector(j.JobID)
+	if isJobLive(j) {
+		gu.st.withLock(func() { gu.st.focused = panelJobInput })
+		// Also SetCurrentView synchronously so tests that don't
+		// drive a layout pass between jobsEnter and the assertion
+		// observe the focus change immediately. The layout pass
+		// would otherwise be the one to actually move the caret.
+		if gu.g != nil {
+			_, _ = gu.g.SetCurrentView(winJobInput)
+		}
+		return nil
+	}
+	gu.st.withLock(func() {
+		gu.st.detailFocus = panelJobs
+		gu.st.focused = panelDetail
+	})
 	return nil
 }
 
 // openFilter opens the per-panel filter prompt.
 func (gu *Gui) openFilter(*gocui.Gui, *gocui.View) error {
-	var view ViewState
-	gu.st.withRLock(func() { view = gu.st.view })
-	if view == StateInspector {
-		return nil
-	}
 	gu.openPrompt("filter: facets like p:1 status:done wf:name agent:name + free text", "", func(value string) error {
 		gu.st.withLock(func() {
 			switch gu.st.focused {
@@ -699,18 +759,24 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"  p priority         M metadata",
 		"",
 		"jobs:",
-		"  Enter inspector (Live default)",
-		"  a Live   s Archive   i Meta    K cancel",
+		"  Enter      focus input (non-terminal) / Detail pane (terminal)",
+		"  K          cancel job",
 		"",
 		"workflows:",
 		"  n new (from file)   D delete",
 		"",
-		"inspector:",
-		"  [ / ]   1..4   tab cycle/jump",
-		"  Esc / Ctrl-O   back to dashboard",
-		"  body (no text input focus): j/k  Ctrl-F page-fwd  Ctrl-B page-back  PgUp/PgDn  g/G",
-		"  Live input (textarea focus): Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort",
-		"  Live input: Ctrl-B / PgUp / PgDn scroll-back the transcript above",
+		"agents:",
+		"  i install   u uninstall",
+		"",
+		"detail:",
+		"  j/k arrows                line scroll",
+		"  Ctrl-F/Ctrl-B/PgUp/PgDn   page scroll",
+		"  g/G                       top/bottom",
+		"  wheel                     scroll",
+		"",
+		"job input (non-terminal job):",
+		"  Ctrl-D send     Ctrl-F follow_up    Ctrl-A abort",
+		"  Esc cancel      Ctrl-B/PgUp/PgDn    scroll transcript above",
 		"",
 		"compose (new task / edit task):",
 		"  summary: Enter / Ctrl-S submit  Tab → description  Esc cancel",
@@ -1099,28 +1165,25 @@ func (gu *Gui) workflowDelete(*gocui.Gui, *gocui.View) error {
 	return nil
 }
 
-func (gu *Gui) jobAttachLive(*gocui.Gui, *gocui.View) error {
-	j, ok := gu.st.selectedJobLocked()
-	if !ok {
-		return nil
-	}
-	gu.openInspectorAtTab(j.JobID, tabLive)
+// agentInstall and agentUninstall are intentionally informational in
+// v1: the daemon has no /v1/agents endpoint so live mode returns the
+// same error as offline. A popup with two no-op options is a fake
+// choice; flashf is the right verb — one piece of info, no demand
+// for an action that doesn't exist. The hotkeys stay bound so the
+// help screen line 'i install / u uninstall' is honest (it points
+// to the CLI workaround).
+func (gu *Gui) agentInstall(*gocui.Gui, *gocui.View) error {
+	gu.flashf("info", "agent install: quit lazy and run 'autosk agent install <pkg>'")
 	return nil
 }
-func (gu *Gui) jobOpenArchive(*gocui.Gui, *gocui.View) error {
-	j, ok := gu.st.selectedJobLocked()
-	if !ok {
-		return nil
+
+func (gu *Gui) agentUninstall(*gocui.Gui, *gocui.View) error {
+	a, ok := gu.st.selectedAgentLocked()
+	name := "<pkg>"
+	if ok && a.Name != "" {
+		name = a.Name
 	}
-	gu.openInspectorAtTab(j.JobID, tabArchive)
-	return nil
-}
-func (gu *Gui) jobOpenMeta(*gocui.Gui, *gocui.View) error {
-	j, ok := gu.st.selectedJobLocked()
-	if !ok {
-		return nil
-	}
-	gu.openInspectorAtTab(j.JobID, tabMeta)
+	gu.flashf("info", "agent uninstall: quit lazy and run 'autosk agent uninstall %s'", name)
 	return nil
 }
 

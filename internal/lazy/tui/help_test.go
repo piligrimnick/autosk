@@ -26,3 +26,27 @@ func TestHelpScreen_NoClaimBinding(t *testing.T) {
 		t.Fatalf("help body empty")
 	}
 }
+
+// TestHelpScreen_NoInspectorReferences pins acceptance criterion 20:
+// the help screen lists the new keymap and contains no Inspector
+// references.
+func TestHelpScreen_NoInspectorReferences(t *testing.T) {
+	gu := &Gui{st: newState()}
+	_ = gu.openHelp(nil, nil)
+	lines := gu.st.popup.Lines
+	for _, line := range lines {
+		if strings.Contains(strings.ToLower(line), "inspector") {
+			t.Fatalf("help still references the (removed) inspector: %q", line)
+		}
+		if strings.Contains(line, "Live tab") || strings.Contains(line, "Archive tab") {
+			t.Fatalf("help references removed Inspector tabs: %q", line)
+		}
+	}
+	// And the new detail-pane / job-input sections must be present.
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{"detail:", "job input", "Ctrl-D send"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("help missing %q section/binding\n%s", want, joined)
+		}
+	}
+}

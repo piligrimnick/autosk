@@ -4,7 +4,6 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,7 +11,6 @@ import (
 	"github.com/jesseduffield/gocui"
 
 	"autosk/internal/agent"
-	"autosk/internal/daemon/runstore"
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/lazy/tui"
 	"autosk/internal/store"
@@ -24,7 +22,6 @@ import (
 // the TUI does against the project DB.
 type fakeDS struct {
 	*datasource.Offline
-	streamed atomic.Bool
 }
 
 func (f *fakeDS) Healthz(_ context.Context) (datasource.Health, error) {
@@ -122,90 +119,6 @@ func TestLazy_SmokeDashboardLaunch(t *testing.T) {
 		cancel()
 		<-done
 		t.Fatalf("TUI did not quit on q")
-	}
-}
-
-// TestLazy_DeepLinkJob verifies --job opens the inspector directly.
-func TestLazy_DeepLinkJob(t *testing.T) {
-	if raceEnabled {
-		t.Skip("skipping under -race: pre-existing race in test fixture's screen reads (see followup)")
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	dir := t.TempDir()
-
-	dl := doltlite.New()
-	if err := dl.Open(ctx, filepath.Join(dir, "test.db")); err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer dl.Close()
-	if err := dl.Migrate(ctx); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	task, _ := dl.CreateTask(ctx, store.Task{Title: "Bump version", Status: store.StatusNew, Priority: 2})
-
-	// Seed a daemon_run directly via SQL — the runstore needs a step
-	// row but for this smoke test we just want a job id the TUI can
-	// open.
-	_, err := dl.DB().ExecContext(ctx, `INSERT INTO agents(id, name, is_human, created_at) VALUES ('ag-fake','x',0,?)`, time.Now().Unix())
-	if err != nil {
-		t.Fatalf("seed agent: %v", err)
-	}
-	_, err = dl.DB().ExecContext(ctx, `INSERT INTO workflows(id, name, description, first_step_id, is_synthetic, created_at) VALUES ('wf-fake','single:x','',?,1,?)`, "st-fake", time.Now().Unix())
-	if err != nil {
-		t.Fatalf("seed wf: %v", err)
-	}
-	_, err = dl.DB().ExecContext(ctx, `INSERT INTO steps(id, workflow_id, name, agent_id, seq) VALUES ('st-fake','wf-fake','x','ag-fake',0)`)
-	if err != nil {
-		t.Fatalf("seed step: %v", err)
-	}
-	rs := runstore.New(dl.DB())
-	r, err := rs.CreateRun(ctx, runstore.NewRun{TaskID: task.ID, StepID: "st-fake"})
-	if err != nil {
-		t.Fatalf("seed run: %v", err)
-	}
-	// Mark it done so the default tab is Archive (no Live SSE needed).
-	exit := 0
-	if _, err := rs.MarkDone(ctx, r.JobID, exit, nil); err != nil {
-		t.Fatalf("mark done: %v", err)
-	}
-
-	ds, err := datasource.NewOffline(dl, dir, nil)
-	if err != nil {
-		t.Fatalf("offline: %v", err)
-	}
-	tui.SetDebugLogger(t.Logf)
-	defer tui.SetDebugLogger(nil)
-
-	done := make(chan error, 1)
-	go func() {
-		done <- tui.Run(ctx, tui.Options{
-			Datasource:  &fakeDS{Offline: ds},
-			ProjectRoot: dir,
-			Refresh:     50 * time.Millisecond,
-			Headless:    true,
-			Width:       120,
-			Height:      40,
-			InitialJob:  r.JobID,
-		})
-	}()
-
-	if !waitFor(3*time.Second, func() bool {
-		injectResize(120, 40)
-		return findInScreen(r.JobID) && findInScreen("Archive")
-	}) {
-		t.Logf("---- screen dump ----\n%s\n---- end ----", dumpScreen())
-		injectKey('q')
-		<-done
-		t.Fatalf("inspector did not open on job %q (tab label Archive missing)", r.JobID)
-	}
-
-	injectKey('q')
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		cancel()
-		<-done
 	}
 }
 
