@@ -228,7 +228,7 @@ Typical cap-fire recovery:
 
 ```bash
 # Task is parked because review hit max_visits = 5.
-autosk show as-bea9
+autosk show ask-bea935
 # status: human
 # current_step: review   <-- TARGET of the failed advance (the
 #                            cap fired on the dev→review transition,
@@ -241,9 +241,9 @@ autosk daemon messages <job-id>
 # … error: step_max_visits_exceeded: step "review" reached visits=5 max=5
 
 # Inspect, decide, reset the counter you want to clear:
-autosk metadata reset-visits as-bea9 --step review
+autosk metadata reset-visits ask-bea935 --step review
 # … and continue the loop:
-autosk resume as-bea9
+autosk resume ask-bea935
 ```
 
 ### Worktree isolation
@@ -293,18 +293,18 @@ When a task targets a workflow with `isolation: "worktree"`:
 
 ```bash
 autosk create "Wire up auth" --workflow feature-dev
-# task created; worktree allocated at ~/.autosk/worktrees/myproj-7a3b9c2e/as-bea9
-# branch autosk/as-bea9 created off HEAD
+# task created; worktree allocated at ~/.autosk/worktrees/myproj-7a3b9c2e/ask-bea935
+# branch autosk/ask-bea935 created off HEAD
 
-autosk show as-bea9
+autosk show ask-bea935
 # …
-# worktree:      ~/.autosk/worktrees/myproj-7a3b9c2e/as-bea9 (exists)
-# branch:        autosk/as-bea9
+# worktree:      ~/.autosk/worktrees/myproj-7a3b9c2e/ask-bea935 (exists)
+# branch:        autosk/ask-bea935
 
-autosk show as-bea9 --json | jq .worktree
+autosk show ask-bea935 --json | jq .worktree
 # {
-#   "path":   "/Users/me/.autosk/worktrees/myproj-7a3b9c2e/as-bea9",
-#   "branch": "autosk/as-bea9",
+#   "path":   "/Users/me/.autosk/worktrees/myproj-7a3b9c2e/ask-bea935",
+#   "branch": "autosk/ask-bea935",
 #   "exists": true
 # }
 ```
@@ -324,7 +324,7 @@ When enrolling an existing task into an isolated workflow you can pick
 the base ref the worktree's branch is forked from:
 
 ```bash
-autosk enroll as-bea9 --workflow feature-dev --base-ref origin/main
+autosk enroll ask-bea935 --workflow feature-dev --base-ref origin/main
 ```
 
 `--base-ref` defaults to `HEAD`. It is **only** meaningful for
@@ -395,18 +395,18 @@ on disk for debugging.
 To recover, either give up:
 
 ```bash
-autosk cancel as-bea9             # branch preserved; dir reaped if any remained
+autosk cancel ask-bea935          # branch preserved; dir reaped if any remained
 ```
 
 or re-allocate the worktree and retry:
 
 ```bash
-autosk worktree rm as-bea9        # clean up the stranded dir
-autosk cancel  as-bea9            # human → cancel (‘reopen’ doesn’t
+autosk worktree rm ask-bea935     # clean up the stranded dir
+autosk cancel  ask-bea935         # human → cancel (‘reopen’ doesn’t
                                   # take human as a source state)
-autosk reopen  as-bea9            # cancel → new; current_step_id cleared
-autosk enroll  as-bea9 --workflow feature-dev   # Ensure re-allocates dir + branch
-# the daemon picks it up automatically; the branch (autosk/as-bea9)
+autosk reopen  ask-bea935         # cancel → new; current_step_id cleared
+autosk enroll  ask-bea935 --workflow feature-dev   # Ensure re-allocates dir + branch
+# the daemon picks it up automatically; the branch (autosk/ask-bea935)
 # survived the round-trip so the worktree reuses it.
 ```
 
@@ -655,8 +655,8 @@ If a task already exists (typically `status='new'`, created without
 `--workflow` / `--agent`), use `enroll` instead of recreating it:
 
 ```bash
-autosk enroll as-bea9 --workflow feature-dev
-autosk enroll as-bea9 --agent    @autosk/developer   # single:@autosk/developer
+autosk enroll ask-bea935 --workflow feature-dev
+autosk enroll ask-bea935 --agent    @autosk/developer   # single:@autosk/developer
 ```
 
 `enroll` is the post-creation mirror of `create --workflow` /

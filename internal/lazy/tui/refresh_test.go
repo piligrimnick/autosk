@@ -302,7 +302,7 @@ func TestRenderTasksPanel_JobMarker(t *testing.T) {
 	wantMarker := []string{"⠋", ">", " "}
 	for i, line := range lines {
 		plain := stripANSI(line)
-		// Format: "P{n} as-XXXXXX  {marker} {status} ..."
+		// Format: "P{n} ask-XXXXXX  {marker} {status} ..."
 		// The marker is the first non-space character after the
 		// padded id column — walk char-by-char for robustness against
 		// future width tweaks.

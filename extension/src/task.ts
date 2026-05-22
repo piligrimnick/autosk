@@ -32,8 +32,8 @@ const TaskStatusSchema = Type.Union([
 
 const TaskArgsSchema = Type.Partial(
 	Type.Object({
-		/** Target task id, e.g. "as-a1b2". Required for show / update. */
-		id: Type.String({ description: "Target task id (e.g. as-a1b2). Required for show and update." }),
+		/** Target task id, e.g. "ask-a1b2c3". Required for show / update. */
+		id: Type.String({ description: "Target task id (e.g. ask-a1b2c3). Required for show and update." }),
 		/** Task title. create / update. */
 		title: Type.String({ description: "Task title. Required by create; optional by update." }),
 		/** Task description. create / update. */
@@ -84,7 +84,7 @@ export type TaskParams = Static<typeof TaskParamsSchema>;
 const TOOL_DESCRIPTION = `Manage autosk tasks (create / update / show) against ./.autosk/db.
 Use this tool for any task mutation; never edit ./.autosk/db by hand and prefer this over shelling out to \`autosk\` via bash.
 
-Params: { action: "create"|"update"|"show", args: {...} }. Task ids look like "as-XXXX".
+Params: { action: "create"|"update"|"show", args: {...} }. Task ids look like "ask-XXXXXX".
 
 create
   args.title (req)                — non-empty.

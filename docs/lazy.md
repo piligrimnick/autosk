@@ -60,15 +60,15 @@ follow_up, `Ctrl-A` abort.
 
 ```
 ┌─[1] Tasks ──────────────────────────────┬─[0] Detail / Inspector ────────────┐
-│ as-a1b2 ●P1 work   ▶dev   Refactor      │ task as-a1b2  work                 │
-│ as-c3d4  P1 work   ▶rev   Add CLI       │ wf=feature-dev step=dev (developer)│
-│ as-e5f6  P2 done          Bump ver      │ author: @autosk/developer          │
-│ as-7788 ✋P0 human  ▶qa    Tune w…       │ priority: 1   blocked: false       │
+│ ask-a1b2c3 ●P1 work   ▶dev   Refactor   │ task ask-a1b2c3  work              │
+│ ask-c3d4e5  P1 work   ▶rev   Add CLI    │ wf=feature-dev step=dev (developer)│
+│ ask-e5f617  P2 done          Bump ver   │ author: @autosk/developer          │
+│ ask-778899 ✋P0 human  ▶qa    Tune w…    │ priority: 1   blocked: false       │
 ├─[2] Jobs ───────────────────────────────┤ ─ description ───────────────────  │
 │ ◐ run-9ab1 stream  feature-dev:dev 3m   │ Refactor the auth flow so that …  │
 │ ◯ run-77a2 done    feature-dev:rev 12m  │                                    │
 │ ✗ run-0c12 failed  single:dev      1h   │ ─ recent jobs (3) ──────────────── │
-│   (filtered by task as-a1b2)            │   run-9ab1 running *live*(1)  3m   │
+│   (filtered by task ask-a1b2c3)         │   run-9ab1 running *live*(1)  3m   │
 ├─[3] Workflows ──────────────────────────┤   run-77a2 done             12m   │
 │ feature-dev      3 steps                │   run-0c12 failed idle_to    1h   │
 │ qa-loop          4 steps                │                                    │
@@ -79,7 +79,7 @@ follow_up, `Ctrl-A` abort.
 │ ● @autosk/reviewer   v0.2.4  installed  │ ─ recent signals (≤3) ─────────── │
 │ ! @autosk/qa          —      db_only    │   2026-05-19T16:31 dev → review   │
 └─────────────────────────────────────────┴────────────────────────────────────┘
- autosk · /Users/me/proj  daemon=ok  workers=2 q=0 r=1  scope: task=as-a1b2  ?=help
+ autosk · /Users/me/proj  daemon=ok  workers=2 q=0 r=1  scope: task=ask-a1b2c3  ?=help
 ```
 
 The focused side panel grows accordion-style so the selected row is

@@ -145,9 +145,9 @@ await call(
 
 // negative — show non-existent id
 await call(
-	"task.show as-zzzz (→ cli_error)",
+	"task.show ask-zzzzzz (→ cli_error)",
 	"autosk_task",
-	{ action: "show", args: { id: "as-zzzz" } },
+	{ action: "show", args: { id: "ask-zzzzzz" } },
 	"error",
 );
 

@@ -6,14 +6,14 @@ and a doltlite-backed local store (with a dolt-server backend planned).
 
 ```
 $ autosk create "Wire up the auth flow" -p 1
-as-a1b2
+ask-3f9b2c
 
 $ autosk ready --limit 1
-ID       P  STATUS  TITLE
-as-a1b2  1  new     Wire up the auth flow
+ID          P  STATUS  TITLE
+ask-3f9b2c  1  new     Wire up the auth flow
 
-$ autosk claim as-a1b2
-id:          as-a1b2
+$ autosk claim ask-3f9b2c
+id:          ask-3f9b2c
 status:      claimed
 priority:    1
 ...
@@ -74,8 +74,8 @@ cd ~/your/project
 autosk create "first task" -p 1     # auto-inits .autosk/db
 autosk list                         # default: open work (new + claimed)
 autosk ready --json                 # what should I work on?
-autosk claim as-a1b2                # atomic, idempotent
-autosk done as-a1b2
+autosk claim ask-3f9b2c              # atomic, idempotent
+autosk done ask-3f9b2c
 ```
 
 ## Concepts

@@ -75,8 +75,8 @@ Only tasks in status='new' can be enrolled:
 
 Examples:
 
-  autosk enroll as-bea9 --workflow feature-dev-generic
-  autosk enroll as-bea9 --workflow feature-dev-generic --step review`,
+  autosk enroll ask-bea935 --workflow feature-dev-generic
+  autosk enroll ask-bea935 --workflow feature-dev-generic --step review`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if workflowArg != "" && agentArg != "" {

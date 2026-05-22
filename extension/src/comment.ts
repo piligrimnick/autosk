@@ -22,7 +22,7 @@ const CommentActionSchema = Type.Union([Type.Literal("add"), Type.Literal("list"
 const CommentArgsSchema = Type.Partial(
 	Type.Object({
 		/** Target task id. Always required. */
-		task_id: Type.String({ description: "Target task id (e.g. as-a1b2). Required for add and list." }),
+		task_id: Type.String({ description: "Target task id (e.g. ask-a1b2c3). Required for add and list." }),
 		/** Comment text. add only. */
 		text: Type.String({ description: "Comment text. Required by add; non-empty." }),
 		/** Optional author override. Defaults to $AUTOSK_AGENT or 'human'. */
