@@ -935,7 +935,11 @@ func (gu *Gui) taskComment(*gocui.Gui, *gocui.View) error {
 	if !ok {
 		return nil
 	}
-	gu.openPrompt("comment on "+t.ID+":", "", func(text string) error {
+	// Single-pane multi-line compose: Enter inserts \n, Ctrl-S /
+	// Alt-Enter submit, Esc cancels. An empty submit (whitespace
+	// only) is a silent cancel — same semantics as the previous
+	// one-line prompt the comment popup used.
+	gu.openSingleCompose("Comment on "+t.ID, "markdown ok", "", func(text string) error {
 		if strings.TrimSpace(text) == "" {
 			return nil
 		}
