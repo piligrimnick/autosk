@@ -69,8 +69,13 @@ type Task struct {
 	BlockedBy     []TaskRef // every blocker (open and closed), in store-order
 	Blocks        []TaskRef // every task this task blocks (open and closed)
 	CommentCount  int
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// Metadata is the raw tasks.metadata JSON object. The Tasks-panel
+	// `M` hotkey reads it (pretty-prints with json.MarshalIndent) and
+	// writes it back wholesale via Datasource.SetMetadata. nil when
+	// the column is SQL NULL.
+	Metadata  map[string]any
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // Job mirrors api.JobResponse with a few cross-referenced helper
@@ -237,6 +242,9 @@ type Datasource interface {
 	Block(ctx context.Context, id, blocker string) error
 	Unblock(ctx context.Context, id, blocker string) error
 	AddComment(ctx context.Context, taskID, text string) error
+	// SetMetadata replaces tasks.metadata wholesale with m. A nil or
+	// empty map clears the metadata column (renders as "{}" on read).
+	SetMetadata(ctx context.Context, id string, m map[string]any) error
 
 	// ---- writes (workflow / agent) ----
 

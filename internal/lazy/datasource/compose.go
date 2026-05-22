@@ -181,6 +181,9 @@ func (c *Compose) Unblock(ctx context.Context, id, b string) error {
 func (c *Compose) AddComment(ctx context.Context, id, text string) error {
 	return c.off.AddComment(ctx, id, text)
 }
+func (c *Compose) SetMetadata(ctx context.Context, id string, m map[string]any) error {
+	return c.off.SetMetadata(ctx, id, m)
+}
 func (c *Compose) CreateWorkflow(ctx context.Context, path string) (string, error) {
 	return c.off.CreateWorkflow(ctx, path)
 }

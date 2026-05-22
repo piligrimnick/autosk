@@ -147,6 +147,7 @@ func (o *Offline) projectTask(ctx context.Context, raw store.Task) (Task, error)
 		AuthorID:      raw.AuthorID,
 		WorkflowID:    raw.WorkflowID,
 		CurrentStepID: raw.CurrentStepID,
+		Metadata:      raw.Metadata,
 		CreatedAt:     raw.CreatedAt,
 		UpdatedAt:     raw.UpdatedAt,
 	}
@@ -814,6 +815,28 @@ func (o *Offline) Unblock(ctx context.Context, id, blocker string) error {
 		return err
 	}
 	_ = o.s.DoltCommit(ctx, "lazy: unblock "+id+"<-"+blocker)
+	return nil
+}
+
+// SetMetadata replaces tasks.metadata with m wholesale. The store's
+// UpdateMetadata takes a mutate-in-place callback, so we express a
+// full replace as clear+copy; that always counts as "changed"
+// (the store skips the UPDATE only when the resulting JSON encodes
+// identically), which matches the CLI's `metadata set` semantics.
+func (o *Offline) SetMetadata(ctx context.Context, id string, m map[string]any) error {
+	_, _, err := o.s.UpdateMetadata(ctx, id, func(cur map[string]any) error {
+		for k := range cur {
+			delete(cur, k)
+		}
+		for k, v := range m {
+			cur[k] = v
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	_ = o.s.DoltCommit(ctx, "lazy: metadata "+id)
 	return nil
 }
 

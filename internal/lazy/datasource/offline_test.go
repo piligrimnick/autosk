@@ -184,6 +184,55 @@ func TestOffline_UpdateTitleDescription(t *testing.T) {
 	}
 }
 
+// TestOffline_SetMetadata pins the lazy `M` (metadata) write path:
+// a wholesale replace works whether the column starts empty or
+// already has keys, and an empty map clears the column back to nil.
+func TestOffline_SetMetadata(t *testing.T) {
+	ctx := context.Background()
+	ds, _, closeFn := newOfflineFx(t)
+	defer closeFn()
+
+	id, err := ds.CreateTask(ctx, "x", "", 2)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Seed: replace nil metadata with two keys.
+	in := map[string]any{"foo": "bar", "n": float64(42)}
+	if err := ds.SetMetadata(ctx, id, in); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	tk, _ := ds.GetTask(ctx, id)
+	if tk.Metadata["foo"] != "bar" {
+		t.Fatalf("metadata[foo]=%v want bar", tk.Metadata["foo"])
+	}
+	if v, _ := tk.Metadata["n"].(float64); v != 42 {
+		t.Fatalf("metadata[n]=%v want 42", tk.Metadata["n"])
+	}
+
+	// Wholesale replace: only the new keys survive.
+	if err := ds.SetMetadata(ctx, id, map[string]any{"baz": "qux"}); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	tk, _ = ds.GetTask(ctx, id)
+	if _, ok := tk.Metadata["foo"]; ok {
+		t.Fatalf("foo leaked after replace: %+v", tk.Metadata)
+	}
+	if tk.Metadata["baz"] != "qux" {
+		t.Fatalf("metadata[baz]=%v want qux", tk.Metadata["baz"])
+	}
+
+	// Empty map clears the column. The store renders SQL NULL as a
+	// nil/empty map on read.
+	if err := ds.SetMetadata(ctx, id, map[string]any{}); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	tk, _ = ds.GetTask(ctx, id)
+	if len(tk.Metadata) != 0 {
+		t.Fatalf("metadata not cleared: %+v", tk.Metadata)
+	}
+}
+
 func TestOffline_HealthIsDown(t *testing.T) {
 	ctx := context.Background()
 	ds, _, closeFn := newOfflineFx(t)

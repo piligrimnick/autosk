@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -99,6 +100,7 @@ func (gu *Gui) bindKeys() error {
 		{winTasks, 'b', gocui.ModNone, gu.taskBlock},
 		{winTasks, 'u', gocui.ModNone, gu.taskUnblock},
 		{winTasks, 'm', gocui.ModNone, gu.taskComment},
+		{winTasks, 'M', gocui.ModNone, gu.taskMetadataEdit},
 		{winTasks, 'p', gocui.ModNone, gu.taskPriority},
 		{winTasks, 'o', gocui.ModNone, gu.taskReopen},
 		// Note: there is no `c claim` binding. The v0.2 schema has no
@@ -751,6 +753,59 @@ func (gu *Gui) taskEdit(*gocui.Gui, *gocui.View) error {
 	}
 	gu.openTaskComposeForEdit(t.ID, t.Title, t.Description)
 	return nil
+}
+
+// taskMetadataEdit opens the single-pane multi-line compose editor
+// pre-filled with the selected task's metadata as pretty-printed
+// JSON (`{}` when empty/nil). On submit the text is parsed back
+// into a map[string]any and pushed via Datasource.SetMetadata. On
+// parse failure (invalid JSON, or a JSON value that isn't an
+// object) the popup is re-opened with the typed text intact so the
+// user can fix it.
+func (gu *Gui) taskMetadataEdit(*gocui.Gui, *gocui.View) error {
+	t, ok := gu.st.selectedTaskLocked()
+	if !ok {
+		return nil
+	}
+	initial := "{}"
+	if len(t.Metadata) > 0 {
+		b, err := json.MarshalIndent(t.Metadata, "", "  ")
+		if err != nil {
+			// Defensive: a map of any may carry a non-marshalable
+			// value (e.g. a func smuggled in by a buggy caller).
+			// Surface the error and bail without opening the popup.
+			gu.flashf("err", "metadata: %v", err)
+			return nil
+		}
+		initial = string(b)
+	}
+	gu.openSingleComposeForMetadata(t.ID, initial)
+	return nil
+}
+
+// openSingleComposeForMetadata is the openSingleCompose wrapper for
+// the metadata-edit flow. Same shape as openTaskComposeForEdit: the
+// validation-error branch re-invokes itself with the same typed
+// text so the popup "stays open" without the user re-typing.
+func (gu *Gui) openSingleComposeForMetadata(id, initial string) {
+	gu.openSingleCompose("Metadata "+id, "JSON object", initial, func(text string) error {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(text), &m); err != nil {
+			gu.flashf("err", "invalid JSON: %v", err)
+			gu.openSingleComposeForMetadata(id, text)
+			return nil
+		}
+		gu.g.OnWorker(func(_ gocui.Task) error {
+			if err := gu.ds.SetMetadata(gu.ctx, id, m); err != nil {
+				gu.flashf("err", "metadata: %v", err)
+				return nil
+			}
+			gu.flashf("info", "metadata updated %s", id)
+			gu.refreshAll()
+			return nil
+		})
+		return nil
+	})
 }
 
 // openTaskComposeForEdit is the openTaskCompose wrapper for the

@@ -94,6 +94,9 @@ func (f *refreshFakeDS) Unblock(_ context.Context, _, _ string) error {
 func (f *refreshFakeDS) AddComment(_ context.Context, _, _ string) error {
 	return datasource.ErrDaemonRequired
 }
+func (f *refreshFakeDS) SetMetadata(_ context.Context, _ string, _ map[string]any) error {
+	return datasource.ErrDaemonRequired
+}
 func (f *refreshFakeDS) CreateWorkflow(_ context.Context, _ string) (string, error) {
 	return "", datasource.ErrDaemonRequired
 }
