@@ -119,6 +119,56 @@ func (p panelID) normalizeForDetail() panelID {
 	return p
 }
 
+// detailDrivingPanel returns the panelID whose entity is currently
+// rendered into the Detail pane, mirroring renderDetail's focus /
+// detailFocus switch (with the same normalizeForDetail collapses).
+// Callers must already hold state.mu (R)Lock — the function reads
+// state.focused / state.detailFocus directly.
+func detailDrivingPanel(s *state) panelID {
+	active := s.focused.normalizeForDetail()
+	if active == panelDetail {
+		active = s.detailFocus.normalizeForDetail()
+	}
+	return active
+}
+
+// detailEntityKey returns a stable "kind:id" identifier for the
+// entity currently rendered into the Detail pane, or the empty
+// string when there's nothing to show. renderViews uses it to
+// detect when the Detail pane should reset its viewport origin
+// (entity changed → start from the natural anchor) versus preserve
+// it (same entity re-rendered → keep the operator's scroll
+// position). Callers must already hold state.mu (R)Lock.
+func detailEntityKey(s *state) string {
+	switch detailDrivingPanel(s) {
+	case panelTasks:
+		if t, ok := s.selectedTask(); ok {
+			return "task:" + t.ID
+		}
+	case panelJobs:
+		if j, ok := s.selectedJob(); ok {
+			return "job:" + j.JobID
+		}
+	case panelWorkflows:
+		if w, ok := s.selectedWorkflow(); ok {
+			return "workflow:" + w.ID
+		}
+	case panelAgents:
+		if a, ok := s.selectedAgent(); ok {
+			return "agent:" + a.Name
+		}
+	}
+	return ""
+}
+
+// detailShowsJob reports whether the Detail pane is currently
+// rendering a job (Job Detail). Used to gate (a) the
+// winJobInput overlay and (b) the writeViewSticky vs writeView
+// branch in renderViews. Callers must already hold state.mu (R)Lock.
+func detailShowsJob(s *state) bool {
+	return detailDrivingPanel(s) == panelJobs
+}
+
 // agentRel selects which agent relation an agent-scope chip refers
 // to. Design plan §3.4 forces the Agents-panel Enter popup so the
 // operator picks one explicitly (the relation is ambiguous —

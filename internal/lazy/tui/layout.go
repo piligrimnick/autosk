@@ -63,18 +63,33 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 		// normalize panelJobInput → winJobs for that calculation.
 		focusedSide = gu.st.focused.normalizeForDetail().window()
 		logHidden = gu.st.logHide
-		// showJobInput is gated on `isJobLive`, which is true for any
-		// non-terminal job (queued or running). The input view's
-		// lifecycle therefore matches the job's lifecycle — allocated
-		// once when the job becomes non-terminal, destroyed once when
-		// it terminates — so the view is never recreated mid-job and
-		// drafts can never be lost to gocui's NewView clearing the
-		// TextArea on creation.
-		// Does NOT depend on which view is currently focused — the
-		// input stays pinned even when the operator is reading the
-		// transcript above with the Detail pane focused.
-		if j, ok := gu.st.selectedJob(); ok && isJobLive(j) {
-			showJobInput = true
+		// showJobInput is gated on two conditions:
+		//
+		//   1. The Detail pane is currently showing a job
+		//      (detailShowsJob: focused panel — or detailFocus when
+		//      focused == panelDetail — normalises to panelJobs).
+		//      Without this gate the input would appear whenever the
+		//      Jobs panel's cursor happens to point at a live job
+		//      EVEN IF the Detail pane is showing a task / workflow /
+		//      agent. The input only makes sense as an attachment to
+		//      the Job Detail body above it.
+		//
+		//   2. The selected job is non-terminal (isJobLive, true for
+		//      queued or running). The view's lifecycle matches the
+		//      job's lifecycle — allocated once when the job becomes
+		//      non-terminal, destroyed once when it terminates — so
+		//      the view is never recreated mid-job and drafts can
+		//      never be lost to gocui's NewView clearing the
+		//      TextArea on creation.
+		//
+		// Once both gates pass, the input stays pinned even when the
+		// operator focuses the Detail pane to read the transcript
+		// above (panelDetail with detailFocus==panelJobs still
+		// satisfies condition 1).
+		if detailShowsJob(gu.st) {
+			if j, ok := gu.st.selectedJob(); ok && isJobLive(j) {
+				showJobInput = true
+			}
 		}
 	})
 	args := arrangeArgs{

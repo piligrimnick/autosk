@@ -99,6 +99,18 @@ type Gui struct {
 	// from the gocui main goroutine (layout → renderViews →
 	// writeView), so no mutex is needed.
 	bodyCache map[string]bodyCacheEntry
+
+	// lastDetailKey is the "kind:id" identifier of whatever entity
+	// was rendered into winDetail on the previous renderViews pass.
+	// When it changes between frames, renderViews resets winDetail's
+	// viewport origin so the new entity shows from its natural
+	// anchor (top for task / workflow / agent, bottom for job via
+	// writeViewSticky). When it's unchanged (same entity, just a
+	// repaint), the origin is preserved so the operator's scroll
+	// position survives spinner ticks / refresh updates / live
+	// event arrivals. Read & written only from the gocui main
+	// goroutine (same as bodyCache), so no mutex is needed.
+	lastDetailKey string
 }
 
 // bodyCacheEntry is one entry in Gui.bodyCache: the body string and
@@ -458,19 +470,58 @@ func (gu *Gui) renderViews() {
 		gu.writeView(winAgents, "[4] Agents", agBody)
 		gu.applyRowHighlight(winAgents, agHdr, gu.st.agentCursor, len(gu.st.agents), focused == panelAgents)
 
-		gu.writeViewSticky(winDetail, "[0] Detail", renderDetail(gu.st, gu.innerWidth(winDetail)))
+		// Detail pane: writeViewSticky's bottom-anchor behaviour is
+		// the right policy ONLY for the live job transcript — it auto-
+		// tails new events as they arrive. For Task / Workflow / Agent
+		// detail the same policy would wrongly scroll past the title /
+		// description on the very first render (the first frame's
+		// prevLines==0 path always fires sticky), so use a plain
+		// writeView for those branches.
+		//
+		// When the entity rendered into the pane changes between
+		// frames (cursor moves to a different task, focus flips from
+		// Tasks to Jobs, etc.), clear winDetail's buffer + reset its
+		// origin to (0,0) so the new entity starts from its natural
+		// anchor: top for non-job, bottom for job (writeViewSticky
+		// snaps to bottom because prevLines is now 0). Clearing the
+		// buffer also matters for the sticky-tail computation:
+		// without it, leftover lines from the previous entity would
+		// fail the "at bottom" predicate and the new job's transcript
+		// would land at the top instead of tailing the latest events.
+		curDetailKey := detailEntityKey(gu.st)
+		isJobDetail := detailShowsJob(gu.st)
+		if curDetailKey != gu.lastDetailKey {
+			if v, err := gu.g.View(winDetail); err == nil && v != nil {
+				v.Clear()
+				v.SetOrigin(0, 0)
+			}
+			gu.invalidateBodyCache(winDetail)
+			gu.lastDetailKey = curDetailKey
+		}
+		detailBody := renderDetail(gu.st, gu.innerWidth(winDetail))
+		if isJobDetail {
+			gu.writeViewSticky(winDetail, "[0] Detail", detailBody)
+		} else {
+			gu.writeView(winDetail, "[0] Detail", detailBody)
+		}
 		gu.writeView(winLog, "log", renderCommandLog(gu.st.logBuf, gu.st.flash))
 		gu.writeView(winStatusBar, "", renderStatusBar(gu.st, gu.opts.ProjectRoot))
 
 		// Job-input textarea is allocated by layout whenever the
-		// selected job is non-terminal (queued or running) — see
-		// isJobLive. renderViews mirrors that gate so writeView
-		// doesn't poke at a view that doesn't exist this frame.
-		// When the job is terminal the input view is absent and the
-		// Detail pane uses its full inner height for the transcript.
-		if j, ok := gu.st.selectedJob(); ok && isJobLive(j) {
-			title := "input — Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort  Esc cancel"
-			gu.writeView(winJobInput, title, gu.st.jobInput)
+		// selected job is non-terminal AND the Detail pane is
+		// currently showing that job. The Detail-pane gate matters:
+		// when the operator is on the Tasks panel (Detail shows the
+		// task), the input must NOT appear just because the Jobs
+		// panel's cursor happens to point at a live job. renderViews
+		// mirrors layout's gate so writeView doesn't poke at a view
+		// that doesn't exist this frame. When the job is terminal
+		// the input view is absent and the Detail pane uses its full
+		// inner height for the transcript.
+		if isJobDetail {
+			if j, ok := gu.st.selectedJob(); ok && isJobLive(j) {
+				title := "input — Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort  Esc cancel"
+				gu.writeView(winJobInput, title, gu.st.jobInput)
+			}
 		}
 	})
 }
@@ -916,6 +967,27 @@ func (gu *Gui) invalidateBodyCache(name string) {
 	delete(gu.bodyCache, name)
 }
 
+// viewBufferLineCount returns the number of lines that gocui's
+// renderer will draw for the view's current buffer. The naive
+// approach (`strings.Count(v.Buffer(), "\n")`) is off by one:
+// gocui's linesToString joins v.lines with '\n' WITHOUT a
+// trailing separator (see gocui/view.go::linesToString), so a
+// buffer holding N visible lines reports N-1 newlines. Using the
+// raw count for the bottom-anchor / scroll-clamp math leaves the
+// viewport positioned one row higher than it should be, which
+// visibly clips the very last line of content — in the Detail
+// pane that's the bottom border of the last drawLabeledBox.
+//
+// Returns 0 for an empty buffer (the +1 doesn't apply when there
+// are no lines at all).
+func viewBufferLineCount(v *gocui.View) int {
+	buf := v.Buffer()
+	if buf == "" {
+		return 0
+	}
+	return strings.Count(buf, "\n") + 1
+}
+
 // writeViewSticky is writeView + a sticky-tail behaviour: if the
 // view was scrolled to the bottom BEFORE the new body landed (or the
 // view was empty / freshly created), the viewport origin is moved
@@ -957,8 +1029,13 @@ func (gu *Gui) writeViewSticky(name, title, body string) {
 	if fullH < 1 {
 		fullH = 1
 	}
-	prevLines := strings.Count(v.Buffer(), "\n")
+	prevLines := viewBufferLineCount(v)
 	// First frame OR user is at (or past) the bottom → sticky.
+	// `oy + fullH >= prevLines` is true exactly when the visible
+	// region [oy, oy+fullH) already covers the last line index
+	// (prevLines-1). Using prevLines as a true line count (rather
+	// than the off-by-one newline count) is required for both this
+	// predicate AND the post-write target below.
 	beforeSticky := prevLines == 0 || oy+fullH >= prevLines
 
 	gu.writeView(name, title, body)
@@ -979,7 +1056,7 @@ func (gu *Gui) writeViewSticky(name, title, body string) {
 	} else {
 		h = fullH
 	}
-	newLines := strings.Count(v.Buffer(), "\n")
+	newLines := viewBufferLineCount(v)
 	target := newLines - h
 	if target < 0 {
 		target = 0

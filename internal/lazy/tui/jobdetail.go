@@ -515,7 +515,12 @@ func (gu *Gui) detailScrollTo(bottom bool) func(*gocui.Gui, *gocui.View) error {
 			v.SetOrigin(ox, 0)
 			return nil
 		}
-		lines := strings.Count(v.Buffer(), "\n")
+		// viewBufferLineCount, not strings.Count("\n"): the latter
+		// undercounts visible lines by 1 (gocui joins v.lines with
+		// '\n' without a trailing separator), which would leave G
+		// one row short of the actual bottom and hide the last
+		// drawLabeledBox's bottom border.
+		lines := viewBufferLineCount(v)
 		h := gu.detailEffectiveInnerH()
 		target := lines - h
 		if target < 0 {
@@ -550,7 +555,9 @@ func (gu *Gui) scrollViewByLines(name string, step int) error {
 			h = 1
 		}
 	}
-	lines := strings.Count(v.Buffer(), "\n")
+	// viewBufferLineCount: see the comment in detailScrollTo for
+	// the off-by-one this avoids vs. strings.Count("\n").
+	lines := viewBufferLineCount(v)
 	max := lines - h
 	if max < 0 {
 		max = 0

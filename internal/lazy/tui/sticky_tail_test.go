@@ -123,14 +123,22 @@ func TestStickyTail_OverlayAppears_TailStaysVisible(t *testing.T) {
 
 	// Seed a 100-line body and anchor at the bottom (no overlay
 	// present yet, so detailEffectiveInnerH == InnerSize).
+	//
+	// Use viewBufferLineCount() (not strings.Count(buf, "\n")):
+	// gocui's linesToString joins v.lines with '\n' without a
+	// trailing separator, so the raw newline count under-reports
+	// the actual line count by 1. The bottom-anchor target is
+	// `lineCount - effectiveH`, so the buggy formula would leave
+	// the last line (the bottom border of the last drawLabeledBox
+	// in production) one row past the visible region.
 	body := strings.Repeat("line\n", 100)
 	gu.writeViewSticky(winDetail, "", body)
 	_, innerH := v.InnerSize()
-	bufLines := strings.Count(v.Buffer(), "\n")
-	wantBefore := bufLines - innerH
+	lineCount := viewBufferLineCount(v)
+	wantBefore := lineCount - innerH
 	_, oy := v.Origin()
 	if oy != wantBefore {
-		t.Fatalf("setup: expected sticky-tail anchor at oy=%d, got %d", wantBefore, oy)
+		t.Fatalf("setup: expected sticky-tail anchor at oy=%d, got %d (lineCount=%d innerH=%d)", wantBefore, oy, lineCount, innerH)
 	}
 
 	// Now create the overlay (winJobInput). Its presence is what
@@ -150,27 +158,37 @@ func TestStickyTail_OverlayAppears_TailStaysVisible(t *testing.T) {
 	if effH >= innerH {
 		t.Fatalf("detailEffectiveInnerH did not shrink: was %d, still %d", innerH, effH)
 	}
-	wantAfter := bufLines - effH
+	wantAfter := lineCount - effH
 	_, oy = v.Origin()
 	if oy != wantAfter {
-		t.Errorf("sticky-tail did not re-anchor on overlay-appears: oy=%d, want %d (effH=%d, bufLines=%d)", oy, wantAfter, effH, bufLines)
+		t.Errorf("sticky-tail did not re-anchor on overlay-appears: oy=%d, want %d (effH=%d, lineCount=%d)", oy, wantAfter, effH, lineCount)
 	}
 	// The crucial invariant: the last line of content sits within
-	// the visible region (i.e. above the overlay).
-	if oy+effH < bufLines {
-		t.Errorf("sticky-tail viewport bottom %d < body length %d: overlay covers tail", oy+effH, bufLines)
+	// the visible region (i.e. above the overlay). After the
+	// off-by-one fix, oy+effH == lineCount when anchored at the
+	// bottom; the old formula left oy+effH == lineCount-1 and the
+	// last line was permanently invisible.
+	if oy+effH < lineCount {
+		t.Errorf("sticky-tail viewport bottom %d < body length %d: overlay covers tail", oy+effH, lineCount)
 	}
 }
 
-// TestDetailScrollTo_BottomUsesInnerSize pins the regression review
-// flagged: detailScrollTo / detailScrollPage / scrollViewByLines
-// must clamp against InnerSize (frame-excluded) not Size, otherwise
-// G lands 2 lines short of the actual bottom and the last 2 lines
-// of the transcript are permanently invisible via j or wheel-down.
+// TestDetailScrollTo_BottomUsesInnerSize pins two regressions in
+// the bottom-anchor math:
 //
-// gocui collapses the trailing newline in Buffer(), so we anchor
-// the expectation on what strings.Count(v.Buffer(), "\n") actually
-// returns rather than the writer-side newline count.
+//  1. detailScrollTo / detailScrollPage / scrollViewByLines must
+//     clamp against InnerSize (frame-excluded), not Size — otherwise
+//     G lands 2 lines short of the actual bottom and the last 2
+//     lines of the transcript are permanently invisible via j or
+//     wheel-down.
+//  2. The line-count used in the clamp must be the actual line
+//     count (`viewBufferLineCount`), NOT `strings.Count(buf, "\n")`.
+//     gocui's linesToString joins v.lines with '\n' without a
+//     trailing separator, so the newline count is off by one. The
+//     buggy version left G one row short of the last line, which
+//     in production rendered as a missing bottom border on the
+//     last drawLabeledBox in winDetail (“у последнего блока не
+//     видно нижней границы” operator report).
 func TestDetailScrollTo_BottomUsesInnerSize(t *testing.T) {
 	gu := newHeadlessGui(t, 80, 40)
 	// Outer view height 31, inner 29 (frame eats 2 cells).
@@ -191,8 +209,8 @@ func TestDetailScrollTo_BottomUsesInnerSize(t *testing.T) {
 	if innerH < 1 {
 		t.Fatalf("innerH=%d; fixture broken", innerH)
 	}
-	bufLines := strings.Count(v.Buffer(), "\n")
-	want := bufLines - innerH
+	lineCount := viewBufferLineCount(v)
+	want := lineCount - innerH
 
 	// G → bottom.
 	if err := gu.detailScrollTo(true)(nil, nil); err != nil {
@@ -200,14 +218,20 @@ func TestDetailScrollTo_BottomUsesInnerSize(t *testing.T) {
 	}
 	_, oy := v.Origin()
 	if oy != want {
-		t.Errorf("detailScrollTo(true) origin oy=%d want %d (innerH=%d, bufLines=%d)", oy, want, innerH, bufLines)
+		t.Errorf("detailScrollTo(true) origin oy=%d want %d (innerH=%d, lineCount=%d)", oy, want, innerH, lineCount)
 	}
 	// Sanity: the buggy Size()-based math would have landed at oy =
-	// bufLines - outerH = bufLines - (innerH+2). Make sure we're
+	// lineCount - outerH = lineCount - (innerH+2). Make sure we're
 	// not there.
-	bug := bufLines - (innerH + 2)
+	bug := lineCount - (innerH + 2)
 	if oy == bug {
 		t.Errorf("detailScrollTo(true) landed at the buggy Size() offset oy=%d (would be %d short of bottom)", oy, want-oy)
+	}
+	// Belt-and-braces: also rule out the off-by-one (strings.Count)
+	// regression. The buggy newline-count formula would land at
+	// oy = (lineCount-1) - innerH = want - 1.
+	if oy == want-1 {
+		t.Errorf("detailScrollTo(true) landed at the off-by-one origin oy=%d (last line hidden)", oy)
 	}
 
 	// Verify scrollViewByLines also uses InnerSize: from oy=0 a
@@ -219,5 +243,12 @@ func TestDetailScrollTo_BottomUsesInnerSize(t *testing.T) {
 	_, oy = v.Origin()
 	if oy != want {
 		t.Errorf("scrollViewByLines(9999) origin oy=%d want %d", oy, want)
+	}
+
+	// The most important post-condition: the last line of the
+	// buffer must actually be inside the viewport's visible
+	// region [oy, oy+innerH).
+	if oy+innerH < lineCount {
+		t.Errorf("after G, viewport bottom %d does not cover last line %d (innerH=%d)", oy+innerH, lineCount, innerH)
 	}
 }
