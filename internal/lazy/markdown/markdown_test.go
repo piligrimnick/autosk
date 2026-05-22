@@ -1,6 +1,7 @@
 package markdown
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -231,6 +232,11 @@ func TestRender_Cache_InvalidatedOnWidthChange(t *testing.T) {
 // palette version; the next Render must rebuild the cached renderer
 // against the new palette. We swap to a palette with a distinctive
 // hex and check the new colour appears in the output.
+//
+// Also asserts that RebuildStyles empties the output LRU map (not
+// just the renderer pointer) — a stale entry there would surface
+// the previous palette's ANSI bytes on the next cache-hit and
+// silently re-leak the old hue into the dashboard.
 func TestRender_Cache_InvalidatedOnPaletteSwap(t *testing.T) {
 	defer RebuildStyles()
 	prev := theme.SetActive(theme.TokyoNight())
@@ -242,12 +248,30 @@ func TestRender_Cache_InvalidatedOnPaletteSwap(t *testing.T) {
 		t.Fatal("first render empty")
 	}
 
+	// At this point the LRU should hold at least the rendered "# Heading"
+	// fragment. RebuildStyles must drop it.
+	cache.mu.Lock()
+	populated := output.m != nil && len(output.m) > 0
+	cache.mu.Unlock()
+	if !populated {
+		t.Fatal("expected output LRU to be populated after a successful Render")
+	}
+
 	// Build a palette whose Header slot is a custom hex.
 	p := theme.TokyoNight()
 	p.Header = theme.RGB("#ff00ff")
 	theme.SetActive(p)
-	// Don't call RebuildStyles \u2014 Render itself should notice the
-	// palette version bump and rebuild on the next call.
+	RebuildStyles()
+
+	// After RebuildStyles the output map must be empty — not just
+	// the renderer pointer.
+	cache.mu.Lock()
+	emptied := output.m == nil || len(output.m) == 0
+	cache.mu.Unlock()
+	if !emptied {
+		t.Fatalf("RebuildStyles did not empty the output LRU; len=%d", len(output.m))
+	}
+
 	second := Render("# Heading", 60)
 	if !strings.Contains(second, "ff;0;ff") && !strings.Contains(second, "255;0;255") {
 		// glamour uses termenv to convert hex to ANSI; the output may
@@ -257,6 +281,106 @@ func TestRender_Cache_InvalidatedOnPaletteSwap(t *testing.T) {
 		if first == second {
 			t.Errorf("palette swap had no effect on render output (cache not invalidated)")
 		}
+	}
+}
+
+// TestRender_OutputCache_HitSkipsGlamour pins the load-bearing
+// invariant of the output LRU: a second Render with the same
+// (md, width, palette) tuple must return the cached bytes WITHOUT
+// running renderHook a second time. We pin that by swapping
+// renderHook to one that panics on second invocation — if the LRU
+// kicks in the panic never fires and the call returns the
+// previously-cached output verbatim.
+func TestRender_OutputCache_HitSkipsGlamour(t *testing.T) {
+	RebuildStyles()
+	orig := renderHook
+	defer func() {
+		renderHook = orig
+		RebuildStyles()
+	}()
+
+	var calls int
+	renderHook = func(r *glamour.TermRenderer, md string) (string, error) {
+		calls++
+		if calls > 1 {
+			panic("renderHook invoked twice; LRU did not short-circuit")
+		}
+		return orig(r, md)
+	}
+
+	first := Render("# Heading\n\nbody", 60)
+	if first == "" {
+		t.Fatal("first Render returned empty")
+	}
+	second := Render("# Heading\n\nbody", 60)
+	if second != first {
+		t.Fatalf("second Render did not return cached bytes:\n first=%q\nsecond=%q", first, second)
+	}
+	if calls != 1 {
+		t.Errorf("expected renderHook to be called exactly once; got %d", calls)
+	}
+}
+
+// TestRender_OutputCache_LRUEviction pins the eviction policy:
+// after we push more distinct entries than the cache can hold, the
+// least-recently-used one is gone and a re-render reaches glamour.
+//
+// The test fills the cache up to maxOutputCacheEntries, then inserts
+// one more (which must evict the first), then re-renders the FIRST
+// fragment and asserts the call reached renderHook (i.e. it was
+// evicted, not still cached).
+func TestRender_OutputCache_LRUEviction(t *testing.T) {
+	RebuildStyles()
+	orig := renderHook
+	defer func() {
+		renderHook = orig
+		RebuildStyles()
+	}()
+
+	var calls int
+	renderHook = func(r *glamour.TermRenderer, md string) (string, error) {
+		calls++
+		return orig(r, md)
+	}
+
+	// Distinct markdown per iteration so each lands its own LRU entry.
+	// Width is fixed so the (md, width, palette) tuple varies only by md.
+	mds := make([]string, 0, maxOutputCacheEntries+1)
+	for i := 0; i < maxOutputCacheEntries+1; i++ {
+		mds = append(mds, fmt.Sprintf("entry %d body", i))
+	}
+
+	// Render the first entry, then fill the rest — the first should
+	// be evicted once we push past maxOutputCacheEntries.
+	_ = Render(mds[0], 60)
+	callsAfterFirst := calls
+	for i := 1; i < len(mds); i++ {
+		_ = Render(mds[i], 60)
+	}
+	callsAfterFill := calls
+
+	// Sanity: each distinct md produced one renderHook call — nothing
+	// was a cache hit during the fill phase.
+	if callsAfterFill-callsAfterFirst != len(mds)-1 {
+		t.Fatalf("fill phase had unexpected cache hits: %d new calls for %d new entries", callsAfterFill-callsAfterFirst, len(mds)-1)
+	}
+
+	// LRU map must now hold exactly maxOutputCacheEntries items.
+	cache.mu.Lock()
+	cacheLen := 0
+	if output.m != nil {
+		cacheLen = len(output.m)
+	}
+	cache.mu.Unlock()
+	if cacheLen != maxOutputCacheEntries {
+		t.Errorf("expected cache to hold %d entries; got %d", maxOutputCacheEntries, cacheLen)
+	}
+
+	// Re-render the first entry. Because it was evicted, renderHook
+	// must be called again.
+	_ = Render(mds[0], 60)
+	if calls != callsAfterFill+1 {
+		t.Errorf("expected LRU-evicted entry to re-render; calls=%d, want %d (eviction did not happen)", calls, callsAfterFill+1)
 	}
 }
 

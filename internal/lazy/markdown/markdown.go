@@ -25,6 +25,7 @@
 package markdown
 
 import (
+	"container/list"
 	"strings"
 	"sync"
 
@@ -70,6 +71,12 @@ const (
 // so concurrent renders from the spinner / refresh goroutines don't
 // race; the renderer itself is not goroutine-safe (it holds a shared
 // goldmark buffer), so Render takes mu for the whole conversion.
+//
+// The same mu also guards the output LRU below: a palette swap that
+// drops the renderer must drop the cached output bytes atomically,
+// otherwise the next Render of a previously-cached fragment could
+// return ANSI escapes built against the OLD palette while the rest
+// of the TUI has flipped to the new one.
 type rendererCache struct {
 	mu             sync.Mutex
 	r              *glamour.TermRenderer
@@ -78,6 +85,108 @@ type rendererCache struct {
 }
 
 var cache rendererCache
+
+// maxOutputCacheEntries caps the rendered-output LRU. A typical
+// `autosk lazy` session browses a few dozen tasks, each of which
+// contributes up to ~7 fragments (description + workflow note + up
+// to 5 trailing comments) to the cache; 64 is enough to hold the
+// working set without spending memory on rarely-revisited entries.
+//
+// Setting this to 0 effectively disables the LRU — every Render
+// re-runs glamour. Lifted out as a const so a future regression in
+// a specific corner case can be mitigated without code changes.
+const maxOutputCacheEntries = 64
+
+// outputKey is the LRU lookup tuple. paletteVersion is included so a
+// runtime palette swap can't return ANSI bytes baked against the
+// previous hues (RebuildStyles drops the whole cache anyway, but
+// keying on the version is a belt-and-braces second line of
+// defence — and lets us drop the explicit reset in the future if
+// callers ever forget to call RebuildStyles).
+type outputKey struct {
+	md             string
+	width          int
+	paletteVersion uint64
+}
+
+// outputCacheEntry is the list element payload: we keep the key
+// alongside the value so eviction can delete the map entry without
+// a reverse lookup.
+type outputCacheEntry struct {
+	key outputKey
+	val string
+}
+
+// outputLRU is a bounded LRU of rendered ANSI fragments, keyed by
+// (md, width, paletteVersion). On hit we return the cached bytes
+// verbatim, skipping the entire goldmark → chroma → glamour
+// pipeline; on miss we render normally and stash the result. The
+// list orders entries MRU-front so eviction picks the back.
+//
+// All access is guarded by cache.mu (shared with the renderer
+// cache); the LRU itself is not goroutine-safe.
+type outputLRU struct {
+	m  map[outputKey]*list.Element
+	ll *list.List // front = most-recently-used
+}
+
+var output outputLRU
+
+// outputCacheGet returns the cached fragment for k and promotes it
+// to MRU on hit. Returns ("", false) on miss. Must be called with
+// cache.mu held.
+func outputCacheGet(k outputKey) (string, bool) {
+	if output.m == nil {
+		return "", false
+	}
+	e, ok := output.m[k]
+	if !ok {
+		return "", false
+	}
+	output.ll.MoveToFront(e)
+	return e.Value.(outputCacheEntry).val, true
+}
+
+// outputCachePut stores v under k and evicts the LRU entry when the
+// cache grows past maxOutputCacheEntries. A repeated put for the
+// same key updates the value in place and re-promotes to MRU. Must
+// be called with cache.mu held.
+//
+// No-op when maxOutputCacheEntries == 0 so the cache can be
+// disabled by a one-line change to the const.
+func outputCachePut(k outputKey, v string) {
+	if maxOutputCacheEntries <= 0 {
+		return
+	}
+	if output.m == nil {
+		output.m = make(map[outputKey]*list.Element, maxOutputCacheEntries)
+		output.ll = list.New()
+	}
+	if e, ok := output.m[k]; ok {
+		e.Value = outputCacheEntry{key: k, val: v}
+		output.ll.MoveToFront(e)
+		return
+	}
+	e := output.ll.PushFront(outputCacheEntry{key: k, val: v})
+	output.m[k] = e
+	for output.ll.Len() > maxOutputCacheEntries {
+		old := output.ll.Back()
+		if old == nil {
+			break
+		}
+		output.ll.Remove(old)
+		delete(output.m, old.Value.(outputCacheEntry).key)
+	}
+}
+
+// outputCacheReset drops every cached fragment. Called from
+// RebuildStyles (so a palette swap doesn't leak old hues) and from
+// the panic-recovery path (a poisoned renderer may have stored a
+// half-baked entry). Must be called with cache.mu held.
+func outputCacheReset() {
+	output.m = nil
+	output.ll = nil
+}
 
 // renderHook is the actual glamour render call, split out so the
 // panic-safe wrapper in Render can be exercised in tests by swapping
@@ -126,17 +235,32 @@ func Render(md string, width int) (out string) {
 	// surfaces as a fall-back to raw md instead of crashing the TUI
 	// manager loop. The cached renderer is dropped because a panic
 	// mid-render may have left its internal buffers in an
-	// inconsistent state; the next call rebuilds it. cache.r = nil
-	// runs while we still hold cache.mu (Unlock was deferred first
-	// and runs after this recover).
+	// inconsistent state; the next call rebuilds it. The output LRU
+	// is dropped too — a poisoned renderer can't have written into
+	// it on THIS call (we cache after a successful render), but the
+	// cheapest robust contract is "on any panic anywhere in the
+	// render path, both halves of cache go." Both writes run while
+	// we still hold cache.mu (Unlock was deferred first and runs
+	// after this recover).
 	defer func() {
 		if r := recover(); r != nil {
 			cache.r = nil
+			outputCacheReset()
 			out = md
 		}
 	}()
 
 	pv := theme.Version()
+
+	// Output LRU hit: skip the entire goldmark → chroma → glamour
+	// pipeline and return the cached bytes verbatim. paletteVersion
+	// is part of the key so a stale-palette read is impossible even
+	// if RebuildStyles is somehow skipped on a palette swap.
+	key := outputKey{md: md, width: width, paletteVersion: pv}
+	if v, ok := outputCacheGet(key); ok {
+		return v
+	}
+
 	if cache.r == nil || cache.width != width || cache.paletteVersion != pv {
 		r, err := newRenderer(width)
 		if err != nil {
@@ -160,18 +284,25 @@ func Render(md string, width int) (out string) {
 	// spacing.
 	rendered = strings.TrimRight(rendered, "\n")
 	rendered = strings.TrimLeft(rendered, "\n")
+	outputCachePut(key, rendered)
 	return rendered
 }
 
-// RebuildStyles invalidates the cached renderer so the next Render
-// call picks up the active palette. The TUI calls this after
-// theme.SetActive + tui.RebuildStyles so all three caches (lipgloss
-// styles, the markdown renderer, gocui frame colours) flip in
-// lockstep on a palette swap.
+// RebuildStyles invalidates the cached renderer AND the output LRU
+// so the next Render call picks up the active palette. The TUI
+// calls this after theme.SetActive + tui.RebuildStyles so all three
+// caches (lipgloss styles, the markdown renderer, gocui frame
+// colours) flip in lockstep on a palette swap.
+//
+// The LRU clear is load-bearing: cached fragments encode the
+// previous palette's hex colours as inline ANSI escapes, so reusing
+// them after a swap would leak the old hues into the freshly-tinted
+// dashboard.
 func RebuildStyles() {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	cache.r = nil
+	outputCacheReset()
 }
 
 // newRenderer constructs a glamour TermRenderer wired to the current
