@@ -106,7 +106,7 @@ with the same job still selected.
 | `Enter` | Drill into the focused row. On Jobs → fullscreen inspector. |
 | `Esc` | Pop one level: inspector → dashboard; popup → close; filter chip → drop. |
 | `?` | Help cheatsheet. |
-| `:` | Command palette (verbs from every panel, e.g. `task new`, `job cancel`, `scope clear`, `quit`). |
+| `:` | Command palette. Verbs from every panel: `task new`, `task edit`, `task done`, `task cancel`, `task reopen`, `task priority`, `task resume`, `task enroll`, `task block`, `task unblock`, `task comment`, `task metadata`, `workflow create`, `workflow delete`, `job cancel`, `scope clear`, `refresh`, `quit`. |
 | `/` | Filter the focused panel. See [§ Filter language](#filter-language). |
 | `*` | Clear all scope chips. |
 | `R` | Force-refresh (ignore the 2s tick). |
@@ -118,7 +118,8 @@ with the same job still selected.
 
 | Key | Action |
 |---|---|
-| `n` | New task — prompt for the title. |
+| `n` | New task — opens the two-pane compose editor (summary + description). Empty summary cancels silently. |
+| `c` | **Edit** the selected task — opens the same two-pane compose editor, pre-filled with the current `title` and `description`. Empty title after edit → flash `title required` and the popup stays open with the typed text intact. |
 | `d` | Mark **done** (confirms when status was `work`). |
 | `x` | Cancel (confirms). |
 | `o` | Reopen (`done`/`cancel` → `new`, preserves `workflow_id`). |
@@ -126,13 +127,15 @@ with the same job still selected.
 | `r` | Resume (`human` → `work`); optionally to a named step. |
 | `b` | Add a blocker (prompts for blocker id). |
 | `u` | Remove a blocker (prompts for blocker id). |
-| `m` | Add a comment. |
+| `m` | Add a comment — single-pane multi-line compose. `Enter` inserts `\n`, `Ctrl-S` / `Alt-Enter` submit, `Esc` cancels. Empty submit is a silent cancel. |
 | `p` | Set priority (`0..3` picker). |
+| `M` | **Edit metadata** — single-pane compose pre-filled with the task's current `metadata` pretty-printed as JSON (`{}` when empty). On submit the body is `json.Unmarshal`-ed into a `map[string]any` and replaces `tasks.metadata` wholesale; invalid JSON or a non-object payload (array, string, number, `null`) re-opens the popup with `invalid JSON: …` and the typed text intact. |
 | `J` / `K` | Scroll the Tasks detail viewport. |
 
-There is **no `c claim`** binding. The v0.2 schema has no claim verb
-— tasks self-advance via workflow steps. Use `e` to enroll, or
-assign an agent via the `:` palette.
+There is **no `c claim`** binding — `c` is bound to **change/edit**
+as of this release. The v0.2 schema has no claim verb anyway; tasks
+self-advance via workflow steps. Use `e` to enroll a `new` task
+into a workflow.
 
 ### Jobs `[2]`
 
@@ -152,10 +155,10 @@ assign an agent via the `:` palette.
 
 ### Agents `[4]`
 
-| Key | Action |
-|---|---|
-| `i` | Flashes the CLI command (`autosk agent install <pkg>`) — install isn't reachable from inside `lazy`. |
-| `u` | Same for `autosk agent uninstall <pkg>`. |
+Read-only panel — no hotkeys. `autosk lazy` cannot fork npm
+installs from inside the TUI; install / uninstall from the CLI
+with `autosk agent install <pkg>` and `autosk agent uninstall
+<pkg>`.
 
 ### Inspector
 
@@ -250,9 +253,10 @@ Swapping the palette at runtime (`theme.SetActive` +
 `tui.RebuildStyles`) updates the markdown render in lockstep with
 the rest of the TUI.
 
-The **compose popup** used to edit a description or write a comment
-stays a **raw editor** — markdown is rendered only when reading,
-never while typing.
+The **compose popups** (two-pane `n`/`c` editor for title +
+description, single-pane `m` comment editor, single-pane `M`
+metadata-JSON editor) all stay **raw editors** — markdown is
+rendered only when reading, never while typing.
 
 Wire formats are untouched: `autosk` CLI `--json` output, the daemon
 HTTP API, the `RunContextSeed` handed to agents, and the prompt
@@ -397,7 +401,7 @@ they do for every other write-capable verb (override DB discovery).
 |---|---|
 | `daemon=down` but `autosk daemon list` works | Stale socket path. Pass `--sock` or set `AUTOSK_SOCK`. |
 | Live tab flashes `daemon required (try Archive)` | Daemon isn't running or doesn't have the SSE / attach hubs wired. `autosk daemon serve`. |
-| `i` on Agents only flashes a message | By design — `lazy` can't fork npm installs from inside the TUI. Quit and run `autosk agent install <pkg>`. |
+| Agents panel has no `i` / `u` hotkeys | By design — `lazy` can't fork npm installs from inside the TUI. Quit and run `autosk agent install <pkg>` / `autosk agent uninstall <pkg>`. |
 | Help screen lists `Ctrl-F` twice | Same chord, two view-scoped meanings — page-forward on the inspector body, `follow_up` dispatch in the Live textarea. The `?` overlay labels each by focus. |
 | Inspector tab shows `(no signals)` for a run you know emitted one | Confirm you're on the right run — the Signals tab is jobID-scoped, not taskID-scoped. Earlier kickback runs of the same task render in their own inspector. |
 
