@@ -160,11 +160,11 @@ func (c *Compose) UpdateStatus(ctx context.Context, id string, st store.Status) 
 func (c *Compose) UpdatePriority(ctx context.Context, id string, p int) error {
 	return c.off.UpdatePriority(ctx, id, p)
 }
+func (c *Compose) UpdateTitleDescription(ctx context.Context, id, title, description string) error {
+	return c.off.UpdateTitleDescription(ctx, id, title, description)
+}
 func (c *Compose) Enroll(ctx context.Context, id, wf string) error {
 	return c.off.Enroll(ctx, id, wf)
-}
-func (c *Compose) EnrollAgent(ctx context.Context, id, ag string) error {
-	return c.off.EnrollAgent(ctx, id, ag)
 }
 func (c *Compose) Resume(ctx context.Context, id, to string) error {
 	return c.off.Resume(ctx, id, to)
@@ -177,6 +177,9 @@ func (c *Compose) Unblock(ctx context.Context, id, b string) error {
 }
 func (c *Compose) AddComment(ctx context.Context, id, text string) error {
 	return c.off.AddComment(ctx, id, text)
+}
+func (c *Compose) SetMetadata(ctx context.Context, id string, m map[string]any) error {
+	return c.off.SetMetadata(ctx, id, m)
 }
 func (c *Compose) CreateWorkflow(ctx context.Context, path string) (string, error) {
 	return c.off.CreateWorkflow(ctx, path)

@@ -137,6 +137,13 @@ const (
 	// (winTaskComposeSummary / winTaskComposeDescription); the
 	// popupState's ComposeFocus picks which one currentView lands on.
 	popupTaskCompose
+	// popupSingleCompose is the one-pane multi-line editor used by
+	// the comment and metadata flows: a single editable view with
+	// SimpleEditor (Enter inserts "\n"), Ctrl-S / Alt-Enter submit,
+	// Esc cancels. Reuses popupState.Input as the initial value and
+	// OnAccept as the submit callback — the contract matches
+	// popupPrompt, only the layout and the submit chords differ.
+	popupSingleCompose
 )
 
 // composePane identifies one of the two panes in the task-compose
@@ -171,6 +178,13 @@ type popupState struct {
 	Description     string
 	ComposeFocus    composePane
 	OnComposeAccept func(summary, description string) error
+
+	// Single-compose subtitle hint (popupSingleCompose). Short label
+	// drawn on the top frame next to the always-on "<c-s>/<a-enter>
+	// submit · <esc> cancel" string — e.g. "markdown ok" for the
+	// comment popup or "JSON object" for the metadata popup. Empty
+	// when the caller doesn't want a context label.
+	Hint string
 }
 
 // inspectorState carries everything the inspector view needs.

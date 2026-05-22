@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -91,6 +92,7 @@ func (gu *Gui) bindKeys() error {
 
 		// Tasks write verbs.
 		{winTasks, 'n', gocui.ModNone, gu.taskNew},
+		{winTasks, 'c', gocui.ModNone, gu.taskEdit},
 		{winTasks, 'd', gocui.ModNone, gu.taskDone},
 		{winTasks, 'x', gocui.ModNone, gu.taskCancel},
 		{winTasks, 'e', gocui.ModNone, gu.taskEnroll},
@@ -98,19 +100,20 @@ func (gu *Gui) bindKeys() error {
 		{winTasks, 'b', gocui.ModNone, gu.taskBlock},
 		{winTasks, 'u', gocui.ModNone, gu.taskUnblock},
 		{winTasks, 'm', gocui.ModNone, gu.taskComment},
+		{winTasks, 'M', gocui.ModNone, gu.taskMetadataEdit},
 		{winTasks, 'p', gocui.ModNone, gu.taskPriority},
 		{winTasks, 'o', gocui.ModNone, gu.taskReopen},
-		// Note: there is no 'c claim' binding. The v0.2 schema has no
-		// claim verb — tasks self-advance via workflow steps. Use 'e'
-		// to enroll, or assign an agent. The help screen reflects this.
+		// Note: there is no `c claim` binding. The v0.2 schema has no
+		// claim verb — tasks self-advance via workflow steps. `c` is
+		// bound to `change` (edit title + description in the two-pane
+		// compose); use `e` to enroll instead.
 
 		// Workflows write verbs.
 		{winWorkflows, 'n', gocui.ModNone, gu.workflowNew},
 		{winWorkflows, 'D', gocui.ModNone, gu.workflowDelete},
 
-		// Agents write verbs.
-		{winAgents, 'i', gocui.ModNone, gu.agentInstall},
-		{winAgents, 'u', gocui.ModNone, gu.agentUninstall},
+		// Agents panel is read-only inside lazy: package install /
+		// uninstall happens via the `autosk agent` CLI, no hotkeys.
 
 		// Jobs hotkeys.
 		{winJobs, 'a', gocui.ModNone, gu.jobAttachLive},
@@ -231,6 +234,17 @@ func (gu *Gui) bindKeys() error {
 		{winTaskComposeDescription, gocui.KeyEnter, gocui.ModAlt, gu.taskComposeConfirm},
 		{winTaskComposeDescription, gocui.KeyTab, gocui.ModNone, gu.taskComposeToggle},
 		{winTaskComposeDescription, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
+
+		// Single-pane multi-line compose popup (comment / metadata).
+		//
+		// Plain Enter is intentionally NOT bound — it falls through to
+		// gocui.DefaultEditor which inserts "\n", which is the whole
+		// point of the multi-line popup. Submitting requires Ctrl+S or
+		// Alt+Enter. Esc cancels without invoking OnAccept.
+		{winSingleCompose, gocui.KeyCtrlS, gocui.ModNone, gu.singleComposeConfirm},
+		{winSingleCompose, gocui.KeyEnter, gocui.ModAlt, gu.singleComposeConfirm},
+		{winSingleCompose, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
+		{winSingleCompose, gocui.KeyCtrlC, gocui.ModNone, gu.quit},
 	}
 	for _, b := range bs {
 		if err := gu.g.SetKeybinding(b.view, b.key, b.mod, b.h); err != nil {
@@ -599,16 +613,19 @@ func (gu *Gui) openFilter(*gocui.Gui, *gocui.View) error {
 func (gu *Gui) openPalette(*gocui.Gui, *gocui.View) error {
 	cmds := []string{
 		"task new",
+		"task edit",
 		"task done",
 		"task cancel",
 		"task reopen",
+		"task priority",
+		"task resume",
 		"task enroll",
 		"task block",
 		"task unblock",
 		"task comment",
+		"task metadata",
 		"workflow create",
 		"workflow delete",
-		"agent install",
 		"job cancel",
 		"scope clear",
 		"refresh",
@@ -625,12 +642,18 @@ func (gu *Gui) dispatchPaletteCommand(cmd string) {
 	switch cmd {
 	case "task new":
 		_ = gu.taskNew(nil, nil)
+	case "task edit":
+		_ = gu.taskEdit(nil, nil)
 	case "task done":
 		_ = gu.taskDone(nil, nil)
 	case "task cancel":
 		_ = gu.taskCancel(nil, nil)
 	case "task reopen":
 		_ = gu.taskReopen(nil, nil)
+	case "task priority":
+		_ = gu.taskPriority(nil, nil)
+	case "task resume":
+		_ = gu.taskResume(nil, nil)
 	case "task enroll":
 		_ = gu.taskEnroll(nil, nil)
 	case "task block":
@@ -639,12 +662,12 @@ func (gu *Gui) dispatchPaletteCommand(cmd string) {
 		_ = gu.taskUnblock(nil, nil)
 	case "task comment":
 		_ = gu.taskComment(nil, nil)
+	case "task metadata":
+		_ = gu.taskMetadataEdit(nil, nil)
 	case "workflow create":
 		_ = gu.workflowNew(nil, nil)
 	case "workflow delete":
 		_ = gu.workflowDelete(nil, nil)
-	case "agent install":
-		_ = gu.agentInstall(nil, nil)
 	case "job cancel":
 		_ = gu.jobCancel(nil, nil)
 	case "scope clear":
@@ -671,9 +694,9 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"tasks:",
 		"  Space        filter Jobs by selected task (stay on Tasks)",
 		"  Enter        filter Jobs by selected task and focus Jobs",
-		"  n new    d done     x cancel   o reopen",
-		"  e enroll r resume   b block    u unblock  m comment",
-		"  p priority",
+		"  n new    c edit    d done     x cancel   o reopen",
+		"  e enroll r resume  b block    u unblock  m comment",
+		"  p priority         M metadata",
 		"",
 		"jobs:",
 		"  Enter inspector (Live default)",
@@ -682,9 +705,6 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"workflows:",
 		"  n new (from file)   D delete",
 		"",
-		"agents:",
-		"  i install   u uninstall",
-		"",
 		"inspector:",
 		"  [ / ]   1..4   tab cycle/jump",
 		"  Esc / Ctrl-O   back to dashboard",
@@ -692,9 +712,11 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"  Live input (textarea focus): Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort",
 		"  Live input: Ctrl-B / PgUp / PgDn scroll-back the transcript above",
 		"",
-		"new task compose:",
+		"compose (new task / edit task):",
 		"  summary: Enter / Ctrl-S submit  Tab → description  Esc cancel",
 		"  description: Ctrl-S / Alt-Enter submit  Tab → summary  Esc cancel",
+		"compose (comment / metadata):",
+		"  Ctrl-S / Alt-Enter submit  Enter newline  Esc cancel",
 	}
 	gu.openMenu("help", lines, func(_ int) error { return gu.popupClose(nil, nil) })
 	return nil
@@ -724,6 +746,120 @@ func (gu *Gui) taskNew(*gocui.Gui, *gocui.View) error {
 		return nil
 	})
 	return nil
+}
+
+// taskEdit opens the two-pane compose editor pre-filled with the
+// selected task's title + description. On submit the values flow to
+// Datasource.UpdateTitleDescription. An empty title (post-trim) is
+// rejected with a flash and the popup is re-opened with the typed
+// text intact so the user can fix it without losing their work.
+func (gu *Gui) taskEdit(*gocui.Gui, *gocui.View) error {
+	t, ok := gu.st.selectedTaskLocked()
+	if !ok {
+		return nil
+	}
+	gu.openTaskComposeForEdit(t.ID, t.Title, t.Description)
+	return nil
+}
+
+// taskMetadataEdit opens the single-pane multi-line compose editor
+// pre-filled with the selected task's metadata as pretty-printed
+// JSON (`{}` when empty/nil). On submit the text is parsed back
+// into a map[string]any and pushed via Datasource.SetMetadata. On
+// parse failure (invalid JSON, or a JSON value that isn't an
+// object) the popup is re-opened with the typed text intact so the
+// user can fix it.
+func (gu *Gui) taskMetadataEdit(*gocui.Gui, *gocui.View) error {
+	t, ok := gu.st.selectedTaskLocked()
+	if !ok {
+		return nil
+	}
+	initial := "{}"
+	if len(t.Metadata) > 0 {
+		b, err := json.MarshalIndent(t.Metadata, "", "  ")
+		if err != nil {
+			// Defensive: a map of any may carry a non-marshalable
+			// value (e.g. a func smuggled in by a buggy caller).
+			// Surface the error and bail without opening the popup.
+			gu.flashf("err", "metadata: %v", err)
+			return nil
+		}
+		initial = string(b)
+	}
+	gu.openSingleComposeForMetadata(t.ID, initial)
+	return nil
+}
+
+// openSingleComposeForMetadata is the openSingleCompose wrapper for
+// the metadata-edit flow. Same shape as openTaskComposeForEdit: the
+// validation-error branch re-invokes itself with the same typed
+// text so the popup "stays open" without the user re-typing.
+//
+// JSON validation has two gates: json.Unmarshal must succeed AND
+// the decoded value must actually be a JSON object. Both `null` and
+// non-object JSON (arrays, strings, numbers, bool) decode into a
+// map[string]any without an error — `null` populates a nil map and
+// non-objects fail mid-decode — but the user-visible contract per
+// plan AC #9 is that only a JSON OBJECT is acceptable. Treat the
+// nil-map case as a validation failure so typing the literal `null`
+// doesn't silently wipe metadata. (Note: json.Unmarshal of an
+// array / string / number / bool into a map[string]any returns a
+// proper error, so they go through the existing err branch.)
+func (gu *Gui) openSingleComposeForMetadata(id, initial string) {
+	gu.openSingleCompose("Metadata "+id, "JSON object", initial, func(text string) error {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(text), &m); err != nil {
+			gu.flashf("err", "invalid JSON: %v", err)
+			gu.openSingleComposeForMetadata(id, text)
+			return nil
+		}
+		if m == nil {
+			// `null` unmarshals cleanly into a nil map. Reject so it
+			// doesn't act as a silent metadata-wipe (plan AC #9).
+			gu.flashf("err", "invalid JSON: metadata must be a JSON object")
+			gu.openSingleComposeForMetadata(id, text)
+			return nil
+		}
+		gu.runDispatch(func() {
+			if err := gu.ds.SetMetadata(gu.ctx, id, m); err != nil {
+				gu.flashf("err", "metadata: %v", err)
+				return
+			}
+			gu.flashf("info", "metadata updated %s", id)
+			gu.refreshAll()
+		})
+		return nil
+	})
+}
+
+// openTaskComposeForEdit is the openTaskCompose wrapper for the
+// edit flow. Extracted so the validation-error branch (empty title)
+// can re-invoke itself with the same (id, summary, description)
+// triple — the compose confirm handler resets popup state to
+// popupNone before invoking the accept callback, so re-opening from
+// inside the callback is the supported way to "keep the popup
+// open".
+//
+// The write itself goes through runDispatch (not gu.g.OnWorker
+// directly) so tests can swap in a synchronous dispatcher and
+// observe the datasource call without needing a gocui MainLoop.
+func (gu *Gui) openTaskComposeForEdit(id, summary, description string) {
+	gu.openTaskCompose("Edit "+id, summary, description, func(s, d string) error {
+		if strings.TrimSpace(s) == "" {
+			gu.flashf("err", "title required")
+			gu.openTaskComposeForEdit(id, s, d)
+			return nil
+		}
+		gu.runDispatch(func() {
+			if err := gu.ds.UpdateTitleDescription(gu.ctx, id, s, d); err != nil {
+				gu.flashf("err", "edit: %v", err)
+				return
+			}
+			gu.flashf("info", "edited %s", id)
+			gu.refreshAll()
+		})
+		return nil
+	})
 }
 
 func (gu *Gui) taskDone(*gocui.Gui, *gocui.View) error {
@@ -881,7 +1017,11 @@ func (gu *Gui) taskComment(*gocui.Gui, *gocui.View) error {
 	if !ok {
 		return nil
 	}
-	gu.openPrompt("comment on "+t.ID+":", "", func(text string) error {
+	// Single-pane multi-line compose: Enter inserts \n, Ctrl-S /
+	// Alt-Enter submit, Esc cancels. An empty submit (whitespace
+	// only) is a silent cancel — same semantics as the previous
+	// one-line prompt the comment popup used.
+	gu.openSingleCompose("Comment on "+t.ID, "markdown ok", "", func(text string) error {
 		if strings.TrimSpace(text) == "" {
 			return nil
 		}
@@ -956,28 +1096,6 @@ func (gu *Gui) workflowDelete(*gocui.Gui, *gocui.View) error {
 			return nil
 		})
 	})
-	return nil
-}
-
-// agentInstall and agentUninstall are intentionally informational in
-// v1: the daemon has no /v1/agents endpoint so live mode returns the
-// same error as offline. A popup with two no-op options is a fake
-// choice; flashf is the right verb — one piece of info, no demand
-// for an action that doesn't exist. The hotkeys stay bound so the
-// help screen line 'i install / u uninstall' is honest (it points
-// to the CLI workaround).
-func (gu *Gui) agentInstall(*gocui.Gui, *gocui.View) error {
-	gu.flashf("info", "agent install: quit lazy and run 'autosk agent install <pkg>'")
-	return nil
-}
-
-func (gu *Gui) agentUninstall(*gocui.Gui, *gocui.View) error {
-	a, ok := gu.st.selectedAgentLocked()
-	name := "<pkg>"
-	if ok && a.Name != "" {
-		name = a.Name
-	}
-	gu.flashf("info", "agent uninstall: quit lazy and run 'autosk agent uninstall %s'", name)
 	return nil
 }
 

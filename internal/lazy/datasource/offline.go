@@ -147,6 +147,7 @@ func (o *Offline) projectTask(ctx context.Context, raw store.Task) (Task, error)
 		AuthorID:      raw.AuthorID,
 		WorkflowID:    raw.WorkflowID,
 		CurrentStepID: raw.CurrentStepID,
+		Metadata:      raw.Metadata,
 		CreatedAt:     raw.CreatedAt,
 		UpdatedAt:     raw.UpdatedAt,
 	}
@@ -644,6 +645,25 @@ func (o *Offline) UpdateStatus(ctx context.Context, id string, status store.Stat
 	return nil
 }
 
+// UpdateTitleDescription rewrites tasks.title and tasks.description
+// in one transaction and commits the change to dolt.
+//
+// Title is trimmed before the store write; an empty title after
+// trimming is rejected so the UI can render a flash and keep the
+// compose popup open. Description is passed through verbatim so the
+// caller can blank it out by submitting an empty string.
+func (o *Offline) UpdateTitleDescription(ctx context.Context, id, title, description string) error {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return errors.New("title required")
+	}
+	if _, err := o.s.UpdateTask(ctx, id, store.TaskPatch{Title: &title, Description: &description}); err != nil {
+		return err
+	}
+	_ = o.s.DoltCommit(ctx, "lazy: edit "+id)
+	return nil
+}
+
 // UpdatePriority rewrites tasks.priority.
 func (o *Offline) UpdatePriority(ctx context.Context, id string, p int) error {
 	if p < store.MinPriority || p > store.MaxPriority {
@@ -685,42 +705,6 @@ func (o *Offline) Enroll(ctx context.Context, id, wfName string) error {
 		return workflow.MapEnterStepError(id, err)
 	}
 	_ = o.s.DoltCommit(ctx, fmt.Sprintf("lazy: enroll %s -> %s", id, wfName))
-	return nil
-}
-
-// EnrollAgent attaches an existing task to the synthetic single:<agent>
-// workflow, creating it (and the agent row) on demand so the call is
-// usable straight off the agents popup.
-//
-// We can't just delegate to Enroll("single:"+name) because lazy's
-// Enroll requires the workflow to already exist (it uses GetByName).
-// EnsureSingle gives us the same single-creation race-safety as the
-// CLI path in cmd/autosk/create.go::resolveWorkflowEntry.
-func (o *Offline) EnrollAgent(ctx context.Context, id, agentName string) error {
-	t, err := o.s.GetTask(ctx, id)
-	if err != nil {
-		return err
-	}
-	if t.Status != store.StatusNew {
-		return fmt.Errorf("enroll: task is not 'new' (status=%s)", t.Status)
-	}
-	ag := agent.New(o.s.DB())
-	if _, err := ag.EnsureByName(ctx, agentName); err != nil {
-		return fmt.Errorf("ensure agent %q: %w", agentName, err)
-	}
-	ws := workflow.New(o.s.DB(), ag)
-	wf, err := ws.EnsureSingle(ctx, agentName)
-	if err != nil {
-		return fmt.Errorf("ensure single:%s: %w", agentName, err)
-	}
-	if err := workflow.EnterStep(ctx, o.s, ws, workflow.EnterStepInput{
-		TaskID:     id,
-		StepID:     wf.FirstStepID,
-		WorkflowID: wf.ID,
-	}); err != nil {
-		return workflow.MapEnterStepError(id, err)
-	}
-	_ = o.s.DoltCommit(ctx, fmt.Sprintf("lazy: enroll %s -> single:%s", id, agentName))
 	return nil
 }
 
@@ -795,6 +779,32 @@ func (o *Offline) Unblock(ctx context.Context, id, blocker string) error {
 		return err
 	}
 	_ = o.s.DoltCommit(ctx, "lazy: unblock "+id+"<-"+blocker)
+	return nil
+}
+
+// SetMetadata replaces tasks.metadata with m wholesale. The store's
+// UpdateMetadata takes a mutate-in-place callback, so we express a
+// full replace as clear+copy. UpdateMetadata returns a `changed`
+// flag (false when the resulting JSON encodes identically to the
+// previous value); we gate the DoltCommit on it so submitting the
+// same JSON twice doesn't churn a no-op revision — matches the
+// CLI's `metadata set` path in cmd/autosk/metadata.go.
+func (o *Offline) SetMetadata(ctx context.Context, id string, m map[string]any) error {
+	_, changed, err := o.s.UpdateMetadata(ctx, id, func(cur map[string]any) error {
+		for k := range cur {
+			delete(cur, k)
+		}
+		for k, v := range m {
+			cur[k] = v
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if changed {
+		_ = o.s.DoltCommit(ctx, "lazy: metadata "+id)
+	}
 	return nil
 }
 

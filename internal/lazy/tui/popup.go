@@ -50,6 +50,52 @@ func (gu *Gui) openPrompt(prompt, initial string, onAccept func(string) error) {
 	gu.requestRedraw()
 }
 
+// openSingleCompose pushes the one-pane multi-line editor used for
+// task comments and metadata. Carries the same simple-contract
+// semantics as openPrompt (Input seeds the initial value, OnAccept
+// fires with the typed text on submit) — the differences are
+// layout (a tall textarea, not a one-line strip) and the submit
+// chords (Ctrl-S / Alt-Enter; plain Enter falls through to the
+// editor and inserts "\n").
+//
+// hint is a short context label drawn alongside the always-on
+// submit/cancel keybinding hint; pass "" for no hint.
+func (gu *Gui) openSingleCompose(title, hint, initial string, onAccept func(string) error) {
+	gu.st.withLock(func() {
+		gu.st.popup = popupState{
+			Kind:     popupSingleCompose,
+			Title:    title,
+			Hint:     hint,
+			Input:    initial,
+			OnAccept: onAccept,
+		}
+	})
+	gu.requestRedraw()
+}
+
+// singleComposeConfirm reads the typed text out of the single-compose
+// view and fires OnAccept with it. Symmetric to taskComposeConfirm,
+// just without the summary pane. Bound on Ctrl+S and Alt+Enter; Esc
+// dismisses without invoking OnAccept.
+func (gu *Gui) singleComposeConfirm(*gocui.Gui, *gocui.View) error {
+	var accept func(string) error
+	var text string
+	if v, err := gu.g.View(winSingleCompose); err == nil && v != nil {
+		text = strings.TrimRight(v.TextArea.GetContent(), "\n")
+	}
+	gu.st.withLock(func() {
+		if gu.st.popup.Kind != popupSingleCompose {
+			return
+		}
+		accept = gu.st.popup.OnAccept
+		gu.st.popup = popupState{}
+	})
+	if accept != nil {
+		return accept(text)
+	}
+	return nil
+}
+
 // openTaskCompose pushes the two-pane lazygit-style commit editor
 // used to create a task. The accept callback fires with the summary
 // (single line) and the multi-line description; either may be empty
@@ -248,6 +294,8 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 	case popupTaskCompose:
 		activeSet[winTaskComposeSummary] = true
 		activeSet[winTaskComposeDescription] = true
+	case popupSingleCompose:
+		activeSet[winSingleCompose] = true
 	}
 	for _, name := range allPopupWindows {
 		if activeSet[name] {
@@ -282,6 +330,10 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 		}
 	case popupTaskCompose:
 		gu.layoutTaskCompose(g, w, h, title)
+	case popupSingleCompose:
+		var hint string
+		gu.st.withRLock(func() { hint = gu.st.popup.Hint })
+		gu.layoutSingleCompose(g, w, h, title, hint, input)
 	}
 }
 
@@ -389,9 +441,14 @@ func (gu *Gui) layoutTaskCompose(g *gocui.Gui, w, h int, title string) {
 		summV.Wrap = false
 		summV.Editor = gocui.DefaultEditor
 		// Seed the initial value only on the very first layout pass
-		// (TextArea is empty). After that the user owns it.
-		if summV.Buffer() == "" && initialSummary != "" {
-			_, _ = summV.Write([]byte(initialSummary))
+		// (TextArea is empty). After that the user owns it. We seed
+		// via TextArea.TypeString + RenderTextArea so the editor's
+		// view of the buffer matches v.lines — a plain v.Write would
+		// only paint v.lines and the next keystroke would wipe the
+		// seed when RenderTextArea fired off an empty TextArea.
+		if summV.TextArea.GetContent() == "" && initialSummary != "" {
+			summV.TextArea.TypeString(initialSummary)
+			summV.RenderTextArea()
 			summaryContent = initialSummary
 		}
 		// Lazygit-style character counter in the subtitle slot.
@@ -430,8 +487,9 @@ func (gu *Gui) layoutTaskCompose(g *gocui.Gui, w, h int, title string) {
 		// the only slot gocui actually paints on empty content.
 		descV.Subtitle = composeDescriptionSubtitle(focus == composeDescription)
 
-		if descV.Buffer() == "" && initialDesc != "" {
-			_, _ = descV.Write([]byte(initialDesc))
+		if descV.TextArea.GetContent() == "" && initialDesc != "" {
+			descV.TextArea.TypeString(initialDesc)
+			descV.RenderTextArea()
 		}
 	}
 
@@ -445,6 +503,89 @@ func (gu *Gui) layoutTaskCompose(g *gocui.Gui, w, h int, title string) {
 	if _, err := g.SetCurrentView(focusName); err != nil && !isUnknownView(err) {
 		return
 	}
+}
+
+// layoutSingleCompose draws the one-pane multi-line popup used by
+// the comment and metadata flows. Reuses the same panel-width
+// formula as the two-pane compose (composePanelWidth) so the popup
+// has visual parity with `n new`, and the same view-lifetime
+// invariant: the view is preserved across layout passes via
+// layoutPopup's activeSet so the TextArea's typed content survives
+// each keystroke (gocui's NewView reinstalls a fresh TextArea
+// otherwise).
+//
+// Height = composeContentHeight(initial) + 2 (frame), capped at
+// 3/4 of the terminal — same envelope as the description pane in
+// the two-pane compose so a freshly-opened popup with empty content
+// is tall enough to type into and a popup pre-filled with long
+// pretty-printed JSON grows to fit.
+//
+// Editor: gocui.DefaultEditor. Enter inserts "\n" (no view-scoped
+// override on plain Enter); Ctrl-S and Alt-Enter are bound to
+// singleComposeConfirm, Esc to popupClose.
+func (gu *Gui) layoutSingleCompose(g *gocui.Gui, termW, termH int, title, hint, initial string) {
+	// Read the live content to size the panel — same trick as the
+	// two-pane compose, so a pretty-printed metadata dump grows the
+	// box past the 7-row minimum without the user having to scroll.
+	content := initial
+	if v, err := g.View(winSingleCompose); err == nil && v != nil {
+		content = v.TextArea.GetContent()
+	}
+
+	panelWidth := composePanelWidth(termW)
+	// composeContentHeight already enforces a min of
+	// composeMinDescriptionContent (7), so panelHeight starts at >=9
+	// before the termH*3/4 cap. No explicit floor needed.
+	panelHeight := composeContentHeight(content) + 2
+	if panelHeight > termH*3/4 {
+		panelHeight = termH * 3 / 4
+	}
+	x0 := termW/2 - panelWidth/2
+	y0 := termH/2 - panelHeight/2 - panelHeight%2
+	x1 := termW/2 + panelWidth/2 - 1
+	y1 := y0 + panelHeight - 1
+
+	v, err := g.SetView(winSingleCompose, x0, y0, x1, y1, 0)
+	if err != nil && !isUnknownView(err) {
+		return
+	}
+	if v == nil {
+		return
+	}
+	v.Title = title
+	v.Frame = true
+	v.FrameRunes = roundedFrameRunes
+	v.FrameColor = theme.Active().PopupBox.Gocui()
+	v.TitleColor = theme.Active().PopupBox.Gocui()
+	v.Editable = true
+	v.Wrap = false
+	v.Editor = gocui.DefaultEditor
+	v.Subtitle = composeSingleSubtitle(hint)
+	// Seed initial on the first layout pass only: type the bytes
+	// directly into the view's TextArea (NOT v.Write — v.Write only
+	// populates v.lines, which the editor doesn't see), then sync
+	// to v.lines via RenderTextArea so the user actually sees the
+	// seed on the first frame. The TextArea-empty guard is the
+	// equivalent of the single-pane prompt's Buffer()-empty guard:
+	// after the first layout the user owns the textarea.
+	if v.TextArea.GetContent() == "" && initial != "" {
+		v.TextArea.TypeString(initial)
+		v.RenderTextArea()
+	}
+	if _, err := g.SetCurrentView(winSingleCompose); err != nil && !isUnknownView(err) {
+		return
+	}
+}
+
+// composeSingleSubtitle renders the always-on submit / cancel hint
+// for popupSingleCompose, optionally prefixed by a caller-supplied
+// context label (e.g. "markdown ok" or "JSON object").
+func composeSingleSubtitle(hint string) string {
+	base := "<c-s>/<a-enter> submit · <esc> cancel"
+	if hint == "" {
+		return " " + base + " "
+	}
+	return " " + hint + " · " + base + " "
 }
 
 // composePanelWidth implements lazygit's getPopupPanelWidth (with

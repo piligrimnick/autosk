@@ -73,10 +73,10 @@ func (f *refreshFakeDS) UpdateStatus(_ context.Context, _ string, _ store.Status
 func (f *refreshFakeDS) UpdatePriority(_ context.Context, _ string, _ int) error {
 	return datasource.ErrDaemonRequired
 }
-func (f *refreshFakeDS) Enroll(_ context.Context, _, _ string) error {
+func (f *refreshFakeDS) UpdateTitleDescription(_ context.Context, _, _, _ string) error {
 	return datasource.ErrDaemonRequired
 }
-func (f *refreshFakeDS) EnrollAgent(_ context.Context, _, _ string) error {
+func (f *refreshFakeDS) Enroll(_ context.Context, _, _ string) error {
 	return datasource.ErrDaemonRequired
 }
 func (f *refreshFakeDS) Resume(_ context.Context, _, _ string) error {
@@ -89,6 +89,9 @@ func (f *refreshFakeDS) Unblock(_ context.Context, _, _ string) error {
 	return datasource.ErrDaemonRequired
 }
 func (f *refreshFakeDS) AddComment(_ context.Context, _, _ string) error {
+	return datasource.ErrDaemonRequired
+}
+func (f *refreshFakeDS) SetMetadata(_ context.Context, _ string, _ map[string]any) error {
 	return datasource.ErrDaemonRequired
 }
 func (f *refreshFakeDS) CreateWorkflow(_ context.Context, _ string) (string, error) {

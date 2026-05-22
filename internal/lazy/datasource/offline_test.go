@@ -150,6 +150,89 @@ func TestOffline_CommentRoundTrip(t *testing.T) {
 	}
 }
 
+// TestOffline_UpdateTitleDescription pins the lazy `c` (edit) write
+// path: a full pair must replace both columns and dolt-commit, while
+// an empty title (post-trim) must fail without touching the row.
+func TestOffline_UpdateTitleDescription(t *testing.T) {
+	ctx := context.Background()
+	ds, _, closeFn := newOfflineFx(t)
+	defer closeFn()
+
+	id, err := ds.CreateTask(ctx, "old title", "old body", 2)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := ds.UpdateTitleDescription(ctx, id, "new title", "new body"); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	tk, err := ds.GetTask(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if tk.Title != "new title" || tk.Description != "new body" {
+		t.Fatalf("got title=%q desc=%q, want new title / new body", tk.Title, tk.Description)
+	}
+
+	// Empty title (or whitespace-only) is rejected and the columns
+	// stay at their previous values.
+	if err := ds.UpdateTitleDescription(ctx, id, "   ", "whatever"); err == nil {
+		t.Fatal("expected error on empty title")
+	}
+	tk2, _ := ds.GetTask(ctx, id)
+	if tk2.Title != "new title" || tk2.Description != "new body" {
+		t.Fatalf("empty-title path mutated columns: title=%q desc=%q", tk2.Title, tk2.Description)
+	}
+}
+
+// TestOffline_SetMetadata pins the lazy `M` (metadata) write path:
+// a wholesale replace works whether the column starts empty or
+// already has keys, and an empty map clears the column back to nil.
+func TestOffline_SetMetadata(t *testing.T) {
+	ctx := context.Background()
+	ds, _, closeFn := newOfflineFx(t)
+	defer closeFn()
+
+	id, err := ds.CreateTask(ctx, "x", "", 2)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Seed: replace nil metadata with two keys.
+	in := map[string]any{"foo": "bar", "n": float64(42)}
+	if err := ds.SetMetadata(ctx, id, in); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	tk, _ := ds.GetTask(ctx, id)
+	if tk.Metadata["foo"] != "bar" {
+		t.Fatalf("metadata[foo]=%v want bar", tk.Metadata["foo"])
+	}
+	if v, _ := tk.Metadata["n"].(float64); v != 42 {
+		t.Fatalf("metadata[n]=%v want 42", tk.Metadata["n"])
+	}
+
+	// Wholesale replace: only the new keys survive.
+	if err := ds.SetMetadata(ctx, id, map[string]any{"baz": "qux"}); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	tk, _ = ds.GetTask(ctx, id)
+	if _, ok := tk.Metadata["foo"]; ok {
+		t.Fatalf("foo leaked after replace: %+v", tk.Metadata)
+	}
+	if tk.Metadata["baz"] != "qux" {
+		t.Fatalf("metadata[baz]=%v want qux", tk.Metadata["baz"])
+	}
+
+	// Empty map clears the column. The store renders SQL NULL as a
+	// nil/empty map on read.
+	if err := ds.SetMetadata(ctx, id, map[string]any{}); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	tk, _ = ds.GetTask(ctx, id)
+	if len(tk.Metadata) != 0 {
+		t.Fatalf("metadata not cleared: %+v", tk.Metadata)
+	}
+}
+
 func TestOffline_HealthIsDown(t *testing.T) {
 	ctx := context.Background()
 	ds, _, closeFn := newOfflineFx(t)
@@ -251,44 +334,6 @@ func TestOfflineEnroll_BumpsFirstStepCounter(t *testing.T) {
 	}
 	if v, _ := sv[devID].(float64); int(v) != 1 {
 		t.Fatalf("step_visits[dev]=%v (want 1)", sv[devID])
-	}
-}
-
-// TestOfflineEnrollAgent_BumpsSyntheticStep covers the single:<agent>
-// shorthand. The synthetic workflow has only one step named "do";
-// after enroll the counter on that step must be 1. max_visits=0 on
-// synthetics means uncapped — the bump must still happen.
-func TestOfflineEnrollAgent_BumpsSyntheticStep(t *testing.T) {
-	ctx := context.Background()
-	ds, ts, closeFn := newOfflineFx(t)
-	defer closeFn()
-
-	id, err := ds.CreateTask(ctx, "y", "", 2)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if err := ds.EnrollAgent(ctx, id, "developer"); err != nil {
-		t.Fatalf("enroll-agent: %v", err)
-	}
-	tk, err := ts.GetTask(ctx, id)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if tk.Status != store.StatusWork {
-		t.Fatalf("status: %s (want work)", tk.Status)
-	}
-	if tk.WorkflowID == "" {
-		t.Fatal("workflow_id not stamped on the task")
-	}
-	if tk.CurrentStepID == "" {
-		t.Fatal("current_step_id not stamped on the task")
-	}
-	sv, _ := tk.Metadata["step_visits"].(map[string]any)
-	if sv == nil {
-		t.Fatalf("step_visits missing; metadata=%+v", tk.Metadata)
-	}
-	if v, _ := sv[tk.CurrentStepID].(float64); int(v) != 1 {
-		t.Fatalf("step_visits[synthetic step]=%v (want 1)", sv[tk.CurrentStepID])
 	}
 }
 

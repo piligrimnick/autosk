@@ -406,28 +406,28 @@ func (gu *Gui) quit(*gocui.Gui, *gocui.View) error {
 
 // flashf appends to the command log and sets a transient toast.
 //
-// Nil-safe on gu.g: tests that exercise key handlers without a real
-// gocui.Gui (e.g. scope_test.go) would otherwise panic inside
-// g.Update. In that mode we apply the model mutation directly
-// under the model lock — there's no UI to repaint, but the log
-// buffer and flash state still record what happened so the test
-// can assert on them.
+// State is updated synchronously under the model lock so the next
+// render sees it; the redraw is requested via g.Update (a no-op
+// closure that just wakes the event loop). The previous shape
+// wrapped the state mutation inside g.Update, which meant the
+// flash didn't land until MainLoop drained the userEvents channel
+// — fine in production but invisible to tests that drive key
+// handlers without a MainLoop, AND non-deterministic in terms of
+// ordering when multiple flashes fire back-to-back. The lock
+// already serialises writes against the layout goroutine, so
+// applying directly is safe.
+//
+// Nil-safe on gu.g: tests that exercise key handlers without a
+// real gocui.Gui (e.g. scope_test.go) skip the redraw poke.
 func (gu *Gui) flashf(level, format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	apply := func() {
-		gu.st.withLock(func() {
-			gu.st.appendLog(msg)
-			gu.st.setFlash(msg, level)
-		})
-	}
-	if gu.g == nil {
-		apply()
-		return
-	}
-	gu.g.Update(func(_ *gocui.Gui) error {
-		apply()
-		return nil
+	gu.st.withLock(func() {
+		gu.st.appendLog(msg)
+		gu.st.setFlash(msg, level)
 	})
+	if gu.g != nil {
+		gu.g.Update(func(_ *gocui.Gui) error { return nil })
+	}
 }
 
 // renderViews re-renders every visible view's content from the model.
