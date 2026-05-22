@@ -63,11 +63,13 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 		// normalize panelJobInput → winJobs for that calculation.
 		focusedSide = gu.st.focused.normalizeForDetail().window()
 		logHidden = gu.st.logHide
-		// showJobInput is gated on the daemon's Streaming flag —
-		// only show the input view when pi is actively between
-		// agent_start and agent_end (live mode). A running job whose
-		// pi is idle between turns is treated as archive-view: the
-		// transcript is visible but the input view is absent.
+		// showJobInput is gated on `isJobLive`, which is true for any
+		// non-terminal job (queued or running). The input view's
+		// lifecycle therefore matches the job's lifecycle — allocated
+		// once when the job becomes non-terminal, destroyed once when
+		// it terminates — so the view is never recreated mid-job and
+		// drafts can never be lost to gocui's NewView clearing the
+		// TextArea on creation.
 		// Does NOT depend on which view is currently focused — the
 		// input stays pinned even when the operator is reading the
 		// transcript above with the Detail pane focused.
@@ -101,9 +103,16 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 				Y0: detail.Y1 - jobInputOverlayH,
 				Y1: detail.Y1 - 1,
 			}
-			// Only add the overlay when there's enough room — a tiny
-			// pane mid-resize could push X1 < X0 or Y1 < Y0.
-			if overlay.X1-overlay.X0 >= 4 && overlay.Y1-overlay.Y0 >= 1 {
+			// Only add the overlay when there's enough room:
+			//   - the box itself has sensible interior dimensions, AND
+			//   - it sits at least 2 rows BELOW detail's top edge so
+			//     a few rows of transcript stay visible above it AND
+			//     overlay.Y0 never lands at a negative offset (at the
+			//     dashboard min size detail's outer height collapses
+			//     to ~1 row, which would push the overlay off-screen).
+			if overlay.X1-overlay.X0 >= 4 &&
+				overlay.Y1-overlay.Y0 >= 1 &&
+				overlay.Y0 >= detail.Y0+2 {
 				dims[winJobInput] = overlay
 			}
 		}

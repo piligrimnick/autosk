@@ -463,11 +463,10 @@ func (gu *Gui) renderViews() {
 		gu.writeView(winStatusBar, "", renderStatusBar(gu.st, gu.opts.ProjectRoot))
 
 		// Job-input textarea is allocated by layout whenever the
-		// selected job is in live mode (pi actively between
-		// agent_start and agent_end). renderViews mirrors that gate
-		// so writeView doesn't poke at a view that doesn't exist this
-		// frame. When the job is running-but-idle (between turns) or
-		// the daemon is offline, the input view is absent and the
+		// selected job is non-terminal (queued or running) — see
+		// isJobLive. renderViews mirrors that gate so writeView
+		// doesn't poke at a view that doesn't exist this frame.
+		// When the job is terminal the input view is absent and the
 		// Detail pane uses its full inner height for the transcript.
 		if j, ok := gu.st.selectedJob(); ok && isJobLive(j) {
 			title := "input — Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort  Esc cancel"
@@ -929,12 +928,20 @@ func (gu *Gui) invalidateBodyCache(name string) {
 // sticky-tail there would break the wheel-scroll-keeps-its-place
 // affordance.
 //
-// For winDetail the visible height is detailEffectiveInnerH() — not
-// the raw InnerSize() — because the winJobInput overlay (when the
-// selected job is live) covers the bottom jobInputOverlayH rows of
-// detail's inner area. Sticky-tail aims to land the last line of
-// content on the last VISIBLE row, i.e. the row immediately above
-// the overlay.
+// For winDetail the at-bottom check uses the FULL inner height
+// (v.InnerSize), not detailEffectiveInnerH; the post-write target
+// uses detailEffectiveInnerH.
+//
+// The split matters when the winJobInput overlay APPEARS between
+// frames (e.g. a queued job promotes to running; or the selection
+// crosses into a non-terminal row from a terminal one). The user
+// was "at the bottom" of the previous viewport — with the overlay
+// absent, the full inner height was visible. Using the new
+// (smaller) effective inner height for the threshold would
+// mis-classify them as "scrolled up" and the overlay would silently
+// hide the last few rows of content they were just looking at.
+// Using the full inner height for the threshold preserves the
+// at-bottom anchor across the overlay-appears transition.
 func (gu *Gui) writeViewSticky(name, title, body string) {
 	v, err := gu.g.View(name)
 	if err != nil || v == nil {
@@ -942,18 +949,17 @@ func (gu *Gui) writeViewSticky(name, title, body string) {
 	}
 	// Snapshot the BEFORE state before writeView's potential clear.
 	ox, oy := v.Origin()
-	var h int
-	if name == winDetail {
-		h = gu.detailEffectiveInnerH()
-	} else {
-		_, h = v.InnerSize()
-		if h < 1 {
-			h = 1
-		}
+	// Threshold uses the FULL inner height (overlay-agnostic): we want
+	// to know whether the user was at the bottom of the underlying
+	// content viewport regardless of whether an overlay is/was/will-be
+	// covering some of it.
+	_, fullH := v.InnerSize()
+	if fullH < 1 {
+		fullH = 1
 	}
 	prevLines := strings.Count(v.Buffer(), "\n")
 	// First frame OR user is at (or past) the bottom → sticky.
-	beforeSticky := prevLines == 0 || oy+h >= prevLines
+	beforeSticky := prevLines == 0 || oy+fullH >= prevLines
 
 	gu.writeView(name, title, body)
 
@@ -964,8 +970,15 @@ func (gu *Gui) writeViewSticky(name, title, body string) {
 	// case the buffer is still the previous body and the origin is
 	// already where the user wanted it, so the recompute below is a
 	// no-op. When the body did change, we recompute the bottom-anchor
-	// origin against the NEW line count. Using inner height — the gocui
-	// `oy` indexes into the inner content area, not the outer-frame box.
+	// origin against the NEW line count. The TARGET uses effective
+	// inner height so the last line of content lands just above the
+	// overlay (if any).
+	var h int
+	if name == winDetail {
+		h = gu.detailEffectiveInnerH()
+	} else {
+		h = fullH
+	}
 	newLines := strings.Count(v.Buffer(), "\n")
 	target := newLines - h
 	if target < 0 {

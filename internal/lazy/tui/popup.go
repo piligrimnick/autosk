@@ -255,14 +255,30 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 		}
 		_ = g.DeleteView(name)
 	}
+	// Pin active popup views to the top of gocui's draw stack so a
+	// dashboard view that was deleted-and-recreated mid-popup
+	// (e.g. winJobInput allocated when a queued job promotes to
+	// running while the popup is open) doesn't end up drawn ON TOP
+	// of the popup. gocui flushes views in g.views insertion order;
+	// SetViewOnTop reorders to the end without recreating the view,
+	// preserving its TextArea / buffer.
+	pinOnTop := func(names ...string) {
+		for _, n := range names {
+			if _, err := g.SetViewOnTop(n); err != nil && !isUnknownView(err) {
+				dlog("SetViewOnTop(%s): %v", n, err)
+			}
+		}
+	}
 	switch kind {
 	case popupMenu:
 		gu.drawPopup(g, winPopupMenu, w, h, title, renderMenuBody(lines, cur))
+		pinOnTop(winPopupMenu)
 		if _, err := g.SetCurrentView(winPopupMenu); err != nil && !isUnknownView(err) {
 			return
 		}
 	case popupConfirm:
 		gu.drawPopup(g, winPopupConfirm, w, h, title, "[y]es / [n]o / [Esc] cancel")
+		pinOnTop(winPopupConfirm)
 		if _, err := g.SetCurrentView(winPopupConfirm); err != nil && !isUnknownView(err) {
 			return
 		}
@@ -277,11 +293,13 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 				_, _ = v.Write([]byte(input))
 			}
 		}
+		pinOnTop(winPopupPrompt)
 		if _, err := g.SetCurrentView(winPopupPrompt); err != nil && !isUnknownView(err) {
 			return
 		}
 	case popupTaskCompose:
 		gu.layoutTaskCompose(g, w, h, title)
+		pinOnTop(winTaskComposeSummary, winTaskComposeDescription)
 	}
 }
 

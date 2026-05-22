@@ -38,3 +38,40 @@ func TestDashboardArrangement_AllWindowsPresent(t *testing.T) {
 		t.Errorf("winJobInput must not be returned by boxlayout (it is overlaid in layout.go)")
 	}
 }
+
+// TestAllDashboardWindows_OverlayOrder pins the load-bearing
+// invariant the layout pass depends on: winDetail must appear
+// before winJobInput in allDashboardWindows, because the layout
+// visits views in this order when creating them and gocui draws
+// views in creation order (last-created on top). If winJobInput
+// were created before winDetail, detail's frame would paint over
+// the input overlay every frame.
+//
+// A future contributor reordering allDashboardWindows (e.g.
+// alphabetising) would silently break the overlay z-order without
+// any other test failing — the containment check in
+// TestLayout_JobInputAppears_WhenSelectedJobLive passes regardless
+// of which view paints on top. This test exists specifically to
+// catch that class of refactor.
+func TestAllDashboardWindows_OverlayOrder(t *testing.T) {
+	detailIdx := -1
+	inputIdx := -1
+	for i, n := range allDashboardWindows {
+		if n == winDetail {
+			detailIdx = i
+		}
+		if n == winJobInput {
+			inputIdx = i
+		}
+	}
+	if detailIdx < 0 {
+		t.Fatalf("winDetail missing from allDashboardWindows: %v", allDashboardWindows)
+	}
+	if inputIdx < 0 {
+		t.Fatalf("winJobInput missing from allDashboardWindows: %v", allDashboardWindows)
+	}
+	if detailIdx >= inputIdx {
+		t.Errorf("winDetail (index %d) must appear before winJobInput (index %d) in allDashboardWindows so the overlay draws on top: %v",
+			detailIdx, inputIdx, allDashboardWindows)
+	}
+}

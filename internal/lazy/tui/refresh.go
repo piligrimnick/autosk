@@ -252,17 +252,21 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 		}
 		if r.jerr == nil {
 			// Detect transitions for the currently-selected job
-			// BEFORE we swap the jobs slice. Two transitions matter:
+			// BEFORE we swap the jobs slice. Two effects:
 			//
-			//   running→terminal: zero the transcript loadedAt so
-			//     the next archive load picks up final-flushed events.
-			//   live→not-live (Streaming flag flipping false, regardless
-			//     of whether status also moved): the winJobInput overlay
-			//     goes away because the layout-pass gate now reads false.
-			//     If the operator was typing in it (focused ==
-			//     panelJobInput), send them back to the Jobs panel so
-			//     they don't end up in phantom-focus on a deleted view
-			//     (caret invisible, per-view bindings dormant).
+			//   running→terminal (same job, status moved): zero the
+			//     transcript loadedAt so the next archive load picks
+			//     up final-flushed events.
+			//   focused == panelJobInput, post-swap selected job not
+			//     live: revert focus to panelJobs so the layout-pass
+			//     SetCurrentView lands on a real view. This branch
+			//     fires whether the SAME job went terminal under the
+			//     operator, OR the cursor's jobID drifted to a
+			//     different (terminal) job because the jobs slice
+			//     reshuffled (e.g. a new queued job lands at index 0,
+			//     pushing the previously-cursored row down). Both
+			//     paths would otherwise leave the caret in
+			//     phantom-focus on a deleted view.
 			prevJob, hadPrev := gu.st.selectedJob()
 			gu.st.jobs = applyJobSearch(r.jobs, r.jobsSearch)
 			gu.st.jobCursor = clampCursor(gu.st.jobCursor, len(gu.st.jobs))
@@ -277,12 +281,21 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 						}
 						refetchJobID = cur.JobID
 					}
-					wasLive := isJobLive(prevJob)
-					isLive := isJobLive(cur)
-					if wasLive && !isLive && gu.st.focused == panelJobInput {
-						gu.st.focused = panelJobs
-					}
 				}
+				// General phantom-focus guard: any time the operator
+				// is in the input but the (post-swap) selected job
+				// is no longer live, revert to panelJobs. Covers
+				// both same-job running→terminal AND reshuffle to
+				// a different non-live job.
+				if gu.st.focused == panelJobInput && !isJobLive(cur) {
+					gu.st.focused = panelJobs
+				}
+			} else if gu.st.focused == panelJobInput {
+				// Jobs slice emptied / filtered out entirely while
+				// the operator was in the input. Same phantom-focus
+				// risk — the input view will be deleted on the next
+				// layout pass.
+				gu.st.focused = panelJobs
 			}
 			// If the streamed job vanished from the slice (e.g. a
 			// filter just removed it), tear down the subscription so

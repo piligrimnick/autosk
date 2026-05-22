@@ -363,32 +363,38 @@ func TestRefreshApply_RunningToTerminal_PreservesNonInputFocus(t *testing.T) {
 	}
 }
 
-// TestRefreshApply_StreamingFlipsOff_RevertsFocusFromJobInput pins
-// the live→idle transition (Streaming==true → Streaming==false
-// while Status stays "running"): the winJobInput overlay goes
-// away on the next layout pass because showJobInput now reads
-// false. If the operator was typing in it (focused ==
-// panelJobInput) the focus must be reverted to panelJobs so the
-// caret doesn't end up on a deleted view.
-func TestRefreshApply_StreamingFlipsOff_RevertsFocusFromJobInput(t *testing.T) {
+// TestRefreshApply_ReshuffleToNonLiveJob_RevertsFocusFromJobInput
+// pins the BLOCKING regression review flagged: a refresh-driven
+// reshuffle of the jobs slice can shift the cursor's underlying
+// jobID to a TERMINAL job (e.g. a brand-new terminal entry lands
+// at index 0 while the operator is mid-typing on the previously-
+// running cursor row). The same-job running→terminal check
+// doesn't catch this case because the jobID has changed. The
+// general phantom-focus guard "if focused == panelJobInput AND
+// post-swap selected job is not live, revert" handles it.
+func TestRefreshApply_ReshuffleToNonLiveJob_RevertsFocusFromJobInput(t *testing.T) {
 	gu := &Gui{st: newState()}
 	gu.ds = &refreshFakeDS{}
-	const jobID = "job-idle"
 
+	// Seed: cursor on job-A (running), focus in the input.
 	gu.st.withLock(func() {
 		gu.st.jobs = []datasource.Job{{
-			JobResponse: api.JobResponse{JobID: jobID, Status: "running", Streaming: true},
+			JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true},
 		}}
 		gu.st.jobCursor = 0
 		gu.st.focused = panelJobInput
 	})
 
-	// Job stays running, but pi flips between turns (Streaming
-	// goes false). No status change — only the live flag flips.
+	// Refresh-driven reshuffle: a brand-new terminal job-Z lands at
+	// index 0, shoving job-A down to index 1. jobCursor stays
+	// pinned at 0, so the (post-swap) selected job is now job-Z
+	// (terminal). The winJobInput view will disappear on the next
+	// layout pass because isJobLive(job-Z) == false.
 	r := refreshResult{
-		jobs: []datasource.Job{{
-			JobResponse: api.JobResponse{JobID: jobID, Status: "running", Streaming: false},
-		}},
+		jobs: []datasource.Job{
+			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "done"}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true}},
+		},
 		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
 	}
 	gu.applyRefreshLocked(r)
@@ -396,7 +402,38 @@ func TestRefreshApply_StreamingFlipsOff_RevertsFocusFromJobInput(t *testing.T) {
 	var focused panelID
 	gu.st.withRLock(func() { focused = gu.st.focused })
 	if focused != panelJobs {
-		t.Errorf("focused after live→idle = %v, want panelJobs (overlay goes away; revert focus)", focused)
+		t.Errorf("focused after reshuffle-to-non-live = %v, want panelJobs (input view goes away; revert)", focused)
+	}
+}
+
+// TestRefreshApply_JobsEmptied_RevertsFocusFromJobInput covers the
+// edge case where a filter removes EVERY job between snapshots
+// while the operator was in the input. The selected job becomes
+// absent (selectedJob returns ok=false), but the focused-input
+// state still needs the revert so the next layout doesn't leave
+// the caret on a deleted view.
+func TestRefreshApply_JobsEmptied_RevertsFocusFromJobInput(t *testing.T) {
+	gu := &Gui{st: newState()}
+	gu.ds = &refreshFakeDS{}
+
+	gu.st.withLock(func() {
+		gu.st.jobs = []datasource.Job{{
+			JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true},
+		}}
+		gu.st.jobCursor = 0
+		gu.st.focused = panelJobInput
+	})
+
+	r := refreshResult{
+		jobs:       []datasource.Job{}, // every job filtered out
+		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
+	}
+	gu.applyRefreshLocked(r)
+
+	var focused panelID
+	gu.st.withRLock(func() { focused = gu.st.focused })
+	if focused != panelJobs {
+		t.Errorf("focused after jobs-emptied = %v, want panelJobs", focused)
 	}
 }
 

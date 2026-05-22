@@ -211,13 +211,20 @@ func TestLayout_JobInputAppears_WhenSelectedJobLive(t *testing.T) {
 	}
 }
 
-// TestLayout_JobInput_OnlyVisibleForLiveJobs pins acceptance
-// criterion 3 from the post-redesign feedback: the input view
-// appears only when the daemon reports Streaming==true (pi is
-// actively between agent_start and agent_end). A running job whose
-// pi is idle between turns (Streaming==false) is treated as
-// archive-view — transcript visible, input absent.
-func TestLayout_JobInput_OnlyVisibleForLiveJobs(t *testing.T) {
+// TestLayout_JobInput_OnlyVisibleForNonTerminalJobs pins the
+// post-feedback visibility contract: the input view is allocated
+// for any non-terminal job (queued or running, with or without
+// the Streaming flag) and absent for terminal jobs (the
+// "archive view" state the user's feedback called out).
+//
+// The predicate matches the daemon's buildInputCommand contract
+// — input is accepted whenever the job is non-terminal (dispatched
+// as `prompt` when pi is idle, `steer` / `follow_up` when pi is
+// streaming). Tying view lifetime to non-terminal status (rather
+// than the narrower Streaming flag) eliminates the view-recreation
+// churn that would otherwise destroy in-flight drafts on every
+// agent_end→agent_start cycle.
+func TestLayout_JobInput_OnlyVisibleForNonTerminalJobs(t *testing.T) {
 	t.Run("running_and_streaming_shows_input", func(t *testing.T) {
 		gu := jobDetailLayoutFixture(t)
 		gu.st.withLock(func() {
@@ -234,10 +241,11 @@ func TestLayout_JobInput_OnlyVisibleForLiveJobs(t *testing.T) {
 			t.Errorf("winJobInput missing for running+streaming job: %v", err)
 		}
 	})
-	t.Run("running_but_idle_hides_input", func(t *testing.T) {
+	t.Run("running_but_idle_still_shows_input", func(t *testing.T) {
 		// Job is still running on the daemon but pi is between
-		// turns (Streaming==false). This is the archive-view state
-		// the user explicitly called out: input must be absent.
+		// turns (Streaming==false). Daemon's buildInputCommand
+		// will dispatch as a plain `prompt`, so the input must
+		// stay visible — the operator can still send messages.
 		gu := jobDetailLayoutFixture(t)
 		gu.st.withLock(func() {
 			gu.st.jobs = []datasource.Job{{
@@ -249,15 +257,31 @@ func TestLayout_JobInput_OnlyVisibleForLiveJobs(t *testing.T) {
 		if err := gu.layout(gu.g); err != nil {
 			t.Fatalf("layout: %v", err)
 		}
-		if _, err := gu.g.View(winJobInput); err == nil {
-			t.Errorf("winJobInput unexpectedly visible for running-but-idle job (Streaming=false)")
+		if _, err := gu.g.View(winJobInput); err != nil {
+			t.Errorf("winJobInput missing for running-but-idle job: %v", err)
+		}
+	})
+	t.Run("queued_shows_input", func(t *testing.T) {
+		gu := jobDetailLayoutFixture(t)
+		gu.st.withLock(func() {
+			gu.st.jobs = []datasource.Job{{
+				JobResponse: api.JobResponse{JobID: "job-q", Status: "queued"},
+			}}
+			gu.st.jobCursor = 0
+			gu.st.focused = panelJobs
+		})
+		if err := gu.layout(gu.g); err != nil {
+			t.Fatalf("layout: %v", err)
+		}
+		if _, err := gu.g.View(winJobInput); err != nil {
+			t.Errorf("winJobInput missing for queued job: %v", err)
 		}
 	})
 	t.Run("terminal_hides_input", func(t *testing.T) {
 		gu := jobDetailLayoutFixture(t)
 		gu.st.withLock(func() {
 			gu.st.jobs = []datasource.Job{{
-				JobResponse: api.JobResponse{JobID: "job-x", Status: "done", Streaming: false},
+				JobResponse: api.JobResponse{JobID: "job-x", Status: "done"},
 			}}
 			gu.st.jobCursor = 0
 			gu.st.focused = panelJobs
@@ -287,9 +311,8 @@ func TestLayout_JobInputDisappears_WhenSelectedJobTerminal(t *testing.T) {
 		if _, err := gu.g.View(winJobInput); err != nil {
 			t.Fatalf("setup: winJobInput should exist for running job: %v", err)
 		}
-		// Flip to terminal. The new input-visibility predicate is
-		// `Streaming == true`; clear both Status and Streaming
-		// because the running→terminal transition zeros both.
+		// Flip to terminal. The input view is gated on isJobLive
+		// (non-terminal status); the Status flip alone is sufficient.
 		gu.st.withLock(func() {
 			gu.st.jobs[0].Status = "done"
 			gu.st.jobs[0].Streaming = false

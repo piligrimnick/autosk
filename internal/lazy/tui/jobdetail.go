@@ -36,18 +36,27 @@ func isJobRunning(j datasource.Job) bool {
 	return runstore.RunStatus(j.Status) == runstore.StatusRunning
 }
 
-// isJobLive reports whether j is in "live mode" — pi is actively
-// processing a turn (between agent_start and agent_end). Drives the
-// visibility of winJobInput: the operator only sees the input view
-// when the agent can receive a steer / follow_up / abort. A running
-// job whose pi is idle (Streaming==false) is treated as archive-view
-// — the transcript is visible but the input is hidden.
+// isJobLive reports whether j is in a state where the operator
+// can author input — i.e. whenever the daemon would accept a
+// SendInput call. Drives the visibility of winJobInput.
 //
-// In offline mode (no daemon) Streaming is always false, so the
-// input view never appears — consistent with SendInput requiring a
-// live daemon.
+// The daemon's buildInputCommand (internal/daemon/server/attach.go)
+// dispatches as `prompt` when pi is idle between turns and as
+// `steer` / `follow_up` when pi is actively streaming, so input
+// is accepted in ANY non-terminal status. Mirroring that here
+// means the input view's lifecycle matches the job's lifecycle:
+// allocated once when the job becomes non-terminal, destroyed
+// once when it terminates. No churn on agent_start/agent_end
+// boundaries → no draft-loss-on-view-recreation, no
+// phantom-focus-after-reshuffle to a non-streaming row.
+//
+// The user's manual-test feedback ("input должно отображаться
+// только при live-режиме работы агента, когда ему можно
+// отправить сообщения") is satisfied by this predicate's
+// clarifying clause: hide the input when the job is in archive
+// view (= terminal), show it whenever messages can be sent.
 func isJobLive(j datasource.Job) bool {
-	return j.Streaming
+	return !runstore.RunStatus(j.Status).IsTerminal()
 }
 
 // jobInputOverlayH is the outer height (frame + content + frame) of

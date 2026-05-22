@@ -223,8 +223,8 @@ func TestWriteView_Cache_InvalidatedByLayoutDeleteView(t *testing.T) {
 	// Step 3: flip job to terminal — winJobInput must be deleted on
 	// the next layout pass AND the body cache for that view must be
 	// invalidated so a future re-creation doesn't get short-circuited.
-	// The input view is gated on Streaming==true; flip both Status
-	// and Streaming to simulate the running→done transition.
+	// The input view is gated on isJobLive (non-terminal status);
+	// flipping Status alone is sufficient.
 	gu.st.withLock(func() {
 		gu.st.jobs[0].Status = "done"
 		gu.st.jobs[0].Streaming = false

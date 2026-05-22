@@ -93,6 +93,75 @@ func TestStickyTail_FirstFrame_StartsAtBottom(t *testing.T) {
 	}
 }
 
+// TestStickyTail_OverlayAppears_TailStaysVisible pins the
+// SUBSTANTIVE regression review flagged: when the winJobInput
+// overlay appears between frames (e.g. the cursor moves from a
+// terminal job to a non-terminal one, or a queued job promotes
+// to running) the operator's at-bottom position must be
+// preserved.
+//
+// The bug was that writeViewSticky computed beforeSticky against
+// detailEffectiveInnerH (which is already shrunk by the overlay
+// when the overlay is present this frame). On the appears
+// transition the operator was at the bottom of the previous
+// (overlay-less) viewport, but the new effective height makes
+// the check fail, leaving the overlay covering the rows they
+// were just reading. The fix is to compute beforeSticky against
+// the full InnerSize() and use the effective height only for the
+// post-write target.
+func TestStickyTail_OverlayAppears_TailStaysVisible(t *testing.T) {
+	gu := newHeadlessGui(t, 80, 40)
+	// Create winDetail at a known size. Inner height ~ 28.
+	v, err := gu.g.SetView(winDetail, 0, 0, 79, 30, 0)
+	if err != nil && !isUnknownView(err) {
+		t.Fatalf("SetView detail: %v", err)
+	}
+	if v == nil {
+		t.Fatal("SetView returned nil")
+	}
+	v.Frame = true
+
+	// Seed a 100-line body and anchor at the bottom (no overlay
+	// present yet, so detailEffectiveInnerH == InnerSize).
+	body := strings.Repeat("line\n", 100)
+	gu.writeViewSticky(winDetail, "", body)
+	_, innerH := v.InnerSize()
+	bufLines := strings.Count(v.Buffer(), "\n")
+	wantBefore := bufLines - innerH
+	_, oy := v.Origin()
+	if oy != wantBefore {
+		t.Fatalf("setup: expected sticky-tail anchor at oy=%d, got %d", wantBefore, oy)
+	}
+
+	// Now create the overlay (winJobInput). Its presence is what
+	// detailEffectiveInnerH() consults to subtract jobInputOverlayH
+	// from winDetail's visible region. We don't need real coords —
+	// just the view's existence is the signal.
+	if _, err := gu.g.SetView(winJobInput, 5, 25, 75, 29, 0); err != nil && !isUnknownView(err) {
+		t.Fatalf("SetView jobInput: %v", err)
+	}
+
+	// Same body again — writeViewSticky should recognise the user is
+	// (still) at the bottom of the underlying content (full inner
+	// height threshold) and re-anchor against the SHRUNK effective
+	// height so the tail stays visible above the overlay.
+	gu.writeViewSticky(winDetail, "", body)
+	effH := gu.detailEffectiveInnerH()
+	if effH >= innerH {
+		t.Fatalf("detailEffectiveInnerH did not shrink: was %d, still %d", innerH, effH)
+	}
+	wantAfter := bufLines - effH
+	_, oy = v.Origin()
+	if oy != wantAfter {
+		t.Errorf("sticky-tail did not re-anchor on overlay-appears: oy=%d, want %d (effH=%d, bufLines=%d)", oy, wantAfter, effH, bufLines)
+	}
+	// The crucial invariant: the last line of content sits within
+	// the visible region (i.e. above the overlay).
+	if oy+effH < bufLines {
+		t.Errorf("sticky-tail viewport bottom %d < body length %d: overlay covers tail", oy+effH, bufLines)
+	}
+}
+
 // TestDetailScrollTo_BottomUsesInnerSize pins the regression review
 // flagged: detailScrollTo / detailScrollPage / scrollViewByLines
 // must clamp against InnerSize (frame-excluded) not Size, otherwise
