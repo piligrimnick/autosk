@@ -231,6 +231,17 @@ func (gu *Gui) bindKeys() error {
 		{winTaskComposeDescription, gocui.KeyEnter, gocui.ModAlt, gu.taskComposeConfirm},
 		{winTaskComposeDescription, gocui.KeyTab, gocui.ModNone, gu.taskComposeToggle},
 		{winTaskComposeDescription, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
+
+		// Single-pane multi-line compose popup (comment / metadata).
+		//
+		// Plain Enter is intentionally NOT bound — it falls through to
+		// gocui.DefaultEditor which inserts "\n", which is the whole
+		// point of the multi-line popup. Submitting requires Ctrl+S or
+		// Alt+Enter. Esc cancels without invoking OnAccept.
+		{winSingleCompose, gocui.KeyCtrlS, gocui.ModNone, gu.singleComposeConfirm},
+		{winSingleCompose, gocui.KeyEnter, gocui.ModAlt, gu.singleComposeConfirm},
+		{winSingleCompose, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
+		{winSingleCompose, gocui.KeyCtrlC, gocui.ModNone, gu.quit},
 	}
 	for _, b := range bs {
 		if err := gu.g.SetKeybinding(b.view, b.key, b.mod, b.h); err != nil {

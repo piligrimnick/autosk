@@ -24,6 +24,8 @@ const (
 	// Task-compose popup (lazygit-style two-pane commit editor).
 	winTaskComposeSummary     = "taskComposeSummary"
 	winTaskComposeDescription = "taskComposeDescription"
+	// Single-pane multi-line compose popup (comment / metadata).
+	winSingleCompose = "singleCompose"
 )
 
 // allPopupWindows is every window name that belongs to a popup. The
@@ -37,6 +39,7 @@ var allPopupWindows = []string{
 	winPopupPrompt,
 	winTaskComposeSummary,
 	winTaskComposeDescription,
+	winSingleCompose,
 }
 
 // ViewState distinguishes the two top-level arrangements.
