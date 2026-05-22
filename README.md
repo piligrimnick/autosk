@@ -23,11 +23,17 @@ $ autosk enroll ask-3f9b2c --agent @your-org/coding-agent
 ## Prerequisites
 
 - **Build the binary** from the autosk checkout:
-  ```bash
-  make install
-  ```
+```bash
+make install
+```
 
 - **Pi.dev** - installed and configured for at least one LLM provider
+
+also you need installed extension to let agents manage their state
+```bash
+pi install npm:@wierdbytes/pi-autosk
+```
+
 - **Node.js 22+** — if you want to use AI agents / workflows (we need it to install npm-packaged agents).
 
 ## Quick start
