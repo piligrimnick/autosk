@@ -329,20 +329,47 @@ func (gu *Gui) loadJobArchive(jobID string) {
 	}
 	gu.g.Update(func(_ *gocui.Gui) error {
 		gu.st.withLock(func() {
-			te := gu.ensureTranscriptEntryLocked(jobID)
-			te.err = err
-			te.loadedAt = time.Now()
-			if err == nil {
-				contentW := gu.innerWidth(winDetail) - 4
-				if contentW < 1 {
-					contentW = 1
-				}
-				te.events = mergeArchiveAndLive(evs, te.events)
-				rebuildTranscriptBoxes(te, contentW)
-			}
+			gu.applyArchiveLoadLocked(jobID, evs, err)
 		})
 		return nil
 	})
+}
+
+// applyArchiveLoadLocked merges a freshly-fetched archive snapshot
+// into the per-job transcript cache and clears the per-load flags.
+// MUST be called with state.mu held — the "Locked" suffix mirrors
+// the rest of the helpers in this file.
+//
+// Pulled out of loadJobArchive so tests can drive the post-fetch
+// path directly (gocui's g.Update queue is async + only drained by
+// MainLoop, which test harnesses don't run). The contract under
+// test:
+//
+//   - te.loadedAt is stamped to time.Now() regardless of fetchErr.
+//   - te.err mirrors the fetch error.
+//   - On success: te.events is replaced by mergeArchiveAndLive
+//     (full snapshot + any post-snapshot live tail), te.truncated
+//     is reset to false (the full archive carries every event the
+//     previous live-cap drop tossed), and te.renderedBoxes is
+//     rebuilt at the current content width.
+func (gu *Gui) applyArchiveLoadLocked(jobID string, evs []datasource.MessageEvent, fetchErr error) {
+	te := gu.ensureTranscriptEntryLocked(jobID)
+	te.err = fetchErr
+	te.loadedAt = time.Now()
+	if fetchErr != nil {
+		return
+	}
+	contentW := gu.innerWidth(winDetail) - 4
+	if contentW < 1 {
+		contentW = 1
+	}
+	te.events = mergeArchiveAndLive(evs, te.events)
+	// A fresh archive carries the FULL event set (we fetched with
+	// full=true / limit=0), so any prior live-cap truncation no
+	// longer applies — drop the stale flag so renderJobDetail
+	// stops prepending the "(transcript truncated...)" note.
+	te.truncated = false
+	rebuildTranscriptBoxes(te, contentW)
 }
 
 // scheduleJobArchive queues loadJobArchive for jobID on the worker

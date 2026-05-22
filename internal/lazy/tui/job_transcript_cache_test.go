@@ -1,12 +1,17 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"autosk/internal/lazy/datasource"
 )
+
+// errFakeArchive is a sentinel for archive-load failure in unit
+// tests that drive applyArchiveLoadLocked directly.
+var errFakeArchive = errors.New("fake archive load failure")
 
 // TestEnsureTranscriptEntry_NewAndLRU pins the cache-init + LRU
 // eviction contract: on miss we allocate; at jobTranscriptCacheMax
@@ -171,6 +176,91 @@ func TestTerminalTTL_TriggersRefetch(t *testing.T) {
 	})
 	if gu.jobArchiveStale(jobID, true) {
 		t.Errorf("running entry should not refetch on TTL alone")
+	}
+}
+
+// TestApplyArchiveLoad_ResetsTruncated pins the regression review
+// flagged: when a job's transcript hits jobLiveBufCap and the live
+// pump trims oldest 25% (setting te.truncated=true), a subsequent
+// archive refetch (carrying the FULL event set via full=true /
+// limit=0) must drop the stale truncated flag. Otherwise
+// renderJobDetail keeps prepending the "(transcript truncated...)"
+// note even though the cache now has every event.
+func TestApplyArchiveLoad_ResetsTruncated(t *testing.T) {
+	gu := newHeadlessGui(t, 120, 40)
+	const jobID = "job-trunc-XYZ"
+
+	// Seed: truncated=true with a small old event set; the renderer
+	// would prepend the truncation note in this state.
+	old := []datasource.MessageEvent{
+		{Kind: "user_text", TS: jobDetailFixedTS, Text: "old-trim-survivor-1"},
+		{Kind: "user_text", TS: jobDetailFixedTS.Add(time.Second), Text: "old-trim-survivor-2"},
+	}
+	gu.st.withLock(func() {
+		te := gu.ensureTranscriptEntryLocked(jobID)
+		te.events = old
+		te.renderedBoxes = make([]string, len(old))
+		te.truncated = true
+	})
+
+	// Simulate a successful archive load with the FULL event set
+	// (this is what loadJobArchive does end-to-end; we drive the
+	// inner helper directly because gocui's g.Update queue is async
+	// in tests).
+	full := []datasource.MessageEvent{
+		{Kind: "user_text", TS: jobDetailFixedTS.Add(-time.Second), Text: "e-historical-1"},
+		{Kind: "user_text", TS: jobDetailFixedTS, Text: "old-trim-survivor-1"},
+		{Kind: "user_text", TS: jobDetailFixedTS.Add(time.Second), Text: "old-trim-survivor-2"},
+		{Kind: "user_text", TS: jobDetailFixedTS.Add(2 * time.Second), Text: "e-fresh-tail"},
+	}
+	gu.st.withLock(func() { gu.applyArchiveLoadLocked(jobID, full, nil) })
+
+	var (
+		truncated bool
+		loadedAt  time.Time
+		nEvents   int
+		fetchErr  error
+	)
+	gu.st.withRLock(func() {
+		te := gu.st.jobTranscript[jobID]
+		truncated = te.truncated
+		loadedAt = te.loadedAt
+		nEvents = len(te.events)
+		fetchErr = te.err
+	})
+	if truncated {
+		t.Errorf("truncated flag not cleared after successful archive load")
+	}
+	if loadedAt.IsZero() {
+		t.Errorf("loadedAt not stamped on success")
+	}
+	if fetchErr != nil {
+		t.Errorf("err leaked on success path: %v", fetchErr)
+	}
+	if nEvents != len(full) {
+		t.Errorf("events count after load = %d, want %d (full archive replace)", nEvents, len(full))
+	}
+
+	// Conversely: a load that errors must NOT clear the flag (and
+	// must NOT touch te.events). Re-set truncated to true to assert
+	// the error path preserves it.
+	gu.st.withLock(func() {
+		te := gu.st.jobTranscript[jobID]
+		te.truncated = true
+	})
+	gu.st.withLock(func() {
+		gu.applyArchiveLoadLocked(jobID, nil, errFakeArchive)
+	})
+	gu.st.withRLock(func() {
+		te := gu.st.jobTranscript[jobID]
+		truncated = te.truncated
+		fetchErr = te.err
+	})
+	if !truncated {
+		t.Errorf("truncated wrongly cleared on error path")
+	}
+	if fetchErr == nil {
+		t.Errorf("err not propagated on error path")
 	}
 }
 

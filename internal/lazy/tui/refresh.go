@@ -230,12 +230,20 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 //   - When state.jobLiveJobID no longer appears in the jobs slice
 //     (filter / scope removed it), stopJobLive tears down the
 //     subscription.
+//
+// Note: this path INTENTIONALLY does NOT call clearJobInputIfStale.
+// The selected job's jobID can shift between snapshots without any
+// operator action (e.g. a new job inserted at index 0 shoves the
+// previously-cursored row down to index 1 while jobCursor stays
+// pinned to 0). Wiping the draft on that shift would silently
+// discard mid-typing text the operator never asked us to touch.
+// The anti-leak guarantee is enforced on the operator-driven
+// explicit cursor move via afterCursorMove(panelJobs), which is
+// the only authored event we want anchoring the clear.
 func (gu *Gui) applyRefreshLocked(r refreshResult) {
 	var (
 		refetchJobID string
 		stopLive     bool
-		curJobID     string
-		haveCurJob   bool
 	)
 	gu.st.withLock(func() {
 		if r.terr == nil {
@@ -250,8 +258,6 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 			gu.st.jobCursor = clampCursor(gu.st.jobCursor, len(gu.st.jobs))
 			gu.st.taskJobIdx = r.taskJobIdx
 			if cur, ok := gu.st.selectedJob(); ok {
-				curJobID = cur.JobID
-				haveCurJob = true
 				if hadPrev && cur.JobID == prevJob.JobID {
 					wasRunning := runstore.RunStatus(prevJob.Status) == runstore.StatusRunning
 					isRunning := runstore.RunStatus(cur.Status) == runstore.StatusRunning
@@ -302,15 +308,6 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 	})
 	if stopLive {
 		gu.stopJobLive()
-	}
-	// Discard the jobInput draft if the selected job changed since
-	// the draft was last touched. Mirrors afterCursorMove's clear so
-	// a refresh-driven re-cursor (filter / scope changed, etc.)
-	// can't smuggle the draft into a new job.
-	if haveCurJob {
-		gu.clearJobInputIfStale(curJobID)
-	} else {
-		gu.clearJobInputIfStale("")
 	}
 	if refetchJobID != "" && gu.g != nil {
 		jobID := refetchJobID

@@ -60,7 +60,7 @@ func TestRenderJobDetail_Header_FieldsPresent(t *testing.T) {
 		"attached 2",
 		"corrections 1/5",
 		"pid 4242",
-		"session /tmp/pi/session-job-aa11.jsonl",
+		"session: /tmp/pi/session-job-aa11.jsonl",
 	} {
 		if !strings.Contains(visible, want) {
 			t.Errorf("missing %q in header output:\n%s", want, visible)

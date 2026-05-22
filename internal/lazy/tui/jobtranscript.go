@@ -40,8 +40,15 @@ func (gu *Gui) ensureTranscriptEntryLocked(jobID string) *jobTranscriptEntry {
 	return te
 }
 
-// evictTranscriptIfNeeded drops the least-recently-touched non-key
-// entry from m if the map is at maxLen AND key isn't already present.
+// evictTranscriptIfNeeded drops the least-recently-touched entry
+// from m if the map is at maxLen AND key isn't already present.
+//
+// Contract: the caller (ensureTranscriptEntryLocked) only invokes
+// this on the cache-miss path, so `key` is GUARANTEED not to be in
+// `m`. The outer `_, exists := m[key]` guard is a paranoia hatch
+// against a future caller misusing the helper; the per-iteration
+// `k == key` check the previous version carried was redundant
+// (the key is absent by contract) and has been removed.
 //
 // The scan is O(N) but N is capped at jobTranscriptCacheMax (32) so
 // the cost is trivial — cheaper than maintaining an ordered list
@@ -59,9 +66,6 @@ func evictTranscriptIfNeeded(m map[string]*jobTranscriptEntry, key string, maxLe
 	var victimAt time.Time
 	first := true
 	for k, te := range m {
-		if k == key {
-			continue
-		}
 		if first || te.touchedAt.Before(victimAt) {
 			victim = k
 			victimAt = te.touchedAt

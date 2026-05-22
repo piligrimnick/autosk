@@ -929,11 +929,12 @@ func wrapPlain(s string, width int) string {
 // about to fetch). When te is nil the header is still emitted and
 // the transcript section shows a muted "(loading...)" line.
 //
-// width is the OUTER width of the detail pane (the same value
-// renderTaskDetail receives). When width <= 0 (first layout pass)
-// we fall back to a plain-text dump that mirrors the previous
-// renderJobDetail shape — enough to not panic, and the next frame
-// will redraw with the real width.
+// width is the inner cell width of the detail pane (matches
+// renderTaskDetail's `width` parameter — i.e. innerWidth(winDetail),
+// frame-excluded). When width <= 0 (first layout pass) we fall back
+// to a plain-text dump that mirrors the previous renderJobDetail
+// shape — enough to not panic, and the next frame will redraw with
+// the real width.
 func renderJobDetail(j datasource.Job, te *jobTranscriptEntry, width int) string {
 	var b strings.Builder
 
@@ -977,14 +978,15 @@ func renderJobDetail(j datasource.Job, te *jobTranscriptEntry, width int) string
 	}
 	b.WriteString(strings.Join(meta, "  ") + "\n")
 
-	// Row 4: session path — whole row muted.
+	// Row 4: session path — whole row muted. The colon matches the
+	// acceptance-criterion spelling ("muted `session:` row").
 	if j.SessionPath != "" {
-		b.WriteString(styleMuted.Render("session "+j.SessionPath) + "\n")
+		b.WriteString(styleMuted.Render("session: "+j.SessionPath) + "\n")
 	}
 
-	// Optional error row.
+	// Optional error row. Same colon convention.
 	if j.Error != "" {
-		b.WriteString(styleErr.Render("error "+j.Error) + "\n")
+		b.WriteString(styleErr.Render("error: "+j.Error) + "\n")
 	}
 
 	// ---- transcript ---------------------------------------------

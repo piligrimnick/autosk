@@ -106,6 +106,73 @@ func TestJobInput_DoesNotLeakAcrossJobs(t *testing.T) {
 	}
 }
 
+// TestJobInput_SurvivesRefreshDrivenReshuffle pins the regression
+// the latest review flagged: a refresh tick that REORDERS the
+// jobs slice without an operator-authored cursor move (e.g. a
+// newly-created job inserts at index 0 and pushes the previously-
+// cursored row to index 1) must NOT silently wipe the operator's
+// in-flight draft.
+//
+// The fix is to drop the clearJobInputIfStale call from
+// applyRefreshLocked: only afterCursorMove (which fires on explicit
+// j/k keypresses) clears the draft on jobID-mismatch. Refresh-
+// driven reshuffles preserve it.
+func TestJobInput_SurvivesRefreshDrivenReshuffle(t *testing.T) {
+	gu := jobDetailLayoutFixture(t)
+	// Seed: cursor on job-A at index 0, draft typed against job-A.
+	gu.st.withLock(func() {
+		gu.st.jobs = []datasource.Job{
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+		}
+		gu.st.jobCursor = 0
+		gu.st.focused = panelJobs
+		gu.st.jobInput = "plan: refactor X"
+		gu.st.jobInputOwner = "job-A"
+	})
+
+	// Refresh-driven reshuffle: a brand-new job-Z lands at index 0,
+	// pushing job-A to index 1. jobCursor stays pinned at 0, so the
+	// selected job is now job-Z. The operator did NOT press j/k.
+	r := refreshResult{
+		jobs: []datasource.Job{
+			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+		},
+		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
+	}
+	gu.applyRefreshLocked(r)
+
+	var (
+		input string
+		owner string
+	)
+	gu.st.withRLock(func() {
+		input = gu.st.jobInput
+		owner = gu.st.jobInputOwner
+	})
+	if input != "plan: refactor X" {
+		t.Errorf("refresh-driven reshuffle wiped the in-flight draft: jobInput=%q (want %q)", input, "plan: refactor X")
+	}
+	if owner != "job-A" {
+		t.Errorf("jobInputOwner clobbered on refresh: %q (want job-A)", owner)
+	}
+
+	// Sanity: a subsequent EXPLICIT cursor move to job-A (now at
+	// index 1) still wins — the owner matches so the draft survives.
+	gu.st.withLock(func() { gu.st.jobCursor = 1 })
+	gu.afterCursorMove(panelJobs)
+	gu.st.withRLock(func() {
+		input = gu.st.jobInput
+		owner = gu.st.jobInputOwner
+	})
+	if input != "plan: refactor X" {
+		t.Errorf("draft lost after re-cursoring back to job-A: jobInput=%q", input)
+	}
+	if owner != "job-A" {
+		t.Errorf("owner lost after re-cursoring back to job-A: %q", owner)
+	}
+}
+
 // TestLayout_JobInputAppears_WhenSelectedJobRunning pins acceptance
 // criterion 5: a running selected job allocates winJobInput, AND
 // winDetail's height shrinks by the input's slot.
