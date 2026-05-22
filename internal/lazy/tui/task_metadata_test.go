@@ -86,7 +86,8 @@ func TestTaskMetadataEditNoOpWithoutSelection(t *testing.T) {
 // TestTaskMetadataInvalidJSONReopensPopup pins the validation
 // branch: invalid JSON MUST NOT call SetMetadata and MUST leave the
 // popup re-opened. The flash level must be "err" so the operator
-// sees the toast.
+// sees the toast. The re-open MUST also preserve the typed text so
+// the user can fix the JSON without re-typing from scratch.
 func TestTaskMetadataInvalidJSONReopensPopup(t *testing.T) {
 	g, err := gocui.NewGui(gocui.NewGuiOpts{
 		OutputMode: gocui.OutputNormal,
@@ -117,6 +118,9 @@ func TestTaskMetadataInvalidJSONReopensPopup(t *testing.T) {
 	if k := gu.st.popup.Kind; k != popupSingleCompose {
 		t.Errorf("popup must be re-opened on invalid JSON; kind=%v", k)
 	}
+	if !strings.Contains(gu.st.popup.Input, "{this is not valid json") {
+		t.Errorf("typed text lost on re-open: input=%q", gu.st.popup.Input)
+	}
 	if !strings.Contains(gu.st.flash.Text, "invalid JSON") {
 		t.Errorf("flash should mention 'invalid JSON': %+v", gu.st.flash)
 	}
@@ -125,49 +129,80 @@ func TestTaskMetadataInvalidJSONReopensPopup(t *testing.T) {
 	}
 }
 
-// TestTaskMetadataNonObjectJSONReopensPopup pins the corner-case
-// from the plan's acceptance criteria #9: valid JSON that isn't an
-// object (e.g. an array or a string) MUST behave the same as
-// invalid JSON \u2014 json.Unmarshal into map[string]any fails on
-// non-object values.
+// TestTaskMetadataNonObjectJSONReopensPopup pins acceptance
+// criteria #9: valid JSON that isn't an object (array, string,
+// number, bool, or `null`) MUST behave the same as invalid JSON.
+// json.Unmarshal of an array / string / number / bool into a
+// map[string]any returns an error so that path goes through the
+// invalid-JSON branch. The `null` literal is the tricky case:
+// json.Unmarshal succeeds and leaves the map at nil, so the code
+// adds an explicit nil-map guard. Pin both shapes.
 func TestTaskMetadataNonObjectJSONReopensPopup(t *testing.T) {
-	g, err := gocui.NewGui(gocui.NewGuiOpts{
-		OutputMode: gocui.OutputNormal,
-		Headless:   true,
-		Width:      120,
-		Height:     40,
-	})
-	if err != nil {
-		t.Fatalf("gocui new: %v", err)
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"array", `["array", "not", "object"]`},
+		{"string", `"just a string"`},
+		{"number", `42`},
+		{"bool", `true`},
+		// `null` is the dangerous corner case — without the
+		// nil-map guard json.Unmarshal returns no error and
+		// SetMetadata(ctx, id, nil) silently wipes metadata.
+		{"null", `null`},
 	}
-	defer g.Close()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g, err := gocui.NewGui(gocui.NewGuiOpts{
+				OutputMode: gocui.OutputNormal,
+				Headless:   true,
+				Width:      120,
+				Height:     40,
+			})
+			if err != nil {
+				t.Fatalf("gocui new: %v", err)
+			}
+			defer g.Close()
 
-	ds := &fakeMetaDS{}
-	gu := &Gui{g: g, st: newState(), ds: ds, ctx: context.Background()}
-	gu.openSingleComposeForMetadata("ask-aaaaaa", "{}")
-	gu.layoutPopup(g, 120, 40)
+			ds := &fakeMetaDS{}
+			gu := &Gui{g: g, st: newState(), ds: ds, ctx: context.Background()}
+			gu.openSingleComposeForMetadata("ask-aaaaaa", "{}")
+			gu.layoutPopup(g, 120, 40)
 
-	v, _ := g.View(winSingleCompose)
-	v.TextArea.Clear()
-	v.TextArea.TypeString(`["array", "not", "object"]`)
+			v, _ := g.View(winSingleCompose)
+			v.TextArea.Clear()
+			v.TextArea.TypeString(tc.body)
 
-	if err := gu.singleComposeConfirm(nil, nil); err != nil {
-		t.Fatalf("confirm: %v", err)
-	}
-	if ds.calls != 0 {
-		t.Errorf("SetMetadata called %d times on non-object JSON, want 0", ds.calls)
-	}
-	if k := gu.st.popup.Kind; k != popupSingleCompose {
-		t.Errorf("popup must be re-opened on non-object JSON; kind=%v", k)
-	}
-	if !strings.Contains(gu.st.flash.Text, "invalid JSON") {
-		t.Errorf("flash should mention 'invalid JSON': %+v", gu.st.flash)
+			if err := gu.singleComposeConfirm(nil, nil); err != nil {
+				t.Fatalf("confirm: %v", err)
+			}
+			if ds.calls != 0 {
+				t.Errorf("SetMetadata called %d times on non-object JSON (%q), want 0", ds.calls, tc.body)
+			}
+			if k := gu.st.popup.Kind; k != popupSingleCompose {
+				t.Errorf("popup must be re-opened on non-object JSON (%q); kind=%v", tc.body, k)
+			}
+			// Text preservation: the user's typed body must round-
+			// trip into popupState.Input on re-open so they can
+			// fix the value without losing their work.
+			if !strings.Contains(gu.st.popup.Input, tc.body) {
+				t.Errorf("typed text lost on re-open: input=%q want contains %q", gu.st.popup.Input, tc.body)
+			}
+			if !strings.Contains(gu.st.flash.Text, "invalid JSON") {
+				t.Errorf("flash should mention 'invalid JSON' for %q: %+v", tc.body, gu.st.flash)
+			}
+			if gu.st.flash.Level != "err" {
+				t.Errorf("flash level = %q for %q, want err", gu.st.flash.Level, tc.body)
+			}
+		})
 	}
 }
 
 // TestTaskMetadataEmptyObjectClearsMap pins acceptance criteria #7
 // for the special case: submitting `{}` is equivalent to clearing
-// metadata, and SetMetadata is called with an empty / nil map.
+// metadata, and SetMetadata is called with an empty map. The
+// synchronous dispatcher in the test fixture lets us observe the
+// worker-body's side-effect inline.
 func TestTaskMetadataEmptyObjectClearsMap(t *testing.T) {
 	g, err := gocui.NewGui(gocui.NewGuiOpts{
 		OutputMode: gocui.OutputNormal,
@@ -182,11 +217,7 @@ func TestTaskMetadataEmptyObjectClearsMap(t *testing.T) {
 
 	ds := &fakeMetaDS{}
 	gu := &Gui{g: g, st: newState(), ds: ds, ctx: context.Background()}
-	// SetMetadata fires through gu.g.OnWorker; the test setup
-	// doesn't run a MainLoop, so we drive the datasource via the
-	// accept callback directly. Open the popup, type `{}`, hit
-	// submit \u2014 the accept callback's worker dispatch enqueues the
-	// SetMetadata call.
+	gu.dispatch = func(f func()) { f() }
 	gu.openSingleComposeForMetadata("ask-aaaaaa", "{}")
 	gu.layoutPopup(g, 120, 40)
 
@@ -197,32 +228,30 @@ func TestTaskMetadataEmptyObjectClearsMap(t *testing.T) {
 	if err := gu.singleComposeConfirm(nil, nil); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
-	// Worker dispatch needs the MainLoop. Verify popup closed +
-	// flash NOT marked as error \u2014 then call SetMetadata directly
-	// to assert the empty map round-trips through the decoder.
 	if k := gu.st.popup.Kind; k != popupNone {
 		t.Errorf("popup not cleared on valid `{}`: kind=%v", k)
 	}
 	if gu.st.flash.Level == "err" {
 		t.Errorf("flash level = err on valid `{}`: %+v", gu.st.flash)
 	}
-
-	// Exercise the datasource path with the parsed map shape that
-	// the accept callback would have produced. json.Unmarshal of
-	// "{}" into map[string]any yields an empty (zero-len) map, NOT
-	// nil. SetMetadata accepts both.
-	if err := ds.SetMetadata(context.Background(), "ask-aaaaaa", map[string]any{}); err != nil {
-		t.Fatalf("SetMetadata: %v", err)
+	// The synchronous dispatcher has already run SetMetadata. Verify
+	// the integration: the empty-object branch routes the parsed map
+	// (zero-length, non-nil) through to the datasource.
+	if ds.calls != 1 {
+		t.Fatalf("SetMetadata called %d times, want 1", ds.calls)
 	}
-	if ds.calls != 1 || ds.gotID != "ask-aaaaaa" || len(ds.gotMap) != 0 {
-		t.Errorf("got calls=%d id=%q map=%+v", ds.calls, ds.gotID, ds.gotMap)
+	if ds.gotID != "ask-aaaaaa" {
+		t.Errorf("id = %q, want ask-aaaaaa", ds.gotID)
+	}
+	if len(ds.gotMap) != 0 {
+		t.Errorf("map = %+v, want empty", ds.gotMap)
 	}
 }
 
 // TestTaskMetadataValidJSONClosesPopup pins acceptance criteria #7
 // for the happy path: a valid JSON object closes the popup, sets a
-// non-error flash, and (when followed by direct ds.SetMetadata) the
-// parsed map round-trips correctly.
+// non-error flash, and the parsed map round-trips through the
+// datasource (via the synchronous dispatcher).
 func TestTaskMetadataValidJSONClosesPopup(t *testing.T) {
 	g, err := gocui.NewGui(gocui.NewGuiOpts{
 		OutputMode: gocui.OutputNormal,
@@ -237,6 +266,7 @@ func TestTaskMetadataValidJSONClosesPopup(t *testing.T) {
 
 	ds := &fakeMetaDS{}
 	gu := &Gui{g: g, st: newState(), ds: ds, ctx: context.Background()}
+	gu.dispatch = func(f func()) { f() }
 	gu.openSingleComposeForMetadata("ask-aaaaaa", "{}")
 	gu.layoutPopup(g, 120, 40)
 
@@ -252,5 +282,21 @@ func TestTaskMetadataValidJSONClosesPopup(t *testing.T) {
 	}
 	if gu.st.flash.Level == "err" {
 		t.Errorf("error flash on valid JSON: %+v", gu.st.flash)
+	}
+	if ds.calls != 1 {
+		t.Fatalf("SetMetadata called %d times, want 1", ds.calls)
+	}
+	if ds.gotID != "ask-aaaaaa" {
+		t.Errorf("id = %q, want ask-aaaaaa", ds.gotID)
+	}
+	if got := ds.gotMap["foo"]; got != "bar" {
+		t.Errorf("map[foo] = %v, want bar", got)
+	}
+	// JSON numbers decode into float64 in map[string]any.
+	if got := ds.gotMap["n"]; got != float64(42) {
+		t.Errorf("map[n] = %v, want 42 (float64)", got)
+	}
+	if gu.st.flash.Level != "info" {
+		t.Errorf("flash level = %q, want info; flash=%+v", gu.st.flash.Level, gu.st.flash)
 	}
 }

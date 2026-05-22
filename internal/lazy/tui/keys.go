@@ -794,6 +794,17 @@ func (gu *Gui) taskMetadataEdit(*gocui.Gui, *gocui.View) error {
 // the metadata-edit flow. Same shape as openTaskComposeForEdit: the
 // validation-error branch re-invokes itself with the same typed
 // text so the popup "stays open" without the user re-typing.
+//
+// JSON validation has two gates: json.Unmarshal must succeed AND
+// the decoded value must actually be a JSON object. Both `null` and
+// non-object JSON (arrays, strings, numbers, bool) decode into a
+// map[string]any without an error — `null` populates a nil map and
+// non-objects fail mid-decode — but the user-visible contract per
+// plan AC #9 is that only a JSON OBJECT is acceptable. Treat the
+// nil-map case as a validation failure so typing the literal `null`
+// doesn't silently wipe metadata. (Note: json.Unmarshal of an
+// array / string / number / bool into a map[string]any returns a
+// proper error, so they go through the existing err branch.)
 func (gu *Gui) openSingleComposeForMetadata(id, initial string) {
 	gu.openSingleCompose("Metadata "+id, "JSON object", initial, func(text string) error {
 		var m map[string]any
@@ -802,14 +813,20 @@ func (gu *Gui) openSingleComposeForMetadata(id, initial string) {
 			gu.openSingleComposeForMetadata(id, text)
 			return nil
 		}
-		gu.g.OnWorker(func(_ gocui.Task) error {
+		if m == nil {
+			// `null` unmarshals cleanly into a nil map. Reject so it
+			// doesn't act as a silent metadata-wipe (plan AC #9).
+			gu.flashf("err", "invalid JSON: metadata must be a JSON object")
+			gu.openSingleComposeForMetadata(id, text)
+			return nil
+		}
+		gu.runDispatch(func() {
 			if err := gu.ds.SetMetadata(gu.ctx, id, m); err != nil {
 				gu.flashf("err", "metadata: %v", err)
-				return nil
+				return
 			}
 			gu.flashf("info", "metadata updated %s", id)
 			gu.refreshAll()
-			return nil
 		})
 		return nil
 	})
@@ -822,6 +839,10 @@ func (gu *Gui) openSingleComposeForMetadata(id, initial string) {
 // popupNone before invoking the accept callback, so re-opening from
 // inside the callback is the supported way to "keep the popup
 // open".
+//
+// The write itself goes through runDispatch (not gu.g.OnWorker
+// directly) so tests can swap in a synchronous dispatcher and
+// observe the datasource call without needing a gocui MainLoop.
 func (gu *Gui) openTaskComposeForEdit(id, summary, description string) {
 	gu.openTaskCompose("Edit "+id, summary, description, func(s, d string) error {
 		if strings.TrimSpace(s) == "" {
@@ -829,14 +850,13 @@ func (gu *Gui) openTaskComposeForEdit(id, summary, description string) {
 			gu.openTaskComposeForEdit(id, s, d)
 			return nil
 		}
-		gu.g.OnWorker(func(_ gocui.Task) error {
+		gu.runDispatch(func() {
 			if err := gu.ds.UpdateTitleDescription(gu.ctx, id, s, d); err != nil {
 				gu.flashf("err", "edit: %v", err)
-				return nil
+				return
 			}
 			gu.flashf("info", "edited %s", id)
 			gu.refreshAll()
-			return nil
 		})
 		return nil
 	})
