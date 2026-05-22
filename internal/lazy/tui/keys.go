@@ -613,13 +613,17 @@ func (gu *Gui) openFilter(*gocui.Gui, *gocui.View) error {
 func (gu *Gui) openPalette(*gocui.Gui, *gocui.View) error {
 	cmds := []string{
 		"task new",
+		"task edit",
 		"task done",
 		"task cancel",
 		"task reopen",
+		"task priority",
+		"task resume",
 		"task enroll",
 		"task block",
 		"task unblock",
 		"task comment",
+		"task metadata",
 		"workflow create",
 		"workflow delete",
 		"job cancel",
@@ -638,12 +642,18 @@ func (gu *Gui) dispatchPaletteCommand(cmd string) {
 	switch cmd {
 	case "task new":
 		_ = gu.taskNew(nil, nil)
+	case "task edit":
+		_ = gu.taskEdit(nil, nil)
 	case "task done":
 		_ = gu.taskDone(nil, nil)
 	case "task cancel":
 		_ = gu.taskCancel(nil, nil)
 	case "task reopen":
 		_ = gu.taskReopen(nil, nil)
+	case "task priority":
+		_ = gu.taskPriority(nil, nil)
+	case "task resume":
+		_ = gu.taskResume(nil, nil)
 	case "task enroll":
 		_ = gu.taskEnroll(nil, nil)
 	case "task block":
@@ -652,6 +662,8 @@ func (gu *Gui) dispatchPaletteCommand(cmd string) {
 		_ = gu.taskUnblock(nil, nil)
 	case "task comment":
 		_ = gu.taskComment(nil, nil)
+	case "task metadata":
+		_ = gu.taskMetadataEdit(nil, nil)
 	case "workflow create":
 		_ = gu.workflowNew(nil, nil)
 	case "workflow delete":
@@ -682,9 +694,9 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"tasks:",
 		"  Space        filter Jobs by selected task (stay on Tasks)",
 		"  Enter        filter Jobs by selected task and focus Jobs",
-		"  n new    d done     x cancel   o reopen",
-		"  e enroll r resume   b block    u unblock  m comment",
-		"  p priority",
+		"  n new    c edit    d done     x cancel   o reopen",
+		"  e enroll r resume  b block    u unblock  m comment",
+		"  p priority         M metadata",
 		"",
 		"jobs:",
 		"  Enter inspector (Live default)",
@@ -700,9 +712,11 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"  Live input (textarea focus): Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort",
 		"  Live input: Ctrl-B / PgUp / PgDn scroll-back the transcript above",
 		"",
-		"new task compose:",
+		"compose (new task / edit task):",
 		"  summary: Enter / Ctrl-S submit  Tab → description  Esc cancel",
 		"  description: Ctrl-S / Alt-Enter submit  Tab → summary  Esc cancel",
+		"compose (comment / metadata):",
+		"  Ctrl-S / Alt-Enter submit  Enter newline  Esc cancel",
 	}
 	gu.openMenu("help", lines, func(_ int) error { return gu.popupClose(nil, nil) })
 	return nil
