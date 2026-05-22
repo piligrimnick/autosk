@@ -533,13 +533,12 @@ func (gu *Gui) layoutSingleCompose(g *gocui.Gui, termW, termH int, title, hint, 
 	}
 
 	panelWidth := composePanelWidth(termW)
-	contentHeight := composeContentHeight(content)
-	panelHeight := contentHeight + 2
+	// composeContentHeight already enforces a min of
+	// composeMinDescriptionContent (7), so panelHeight starts at >=9
+	// before the termH*3/4 cap. No explicit floor needed.
+	panelHeight := composeContentHeight(content) + 2
 	if panelHeight > termH*3/4 {
 		panelHeight = termH * 3 / 4
-	}
-	if panelHeight < 5 {
-		panelHeight = 5
 	}
 	x0 := termW/2 - panelWidth/2
 	y0 := termH/2 - panelHeight/2 - panelHeight%2
