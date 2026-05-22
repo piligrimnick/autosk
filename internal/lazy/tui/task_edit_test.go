@@ -28,7 +28,7 @@ func (f *fakeEditDS) UpdateTitleDescription(_ context.Context, id, title, desc s
 // taskEdit opens the two-pane compose popup with the selected task's
 // title and description already in popup state. The first layout
 // pass after that point seeds the TextArea from those initial
-// values \u2014 covered by the popup_compose_test.go layout test, so
+// values — covered by the popup_compose_test.go layout test, so
 // here we pin the state shape instead.
 func TestTaskEditOpensComposePrefilled(t *testing.T) {
 	gu := &Gui{st: newState()}
@@ -70,10 +70,12 @@ func TestTaskEditNoOpWithoutSelection(t *testing.T) {
 	}
 }
 
-// TestTaskEditHappyPathCallsDatasource drives a real headless gocui
-// through the full edit path: open compose via `c`, type into both
-// panes, Ctrl-S submits, the datasource sees the new title and
-// description.
+// TestTaskEditHappyPathCallsDatasource drives the full edit path:
+// open compose via `c`, type into both panes, Ctrl-S submits. The
+// submit-path's worker body is routed through gu.runDispatch (so a
+// test can substitute a synchronous dispatcher) — that's the only
+// reason this test can assert UpdateTitleDescription was called
+// without driving a real gocui MainLoop.
 func TestTaskEditHappyPathCallsDatasource(t *testing.T) {
 	g, err := gocui.NewGui(gocui.NewGuiOpts{
 		OutputMode: gocui.OutputNormal,
@@ -88,6 +90,10 @@ func TestTaskEditHappyPathCallsDatasource(t *testing.T) {
 
 	ds := &fakeEditDS{}
 	gu := &Gui{g: g, st: newState(), ds: ds, ctx: context.Background()}
+	// Synchronous dispatcher: lets us observe the worker side-effect
+	// inside the test without a MainLoop. Production keeps the
+	// default OnWorker path.
+	gu.dispatch = func(f func()) { f() }
 	gu.st.tasks = []datasource.Task{{ID: "ask-bbbbbb", Title: "x", Description: "y"}}
 	gu.st.taskCursor = 0
 	gu.st.focused = panelTasks
@@ -106,29 +112,14 @@ func TestTaskEditHappyPathCallsDatasource(t *testing.T) {
 	if err := gu.taskComposeConfirm(nil, nil); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
-	// taskEditAccept fires OnWorker which dispatches in the real
-	// driver; in tests we just verify the popup closed and the
-	// callback was queued. We can't easily intercept the OnWorker
-	// without a gocui MainLoop, so we drive the callback directly
-	// by re-invoking taskEdit's accept logic.
-	//
-	// Instead: assert that popup state cleared (Ctrl-S happy path),
-	// then synthesise the accept call to verify the datasource sees
-	// the right args. This double-tests both halves without needing
-	// a MainLoop.
 	if k := gu.st.popup.Kind; k != popupNone {
 		t.Errorf("popup not cleared on Ctrl-S: kind=%v", k)
 	}
 
-	// Now exercise the worker callback directly by simulating
-	// UpdateTitleDescription with the values that taskComposeConfirm
-	// just read. The submit path is taskComposeConfirm \u2192
-	// OnComposeAccept(s,d) \u2192 OnWorker(ds.UpdateTitleDescription).
-	// We invoke the datasource path here so the test asserts on the
-	// observable side effect.
-	if err := ds.UpdateTitleDescription(context.Background(), "ask-bbbbbb", "new title", "new\nbody"); err != nil {
-		t.Fatalf("ds.UpdateTitleDescription: %v", err)
-	}
+	// With the synchronous dispatcher in place the accept callback
+	// has already run UpdateTitleDescription by the time Confirm
+	// returns. Assert on the observable side-effect of the real
+	// integration path.
 	if ds.calls != 1 {
 		t.Fatalf("UpdateTitleDescription called %d times, want 1", ds.calls)
 	}
@@ -136,13 +127,18 @@ func TestTaskEditHappyPathCallsDatasource(t *testing.T) {
 		t.Errorf("got (%q, %q, %q), want (ask-bbbbbb, new title, new\\nbody)",
 			ds.gotID, ds.gotTitle, ds.gotDesc)
 	}
+	if gu.st.flash.Level != "info" {
+		t.Errorf("flash level = %q, want info; flash=%+v", gu.st.flash.Level, gu.st.flash)
+	}
 }
 
 // TestTaskEditEmptyTitleReopensPopup pins the validation branch of
 // openTaskComposeForEdit's accept callback: an empty (whitespace-
 // only) title MUST NOT call UpdateTitleDescription and MUST leave
 // the popup re-opened so the user can fix the title without losing
-// their work.
+// their work. The re-open also has to preserve the typed
+// description (and the whitespace-only summary) so we explicitly
+// assert popup.Summary / popup.Description survived.
 func TestTaskEditEmptyTitleReopensPopup(t *testing.T) {
 	g, err := gocui.NewGui(gocui.NewGuiOpts{
 		OutputMode: gocui.OutputNormal,
@@ -157,6 +153,7 @@ func TestTaskEditEmptyTitleReopensPopup(t *testing.T) {
 
 	ds := &fakeEditDS{}
 	gu := &Gui{g: g, st: newState(), ds: ds, ctx: context.Background()}
+	gu.dispatch = func(f func()) { f() }
 	gu.st.tasks = []datasource.Task{{ID: "ask-cccccc", Title: "x", Description: "y"}}
 	gu.st.taskCursor = 0
 	gu.st.focused = panelTasks
@@ -180,6 +177,16 @@ func TestTaskEditEmptyTitleReopensPopup(t *testing.T) {
 
 	if k := gu.st.popup.Kind; k != popupTaskCompose {
 		t.Errorf("popup must be re-opened after empty-title submit; kind=%v", k)
+	}
+	// Text preservation is the whole point of the re-open path: if a
+	// future refactor drops the (s, d) round-trip and re-seeds with
+	// empty values, the user silently loses their typed body. Pin
+	// the contract here.
+	if gu.st.popup.Summary != "   " {
+		t.Errorf("summary lost on re-open: got %q, want %q", gu.st.popup.Summary, "   ")
+	}
+	if gu.st.popup.Description != "kept body" {
+		t.Errorf("description lost on re-open: got %q, want %q", gu.st.popup.Description, "kept body")
 	}
 	if ds.calls != 0 {
 		t.Errorf("UpdateTitleDescription called %d times on empty-title submit, want 0", ds.calls)
