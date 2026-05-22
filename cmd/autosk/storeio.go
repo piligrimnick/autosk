@@ -46,7 +46,16 @@ func projectRootFromCwd() (string, error) {
 
 // openStore resolves the DB path and opens it, running migrations.
 //
-// writeOK controls whether AutoInit is allowed (write commands pass true).
+// writeOK controls whether AutoInit is allowed (write commands pass
+// true). When AutoInit fires, openStore also runs the same workflow
+// bootstrap that `autosk init` does so a fresh project gets the
+// canonical `feature-dev-generic` workflow seeded regardless of which
+// verb triggered the auto-init (write verb, `autosk lazy`, ...).
+//
+// Bootstrap can be suppressed by setting AUTOSK_AUTOINIT_SKIP_BOOTSTRAP
+// (see autoinit.go). Bootstrap failures are non-fatal: a warning is
+// printed to stderr and the migrated DB is still returned.
+//
 // Returns the store and a close func that the caller must defer.
 func openStore(ctx context.Context, writeOK bool) (store.Store, func(), error) {
 	cwd, err := os.Getwd()
@@ -59,13 +68,16 @@ func openStore(ctx context.Context, writeOK bool) (store.Store, func(), error) {
 		created bool
 	)
 	if writeOK {
-		dbPath, created, err = projectdb.ResolveOrInit(cwd, flagDB)
+		dbPath, created, err = resolveOrInitInteractive(cwd, flagDB)
 	} else {
 		dbPath, err = projectdb.Resolve(cwd, flagDB)
 	}
 	if err != nil {
-		if errors.Is(err, projectdb.ErrNotFound) {
+		switch {
+		case errors.Is(err, projectdb.ErrNotFound):
 			return nil, nil, fmt.Errorf("no .autosk/db found in this directory or any parent (run `autosk init`, or run a write command to auto-init)")
+		case errors.Is(err, ErrAutoInitDeclined):
+			return nil, nil, fmt.Errorf("no .autosk/db: declined to create one (run `autosk init` explicitly, or point at an existing project with --db <path> / AUTOSK_DB)")
 		}
 		return nil, nil, err
 	}
@@ -78,8 +90,32 @@ func openStore(ctx context.Context, writeOK bool) (store.Store, func(), error) {
 		_ = s.Close()
 		return nil, nil, fmt.Errorf("migrate %s: %w", dbPath, err)
 	}
-	if created && !flagQuiet {
-		fmt.Fprintf(os.Stderr, "autosk: created %s\n", dbPath)
+
+	if created {
+		if !flagQuiet {
+			fmt.Fprintf(os.Stderr, "autosk: created %s\n", dbPath)
+		}
+		// Mirror `autosk init`'s post-migrate work so the auto-init
+		// path leaves the same state as an explicit init:
+		//   1. Ensure the global packages prefix exists (best-effort).
+		//   2. Seed the bootstrap workflow (best-effort).
+		// Both steps are skipped when the operator opted out via
+		// AUTOSK_AUTOINIT_SKIP_BOOTSTRAP; that env covers the test
+		// helpers and any pipeline that wants a strictly minimal DB.
+		if os.Getenv(EnvAutoInitSkipBootstrap) == "" {
+			if reg, perr := openPackagesRegistry(); perr == nil {
+				if err := reg.EnsurePrefix(); err != nil && !flagQuiet {
+					fmt.Fprintf(os.Stderr,
+						"warning: could not create packages prefix at %s: %v\n",
+						reg.Prefix(), err)
+				}
+			}
+			if berr := bootstrapDefaultWorkflow(ctx, s); berr != nil {
+				fmt.Fprintf(os.Stderr,
+					"warning: could not bootstrap default workflow: %v (set %s=1 to suppress this step)\n",
+					berr, EnvAutoInitSkipBootstrap)
+			}
+		}
 	}
 	return s, func() { _ = s.Close() }, nil
 }

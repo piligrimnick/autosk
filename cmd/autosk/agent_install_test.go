@@ -108,10 +108,24 @@ func withIsolatedPackagesPrefix(t *testing.T) string {
 // project's DB instead of the per-test t.TempDir(). Same hazard if a
 // developer's shell has AUTOSK_DB set. t.Setenv restores the prior
 // state on test cleanup.
+//
+// Bootstrap isolation: openStore now also seeds feature-dev-generic on
+// the auto-init path (mirroring `autosk init`). Tests that exercise a
+// write verb in a fresh dir without first calling `autosk init` would
+// otherwise have that bootstrap fire and either pollute their assertions
+// or try to reach the real npm registry. We default the runRoot env to
+// AUTOSK_AUTOINIT_SKIP_BOOTSTRAP=1; tests that explicitly want to verify
+// the auto-init bootstrap path opt back in by clearing the env via
+// t.Setenv before calling runRoot. The `autosk init` verb itself ignores
+// this env (it has its own --skip-bootstrap flag), so init-driven
+// bootstrap tests stay unaffected.
 func runRoot(t *testing.T, dir string, argv ...string) (string, error) {
 	t.Helper()
 	t.Setenv("AUTOSK_DB", "")
 	t.Setenv("AUTOSK_NO_AUTOINIT", "")
+	if _, set := os.LookupEnv("AUTOSK_AUTOINIT_SKIP_BOOTSTRAP"); !set {
+		t.Setenv("AUTOSK_AUTOINIT_SKIP_BOOTSTRAP", "1")
+	}
 	root := newRootCmd()
 	root.SetArgs(argv)
 	// emit* helpers write to os.Stdout directly; capture via pipe.

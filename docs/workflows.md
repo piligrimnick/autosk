@@ -176,6 +176,42 @@ Bootstrap failures (network down, npm registry 5xx, read-only packages
 prefix, ...) are non-fatal: `autosk init` warns on stderr, exits 0, and
 leaves a valid migrated DB behind.
 
+##### Implicit auto-init from other verbs
+
+The write-side verbs (`autosk create`, `autosk lazy`, `autosk enroll`,
+etc.) also bootstrap the default workflow the first time they reach a
+directory tree that has no `.autosk/db`. The exact behaviour depends on
+whether stdin/stderr are attached to a real terminal:
+
+- **Interactive (TTY).** Before creating anything the CLI prompts on
+  stderr:
+
+  ```
+  No autosk database found at or above /path/to/cwd.
+  Create a new autosk database in /path/to/cwd/.autosk/db? [Y/n]
+  ```
+
+  Empty answer or `y`/`yes` accepts. `n`/`no` aborts the verb with an
+  error pointing at `autosk init`, `--db`, and `AUTOSK_DB`. After an
+  accepted prompt the bootstrap sequence is identical to
+  `autosk init`: migrations, packages-prefix touch, then seed the
+  `feature-dev-generic` workflow and install `@autogent/generic`.
+
+- **Non-interactive (no TTY, piped stdin, `--json`, `--quiet`).** The
+  prompt is skipped and the CLI behaves as if the user answered `y`.
+  This preserves the original "write verbs auto-init" contract for
+  scripts, CI, the daemon executor, and editor terminals that
+  intentionally hide the TTY.
+
+Two environment knobs control the implicit path without authoring a
+workflow JSON yourself:
+
+| Variable | Effect |
+| -------- | ------ |
+| `AUTOSK_NO_AUTOINIT=1` | Refuse auto-init entirely; the verb errors out with `auto-init disabled by AUTOSK_NO_AUTOINIT`. Intended for tests and read-only environments. |
+| `AUTOSK_AUTOINIT_ASSUME_YES=1` | Skip the interactive prompt even under a TTY and proceed as if the user said `y`. |
+| `AUTOSK_AUTOINIT_SKIP_BOOTSTRAP=1` | Create `.autosk/db` (with the y/n prompt path unchanged) but skip the workflow-seed step. Does not affect explicit `autosk init` — use its `--skip-bootstrap` flag for that. |
+
 The shipped example:
 
 ```jsonc
