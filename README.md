@@ -1,19 +1,13 @@
 ## What is autosk?
 
-A tiny task tracker and workflow engine for AI coding agents:
-
-1. **A task tracker.** Small, local, file-based. One DB per repo. You can use it to scope agent attention to concrete context.
-2. **A workflow engine.** Each workflow is a directed graph of **steps**, and each step is owned by an **agent**. Agents are either `human` (your interactive session) or sub-agents installed as npm packages.
+1. **task tracker**: small, local, file-based. One DB per repo. You can use it to scope agent attention to concrete context.
+2. **workflow engine**: each workflow is a directed graph of **steps**, and each step is owned by an **agent** managed by engine.
 
 You can stop at step 1 if all you want is a backlog. Step 2 is opt-in.
 
-- Create tasks from your terminal — they live in a local DB inside your repo (`.autosk/db`).
-- Pick what to work on next, or hand a task off to an AI agent.
-- Workflows walk each task through a graph of steps (e.g. *developer → reviewer → validator*); the daemon spawns the right agent at each step and do its work.
-
 Inspired by [beads](https://github.com/steveyegge/beads) but simpler and more flexible. Use it as a plain backlog, or opt in to workflows when you're ready to let agents pick tickets up on their own.
 
-```
+```bash
 $ autosk create "Wire up the auth flow" -p 1
 ask-3f9b2c
 
@@ -41,10 +35,10 @@ $ autosk enroll ask-3f9b2c --agent @your-org/coding-agent
 Tasks, jobs, workflows, and agents in one screen. Selecting a job streams its transcript live into the Detail pane.
 
 For TUI interface for easy manipulation and observability. Or go further and use CLI (see below).
-  ```bash
-  cd ~/your/project
-  autosk lazy
-  ```
+```bash
+cd ~/your/project
+autosk lazy
+```
 Here you can press `n` to create new task or `?` to see hotkeys.
 
 ### CLI
