@@ -30,8 +30,9 @@ the task is parked to `human` on the **target** step (the
 one the run was about to enter), and the human clears the counter
 with `autosk metadata reset-visits <id> [--step NAME]` before
 resuming.
-An interactive TUI (`autosk lazy`) renders all four entity kinds plus
-an SSE-backed job inspector. See:
+An interactive TUI (`autosk lazy`) renders all four entity kinds and
+shows the live + archive transcript of the focused job inline in the
+Detail pane. See:
 
 - Workflows plan: [`docs/plans/20260517-Workflows-Plan.md`](docs/plans/20260517-Workflows-Plan.md).
 - Agent packages plan: [`docs/plans/20260518-Agent-Packages.md`](docs/plans/20260518-Agent-Packages.md).
@@ -171,7 +172,7 @@ Daemon
   autosk daemon status <job-id> / messages <job-id> / cancel <job-id>
 
 Interactive TUI
-  autosk lazy [--job ID] [--sock PATH] [--refresh 2s]
+  autosk lazy [--sock PATH] [--refresh 2s]
 ```
 
 Every read command accepts `--json`. Every write command produces a
@@ -222,21 +223,22 @@ format is summarised in
 ## Interactive TUI
 
 `autosk lazy` is a lazygit-style terminal dashboard: tasks, jobs,
-workflows, and agents in one process, with a fullscreen inspector
-for running pi sessions (`Live / Archive / Meta / Signals` tabs).
+workflows, and agents in one process. Selecting a job renders its
+transcript (archive + live SSE) directly in the Detail pane, one
+labelled box per event; for a running job a small textarea appears
+below Detail for `Ctrl-D send` / `Ctrl-F follow_up` / `Ctrl-A abort`.
 It works against `.autosk/db` directly when the daemon isn't
-running; the Live tab is the one piece that needs `autosk daemon
-serve`. See [`docs/lazy.md`](docs/lazy.md) for the layout diagram,
-keymap, filter language, and graceful-degradation contract.
+running; the live SSE stream is the one piece that needs `autosk
+daemon serve`. See [`docs/lazy.md`](docs/lazy.md) for the layout
+diagram, keymap, filter language, and graceful-degradation contract.
 
 ```bash
 autosk lazy                    # dashboard
-autosk lazy --job run-9ab1     # deep-link straight into the inspector
 ```
 
-The previous standalone `autosk attach` command is gone in this
-release — use `autosk lazy --job <id>` to open a job's live mirror
-from the command line.
+The previous standalone `autosk attach` command is gone — focus the
+Jobs panel, move the cursor to the job, and the live transcript +
+input textarea render in the Detail pane.
 
 ## Roadmap (post v0.2)
 
