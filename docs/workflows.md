@@ -1,6 +1,6 @@
-# Workflows & agents (v0.2)
+# Workflows & agents
 
-autosk v0.2 turns the task tracker into a small workflow engine. Tasks
+autosk turns the task tracker into a small workflow engine. Tasks
 move through a directed graph of **steps**; each step is owned by an
 **agent** (a human or a background pi instance). The daemon picks up
 tasks in `work` status, spawns the step's agent, and advances the
