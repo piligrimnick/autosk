@@ -166,9 +166,6 @@ func (c *Compose) UpdateTitleDescription(ctx context.Context, id, title, descrip
 func (c *Compose) Enroll(ctx context.Context, id, wf string) error {
 	return c.off.Enroll(ctx, id, wf)
 }
-func (c *Compose) EnrollAgent(ctx context.Context, id, ag string) error {
-	return c.off.EnrollAgent(ctx, id, ag)
-}
 func (c *Compose) Resume(ctx context.Context, id, to string) error {
 	return c.off.Resume(ctx, id, to)
 }

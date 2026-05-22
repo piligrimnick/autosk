@@ -337,44 +337,6 @@ func TestOfflineEnroll_BumpsFirstStepCounter(t *testing.T) {
 	}
 }
 
-// TestOfflineEnrollAgent_BumpsSyntheticStep covers the single:<agent>
-// shorthand. The synthetic workflow has only one step named "do";
-// after enroll the counter on that step must be 1. max_visits=0 on
-// synthetics means uncapped — the bump must still happen.
-func TestOfflineEnrollAgent_BumpsSyntheticStep(t *testing.T) {
-	ctx := context.Background()
-	ds, ts, closeFn := newOfflineFx(t)
-	defer closeFn()
-
-	id, err := ds.CreateTask(ctx, "y", "", 2)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if err := ds.EnrollAgent(ctx, id, "developer"); err != nil {
-		t.Fatalf("enroll-agent: %v", err)
-	}
-	tk, err := ts.GetTask(ctx, id)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if tk.Status != store.StatusWork {
-		t.Fatalf("status: %s (want work)", tk.Status)
-	}
-	if tk.WorkflowID == "" {
-		t.Fatal("workflow_id not stamped on the task")
-	}
-	if tk.CurrentStepID == "" {
-		t.Fatal("current_step_id not stamped on the task")
-	}
-	sv, _ := tk.Metadata["step_visits"].(map[string]any)
-	if sv == nil {
-		t.Fatalf("step_visits missing; metadata=%+v", tk.Metadata)
-	}
-	if v, _ := sv[tk.CurrentStepID].(float64); int(v) != 1 {
-		t.Fatalf("step_visits[synthetic step]=%v (want 1)", sv[tk.CurrentStepID])
-	}
-}
-
 // TestOfflineResume_WithTo_BumpsTargetStep covers the deliberate-
 // transition branch of Resume. Park a task on "dev", Resume(--to
 // review), assert the target counter bumped exactly once and

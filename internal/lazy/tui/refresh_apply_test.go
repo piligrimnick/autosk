@@ -79,9 +79,6 @@ func (f *refreshFakeDS) UpdateTitleDescription(_ context.Context, _, _, _ string
 func (f *refreshFakeDS) Enroll(_ context.Context, _, _ string) error {
 	return datasource.ErrDaemonRequired
 }
-func (f *refreshFakeDS) EnrollAgent(_ context.Context, _, _ string) error {
-	return datasource.ErrDaemonRequired
-}
 func (f *refreshFakeDS) Resume(_ context.Context, _, _ string) error {
 	return datasource.ErrDaemonRequired
 }

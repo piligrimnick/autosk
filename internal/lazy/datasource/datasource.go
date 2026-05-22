@@ -237,7 +237,6 @@ type Datasource interface {
 	// is empty after trimming so the UI can render a flash.
 	UpdateTitleDescription(ctx context.Context, id, title, description string) error
 	Enroll(ctx context.Context, id, workflow string) error
-	EnrollAgent(ctx context.Context, id, agent string) error
 	Resume(ctx context.Context, id, toStep string) error
 	Block(ctx context.Context, id, blocker string) error
 	Unblock(ctx context.Context, id, blocker string) error

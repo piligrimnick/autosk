@@ -112,9 +112,8 @@ func (gu *Gui) bindKeys() error {
 		{winWorkflows, 'n', gocui.ModNone, gu.workflowNew},
 		{winWorkflows, 'D', gocui.ModNone, gu.workflowDelete},
 
-		// Agents write verbs.
-		{winAgents, 'i', gocui.ModNone, gu.agentInstall},
-		{winAgents, 'u', gocui.ModNone, gu.agentUninstall},
+		// Agents panel is read-only inside lazy: package install /
+		// uninstall happens via the `autosk agent` CLI, no hotkeys.
 
 		// Jobs hotkeys.
 		{winJobs, 'a', gocui.ModNone, gu.jobAttachLive},
@@ -623,7 +622,6 @@ func (gu *Gui) openPalette(*gocui.Gui, *gocui.View) error {
 		"task comment",
 		"workflow create",
 		"workflow delete",
-		"agent install",
 		"job cancel",
 		"scope clear",
 		"refresh",
@@ -658,8 +656,6 @@ func (gu *Gui) dispatchPaletteCommand(cmd string) {
 		_ = gu.workflowNew(nil, nil)
 	case "workflow delete":
 		_ = gu.workflowDelete(nil, nil)
-	case "agent install":
-		_ = gu.agentInstall(nil, nil)
 	case "job cancel":
 		_ = gu.jobCancel(nil, nil)
 	case "scope clear":
@@ -696,9 +692,6 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"",
 		"workflows:",
 		"  n new (from file)   D delete",
-		"",
-		"agents:",
-		"  i install   u uninstall",
 		"",
 		"inspector:",
 		"  [ / ]   1..4   tab cycle/jump",
@@ -1069,28 +1062,6 @@ func (gu *Gui) workflowDelete(*gocui.Gui, *gocui.View) error {
 			return nil
 		})
 	})
-	return nil
-}
-
-// agentInstall and agentUninstall are intentionally informational in
-// v1: the daemon has no /v1/agents endpoint so live mode returns the
-// same error as offline. A popup with two no-op options is a fake
-// choice; flashf is the right verb — one piece of info, no demand
-// for an action that doesn't exist. The hotkeys stay bound so the
-// help screen line 'i install / u uninstall' is honest (it points
-// to the CLI workaround).
-func (gu *Gui) agentInstall(*gocui.Gui, *gocui.View) error {
-	gu.flashf("info", "agent install: quit lazy and run 'autosk agent install <pkg>'")
-	return nil
-}
-
-func (gu *Gui) agentUninstall(*gocui.Gui, *gocui.View) error {
-	a, ok := gu.st.selectedAgentLocked()
-	name := "<pkg>"
-	if ok && a.Name != "" {
-		name = a.Name
-	}
-	gu.flashf("info", "agent uninstall: quit lazy and run 'autosk agent uninstall %s'", name)
 	return nil
 }
 

@@ -708,42 +708,6 @@ func (o *Offline) Enroll(ctx context.Context, id, wfName string) error {
 	return nil
 }
 
-// EnrollAgent attaches an existing task to the synthetic single:<agent>
-// workflow, creating it (and the agent row) on demand so the call is
-// usable straight off the agents popup.
-//
-// We can't just delegate to Enroll("single:"+name) because lazy's
-// Enroll requires the workflow to already exist (it uses GetByName).
-// EnsureSingle gives us the same single-creation race-safety as the
-// CLI path in cmd/autosk/create.go::resolveWorkflowEntry.
-func (o *Offline) EnrollAgent(ctx context.Context, id, agentName string) error {
-	t, err := o.s.GetTask(ctx, id)
-	if err != nil {
-		return err
-	}
-	if t.Status != store.StatusNew {
-		return fmt.Errorf("enroll: task is not 'new' (status=%s)", t.Status)
-	}
-	ag := agent.New(o.s.DB())
-	if _, err := ag.EnsureByName(ctx, agentName); err != nil {
-		return fmt.Errorf("ensure agent %q: %w", agentName, err)
-	}
-	ws := workflow.New(o.s.DB(), ag)
-	wf, err := ws.EnsureSingle(ctx, agentName)
-	if err != nil {
-		return fmt.Errorf("ensure single:%s: %w", agentName, err)
-	}
-	if err := workflow.EnterStep(ctx, o.s, ws, workflow.EnterStepInput{
-		TaskID:     id,
-		StepID:     wf.FirstStepID,
-		WorkflowID: wf.ID,
-	}); err != nil {
-		return workflow.MapEnterStepError(id, err)
-	}
-	_ = o.s.DoltCommit(ctx, fmt.Sprintf("lazy: enroll %s -> single:%s", id, agentName))
-	return nil
-}
-
 // Resume flips a task from human back to work,
 // optionally relocating its current step.
 //
