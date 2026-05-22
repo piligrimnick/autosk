@@ -784,11 +784,13 @@ func (o *Offline) Unblock(ctx context.Context, id, blocker string) error {
 
 // SetMetadata replaces tasks.metadata with m wholesale. The store's
 // UpdateMetadata takes a mutate-in-place callback, so we express a
-// full replace as clear+copy; that always counts as "changed"
-// (the store skips the UPDATE only when the resulting JSON encodes
-// identically), which matches the CLI's `metadata set` semantics.
+// full replace as clear+copy. UpdateMetadata returns a `changed`
+// flag (false when the resulting JSON encodes identically to the
+// previous value); we gate the DoltCommit on it so submitting the
+// same JSON twice doesn't churn a no-op revision — matches the
+// CLI's `metadata set` path in cmd/autosk/metadata.go.
 func (o *Offline) SetMetadata(ctx context.Context, id string, m map[string]any) error {
-	_, _, err := o.s.UpdateMetadata(ctx, id, func(cur map[string]any) error {
+	_, changed, err := o.s.UpdateMetadata(ctx, id, func(cur map[string]any) error {
 		for k := range cur {
 			delete(cur, k)
 		}
@@ -800,7 +802,9 @@ func (o *Offline) SetMetadata(ctx context.Context, id string, m map[string]any) 
 	if err != nil {
 		return err
 	}
-	_ = o.s.DoltCommit(ctx, "lazy: metadata "+id)
+	if changed {
+		_ = o.s.DoltCommit(ctx, "lazy: metadata "+id)
+	}
 	return nil
 }
 
