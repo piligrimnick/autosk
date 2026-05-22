@@ -88,6 +88,12 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 	for _, name := range []string{winTasks, winJobs, winWorkflows, winAgents, winDetail, winLog, winInspectorHdr, winInspector, winInspectorIn} {
 		if !active[name] {
 			_ = g.DeleteView(name)
+			// The view (and its internal buffer) is gone — the next
+			// writeView that targets this name will land on a freshly
+			// recreated, empty view, so any cached body must be
+			// dropped or the short-circuit would leave the new view
+			// visibly blank.
+			gu.invalidateBodyCache(name)
 		}
 	}
 
@@ -99,6 +105,12 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 		v, err := g.SetView(win, d.X0, d.Y0, d.X1, d.Y1, 0)
 		if err != nil && !isUnknownView(err) {
 			return err
+		}
+		if isUnknownView(err) {
+			// First-creation path: SetView returned the freshly-built,
+			// empty view AND ErrUnknownView. Drop the cache entry so the
+			// writeView at the end of the frame actually writes into it.
+			gu.invalidateBodyCache(win)
 		}
 		if v == nil {
 			continue

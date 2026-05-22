@@ -85,6 +85,32 @@ type Gui struct {
 	// time.Time) so the renderer doesn't need to know the cadence —
 	// it just walks the frame list.
 	spinnerTick atomic.Uint64
+
+	// bodyCache memoises the last (body, view-dimensions) writeView
+	// committed to each named view. On a follow-up writeView call
+	// with byte-identical body AND unchanged dimensions we skip the
+	// v.Clear()+v.Write() cost — gocui would otherwise re-parse the
+	// ANSI SGR escape stream cell-by-cell, which is the dominant cost
+	// of a spinner-only repaint after the markdown LRU eliminates
+	// the glamour re-render.
+	//
+	// Invalidated on view (re-)creation (layout drops the entry when
+	// SetView returns ErrUnknownView), on DeleteView (the layout loop
+	// drops it alongside the gocui DeleteView call), and implicitly
+	// on resize (cached dims won't match the new dims). All access is
+	// from the gocui main goroutine (layout → renderViews →
+	// writeView), so no mutex is needed.
+	bodyCache map[string]bodyCacheEntry
+}
+
+// bodyCacheEntry is one entry in Gui.bodyCache: the body string and
+// the view dimensions it was paired with when it was committed. We
+// store dimensions because gocui's SetView calls clearViewLines()
+// internally on resize, so a stale-body short-circuit after a
+// resize would leave the pane visibly blank.
+type bodyCacheEntry struct {
+	body           string
+	x0, y0, x1, y1 int
 }
 
 // adaptiveDelay returns the next ticker delay given a base cadence and
@@ -845,9 +871,28 @@ func (gu *Gui) innerWidth(name string) int {
 // view not existing yet (the layout function may not have created it
 // on the very first frame, and the current viewState may not include
 // the requested window).
+//
+// Short-circuit: if the body string AND the view's outer dimensions
+// match the last commit recorded in bodyCache, we skip the
+// v.Clear()+v.Write() pair entirely. gocui parses the SGR escape
+// stream byte-by-byte inside View.Write (escape.go), so on a
+// multi-KB rendered detail pane the savings on a spinner-tick frame
+// are substantial. Title and Wrap are still pushed onto the view
+// every call because they're cheap field assignments and not
+// covered by the body cache.
 func (gu *Gui) writeView(name, title, body string) {
 	v, err := gu.g.View(name)
 	if err != nil {
+		return
+	}
+	x0, y0, x1, y1 := v.Dimensions()
+	if e, ok := gu.bodyCache[name]; ok && e.body == body && e.x0 == x0 && e.y0 == y0 && e.x1 == x1 && e.y1 == y1 {
+		// Body and frame are unchanged; title / wrap are idempotent
+		// field writes so still push them through.
+		if title != "" {
+			v.Title = title
+		}
+		v.Wrap = false
 		return
 	}
 	v.Clear()
@@ -856,6 +901,19 @@ func (gu *Gui) writeView(name, title, body string) {
 	}
 	v.Wrap = false
 	_, _ = v.Write([]byte(body))
+	if gu.bodyCache == nil {
+		gu.bodyCache = make(map[string]bodyCacheEntry)
+	}
+	gu.bodyCache[name] = bodyCacheEntry{body: body, x0: x0, y0: y0, x1: x1, y1: y1}
+}
+
+// invalidateBodyCache drops the cached body for name, if any. Used
+// by layout when SetView returns ErrUnknownView (the view was just
+// re-created with an empty buffer, so a cached "matches" entry
+// would skip the write and leave the pane visibly blank) and after
+// DeleteView.
+func (gu *Gui) invalidateBodyCache(name string) {
+	delete(gu.bodyCache, name)
 }
 
 // truncateLines crops a string to at most n lines (helps small views).
