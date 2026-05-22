@@ -768,3 +768,176 @@ func TestLayout_EnterFocusesJobInput(t *testing.T) {
 		}
 	})
 }
+
+// TestJobInput_TextAreaClearedOnCursorMove pins the BLOCKING
+// regression the latest review flagged: gocui's editable views
+// maintain TWO buffers — v.lines (what Buffer()/Write touch) and
+// v.TextArea (where SimpleEditor's TypeCharacter writes; the next
+// keystroke calls RenderTextArea which re-rasterises TextArea
+// back into v.lines). The old clear path (`v.Clear() + v.SetCursor`)
+// only scrubs v.lines, so the very next keystroke on the new job
+// re-materialised the previous job's draft into the visible buffer.
+//
+// Fix: clearJobInputIfStale must use v.ClearTextArea() which scrubs
+// both buffers. This test drives the production flow end-to-end
+// (real liveEditor → real cursor move → real liveEditor) and
+// asserts no leak survives.
+func TestJobInput_TextAreaClearedOnCursorMove(t *testing.T) {
+	gu := jobDetailLayoutFixture(t)
+	gu.st.withLock(func() {
+		gu.st.jobs = []datasource.Job{
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-B", Status: "running"}},
+		}
+		gu.st.jobCursor = 0
+		gu.st.focused = panelJobs
+	})
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout (cursor on job-A): %v", err)
+	}
+	v, err := gu.g.View(winJobInput)
+	if err != nil {
+		t.Fatalf("winJobInput missing: %v", err)
+	}
+	// Type "hello" against job-A through the REAL editor path.
+	for _, ch := range "hello" {
+		gu.liveEditor(v, 0, ch, 0)
+	}
+	if got := v.Buffer(); !strings.Contains(got, "hello") {
+		t.Fatalf("setup: typed 'hello' but view buffer is %q", got)
+	}
+	var input, owner string
+	gu.st.withRLock(func() {
+		input = gu.st.jobInput
+		owner = gu.st.jobInputOwner
+	})
+	if !strings.Contains(input, "hello") || owner != "job-A" {
+		t.Fatalf("setup: state.jobInput=%q owner=%q (want hello/job-A)", input, owner)
+	}
+
+	// Explicit cursor move to job-B. afterCursorMove(panelJobs)
+	// triggers clearJobInputIfStale because jobInputOwner="job-A"
+	// no longer matches the selected job (job-B).
+	gu.st.withLock(func() { gu.st.jobCursor = 1 })
+	gu.afterCursorMove(panelJobs)
+
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout (cursor on job-B): %v", err)
+	}
+	v2, err := gu.g.View(winJobInput)
+	if err != nil {
+		t.Fatalf("winJobInput missing after cursor move: %v", err)
+	}
+	if got := v2.Buffer(); strings.Contains(got, "hello") {
+		t.Errorf("job-A's draft leaked into v.lines on job-B (BEFORE keystroke): %q", got)
+	}
+
+	// One more keystroke on job-B. If v.ClearTextArea was NOT
+	// used, this fires RenderTextArea on the still-populated
+	// TextArea and "hello" reappears prepended to 'x'.
+	gu.liveEditor(v2, 0, 'x', 0)
+
+	if got := v2.Buffer(); strings.Contains(got, "hello") {
+		t.Errorf("LEAK: job-A's 'hello' re-materialised into job-B's input on first keystroke: %q", got)
+	}
+	gu.st.withRLock(func() {
+		input = gu.st.jobInput
+		owner = gu.st.jobInputOwner
+	})
+	if strings.Contains(input, "hello") {
+		t.Errorf("LEAK: state.jobInput contains job-A text after typing on job-B: %q", input)
+	}
+	if owner != "job-B" {
+		t.Errorf("jobInputOwner = %q, want job-B (the new authored target)", owner)
+	}
+}
+
+// TestJobInput_TextAreaClearedOnDispatch is the Ctrl-D variant of
+// TestJobInput_TextAreaClearedOnCursorMove. After a successful
+// dispatch the textarea must be fully empty — both v.lines and
+// v.TextArea — so the next keystroke starts a fresh draft instead
+// of re-materialising the just-sent message.
+func TestJobInput_TextAreaClearedOnDispatch(t *testing.T) {
+	gu := jobDetailLayoutFixture(t)
+	ds := &dispatchFakeDS{}
+	gu.ds = ds
+	seedRunningJob(gu, "job-A")
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout: %v", err)
+	}
+	v, err := gu.g.View(winJobInput)
+	if err != nil {
+		t.Fatalf("winJobInput missing: %v", err)
+	}
+	for _, ch := range "first message" {
+		gu.liveEditor(v, 0, ch, 0)
+	}
+	if err := gu.liveSend(gu.g, v); err != nil {
+		t.Fatalf("liveSend: %v", err)
+	}
+	// liveDispatch routes the actual SendInput call onto a
+	// worker, but the buffer + state clearing happen inline
+	// before that. The buffer must already be empty.
+	if got := strings.TrimSpace(v.Buffer()); got != "" {
+		t.Errorf("v.Buffer() after dispatch = %q, want empty", got)
+	}
+
+	// Next keystroke. With the old v.Clear() path the TextArea
+	// still holds "first message" and RenderTextArea would
+	// re-emit it prepended to 'h'.
+	gu.liveEditor(v, 0, 'h', 0)
+	if got := v.Buffer(); strings.Contains(got, "first message") {
+		t.Errorf("LEAK: dispatched message re-materialised on next keystroke: %q", got)
+	}
+	if got := strings.TrimSpace(v.Buffer()); got != "h" {
+		t.Errorf("v.Buffer() after fresh keystroke = %q, want %q", got, "h")
+	}
+}
+
+// TestJobInput_TextAreaClearedOnEscape is the Esc variant. After
+// jobInputEscape the textarea must be empty enough that returning
+// to the same running job and pressing a key starts a fresh draft
+// instead of re-materialising the abandoned one.
+func TestJobInput_TextAreaClearedOnEscape(t *testing.T) {
+	gu := jobDetailLayoutFixture(t)
+	seedRunningJob(gu, "job-A")
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout: %v", err)
+	}
+	v, err := gu.g.View(winJobInput)
+	if err != nil {
+		t.Fatalf("winJobInput missing: %v", err)
+	}
+	for _, ch := range "draft" {
+		gu.liveEditor(v, 0, ch, 0)
+	}
+	if err := gu.jobInputEscape(nil, nil); err != nil {
+		t.Fatalf("jobInputEscape: %v", err)
+	}
+	if got := strings.TrimSpace(v.Buffer()); got != "" {
+		t.Errorf("v.Buffer() after Esc = %q, want empty", got)
+	}
+
+	// Operator returns: jobsEnter on the same running job moves
+	// focus back to panelJobInput. Layout pass keeps the same view
+	// (we never DeleteView while the running job stays selected).
+	if err := gu.jobsEnter(nil, nil); err != nil {
+		t.Fatalf("jobsEnter (return): %v", err)
+	}
+	if err := gu.layout(gu.g); err != nil {
+		t.Fatalf("layout (return): %v", err)
+	}
+	v2, err := gu.g.View(winJobInput)
+	if err != nil {
+		t.Fatalf("winJobInput missing on return: %v", err)
+	}
+	// First keystroke after returning. With the old v.Clear() path
+	// the TextArea still holds "draft" and 'y' would produce "drafty".
+	gu.liveEditor(v2, 0, 'y', 0)
+	if got := v2.Buffer(); strings.Contains(got, "draft") {
+		t.Errorf("LEAK: previous draft re-materialised after Esc + return + keystroke: %q", got)
+	}
+	if got := strings.TrimSpace(v2.Buffer()); got != "y" {
+		t.Errorf("v.Buffer() after fresh keystroke = %q, want %q", got, "y")
+	}
+}

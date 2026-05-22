@@ -628,8 +628,13 @@ func (gu *Gui) liveDispatch(v *gocui.View, behavior string) error {
 	if strings.TrimSpace(msg) == "" {
 		return nil
 	}
-	v.Clear()
-	v.SetCursor(0, 0)
+	// ClearTextArea (not Clear) scrubs BOTH v.lines and v.TextArea —
+	// SimpleEditor's TypeCharacter writes into TextArea, then
+	// RenderTextArea re-rasterises TextArea → v.lines on every
+	// keystroke. v.Clear() alone leaves TextArea populated, so the
+	// next keystroke would re-materialise the just-dispatched
+	// message into the visible buffer.
+	v.ClearTextArea()
 	gu.st.withLock(func() {
 		gu.st.jobInput = ""
 		gu.st.jobInputOwner = ""
@@ -676,8 +681,12 @@ func (gu *Gui) clearJobInputIfStale(curJobID string) {
 		return
 	}
 	if v, err := gu.g.View(winJobInput); err == nil && v != nil {
-		v.Clear()
-		v.SetCursor(0, 0)
+		// ClearTextArea (not Clear) — see liveDispatch for the
+		// rationale. v.Clear() alone would leave the editor's
+		// internal TextArea populated and the next keystroke on
+		// the new job would re-materialise job-A's draft into the
+		// visible buffer.
+		v.ClearTextArea()
 	}
 }
 
@@ -691,10 +700,12 @@ func (gu *Gui) jobInputEscape(*gocui.Gui, *gocui.View) error {
 		gu.st.focused = panelJobs
 	})
 	// Clear the view's TextArea / buffer too so the next layout pass
-	// doesn't pull the previous content back out.
+	// doesn't pull the previous content back out. ClearTextArea
+	// scrubs both v.lines and v.TextArea (see liveDispatch); v.Clear()
+	// alone would leak the previous draft on the next keystroke when
+	// the operator returns to the same running job.
 	if v, err := gu.g.View(winJobInput); err == nil && v != nil {
-		v.Clear()
-		v.SetCursor(0, 0)
+		v.ClearTextArea()
 	}
 	return nil
 }
