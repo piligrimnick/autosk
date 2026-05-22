@@ -30,10 +30,54 @@ func hydrateContext(parent context.Context, refresh time.Duration) (context.Cont
 }
 
 // isJobRunning reports whether j is currently in the running enum
-// state. Shared by layout / scheduleJobLive / renderViews so the
-// "Live input visible" predicate has exactly one definition.
+// state. Drives the SSE subscription (we stream transcript events
+// for any running job, even when pi is idle between turns).
 func isJobRunning(j datasource.Job) bool {
 	return runstore.RunStatus(j.Status) == runstore.StatusRunning
+}
+
+// isJobLive reports whether j is in "live mode" — pi is actively
+// processing a turn (between agent_start and agent_end). Drives the
+// visibility of winJobInput: the operator only sees the input view
+// when the agent can receive a steer / follow_up / abort. A running
+// job whose pi is idle (Streaming==false) is treated as archive-view
+// — the transcript is visible but the input is hidden.
+//
+// In offline mode (no daemon) Streaming is always false, so the
+// input view never appears — consistent with SendInput requiring a
+// live daemon.
+func isJobLive(j datasource.Job) bool {
+	return j.Streaming
+}
+
+// jobInputOverlayH is the outer height (frame + content + frame) of
+// the winJobInput overlay that sits inside winDetail. Two content
+// rows are enough for typing follow-up messages; longer drafts wrap
+// inside the textarea (gocui's editor handles vertical scrolling).
+const jobInputOverlayH = 4
+
+// detailEffectiveInnerH returns the inner content height of winDetail
+// adjusted for the winJobInput overlay (if present this frame).
+// When the input is overlaid at the bottom of detail, the rows it
+// covers are not visible to the operator, so sticky-tail / scroll
+// math should treat the visible region as ending just above the
+// overlay. Returns 1 at minimum so the / 0 trap doesn't bite.
+func (gu *Gui) detailEffectiveInnerH() int {
+	v, err := gu.g.View(winDetail)
+	if err != nil || v == nil {
+		return 1
+	}
+	_, h := v.InnerSize()
+	if _, err := gu.g.View(winJobInput); err == nil {
+		// The input overlay covers the bottom jobInputOverlayH rows
+		// of detail's inner area. Subtract that from the visible
+		// content height.
+		h -= jobInputOverlayH
+	}
+	if h < 1 {
+		h = 1
+	}
+	return h
 }
 
 // ---- SSE lifecycle ------------------------------------------------------
@@ -439,15 +483,10 @@ func (gu *Gui) detailScroll(step int) func(*gocui.Gui, *gocui.View) error {
 // writeViewSticky applies for the tail anchor.
 func (gu *Gui) detailScrollPage(dir int) func(*gocui.Gui, *gocui.View) error {
 	return func(_ *gocui.Gui, _ *gocui.View) error {
-		v, err := gu.g.View(winDetail)
-		if err != nil || v == nil {
+		if v, err := gu.g.View(winDetail); err != nil || v == nil {
 			return nil
 		}
-		_, h := v.InnerSize()
-		if h < 1 {
-			h = 1
-		}
-		return gu.scrollViewByLines(winDetail, dir*h)
+		return gu.scrollViewByLines(winDetail, dir*gu.detailEffectiveInnerH())
 	}
 }
 
@@ -468,10 +507,7 @@ func (gu *Gui) detailScrollTo(bottom bool) func(*gocui.Gui, *gocui.View) error {
 			return nil
 		}
 		lines := strings.Count(v.Buffer(), "\n")
-		_, h := v.InnerSize()
-		if h < 1 {
-			h = 1
-		}
+		h := gu.detailEffectiveInnerH()
 		target := lines - h
 		if target < 0 {
 			target = 0
@@ -494,9 +530,16 @@ func (gu *Gui) scrollViewByLines(name string, step int) error {
 	if ny < 0 {
 		ny = 0
 	}
-	_, h := v.InnerSize()
-	if h < 1 {
-		h = 1
+	var h int
+	if name == winDetail {
+		// winDetail's effective visible height shrinks when the
+		// winJobInput overlay sits over its bottom rows.
+		h = gu.detailEffectiveInnerH()
+	} else {
+		_, h = v.InnerSize()
+		if h < 1 {
+			h = 1
+		}
 	}
 	lines := strings.Count(v.Buffer(), "\n")
 	max := lines - h

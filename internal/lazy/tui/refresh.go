@@ -251,8 +251,18 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 			gu.st.taskCursor = clampCursor(gu.st.taskCursor, len(gu.st.tasks))
 		}
 		if r.jerr == nil {
-			// Detect running→terminal transition for the currently-
-			// selected job BEFORE we swap the jobs slice.
+			// Detect transitions for the currently-selected job
+			// BEFORE we swap the jobs slice. Two transitions matter:
+			//
+			//   running→terminal: zero the transcript loadedAt so
+			//     the next archive load picks up final-flushed events.
+			//   live→not-live (Streaming flag flipping false, regardless
+			//     of whether status also moved): the winJobInput overlay
+			//     goes away because the layout-pass gate now reads false.
+			//     If the operator was typing in it (focused ==
+			//     panelJobInput), send them back to the Jobs panel so
+			//     they don't end up in phantom-focus on a deleted view
+			//     (caret invisible, per-view bindings dormant).
 			prevJob, hadPrev := gu.st.selectedJob()
 			gu.st.jobs = applyJobSearch(r.jobs, r.jobsSearch)
 			gu.st.jobCursor = clampCursor(gu.st.jobCursor, len(gu.st.jobs))
@@ -266,18 +276,11 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 							te.loadedAt = time.Time{}
 						}
 						refetchJobID = cur.JobID
-						// The input view (winJobInput) goes away with
-						// the running state — the next layout pass GC's
-						// it because showJobInput now reads false. If the
-						// operator was typing in it (state.focused ==
-						// panelJobInput), send them back to the Jobs panel
-						// so they don't end up in phantom-focus on a
-						// deleted view (caret invisible, keystrokes
-						// routed nowhere because the per-view bindings
-						// on winJobInput no longer match anything).
-						if gu.st.focused == panelJobInput {
-							gu.st.focused = panelJobs
-						}
+					}
+					wasLive := isJobLive(prevJob)
+					isLive := isJobLive(cur)
+					if wasLive && !isLive && gu.st.focused == panelJobInput {
+						gu.st.focused = panelJobs
 					}
 				}
 			}

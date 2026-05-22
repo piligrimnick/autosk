@@ -209,7 +209,7 @@ func TestWriteView_Cache_InvalidatedByLayoutDeleteView(t *testing.T) {
 
 	// Step 2: seed a running job and re-layout — winJobInput appears.
 	gu.st.withLock(func() {
-		gu.st.jobs = []datasource.Job{{JobResponse: api.JobResponse{JobID: "j-1", Status: "running"}}}
+		gu.st.jobs = []datasource.Job{{JobResponse: api.JobResponse{JobID: "j-1", Status: "running", Streaming: true}}}
 		gu.st.jobCursor = 0
 		gu.st.focused = panelJobs
 	})
@@ -223,8 +223,11 @@ func TestWriteView_Cache_InvalidatedByLayoutDeleteView(t *testing.T) {
 	// Step 3: flip job to terminal — winJobInput must be deleted on
 	// the next layout pass AND the body cache for that view must be
 	// invalidated so a future re-creation doesn't get short-circuited.
+	// The input view is gated on Streaming==true; flip both Status
+	// and Streaming to simulate the running→done transition.
 	gu.st.withLock(func() {
 		gu.st.jobs[0].Status = "done"
+		gu.st.jobs[0].Streaming = false
 	})
 	if err := gu.layout(gu.g); err != nil {
 		t.Fatalf("layout dashboard #3: %v", err)
@@ -235,7 +238,10 @@ func TestWriteView_Cache_InvalidatedByLayoutDeleteView(t *testing.T) {
 
 	// Step 4: flip back to running — winJobInput must come back
 	// populated (not stuck blank from a stale body-cache entry).
-	gu.st.withLock(func() { gu.st.jobs[0].Status = "running" })
+	gu.st.withLock(func() {
+		gu.st.jobs[0].Status = "running"
+		gu.st.jobs[0].Streaming = true
+	})
 	if err := gu.layout(gu.g); err != nil {
 		t.Fatalf("layout dashboard #4: %v", err)
 	}

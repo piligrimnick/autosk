@@ -258,7 +258,7 @@ func TestRefreshApply_RunningToTerminalInvalidatesArchive(t *testing.T) {
 	// entry exists with a non-zero loadedAt.
 	gu.st.withLock(func() {
 		gu.st.jobs = []datasource.Job{{
-			JobResponse: api.JobResponse{JobID: jobID, Status: "running"},
+			JobResponse: api.JobResponse{JobID: jobID, Status: "running", Streaming: true},
 		}}
 		gu.st.jobCursor = 0
 		gu.st.focused = panelJobs
@@ -308,7 +308,7 @@ func TestRefreshApply_RunningToTerminal_RevertsFocusFromJobInput(t *testing.T) {
 
 	gu.st.withLock(func() {
 		gu.st.jobs = []datasource.Job{{
-			JobResponse: api.JobResponse{JobID: jobID, Status: "running"},
+			JobResponse: api.JobResponse{JobID: jobID, Status: "running", Streaming: true},
 		}}
 		gu.st.jobCursor = 0
 		gu.st.focused = panelJobInput // operator is typing
@@ -342,7 +342,7 @@ func TestRefreshApply_RunningToTerminal_PreservesNonInputFocus(t *testing.T) {
 
 	gu.st.withLock(func() {
 		gu.st.jobs = []datasource.Job{{
-			JobResponse: api.JobResponse{JobID: jobID, Status: "running"},
+			JobResponse: api.JobResponse{JobID: jobID, Status: "running", Streaming: true},
 		}}
 		gu.st.jobCursor = 0
 		gu.st.focused = panelTasks // not in the input
@@ -363,6 +363,43 @@ func TestRefreshApply_RunningToTerminal_PreservesNonInputFocus(t *testing.T) {
 	}
 }
 
+// TestRefreshApply_StreamingFlipsOff_RevertsFocusFromJobInput pins
+// the live→idle transition (Streaming==true → Streaming==false
+// while Status stays "running"): the winJobInput overlay goes
+// away on the next layout pass because showJobInput now reads
+// false. If the operator was typing in it (focused ==
+// panelJobInput) the focus must be reverted to panelJobs so the
+// caret doesn't end up on a deleted view.
+func TestRefreshApply_StreamingFlipsOff_RevertsFocusFromJobInput(t *testing.T) {
+	gu := &Gui{st: newState()}
+	gu.ds = &refreshFakeDS{}
+	const jobID = "job-idle"
+
+	gu.st.withLock(func() {
+		gu.st.jobs = []datasource.Job{{
+			JobResponse: api.JobResponse{JobID: jobID, Status: "running", Streaming: true},
+		}}
+		gu.st.jobCursor = 0
+		gu.st.focused = panelJobInput
+	})
+
+	// Job stays running, but pi flips between turns (Streaming
+	// goes false). No status change — only the live flag flips.
+	r := refreshResult{
+		jobs: []datasource.Job{{
+			JobResponse: api.JobResponse{JobID: jobID, Status: "running", Streaming: false},
+		}},
+		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
+	}
+	gu.applyRefreshLocked(r)
+
+	var focused panelID
+	gu.st.withRLock(func() { focused = gu.st.focused })
+	if focused != panelJobs {
+		t.Errorf("focused after live→idle = %v, want panelJobs (overlay goes away; revert focus)", focused)
+	}
+}
+
 // TestRefreshApply_NoTransitionPreservesArchive is the inverse:
 // when the selected job's status DOESN'T change (still running
 // across two snapshots, or still terminal), the cache entry's
@@ -375,7 +412,7 @@ func TestRefreshApply_NoTransitionPreservesArchive(t *testing.T) {
 
 	gu.st.withLock(func() {
 		gu.st.jobs = []datasource.Job{{
-			JobResponse: api.JobResponse{JobID: jobID, Status: "running"},
+			JobResponse: api.JobResponse{JobID: jobID, Status: "running", Streaming: true},
 		}}
 		gu.st.jobCursor = 0
 		gu.st.focused = panelJobs
@@ -385,7 +422,7 @@ func TestRefreshApply_NoTransitionPreservesArchive(t *testing.T) {
 
 	r := refreshResult{
 		jobs: []datasource.Job{{
-			JobResponse: api.JobResponse{JobID: jobID, Status: "running"},
+			JobResponse: api.JobResponse{JobID: jobID, Status: "running", Streaming: true},
 		}},
 		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
 	}

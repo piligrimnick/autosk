@@ -30,7 +30,7 @@ func jobDetailLayoutFixture(t *testing.T) *Gui {
 func seedRunningJob(gu *Gui, jobID string) {
 	gu.st.withLock(func() {
 		gu.st.jobs = []datasource.Job{{
-			JobResponse: api.JobResponse{JobID: jobID, Status: "running"},
+			JobResponse: api.JobResponse{JobID: jobID, Status: "running", Streaming: true},
 		}}
 		gu.st.jobCursor = 0
 		gu.st.focused = panelJobs
@@ -59,8 +59,8 @@ func TestJobInput_DoesNotLeakAcrossJobs(t *testing.T) {
 	// Seed two running jobs.
 	gu.st.withLock(func() {
 		gu.st.jobs = []datasource.Job{
-			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
-			{JobResponse: api.JobResponse{JobID: "job-B", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true}},
+			{JobResponse: api.JobResponse{JobID: "job-B", Status: "running", Streaming: true}},
 		}
 		gu.st.jobCursor = 0
 		gu.st.focused = panelJobs
@@ -124,7 +124,7 @@ func TestJobInput_SurvivesRefreshDrivenReshuffle(t *testing.T) {
 	// Seed: cursor on job-A at index 0, draft typed against job-A.
 	gu.st.withLock(func() {
 		gu.st.jobs = []datasource.Job{
-			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true}},
 		}
 		gu.st.jobCursor = 0
 		gu.st.focused = panelJobs
@@ -137,8 +137,8 @@ func TestJobInput_SurvivesRefreshDrivenReshuffle(t *testing.T) {
 	// selected job is now job-Z. The operator did NOT press j/k.
 	r := refreshResult{
 		jobs: []datasource.Job{
-			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "running"}},
-			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "running", Streaming: true}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true}},
 		},
 		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
 	}
@@ -175,25 +175,100 @@ func TestJobInput_SurvivesRefreshDrivenReshuffle(t *testing.T) {
 	}
 }
 
-// TestLayout_JobInputAppears_WhenSelectedJobRunning pins acceptance
-// criterion 5: a running selected job allocates winJobInput, AND
-// winDetail's height shrinks by the input's slot.
-func TestLayout_JobInputAppears_WhenSelectedJobRunning(t *testing.T) {
+// TestLayout_JobInputAppears_WhenSelectedJobLive pins acceptance
+// criterion 5: a live selected job allocates winJobInput, AND the
+// input is overlaid INSIDE winDetail (not below it). winDetail's
+// outer height stays the same as the no-input case — the input
+// sits on top of detail's bottom rows; detail's visible content
+// area is shrunk via detailEffectiveInnerH() in the scroll /
+// sticky-tail handlers, not via boxlayout.
+func TestLayout_JobInputAppears_WhenSelectedJobLive(t *testing.T) {
 	gu := jobDetailLayoutFixture(t)
 	seedRunningJob(gu, "job-run")
 	if err := gu.layout(gu.g); err != nil {
 		t.Fatalf("layout: %v", err)
 	}
-	if _, err := gu.g.View(winJobInput); err != nil {
-		t.Fatalf("winJobInput missing for running selected job: %v", err)
+	input, err := gu.g.View(winJobInput)
+	if err != nil {
+		t.Fatalf("winJobInput missing for live selected job: %v", err)
 	}
 	detail, err := gu.g.View(winDetail)
 	if err != nil {
 		t.Fatalf("winDetail missing: %v", err)
 	}
-	if h := detail.Height(); h < 4 {
-		t.Errorf("winDetail too thin after winJobInput took its slot: h=%d", h)
+	// Overlay containment: input's outer box must sit STRICTLY
+	// inside detail's frame coordinates.
+	dx0, dy0, dx1, dy1 := detail.Dimensions()
+	ix0, iy0, ix1, iy1 := input.Dimensions()
+	if ix0 <= dx0 || iy0 <= dy0 || ix1 >= dx1 || iy1 >= dy1 {
+		t.Errorf("input box not contained inside detail's frame: detail=(%d,%d,%d,%d) input=(%d,%d,%d,%d)",
+			dx0, dy0, dx1, dy1, ix0, iy0, ix1, iy1)
 	}
+	// Detail's outer height must NOT shrink due to the overlay —
+	// the overlay sits inside detail's box, doesn't push it up.
+	if dh := detail.Height(); dh < 8 {
+		t.Errorf("winDetail unexpectedly thin (overlay should not shrink outer height): h=%d", dh)
+	}
+}
+
+// TestLayout_JobInput_OnlyVisibleForLiveJobs pins acceptance
+// criterion 3 from the post-redesign feedback: the input view
+// appears only when the daemon reports Streaming==true (pi is
+// actively between agent_start and agent_end). A running job whose
+// pi is idle between turns (Streaming==false) is treated as
+// archive-view — transcript visible, input absent.
+func TestLayout_JobInput_OnlyVisibleForLiveJobs(t *testing.T) {
+	t.Run("running_and_streaming_shows_input", func(t *testing.T) {
+		gu := jobDetailLayoutFixture(t)
+		gu.st.withLock(func() {
+			gu.st.jobs = []datasource.Job{{
+				JobResponse: api.JobResponse{JobID: "job-x", Status: "running", Streaming: true},
+			}}
+			gu.st.jobCursor = 0
+			gu.st.focused = panelJobs
+		})
+		if err := gu.layout(gu.g); err != nil {
+			t.Fatalf("layout: %v", err)
+		}
+		if _, err := gu.g.View(winJobInput); err != nil {
+			t.Errorf("winJobInput missing for running+streaming job: %v", err)
+		}
+	})
+	t.Run("running_but_idle_hides_input", func(t *testing.T) {
+		// Job is still running on the daemon but pi is between
+		// turns (Streaming==false). This is the archive-view state
+		// the user explicitly called out: input must be absent.
+		gu := jobDetailLayoutFixture(t)
+		gu.st.withLock(func() {
+			gu.st.jobs = []datasource.Job{{
+				JobResponse: api.JobResponse{JobID: "job-x", Status: "running", Streaming: false},
+			}}
+			gu.st.jobCursor = 0
+			gu.st.focused = panelJobs
+		})
+		if err := gu.layout(gu.g); err != nil {
+			t.Fatalf("layout: %v", err)
+		}
+		if _, err := gu.g.View(winJobInput); err == nil {
+			t.Errorf("winJobInput unexpectedly visible for running-but-idle job (Streaming=false)")
+		}
+	})
+	t.Run("terminal_hides_input", func(t *testing.T) {
+		gu := jobDetailLayoutFixture(t)
+		gu.st.withLock(func() {
+			gu.st.jobs = []datasource.Job{{
+				JobResponse: api.JobResponse{JobID: "job-x", Status: "done", Streaming: false},
+			}}
+			gu.st.jobCursor = 0
+			gu.st.focused = panelJobs
+		})
+		if err := gu.layout(gu.g); err != nil {
+			t.Fatalf("layout: %v", err)
+		}
+		if _, err := gu.g.View(winJobInput); err == nil {
+			t.Errorf("winJobInput unexpectedly visible for terminal job")
+		}
+	})
 }
 
 // TestLayout_JobInputDisappears_WhenSelectedJobTerminal pins the
@@ -212,8 +287,13 @@ func TestLayout_JobInputDisappears_WhenSelectedJobTerminal(t *testing.T) {
 		if _, err := gu.g.View(winJobInput); err != nil {
 			t.Fatalf("setup: winJobInput should exist for running job: %v", err)
 		}
-		// Flip to terminal.
-		gu.st.withLock(func() { gu.st.jobs[0].Status = "done" })
+		// Flip to terminal. The new input-visibility predicate is
+		// `Streaming == true`; clear both Status and Streaming
+		// because the running→terminal transition zeros both.
+		gu.st.withLock(func() {
+			gu.st.jobs[0].Status = "done"
+			gu.st.jobs[0].Streaming = false
+		})
 		if err := gu.layout(gu.g); err != nil {
 			t.Fatalf("layout (terminal): %v", err)
 		}
@@ -486,7 +566,7 @@ func TestLiveDispatch_AfterReshuffle_DispatchesToOwner(t *testing.T) {
 	// Seed: cursor on job-A, draft typed against job-A.
 	gu.st.withLock(func() {
 		gu.st.jobs = []datasource.Job{
-			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true}},
 		}
 		gu.st.jobCursor = 0
 		gu.st.focused = panelJobs
@@ -498,8 +578,8 @@ func TestLiveDispatch_AfterReshuffle_DispatchesToOwner(t *testing.T) {
 	// jobCursor pinned at 0 → selected job is now job-Z.
 	r := refreshResult{
 		jobs: []datasource.Job{
-			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "running"}},
-			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "running", Streaming: true}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true}},
 		},
 		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
 	}
@@ -563,7 +643,7 @@ func TestLiveDispatch_AfterReshuffleAndKeystroke_DispatchesToOwner(t *testing.T)
 	// Seed: cursor on job-A, draft typed against job-A.
 	gu.st.withLock(func() {
 		gu.st.jobs = []datasource.Job{
-			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true}},
 		}
 		gu.st.jobCursor = 0
 		gu.st.focused = panelJobs
@@ -574,8 +654,8 @@ func TestLiveDispatch_AfterReshuffleAndKeystroke_DispatchesToOwner(t *testing.T)
 	// Refresh-driven reshuffle: job-Z lands at index 0, job-A at index 1.
 	r := refreshResult{
 		jobs: []datasource.Job{
-			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "running"}},
-			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "running", Streaming: true}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true}},
 		},
 		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
 	}
@@ -634,7 +714,7 @@ func TestLiveAbort_AfterReshuffle_TargetsOwner(t *testing.T) {
 	// Seed: cursor on job-A with an authored draft.
 	gu.st.withLock(func() {
 		gu.st.jobs = []datasource.Job{
-			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true}},
 		}
 		gu.st.jobCursor = 0
 		gu.st.focused = panelJobs
@@ -645,8 +725,8 @@ func TestLiveAbort_AfterReshuffle_TargetsOwner(t *testing.T) {
 	// Refresh reshuffle: job-Z at index 0, job-A at index 1.
 	r := refreshResult{
 		jobs: []datasource.Job{
-			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "running"}},
-			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "running", Streaming: true}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true}},
 		},
 		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
 	}
@@ -786,8 +866,8 @@ func TestJobInput_TextAreaClearedOnCursorMove(t *testing.T) {
 	gu := jobDetailLayoutFixture(t)
 	gu.st.withLock(func() {
 		gu.st.jobs = []datasource.Job{
-			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running"}},
-			{JobResponse: api.JobResponse{JobID: "job-B", Status: "running"}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true}},
+			{JobResponse: api.JobResponse{JobID: "job-B", Status: "running", Streaming: true}},
 		}
 		gu.st.jobCursor = 0
 		gu.st.focused = panelJobs

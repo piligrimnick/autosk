@@ -60,15 +60,18 @@ const (
 
 // arrangeArgs is the input to a window-arrangement function. Only the
 // fields we actually consume; we don't need lazygit's whole bag.
+//
+// winJobInput is NOT positioned by the boxlayout tree — it is
+// overlaid on top of winDetail's bottom rows by layout.go when the
+// selected job is live. boxlayout doesn't support overlapping
+// boxes, so we keep arrangement focused on the non-overlapping
+// stack (side panels + detail + log + status bar) and inject the
+// overlay coordinates downstream.
 type arrangeArgs struct {
 	width, height int
 	focusedSide   string // one of winTasks / winJobs / winWorkflows / winAgents
 	state         ViewState
 	logHidden     bool
-	// showJobInput, when true, allocates winJobInput as a fixed-size
-	// box under winDetail. Layout pass computes this from the
-	// selected job's running status — see layout.go.
-	showJobInput bool
 }
 
 // dashboardArrangement returns the Box tree for the standard
@@ -79,11 +82,11 @@ type arrangeArgs struct {
 // pre-redesign inspector comment for the gocui-side rationale) so
 // the status bar gets Size:3 to fit its single line of content.
 //
-// When showJobInput is true, a 6-row winJobInput box is inserted
-// directly under winDetail (above winLog). The size is fixed at 6
-// rows (1 frame top + 1 padding + ~2 content lines + 1 padding + 1
-// frame bottom) — same magic number used for the previous
-// inspector-input slot.
+// winJobInput does NOT appear in this tree. It is overlaid on top of
+// winDetail's bottom rows by layout.go when the selected job is
+// live. boxlayout doesn't support overlapping boxes, so the input's
+// position is computed in layout.go from dims[winDetail] after
+// arrange() runs.
 func dashboardArrangement(a arrangeArgs) *boxlayout.Box {
 	logSize := 8
 	if a.logHidden {
@@ -93,9 +96,6 @@ func dashboardArrangement(a arrangeArgs) *boxlayout.Box {
 
 	rightChildren := []*boxlayout.Box{
 		{Window: winDetail, Weight: 3},
-	}
-	if a.showJobInput {
-		rightChildren = append(rightChildren, &boxlayout.Box{Window: winJobInput, Size: 6})
 	}
 	if logSize > 0 {
 		rightChildren = append(rightChildren, &boxlayout.Box{Window: winLog, Size: logSize})

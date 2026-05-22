@@ -463,14 +463,15 @@ func (gu *Gui) renderViews() {
 		gu.writeView(winStatusBar, "", renderStatusBar(gu.st, gu.opts.ProjectRoot))
 
 		// Job-input textarea is allocated by layout whenever the
-		// selected job is running (independent of focused panel).
-		// renderViews mirrors that gate so writeView doesn't poke at
-		// a view that doesn't exist this frame.
-		if j, ok := gu.st.selectedJob(); ok {
-			if runstore.RunStatus(j.Status) == runstore.StatusRunning {
-				title := "input (Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort  Esc cancel)"
-				gu.writeView(winJobInput, title, gu.st.jobInput)
-			}
+		// selected job is in live mode (pi actively between
+		// agent_start and agent_end). renderViews mirrors that gate
+		// so writeView doesn't poke at a view that doesn't exist this
+		// frame. When the job is running-but-idle (between turns) or
+		// the daemon is offline, the input view is absent and the
+		// Detail pane uses its full inner height for the transcript.
+		if j, ok := gu.st.selectedJob(); ok && isJobLive(j) {
+			title := "input — Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort  Esc cancel"
+			gu.writeView(winJobInput, title, gu.st.jobInput)
 		}
 	})
 }
@@ -927,6 +928,13 @@ func (gu *Gui) invalidateBodyCache(name string) {
 // manage their origin via the cursor-highlight loop, and applying
 // sticky-tail there would break the wheel-scroll-keeps-its-place
 // affordance.
+//
+// For winDetail the visible height is detailEffectiveInnerH() — not
+// the raw InnerSize() — because the winJobInput overlay (when the
+// selected job is live) covers the bottom jobInputOverlayH rows of
+// detail's inner area. Sticky-tail aims to land the last line of
+// content on the last VISIBLE row, i.e. the row immediately above
+// the overlay.
 func (gu *Gui) writeViewSticky(name, title, body string) {
 	v, err := gu.g.View(name)
 	if err != nil || v == nil {
@@ -934,9 +942,14 @@ func (gu *Gui) writeViewSticky(name, title, body string) {
 	}
 	// Snapshot the BEFORE state before writeView's potential clear.
 	ox, oy := v.Origin()
-	_, h := v.InnerSize()
-	if h < 1 {
-		h = 1
+	var h int
+	if name == winDetail {
+		h = gu.detailEffectiveInnerH()
+	} else {
+		_, h = v.InnerSize()
+		if h < 1 {
+			h = 1
+		}
 	}
 	prevLines := strings.Count(v.Buffer(), "\n")
 	// First frame OR user is at (or past) the bottom → sticky.

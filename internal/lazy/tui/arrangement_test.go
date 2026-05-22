@@ -21,9 +21,10 @@ func TestDashboardArrangement_FocusedSideGrows(t *testing.T) {
 }
 
 // TestDashboardArrangement_AllWindowsPresent ensures every named
-// window gets a slot. winJobInput is conditional (only when the
-// selected job is running) and is exercised by
-// TestDashboardArrangement_JobInputAppearsWhenRunning below.
+// window gets a slot in the boxlayout tree. winJobInput is NOT in
+// the boxlayout — it is overlaid on top of winDetail's bottom rows
+// by layout.go when the selected job is live. The overlay's
+// presence is exercised in job_detail_layout_test.go.
 func TestDashboardArrangement_AllWindowsPresent(t *testing.T) {
 	dims := arrange(arrangeArgs{width: 120, height: 40, focusedSide: winTasks})
 	for _, w := range []string{winTasks, winJobs, winWorkflows, winAgents, winDetail, winLog, winStatusBar} {
@@ -31,41 +32,9 @@ func TestDashboardArrangement_AllWindowsPresent(t *testing.T) {
 			t.Errorf("missing window %q", w)
 		}
 	}
-	// winJobInput must NOT appear when showJobInput=false.
+	// winJobInput must never appear in the boxlayout tree — it is
+	// overlaid by layout.go on top of winDetail's bottom rows.
 	if _, ok := dims[winJobInput]; ok {
-		t.Errorf("winJobInput should be absent when showJobInput=false")
+		t.Errorf("winJobInput must not be returned by boxlayout (it is overlaid in layout.go)")
 	}
-}
-
-// TestDashboardArrangement_JobInputAppearsWhenRunning pins the
-// conditional-input branch: showJobInput=true adds winJobInput and
-// the slot is the documented 6 rows.
-func TestDashboardArrangement_JobInputAppearsWhenRunning(t *testing.T) {
-	t.Run("with_input", func(t *testing.T) {
-		dims := arrange(arrangeArgs{
-			width: 120, height: 40,
-			focusedSide:  winJobs,
-			showJobInput: true,
-		})
-		in, ok := dims[winJobInput]
-		if !ok {
-			t.Fatalf("missing winJobInput with showJobInput=true: %v", dims)
-		}
-		if h := in.Y1 - in.Y0; h < 4 {
-			t.Errorf("winJobInput height %d too small: %+v", h, in)
-		}
-		if _, ok := dims[winDetail]; !ok {
-			t.Fatalf("missing winDetail")
-		}
-	})
-	t.Run("without_input", func(t *testing.T) {
-		dims := arrange(arrangeArgs{
-			width: 120, height: 40,
-			focusedSide:  winJobs,
-			showJobInput: false,
-		})
-		if _, ok := dims[winJobInput]; ok {
-			t.Errorf("winJobInput must be absent when showJobInput=false")
-		}
-	})
 }

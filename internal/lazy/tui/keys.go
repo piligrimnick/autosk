@@ -586,18 +586,24 @@ func (gu *Gui) agentsEnter(*gocui.Gui, *gocui.View) error {
 }
 
 // jobsEnter focuses the appropriate view for the highlighted job:
-//   - running job → winJobInput (caret blinks inside the textarea).
-//   - terminal job → logical focus to panelDetail so j/k scroll
-//     the transcript above.
+//   - live job (pi actively streaming) → winJobInput, caret blinks
+//     inside the textarea.
+//   - non-live job (terminal OR running-but-idle between turns,
+//     OR offline-mode where Streaming is always false) → logical
+//     focus to panelDetail so j/k scroll the transcript above.
 //
-// On the running-job branch we set state.focused = panelJobInput
+// The visibility predicate (isJobLive) intentionally mirrors the
+// layout-pass gate on winJobInput: Enter only routes to the input
+// view when that view actually exists this frame.
+//
+// On the live-job branch we set state.focused = panelJobInput
 // (a synthetic focus identity whose window() is winJobInput). The
 // layout pass calls g.SetCurrentView(focused.window()) on every
 // frame; without recording the focus in the model the next layout
 // would yank current-view back to winJobs within ~100ms (spinner
 // tick cadence) and the caret would jump out of the textarea.
 //
-// On the terminal-job branch we stash detailFocus = panelJobs so
+// On the non-live branch we stash detailFocus = panelJobs so
 // renderDetail keeps emitting the Job Detail body even though
 // focused now reads panelDetail.
 func (gu *Gui) jobsEnter(*gocui.Gui, *gocui.View) error {
@@ -605,7 +611,7 @@ func (gu *Gui) jobsEnter(*gocui.Gui, *gocui.View) error {
 	if !ok {
 		return nil
 	}
-	if isJobRunning(j) {
+	if isJobLive(j) {
 		gu.st.withLock(func() { gu.st.focused = panelJobInput })
 		// Also SetCurrentView synchronously so tests that don't
 		// drive a layout pass between jobsEnter and the assertion
@@ -725,7 +731,7 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"  p priority",
 		"",
 		"jobs:",
-		"  Enter      focus input (running) / Detail pane (terminal)",
+		"  Enter      focus input (live) / Detail pane (otherwise)",
 		"  K          cancel job",
 		"",
 		"workflows:",
@@ -740,7 +746,7 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"  g/G                       top/bottom",
 		"  wheel                     scroll",
 		"",
-		"job input (running job):",
+		"job input (live job — pi actively streaming):",
 		"  Ctrl-D send     Ctrl-F follow_up    Ctrl-A abort",
 		"  Esc cancel      Ctrl-B/PgUp/PgDn    scroll transcript above",
 		"",

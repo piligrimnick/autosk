@@ -2,8 +2,8 @@ package tui
 
 import (
 	"github.com/jesseduffield/gocui"
+	"github.com/jesseduffield/lazycore/pkg/boxlayout"
 
-	"autosk/internal/daemon/runstore"
 	"autosk/internal/lazy/theme"
 )
 
@@ -63,26 +63,51 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 		// normalize panelJobInput → winJobs for that calculation.
 		focusedSide = gu.st.focused.normalizeForDetail().window()
 		logHidden = gu.st.logHide
-		// showJobInput is "selected job is running" — does NOT depend
-		// on which view is currently focused. The Jobs cursor sitting
-		// on a running job is enough; the input stays pinned even
-		// when the operator is reading the transcript above with the
-		// Detail pane focused.
-		if j, ok := gu.st.selectedJob(); ok {
-			if runstore.RunStatus(j.Status) == runstore.StatusRunning {
-				showJobInput = true
-			}
+		// showJobInput is gated on the daemon's Streaming flag —
+		// only show the input view when pi is actively between
+		// agent_start and agent_end (live mode). A running job whose
+		// pi is idle between turns is treated as archive-view: the
+		// transcript is visible but the input view is absent.
+		// Does NOT depend on which view is currently focused — the
+		// input stays pinned even when the operator is reading the
+		// transcript above with the Detail pane focused.
+		if j, ok := gu.st.selectedJob(); ok && isJobLive(j) {
+			showJobInput = true
 		}
 	})
 	args := arrangeArgs{
-		width:        w,
-		height:       h,
-		focusedSide:  focusedSide,
-		state:        StateDashboard,
-		logHidden:    logHidden,
-		showJobInput: showJobInput,
+		width:       w,
+		height:      h,
+		focusedSide: focusedSide,
+		state:       StateDashboard,
+		logHidden:   logHidden,
 	}
 	dims := arrange(args)
+
+	// Overlay winJobInput INSIDE winDetail's coordinates when the
+	// selected job is live. Detail's rounded frame surrounds both the
+	// transcript and the input box visually — the input has its own
+	// rounded frame inset by 1 cell from detail's frame on left/right
+	// and 1 cell above detail's bottom frame. The overlay's height is
+	// fixed at jobInputOverlayH rows (frame top + 2 content + frame
+	// bottom). Sticky-tail and scroll handlers consult
+	// detailEffectiveInnerH() so the visible region clamps to the rows
+	// above the overlay.
+	if showJobInput {
+		if detail, ok := dims[winDetail]; ok {
+			overlay := boxlayout.Dimensions{
+				X0: detail.X0 + 1,
+				X1: detail.X1 - 1,
+				Y0: detail.Y1 - jobInputOverlayH,
+				Y1: detail.Y1 - 1,
+			}
+			// Only add the overlay when there's enough room — a tiny
+			// pane mid-resize could push X1 < X0 or Y1 < Y0.
+			if overlay.X1-overlay.X0 >= 4 && overlay.Y1-overlay.Y0 >= 1 {
+				dims[winJobInput] = overlay
+			}
+		}
+	}
 
 	// Garbage-collect any dashboard window that doesn't appear in the
 	// current arrangement (e.g. winJobInput when the selected job is
@@ -107,8 +132,20 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 		}
 	}
 
-	// Create views for the active arrangement.
-	for win, d := range dims {
+	// Create views for the active arrangement. Iterate in a fixed
+	// order so the initial creation pass produces a deterministic
+	// view stack — gocui renders views in creation order, and the
+	// overlay winJobInput must be created AFTER winDetail so it
+	// draws ON TOP of detail's bottom rows. allDashboardWindows
+	// already lists winDetail before winJobInput, and the status
+	// bar comes last.
+	visitOrder := append([]string(nil), allDashboardWindows...)
+	visitOrder = append(visitOrder, winStatusBar)
+	for _, win := range visitOrder {
+		d, ok := dims[win]
+		if !ok {
+			continue
+		}
 		if d.X1-d.X0 < 1 || d.Y1-d.Y0 < 0 {
 			continue
 		}
@@ -143,12 +180,24 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 		// "[N] Title" string is the visual marker for which panel owns
 		// the cursor right now.
 		focusAttr := theme.Active().Focus.Gocui()
-		if win == focusedWin {
-			v.FrameColor = focusAttr
-			v.TitleColor = focusAttr
-		} else {
-			v.FrameColor = gocui.ColorDefault
-			v.TitleColor = gocui.ColorDefault
+		mutedAttr := theme.Active().Muted.Gocui()
+		switch win {
+		case winJobInput:
+			// winJobInput is overlaid INSIDE winDetail's frame; its own
+			// frame + title stay muted (gray) at all times so it reads
+			// as chrome that belongs to the detail pane rather than a
+			// standalone panel competing for the operator's attention.
+			// The hotkey hint in the title also wears muted.
+			v.FrameColor = mutedAttr
+			v.TitleColor = mutedAttr
+		default:
+			if win == focusedWin {
+				v.FrameColor = focusAttr
+				v.TitleColor = focusAttr
+			} else {
+				v.FrameColor = gocui.ColorDefault
+				v.TitleColor = gocui.ColorDefault
+			}
 		}
 		if win == winJobInput {
 			v.Editable = true
