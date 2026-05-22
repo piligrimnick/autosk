@@ -1,21 +1,31 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"autosk/internal/agent"
+	"autosk/internal/agent/pkgregistry"
+	"autosk/internal/bootstrap"
 	"autosk/internal/projectdb"
 	"autosk/internal/store/doltlite"
+	"autosk/internal/workflow"
 )
 
 // newInitCmd: explicit `autosk init`. Idempotent — runs migrations on an
-// existing DB.
+// existing DB and seeds the default `feature-dev-generic` workflow on
+// first run (see `internal/bootstrap`).
 func newInitCmd() *cobra.Command {
-	var prefix string
+	var (
+		prefix        string
+		skipBootstrap bool
+	)
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize an autosk database in the current directory",
@@ -23,8 +33,20 @@ func newInitCmd() *cobra.Command {
 
 Idempotent: running on an existing project re-applies any pending migrations.
 
+After the schema is current, init seeds the default workflow
+` + "`feature-dev-generic`" + ` (canonical definition:
+internal/bootstrap/feature-dev-generic.json) and auto-installs the
+` + "`@autogent/generic`" + ` agent it references. The bootstrap step is
+idempotent (re-running init is a no-op once the workflow row exists) and
+failures are non-fatal — a warning is printed to stderr and the DB is
+still left in a usable state.
+
 Write commands auto-init the database on first use, so calling init is
-optional unless you want to set a custom ID prefix (not yet implemented).`,
+optional unless you want the default workflow seeded or you want to set
+a custom ID prefix (not yet implemented).
+
+Use --skip-bootstrap to opt out of the workflow seed (useful for tests,
+CI and offline machines).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if prefix != "" {
@@ -65,11 +87,128 @@ optional unless you want to set a custom ID prefix (not yet implemented).`,
 			if !flagQuiet {
 				fmt.Printf("initialized %s (schema_version=%d)\n", dbPath, v)
 			}
+
+			// Seed the default workflow. Failures here are non-fatal:
+			// a warning lands on stderr and the DB is still a usable
+			// migrated project root (mirror of the EnsurePrefix block
+			// above). The warning is emitted regardless of --quiet —
+			// quiet only suppresses informational stdout, not the
+			// stderr signal that bootstrap silently did not happen.
+			if !skipBootstrap {
+				if err := bootstrapDefaultWorkflow(cmd.Context(), s); err != nil {
+					fmt.Fprintf(os.Stderr,
+						"warning: could not bootstrap default workflow: %v (re-run with --skip-bootstrap to opt out of the seed)\n",
+						err)
+				}
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&prefix, "prefix", "", "ID prefix (reserved; currently always 'as')")
+	cmd.Flags().BoolVar(&skipBootstrap, "skip-bootstrap", false,
+		"do not seed the default feature-dev-generic workflow")
 	return cmd
+}
+
+// bootstrapDefaultWorkflow seeds the canonical `feature-dev-generic`
+// workflow (definition lives at internal/bootstrap/feature-dev-generic.json).
+//
+// Behaviour is intentionally idempotent: if a workflow with that name
+// already exists in the DB, the call is a silent no-op (one
+// informational line at non-quiet verbosity). Otherwise it:
+//
+//  1. Auto-installs @autogent/generic via the same path used by
+//     `autosk workflow create --file`.
+//  2. Creates the workflow row + its steps + transitions.
+//  3. Commits the change to doltlite with a dedicated message.
+//
+// Callers wrap the error in a warning; this function does not print on
+// the happy path beyond the "bootstrapped" / "already present" line.
+func bootstrapDefaultWorkflow(ctx context.Context, s *doltlite.Store) error {
+	def, err := bootstrap.FeatureDevGeneric()
+	if err != nil {
+		return fmt.Errorf("load embedded definition: %w", err)
+	}
+	wf := workflow.New(s.DB(), agent.New(s.DB()))
+
+	// Idempotency check by name. A user who explicitly deleted the
+	// workflow gets it re-created on the next init — that's the
+	// documented escape hatch.
+	_, gerr := wf.GetByName(ctx, def.Name)
+	if gerr == nil {
+		if !flagQuiet {
+			fmt.Printf("bootstrap: workflow %q already present, skipping\n", def.Name)
+		}
+		return nil
+	}
+	if !errors.Is(gerr, workflow.ErrNotFound) {
+		return fmt.Errorf("check workflow %q: %w", def.Name, gerr)
+	}
+
+	// Auto-install any scoped npm agents the bootstrap references. The
+	// helper short-circuits cleanly when the agent is already in the
+	// DB (re-runs of init after the user manually installed the agent
+	// then deleted the workflow row).
+	installed, err := autoInstallMissingAgents(ctx, def, wf.Agents(), s)
+	if err != nil {
+		return err
+	}
+
+	w, err := wf.Create(ctx, def, false /*isSynthetic*/)
+	if err != nil {
+		// Belt-and-suspenders against a TOCTOU race with a parallel
+		// writer (two `autosk init` processes on a fresh DB, the
+		// daemon racing a manual init, etc.): doltlite is
+		// single-writer at the connection level, so the loser only
+		// learns about the conflict at Create-time. Treat it as the
+		// same idempotent no-op as the GetByName-found branch above
+		// instead of a confusing warning.
+		if errors.Is(err, workflow.ErrAlreadyExist) {
+			if !flagQuiet {
+				fmt.Printf("bootstrap: workflow %q already present, skipping\n", def.Name)
+			}
+			return nil
+		}
+		return fmt.Errorf("create workflow: %w", err)
+	}
+	_ = s.DoltCommit(ctx, "init: bootstrap "+w.Name+" workflow")
+
+	if !flagQuiet {
+		// Format `(agent @scope/name@version installed[, ...])` so the
+		// success line matches plan §4.6. We only list agents we
+		// actually installed in this call; a re-run that re-creates a
+		// previously-deleted workflow but finds the agent already in
+		// the DB will print the bare "bootstrapped workflow X" form.
+		agentSuffix := formatInstalledAgentSuffix(installed)
+		if agentSuffix != "" {
+			fmt.Printf("bootstrapped workflow %s %s\n", w.Name, agentSuffix)
+		} else {
+			fmt.Printf("bootstrapped workflow %s\n", w.Name)
+		}
+	}
+	return nil
+}
+
+// formatInstalledAgentSuffix renders the parenthesised suffix appended
+// to the bootstrap success line, matching plan §4.6:
+//
+//	bootstrapped workflow feature-dev-generic (agent @autogent/generic@0.1.0 installed)
+//
+// Returns the empty string when nothing was installed (the bare
+// "bootstrapped workflow X" form is used in that case).
+func formatInstalledAgentSuffix(installed []pkgregistry.Entry) string {
+	if len(installed) == 0 {
+		return ""
+	}
+	parts := make([]string, len(installed))
+	for i, e := range installed {
+		parts[i] = e.Name + "@" + e.Version
+	}
+	label := "agent"
+	if len(installed) > 1 {
+		label = "agents"
+	}
+	return "(" + label + " " + strings.Join(parts, ", ") + " installed)"
 }
 
 // newMigrateCmd: explicit migrate (also runs implicitly on every Open).

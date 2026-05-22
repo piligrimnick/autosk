@@ -25,6 +25,7 @@ The `libsqlite3` build tag is mandatory: it routes `mattn/go-sqlite3` through th
 - `internal/lazy/` — lazygit-style TUI (`autosk lazy`), built on `jesseduffield/gocui`
 - `internal/daemon/` — Unix-domain-socket daemon + job executor
 - `internal/workflow/` — workflow step graph, transitions, executor
+- `internal/bootstrap/` — canonical workflow JSON shipped with the binary; embedded via `go:embed` and applied by `autosk init`. Single source of truth for `feature-dev-generic` — do not duplicate it under `docs/` or anywhere else.
 - `internal/projectdb/`, `internal/store/`, `internal/migrations/` — doltlite-backed task/workflow/agent store
 - `extension/` — TypeScript SDK + agent runtime (`pi --mode rpc`)
 - `agents/` — reference agent implementations (TS/JS)

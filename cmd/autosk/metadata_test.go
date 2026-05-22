@@ -14,7 +14,7 @@ import (
 func TestMetadata_ShowEmpty(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	id := createBareTask(t, dir, "no metadata")
@@ -36,7 +36,7 @@ func TestMetadata_ShowEmpty(t *testing.T) {
 func TestMetadata_SetRoundTrip(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	id := createBareTask(t, dir, "rt")
@@ -77,7 +77,7 @@ func TestMetadata_SetRoundTrip(t *testing.T) {
 func TestMetadata_SetRejectsBadStepVisitsLeaf(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	id := createBareTask(t, dir, "guard")
@@ -96,7 +96,7 @@ func TestMetadata_SetRejectsBadStepVisitsLeaf(t *testing.T) {
 func TestMetadata_SetRejectsNonObjectStepVisits(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	id := createBareTask(t, dir, "guard2")
@@ -116,7 +116,7 @@ func TestMetadata_SetRejectsNonObjectStepVisits(t *testing.T) {
 func TestMetadata_UnsetRemovesEmptyParents(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	id := createBareTask(t, dir, "prune")
@@ -139,7 +139,7 @@ func TestMetadata_UnsetRemovesEmptyParents(t *testing.T) {
 func TestMetadata_UnsetMissingKey(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	id := createBareTask(t, dir, "noop")
@@ -156,7 +156,7 @@ func TestMetadata_UnsetMissingKey(t *testing.T) {
 func TestMetadata_ResetVisitsAll(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	id := createBareTask(t, dir, "reset")
@@ -183,7 +183,7 @@ func TestMetadata_ResetVisitsAll(t *testing.T) {
 func TestMetadata_ResetVisitsByStepID(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	id := createBareTask(t, dir, "one")
@@ -213,7 +213,7 @@ func TestMetadata_ResetVisitsByStepID(t *testing.T) {
 func TestMetadata_ResetVisitsByStepName(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	// Set up a workflow with two steps so we can resolve a name.
@@ -260,7 +260,7 @@ func TestMetadata_ResetVisitsByStepName(t *testing.T) {
 func TestMetadata_SetFromFile(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	id := createBareTask(t, dir, "json-from-file")
@@ -285,7 +285,7 @@ func TestMetadata_SetFromFile(t *testing.T) {
 func TestShow_RendersVisitsSummary(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	wfPath := writeCappedWorkflow(t, dir)
@@ -315,7 +315,7 @@ func TestShow_RendersVisitsSummary(t *testing.T) {
 func TestShow_JSONIncludesMetadata(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	wfPath := writeCappedWorkflow(t, dir)

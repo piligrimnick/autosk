@@ -25,7 +25,7 @@ import (
 func TestResume_CapExceeded_HintsResetThenSucceeds(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runRoot(t, dir, "agent", "install", "@autosk/dev-fixture"); err != nil {
@@ -122,7 +122,7 @@ func devStepID(t *testing.T, dir, wfName string) string {
 func TestResume_NoTo_DoesNotBumpCounter(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runRoot(t, dir, "agent", "install", "@autosk/dev-fixture"); err != nil {

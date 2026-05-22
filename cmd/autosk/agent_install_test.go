@@ -21,6 +21,9 @@ import (
 //	@autosk/dev-fixture          — a "standard" agent (no runner)
 //	@autosk/custom-fixture       — declares a runner ./agent.ts
 //	@autosk/agent-runtime        — runtime stub
+//	@autogent/generic            — the bootstrap agent seeded by
+//	                               `autosk init` (mirrors the
+//	                               on-disk shape of agents/generic-agent)
 //
 // Anything else passed to Install is rejected so tests fail loudly on
 // drift.
@@ -49,6 +52,15 @@ func (fakeNpmInProcess) Install(_ context.Context, prefix, spec string) error {
 				"model":         "sonnet:high",
 				"thinking":      "high",
 			}},
+		}
+	case "@autogent/generic":
+		// Hermetic stand-in for the real agents/generic-agent package
+		// so the bootstrap workflow seeded by `autosk init` can be
+		// installed offline.
+		pj = map[string]any{
+			"name":    name,
+			"version": "0.1.0",
+			"autosk":  map[string]any{"agent": map[string]any{}},
 		}
 	case "@autosk/custom-fixture":
 		pj = map[string]any{
@@ -138,7 +150,7 @@ func runRoot(t *testing.T, dir string, argv ...string) (string, error) {
 func TestAgentInstall_StandardCreatesDBRow(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	stdout, err := runRoot(t, dir, "agent", "install", "@autosk/dev-fixture")
@@ -167,7 +179,7 @@ func TestAgentInstall_StandardCreatesDBRow(t *testing.T) {
 func TestAgentInstall_CustomRunnerSurfaceKind(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	stdout, err := runRoot(t, dir, "agent", "install", "@autosk/custom-fixture")
@@ -182,7 +194,7 @@ func TestAgentInstall_CustomRunnerSurfaceKind(t *testing.T) {
 func TestAgentShow_UnionView(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runRoot(t, dir, "agent", "install", "@autosk/dev-fixture"); err != nil {
@@ -202,7 +214,7 @@ func TestAgentShow_UnionView(t *testing.T) {
 func TestAgentUninstall_RefusesWhenReferenced(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runRoot(t, dir, "agent", "install", "@autosk/dev-fixture"); err != nil {
@@ -235,7 +247,7 @@ func TestAgentUninstall_RefusesWhenReferenced(t *testing.T) {
 func TestAgentInstall_RejectsBadPackageName(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	_, err := runRoot(t, dir, "agent", "install", "human")
@@ -247,7 +259,7 @@ func TestAgentInstall_RejectsBadPackageName(t *testing.T) {
 func TestCreate_RejectsUninstalledAgent(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	_, err := runRoot(t, dir, "create", "bad", "--agent", "@noone/here")

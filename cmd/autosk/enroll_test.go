@@ -41,17 +41,15 @@ func writeFeatureDevWorkflow(t *testing.T, dir string) string {
 }
 
 // createBareTask creates a status='new' task and returns its id.
+// Uses the shared lastLine helper (init_test.go) so the id-extraction
+// rule lives in exactly one place across the test suite.
 func createBareTask(t *testing.T, dir, title string) string {
 	t.Helper()
 	out, err := runRoot(t, dir, "create", title)
 	if err != nil {
 		t.Fatalf("create: %v\n%s", err, out)
 	}
-	id := strings.TrimSpace(out)
-	// Strip any prefatory lines (e.g. "autosk: created ..."), take last line.
-	if i := strings.LastIndex(id, "\n"); i >= 0 {
-		id = id[i+1:]
-	}
+	id := lastLine(out)
 	if !strings.HasPrefix(id, "ask-") || len(id) != 10 {
 		t.Fatalf("create did not return an ask-XXXXXX id; got %q", out)
 	}
@@ -79,7 +77,7 @@ func statusOf(t *testing.T, dir, id string) map[string]any {
 func TestEnroll_IntoNamedWorkflow_Happy(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	wfPath := writeFeatureDevWorkflow(t, dir)
@@ -132,7 +130,7 @@ func TestEnroll_IntoNamedWorkflow_Happy(t *testing.T) {
 func TestEnroll_IntoSingleAgent_AutoCreatesSyntheticWorkflow(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runRoot(t, dir, "agent", "install", "@autosk/dev-fixture"); err != nil {
@@ -176,7 +174,7 @@ func TestEnroll_IntoSingleAgent_AutoCreatesSyntheticWorkflow(t *testing.T) {
 func TestEnroll_AlreadyEnrolled_Rejected(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runRoot(t, dir, "agent", "install", "@autosk/dev-fixture"); err != nil {
@@ -211,7 +209,7 @@ func TestEnroll_AlreadyEnrolled_Rejected(t *testing.T) {
 func TestEnroll_HumanFeedback_Rejected(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runRoot(t, dir, "agent", "install", "@autosk/dev-fixture"); err != nil {
@@ -250,7 +248,7 @@ func TestEnroll_HumanFeedback_Rejected(t *testing.T) {
 func TestEnroll_TerminalTask_Rejected(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runRoot(t, dir, "agent", "install", "@autosk/dev-fixture"); err != nil {
@@ -275,7 +273,7 @@ func TestEnroll_TerminalTask_Rejected(t *testing.T) {
 func TestEnroll_FlagValidation(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	id := createBareTask(t, dir, "X")
@@ -298,7 +296,7 @@ func TestEnroll_FlagValidation(t *testing.T) {
 func TestEnroll_TaskNotFound(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	_, err := runRoot(t, dir, "enroll", "ask-zzzzzz", "--workflow", "anything")
@@ -315,7 +313,7 @@ func TestEnroll_TaskNotFound(t *testing.T) {
 func TestEnroll_UnknownWorkflow(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	id := createBareTask(t, dir, "X")
@@ -336,7 +334,7 @@ func TestEnroll_UnknownWorkflow(t *testing.T) {
 func TestEnroll_RejectsUninstalledAgent(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	id := createBareTask(t, dir, "X")
@@ -371,7 +369,7 @@ func TestEnroll_RejectsUninstalledAgent(t *testing.T) {
 func TestEnroll_AtSpecificStep_Workflow(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	wfPath := writeFeatureDevWorkflow(t, dir)
@@ -399,7 +397,7 @@ func TestEnroll_AtSpecificStep_Workflow(t *testing.T) {
 func TestEnroll_AtSpecificStep_Unknown(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	wfPath := writeFeatureDevWorkflow(t, dir)
@@ -431,7 +429,7 @@ func TestEnroll_AtSpecificStep_Unknown(t *testing.T) {
 func TestEnroll_StepIncompatibleWithAgent(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runRoot(t, dir, "agent", "install", "@autosk/dev-fixture"); err != nil {
@@ -454,7 +452,7 @@ func TestEnroll_StepIncompatibleWithAgent(t *testing.T) {
 func TestCreate_AtSpecificStep_Workflow(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	wfPath := writeFeatureDevWorkflow(t, dir)
@@ -466,10 +464,7 @@ func TestCreate_AtSpecificStep_Workflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create --step: %v\n%s", err, out)
 	}
-	id := strings.TrimSpace(out)
-	if i := strings.LastIndex(id, "\n"); i >= 0 {
-		id = id[i+1:]
-	}
+	id := lastLine(out)
 	got := statusOf(t, dir, id)
 	if got["status"] != "work" {
 		t.Errorf("status: want work, got %v", got["status"])
@@ -485,7 +480,7 @@ func TestCreate_AtSpecificStep_Workflow(t *testing.T) {
 func TestCreate_StepWithoutWorkflow(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	_, err := runRoot(t, dir, "create", "X", "--step", "review")
@@ -505,7 +500,7 @@ func TestCreate_StepWithoutWorkflow(t *testing.T) {
 func TestEnroll_JSONOutput(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runRoot(t, dir, "agent", "install", "@autosk/dev-fixture"); err != nil {
@@ -518,10 +513,7 @@ func TestEnroll_JSONOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create --blocked-by: %v\n%s", err, targetOut)
 	}
-	id := strings.TrimSpace(targetOut)
-	if i := strings.LastIndex(id, "\n"); i >= 0 {
-		id = id[i+1:]
-	}
+	id := lastLine(targetOut)
 
 	out, err := runRoot(t, dir, "enroll", id, "--agent", "@autosk/dev-fixture", "--json")
 	if err != nil {

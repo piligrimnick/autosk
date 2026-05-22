@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"autosk/internal/agent"
+	"autosk/internal/agent/pkgregistry"
 	"autosk/internal/render"
 	"autosk/internal/store/doltlite"
 	"autosk/internal/timeformat"
@@ -82,8 +83,8 @@ func newWorkflowCreateCmd() *cobra.Command {
 			defer closeFn()
 
 			if !noInstall {
-				if err := autoInstallMissingAgents(cmd.Context(), def, wf.Agents(), dl); err != nil {
-					return err
+				if _, err := autoInstallMissingAgents(cmd.Context(), def, wf.Agents(), dl); err != nil {
+					return fmt.Errorf("%w (pass --no-install to skip)", err)
 				}
 			}
 
@@ -113,9 +114,14 @@ func newWorkflowCreateCmd() *cobra.Command {
 // On a successful install the matching `agents` row is created so the
 // downstream workflow validation sees a real agent.
 //
+// The function returns the slice of `pkgregistry.Entry` rows it just
+// installed so callers can surface them in their own success output
+// (used by `autosk init`'s bootstrap line). Empty slice + nil error
+// means every referenced agent was already present.
+//
 // The function is a no-op (returns nil) when every agent is either
 // `human` or already in the DB.
-func autoInstallMissingAgents(ctx context.Context, def workflow.Definition, ag *agent.Store, dl *doltlite.Store) error {
+func autoInstallMissingAgents(ctx context.Context, def workflow.Definition, ag *agent.Store, dl *doltlite.Store) ([]pkgregistry.Entry, error) {
 	// Collect unique referenced agent names.
 	seen := make(map[string]struct{}, len(def.Steps))
 	for _, s := range def.Steps {
@@ -125,7 +131,7 @@ func autoInstallMissingAgents(ctx context.Context, def workflow.Definition, ag *
 		seen[s.AgentName] = struct{}{}
 	}
 	if len(seen) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// Determine which need install (not in DB, not 'human', scoped name).
@@ -143,16 +149,16 @@ func autoInstallMissingAgents(ctx context.Context, def workflow.Definition, ag *
 		todo = append(todo, name)
 	}
 	if len(todo) == 0 {
-		return nil
+		return nil, nil
 	}
 	sort.Strings(todo)
 
 	reg, err := openPackagesRegistry()
 	if err != nil {
-		return fmt.Errorf("open packages registry: %w", err)
+		return nil, fmt.Errorf("open packages registry: %w", err)
 	}
 	if err := reg.EnsurePrefix(); err != nil {
-		return fmt.Errorf("ensure packages prefix: %w", err)
+		return nil, fmt.Errorf("ensure packages prefix: %w", err)
 	}
 
 	// Attach the registry to the agent store so EnsureByName accepts the
@@ -164,23 +170,29 @@ func autoInstallMissingAgents(ctx context.Context, def workflow.Definition, ag *
 			len(todo), strings.Join(todo, ", "))
 	}
 
+	installed := make([]pkgregistry.Entry, 0, len(todo))
 	for _, name := range todo {
 		if !flagQuiet {
 			fmt.Fprintf(os.Stderr, "\u2192 agent install %s\n", name)
 		}
 		entry, ierr := reg.Install(ctx, name, "")
 		if ierr != nil {
-			return fmt.Errorf("auto-install %s failed: %w (pass --no-install to skip, or install manually with `autosk agent install %s`)",
+			// The helper deliberately does NOT mention --no-install
+			// because not every caller has that flag (e.g. `autosk init`
+			// uses --skip-bootstrap instead). Each caller wraps this
+			// error with its own contextual flag hint.
+			return installed, fmt.Errorf("auto-install %s failed: %w (install manually with `autosk agent install %s`)",
 				name, ierr, name)
 		}
 		if _, eerr := agWithResolver.EnsureByName(ctx, entry.Name); eerr != nil {
-			return fmt.Errorf("register %s in agents table: %w", entry.Name, eerr)
+			return installed, fmt.Errorf("register %s in agents table: %w", entry.Name, eerr)
 		}
 		if !flagQuiet {
 			fmt.Fprintf(os.Stderr, "  installed %s@%s\n", entry.Name, entry.Version)
 		}
+		installed = append(installed, entry)
 	}
-	return nil
+	return installed, nil
 }
 
 // looksLikeScopedNpmName reports whether s is an npm name with a

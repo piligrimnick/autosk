@@ -136,6 +136,46 @@ and import:
 autosk workflow create --file docs/notes/workflow-example.json
 ```
 
+#### Shipped default: `feature-dev-generic`
+
+`autosk init` seeds one workflow into every new project so users can
+start enrolling tasks without first authoring or copying a workflow
+JSON. The seeded workflow is named `feature-dev-generic` and has the
+shape:
+
+```
+dev → review → docs → validator → human
+```
+
+with bounce-back edges from `review → dev` and `validator → dev`.
+Every step is owned by the same agent, `@autogent/generic`, which
+`autosk init` also auto-installs through the same path used by
+`autosk workflow create --file ...`.
+
+The canonical definition lives at
+[`internal/bootstrap/feature-dev-generic.json`](../internal/bootstrap/feature-dev-generic.json).
+It is embedded into the `autosk` binary via `go:embed`, parsed through
+the same `workflow.ParseReader` path as user-authored JSON, and applied
+by `autosk init`. To reuse it as a template, copy that file and pass it
+to `autosk workflow create --file ...` under a different name — do not
+edit the embedded file in place if you only need a local variant.
+
+Bootstrap is idempotent: re-running `autosk init` is a no-op once the
+workflow row exists, regardless of its content (the engine does not
+diff the embedded JSON against the row). If you have edited the seeded
+workflow and want the default back, `autosk workflow delete
+feature-dev-generic` followed by `autosk init` re-creates it.
+
+If you want a truly empty database, pass `--skip-bootstrap`:
+
+```bash
+autosk init --skip-bootstrap     # no workflow seeded, no agent installed
+```
+
+Bootstrap failures (network down, npm registry 5xx, read-only packages
+prefix, ...) are non-fatal: `autosk init` warns on stderr, exits 0, and
+leaves a valid migrated DB behind.
+
 The shipped example:
 
 ```jsonc
@@ -601,6 +641,12 @@ npm-package agent model.
 ```bash
 # 1. Bootstrap.
 autosk init
+# initialized .../.autosk/db (schema_version=N)
+# bootstrapped workflow feature-dev-generic (agent @autogent/generic@X.Y.Z installed)
+
+# `autosk init` already seeded `feature-dev-generic` and installed
+# `@autogent/generic` (see "Shipped default" above). The verbose path
+# below is only needed if you want extra agents and a custom workflow.
 autosk agent install @autosk/developer
 autosk agent install @autosk/code-reviewer
 autosk agent install @autosk/task-validator

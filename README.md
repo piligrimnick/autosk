@@ -54,21 +54,36 @@ Here you can press `n` to create new task or `?` to see hotkeys.
 1. **Create your first task.** using CLI:
    ```bash
    cd ~/your/project
+   autosk init             # creates .autosk/db and seeds the default
+                           # `feature-dev-generic` workflow (see below)
    autosk create "Tidy the README" -p 1
    autosk list             # everything that's open
    autosk ready            # what should I work on right now?
    autosk done ask-3f9b2c  # mark it finished
    ```
 
-3. **(Optional) Hand a task to an AI agent.** Install an agent package, launch the daemon, enroll the task:
+   `autosk init` is idempotent. Pass `--skip-bootstrap` if you don't
+   want the default workflow seeded (handy for tests and offline CI).
+
+2. **(Optional) Hand a task to the bundled developer workflow.** `autosk init`
+   already installed `@autogent/generic` and seeded `feature-dev-generic`
+   (dev → review → docs → validator → human), so all that's left is to start
+   the daemon and enroll a task:
+   ```bash
+   autosk daemon serve &                                # run in the background
+   id=$(autosk create "Fix the flaky test" -p 1 --workflow feature-dev-generic --json | jq -r .id)
+   ```
+   The daemon picks up the task, runs the workflow, and either closes it
+   to `done` or parks it to `human` for review.
+
+3. **(Optional) Use your own agent or workflow.** Install an agent
+   package and enroll directly against it (autosk wraps it in a synthetic
+   one-step workflow):
    ```bash
    autosk agent install @your-org/developer    # install once
-   autosk daemon serve &                       # run in the background
-
    id=$(autosk create "Fix the flaky test" -p 1 --json | jq -r .id)
    autosk enroll "$id" --agent @your-org/developer
    ```
-   The daemon picks up the task, runs the agent, and transitions it to `done` (or parks it to `human` if it gets stuck).
 
 ## How it works
 
@@ -106,6 +121,14 @@ You define workflows in JSON and load them into the DB:
 autosk workflow create --file my-flow.json
 autosk workflow list
 ```
+
+`autosk init` seeds one workflow for you out of the box —
+`feature-dev-generic` (`dev → review → docs → validator → human`,
+every step owned by `@autogent/generic`). The canonical JSON lives at
+[`internal/bootstrap/feature-dev-generic.json`](internal/bootstrap/feature-dev-generic.json)
+and is embedded into the binary; copy that file and pass it to
+`autosk workflow create --file ...` under a different name if you want
+to fork it.
 
 For one-off uses, skip the workflow file and pass `--agent <pkg>` to `enroll` — autosk creates a synthetic single-step workflow for you on the fly.
 

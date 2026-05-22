@@ -14,7 +14,7 @@ import (
 func TestWorkflowCreate_AutoInstallsScopedAgent(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 
@@ -65,7 +65,7 @@ func TestWorkflowCreate_AutoInstallsScopedAgent(t *testing.T) {
 func TestWorkflowCreate_NoInstallFlag(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -102,7 +102,7 @@ func TestWorkflowCreate_NoInstallFlag(t *testing.T) {
 func TestWorkflowCreate_BareNameNotAutoInstalled(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatal(err)
 	}
 

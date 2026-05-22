@@ -42,7 +42,7 @@ func makeIsolatedProject(t *testing.T) string {
 	}
 	runGitOrFail(t, dir, "add", "README.md")
 	runGitOrFail(t, dir, "commit", "-m", "init")
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatalf("autosk init: %v", err)
 	}
 	canon, err := filepath.EvalSymlinks(dir)
@@ -127,14 +127,10 @@ func installFixturesAndIsolatedWF(t *testing.T, dir, wfName string) {
 }
 
 // createIDFromOutput pulls the trailing line (the printed task id)
-// out of `autosk create` output. Mirrors the helper in enroll_test.go.
-func createIDFromOutput(out string) string {
-	id := strings.TrimSpace(out)
-	if i := strings.LastIndex(id, "\n"); i >= 0 {
-		id = id[i+1:]
-	}
-	return id
-}
+// out of `autosk create` output. Thin wrapper around `lastLine`
+// (defined in init_test.go) so the id-extraction rule lives in
+// exactly one place across the cmd/autosk test suite.
+func createIDFromOutput(out string) string { return lastLine(out) }
 
 // gitBranchExists checks `git -C root show-ref` for refs/heads/<branch>.
 func gitBranchExists(t *testing.T, root, branch string) bool {
@@ -197,7 +193,7 @@ func TestWorktree_CLI_CreateIsolated_NonGitRollsBackTaskRow(t *testing.T) {
 	// Isolate $HOME but DO NOT git init the project dir.
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
-	if _, err := runRoot(t, dir, "init"); err != nil {
+	if _, err := runRoot(t, dir, "init", "--skip-bootstrap"); err != nil {
 		t.Fatalf("autosk init: %v", err)
 	}
 	withIsolatedPackagesPrefix(t)
