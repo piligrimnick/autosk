@@ -225,6 +225,12 @@ type Datasource interface {
 	CreateTask(ctx context.Context, title, description string, priority int) (string, error)
 	UpdateStatus(ctx context.Context, id string, status store.Status) error
 	UpdatePriority(ctx context.Context, id string, p int) error
+	// UpdateTitleDescription rewrites tasks.title and tasks.description
+	// in one call. Either field may be unchanged from the current task —
+	// callers are expected to pre-load the current values (or accept
+	// the wipe) and submit a full pair. Returns an error when title
+	// is empty after trimming so the UI can render a flash.
+	UpdateTitleDescription(ctx context.Context, id, title, description string) error
 	Enroll(ctx context.Context, id, workflow string) error
 	EnrollAgent(ctx context.Context, id, agent string) error
 	Resume(ctx context.Context, id, toStep string) error

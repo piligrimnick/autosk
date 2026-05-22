@@ -160,6 +160,9 @@ func (c *Compose) UpdateStatus(ctx context.Context, id string, st store.Status) 
 func (c *Compose) UpdatePriority(ctx context.Context, id string, p int) error {
 	return c.off.UpdatePriority(ctx, id, p)
 }
+func (c *Compose) UpdateTitleDescription(ctx context.Context, id, title, description string) error {
+	return c.off.UpdateTitleDescription(ctx, id, title, description)
+}
 func (c *Compose) Enroll(ctx context.Context, id, wf string) error {
 	return c.off.Enroll(ctx, id, wf)
 }

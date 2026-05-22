@@ -150,6 +150,40 @@ func TestOffline_CommentRoundTrip(t *testing.T) {
 	}
 }
 
+// TestOffline_UpdateTitleDescription pins the lazy `c` (edit) write
+// path: a full pair must replace both columns and dolt-commit, while
+// an empty title (post-trim) must fail without touching the row.
+func TestOffline_UpdateTitleDescription(t *testing.T) {
+	ctx := context.Background()
+	ds, _, closeFn := newOfflineFx(t)
+	defer closeFn()
+
+	id, err := ds.CreateTask(ctx, "old title", "old body", 2)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := ds.UpdateTitleDescription(ctx, id, "new title", "new body"); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	tk, err := ds.GetTask(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if tk.Title != "new title" || tk.Description != "new body" {
+		t.Fatalf("got title=%q desc=%q, want new title / new body", tk.Title, tk.Description)
+	}
+
+	// Empty title (or whitespace-only) is rejected and the columns
+	// stay at their previous values.
+	if err := ds.UpdateTitleDescription(ctx, id, "   ", "whatever"); err == nil {
+		t.Fatal("expected error on empty title")
+	}
+	tk2, _ := ds.GetTask(ctx, id)
+	if tk2.Title != "new title" || tk2.Description != "new body" {
+		t.Fatalf("empty-title path mutated columns: title=%q desc=%q", tk2.Title, tk2.Description)
+	}
+}
+
 func TestOffline_HealthIsDown(t *testing.T) {
 	ctx := context.Background()
 	ds, _, closeFn := newOfflineFx(t)

@@ -91,6 +91,7 @@ func (gu *Gui) bindKeys() error {
 
 		// Tasks write verbs.
 		{winTasks, 'n', gocui.ModNone, gu.taskNew},
+		{winTasks, 'c', gocui.ModNone, gu.taskEdit},
 		{winTasks, 'd', gocui.ModNone, gu.taskDone},
 		{winTasks, 'x', gocui.ModNone, gu.taskCancel},
 		{winTasks, 'e', gocui.ModNone, gu.taskEnroll},
@@ -100,9 +101,10 @@ func (gu *Gui) bindKeys() error {
 		{winTasks, 'm', gocui.ModNone, gu.taskComment},
 		{winTasks, 'p', gocui.ModNone, gu.taskPriority},
 		{winTasks, 'o', gocui.ModNone, gu.taskReopen},
-		// Note: there is no 'c claim' binding. The v0.2 schema has no
-		// claim verb — tasks self-advance via workflow steps. Use 'e'
-		// to enroll, or assign an agent. The help screen reflects this.
+		// Note: there is no `c claim` binding. The v0.2 schema has no
+		// claim verb — tasks self-advance via workflow steps. `c` is
+		// bound to `change` (edit title + description in the two-pane
+		// compose); use `e` to enroll instead.
 
 		// Workflows write verbs.
 		{winWorkflows, 'n', gocui.ModNone, gu.workflowNew},
@@ -735,6 +737,47 @@ func (gu *Gui) taskNew(*gocui.Gui, *gocui.View) error {
 		return nil
 	})
 	return nil
+}
+
+// taskEdit opens the two-pane compose editor pre-filled with the
+// selected task's title + description. On submit the values flow to
+// Datasource.UpdateTitleDescription. An empty title (post-trim) is
+// rejected with a flash and the popup is re-opened with the typed
+// text intact so the user can fix it without losing their work.
+func (gu *Gui) taskEdit(*gocui.Gui, *gocui.View) error {
+	t, ok := gu.st.selectedTaskLocked()
+	if !ok {
+		return nil
+	}
+	gu.openTaskComposeForEdit(t.ID, t.Title, t.Description)
+	return nil
+}
+
+// openTaskComposeForEdit is the openTaskCompose wrapper for the
+// edit flow. Extracted so the validation-error branch (empty title)
+// can re-invoke itself with the same (id, summary, description)
+// triple — the compose confirm handler resets popup state to
+// popupNone before invoking the accept callback, so re-opening from
+// inside the callback is the supported way to "keep the popup
+// open".
+func (gu *Gui) openTaskComposeForEdit(id, summary, description string) {
+	gu.openTaskCompose("Edit "+id, summary, description, func(s, d string) error {
+		if strings.TrimSpace(s) == "" {
+			gu.flashf("err", "title required")
+			gu.openTaskComposeForEdit(id, s, d)
+			return nil
+		}
+		gu.g.OnWorker(func(_ gocui.Task) error {
+			if err := gu.ds.UpdateTitleDescription(gu.ctx, id, s, d); err != nil {
+				gu.flashf("err", "edit: %v", err)
+				return nil
+			}
+			gu.flashf("info", "edited %s", id)
+			gu.refreshAll()
+			return nil
+		})
+		return nil
+	})
 }
 
 func (gu *Gui) taskDone(*gocui.Gui, *gocui.View) error {

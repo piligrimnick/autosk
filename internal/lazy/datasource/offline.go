@@ -644,6 +644,25 @@ func (o *Offline) UpdateStatus(ctx context.Context, id string, status store.Stat
 	return nil
 }
 
+// UpdateTitleDescription rewrites tasks.title and tasks.description
+// in one transaction and commits the change to dolt.
+//
+// Title is trimmed before the store write; an empty title after
+// trimming is rejected so the UI can render a flash and keep the
+// compose popup open. Description is passed through verbatim so the
+// caller can blank it out by submitting an empty string.
+func (o *Offline) UpdateTitleDescription(ctx context.Context, id, title, description string) error {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return errors.New("title required")
+	}
+	if _, err := o.s.UpdateTask(ctx, id, store.TaskPatch{Title: &title, Description: &description}); err != nil {
+		return err
+	}
+	_ = o.s.DoltCommit(ctx, "lazy: edit "+id)
+	return nil
+}
+
 // UpdatePriority rewrites tasks.priority.
 func (o *Offline) UpdatePriority(ctx context.Context, id string, p int) error {
 	if p < store.MinPriority || p > store.MaxPriority {

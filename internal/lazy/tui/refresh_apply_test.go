@@ -73,6 +73,9 @@ func (f *refreshFakeDS) UpdateStatus(_ context.Context, _ string, _ store.Status
 func (f *refreshFakeDS) UpdatePriority(_ context.Context, _ string, _ int) error {
 	return datasource.ErrDaemonRequired
 }
+func (f *refreshFakeDS) UpdateTitleDescription(_ context.Context, _, _, _ string) error {
+	return datasource.ErrDaemonRequired
+}
 func (f *refreshFakeDS) Enroll(_ context.Context, _, _ string) error {
 	return datasource.ErrDaemonRequired
 }
