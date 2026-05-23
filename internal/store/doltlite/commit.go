@@ -3,6 +3,8 @@ package doltlite
 import (
 	"context"
 	"fmt"
+
+	"autosk/internal/sqlretry"
 )
 
 // DoltCommit creates a dolt commit with the given message, recording every
@@ -16,7 +18,7 @@ func (s *Store) DoltCommit(ctx context.Context, msg string) error {
 	if s.db == nil {
 		return nil
 	}
-	return retryOnBusy(ctx, func() error {
+	return sqlretry.OnBusy(ctx, func() error {
 		row := s.db.QueryRowContext(ctx, `SELECT dolt_commit('-A', '-m', ?)`, msg)
 		var hash string
 		if err := row.Scan(&hash); err != nil {

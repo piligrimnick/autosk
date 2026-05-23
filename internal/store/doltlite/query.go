@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"autosk/internal/sqlretry"
 	"autosk/internal/store"
 )
 
@@ -112,7 +113,7 @@ func (s *Store) UpdateTask(ctx context.Context, idStr string, p store.TaskPatch)
 
 	q := "UPDATE tasks SET " + strings.Join(sets, ", ") + " WHERE id = ?"
 	var res sql.Result
-	err = retryOnBusy(ctx, func() error {
+	err = sqlretry.OnBusy(ctx, func() error {
 		var e error
 		res, e = s.db.ExecContext(ctx, q, args...)
 		return e

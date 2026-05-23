@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"autosk/internal/id"
+	"autosk/internal/sqlretry"
 )
 
 // RunStatus is the lifecycle state of a job. Mirrors the SQL CHECK enum.
@@ -153,11 +154,14 @@ func (s *Store) CreateRun(ctx context.Context, nr NewRun) (Run, error) {
 	if max <= 0 {
 		max = 3
 	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO daemon_runs(
-			job_id, task_id, step_id, status, max_corrections, corrections_used, created_at
-		) VALUES (?, ?, ?, 'queued', ?, 0, ?)
-	`, jobID, nr.TaskID, nr.StepID, max, now.Unix())
+	err = sqlretry.OnBusy(ctx, func() error {
+		_, e := s.db.ExecContext(ctx, `
+			INSERT INTO daemon_runs(
+				job_id, task_id, step_id, status, max_corrections, corrections_used, created_at
+			) VALUES (?, ?, ?, 'queued', ?, 0, ?)
+		`, jobID, nr.TaskID, nr.StepID, max, now.Unix())
+		return e
+	})
 	if err != nil {
 		return Run{}, fmt.Errorf("insert daemon_run: %w", err)
 	}
@@ -228,17 +232,19 @@ func (s *Store) MarkRunning(ctx context.Context, jobID string, pid int) (Run, er
 		return Run{}, ErrNotOpen
 	}
 	now := time.Now().UTC().Unix()
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE daemon_runs
-		   SET status = 'running', pid = ?, started_at = ?
-		 WHERE job_id = ? AND status = 'queued'
-	`, pid, now, jobID)
+	err := sqlretry.OnBusy(ctx, func() error {
+		_, e := s.db.ExecContext(ctx, `
+			UPDATE daemon_runs
+			   SET status = 'running', pid = ?, started_at = ?
+			 WHERE job_id = ? AND status = 'queued'
+		`, pid, now, jobID)
+		return e
+	})
 	if err != nil {
 		return Run{}, fmt.Errorf("mark running: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return s.GetRun(ctx, jobID)
-	}
+	// RowsAffected==0 is fine here: the row may already be running
+	// (idempotent re-claim). GetRun returns the canonical state.
 	return s.GetRun(ctx, jobID)
 }
 
@@ -270,23 +276,31 @@ func (s *Store) markTerminal(
 		return Run{}, ErrInvalidStatus
 	}
 	now := time.Now().UTC().Unix()
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE daemon_runs
-		   SET status        = ?,
-		       exit_code     = ?,
-		       error         = CASE WHEN ?='' THEN error ELSE ? END,
-		       transition_id = COALESCE(?, transition_id),
-		       finished_at   = ?,
-		       pid           = NULL
-		 WHERE job_id = ?
-	`, string(target), nullableInt(exitCode),
-		errMsg, errMsg,
-		nullableInt64(transitionID),
-		now, jobID)
+	var rows int64
+	err := sqlretry.OnBusy(ctx, func() error {
+		res, e := s.db.ExecContext(ctx, `
+			UPDATE daemon_runs
+			   SET status        = ?,
+			       exit_code     = ?,
+			       error         = CASE WHEN ?='' THEN error ELSE ? END,
+			       transition_id = COALESCE(?, transition_id),
+			       finished_at   = ?,
+			       pid           = NULL
+			 WHERE job_id = ?
+		`, string(target), nullableInt(exitCode),
+			errMsg, errMsg,
+			nullableInt64(transitionID),
+			now, jobID)
+		if e != nil {
+			return e
+		}
+		rows, _ = res.RowsAffected()
+		return nil
+	})
 	if err != nil {
 		return Run{}, fmt.Errorf("mark %s: %w", target, err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if rows == 0 {
 		return Run{}, ErrNotFound
 	}
 	return s.GetRun(ctx, jobID)
@@ -297,12 +311,20 @@ func (s *Store) SetPID(ctx context.Context, jobID string, pid int) error {
 	if s.db == nil {
 		return ErrNotOpen
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE daemon_runs SET pid = ? WHERE job_id = ?`, pid, jobID)
+	var rows int64
+	err := sqlretry.OnBusy(ctx, func() error {
+		res, e := s.db.ExecContext(ctx,
+			`UPDATE daemon_runs SET pid = ? WHERE job_id = ?`, pid, jobID)
+		if e != nil {
+			return e
+		}
+		rows, _ = res.RowsAffected()
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("set pid: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if rows == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -313,13 +335,21 @@ func (s *Store) SetPISession(ctx context.Context, jobID, sessionID, sessionPath 
 	if s.db == nil {
 		return ErrNotOpen
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE daemon_runs SET pi_session_id = ?, session_path = ? WHERE job_id = ?`,
-		nullableText(sessionID), nullableText(sessionPath), jobID)
+	var rows int64
+	err := sqlretry.OnBusy(ctx, func() error {
+		res, e := s.db.ExecContext(ctx,
+			`UPDATE daemon_runs SET pi_session_id = ?, session_path = ? WHERE job_id = ?`,
+			nullableText(sessionID), nullableText(sessionPath), jobID)
+		if e != nil {
+			return e
+		}
+		rows, _ = res.RowsAffected()
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("set pi session: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if rows == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -330,12 +360,20 @@ func (s *Store) IncCorrections(ctx context.Context, jobID string) (int, error) {
 	if s.db == nil {
 		return 0, ErrNotOpen
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE daemon_runs SET corrections_used = corrections_used + 1 WHERE job_id = ?`, jobID)
+	var rows int64
+	err := sqlretry.OnBusy(ctx, func() error {
+		res, e := s.db.ExecContext(ctx,
+			`UPDATE daemon_runs SET corrections_used = corrections_used + 1 WHERE job_id = ?`, jobID)
+		if e != nil {
+			return e
+		}
+		rows, _ = res.RowsAffected()
+		return nil
+	})
 	if err != nil {
 		return 0, fmt.Errorf("inc corrections: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if rows == 0 {
 		return 0, ErrNotFound
 	}
 	var used int
@@ -353,18 +391,25 @@ func (s *Store) SweepRunningOnStartup(ctx context.Context) (int, error) {
 		return 0, ErrNotOpen
 	}
 	now := time.Now().UTC().Unix()
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE daemon_runs
-		   SET status = 'failed',
-		       error  = COALESCE(NULLIF(error,''), 'daemon_restart'),
-		       finished_at = COALESCE(finished_at, ?),
-		       pid    = NULL
-		 WHERE status = 'running'
-	`, now)
+	var n int64
+	err := sqlretry.OnBusy(ctx, func() error {
+		res, e := s.db.ExecContext(ctx, `
+			UPDATE daemon_runs
+			   SET status = 'failed',
+			       error  = COALESCE(NULLIF(error,''), 'daemon_restart'),
+			       finished_at = COALESCE(finished_at, ?),
+			       pid    = NULL
+			 WHERE status = 'running'
+		`, now)
+		if e != nil {
+			return e
+		}
+		n, _ = res.RowsAffected()
+		return nil
+	})
 	if err != nil {
 		return 0, fmt.Errorf("sweep running: %w", err)
 	}
-	n, _ := res.RowsAffected()
 	return int(n), nil
 }
 

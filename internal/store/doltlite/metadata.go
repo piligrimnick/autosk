@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"autosk/internal/sqlretry"
 	"autosk/internal/store"
 )
 
@@ -43,7 +44,7 @@ func (s *Store) UpdateMetadata(ctx context.Context, taskID string, fn func(m map
 		result  map[string]any
 		changed bool
 	)
-	err := retryOnBusy(ctx, func() error {
+	err := sqlretry.OnBusy(ctx, func() error {
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("begin tx: %w", err)
@@ -143,7 +144,7 @@ func (s *Store) UpdateMetadataAndPatch(ctx context.Context, taskID string, fn fu
 		return store.Task{}, err
 	}
 
-	err := retryOnBusy(ctx, func() error {
+	err := sqlretry.OnBusy(ctx, func() error {
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("begin tx: %w", err)

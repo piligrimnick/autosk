@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"autosk/internal/id"
+	"autosk/internal/sqlretry"
 	"autosk/internal/store"
 )
 
@@ -62,7 +63,7 @@ func (s *Store) CreateTask(ctx context.Context, t store.Task) (store.Task, error
 	if err != nil {
 		return store.Task{}, err
 	}
-	err = retryOnBusy(ctx, func() error {
+	err = sqlretry.OnBusy(ctx, func() error {
 		_, e := s.db.ExecContext(ctx, `
 			INSERT INTO tasks(id, title, description, status, priority,
 			                  author_id, workflow_id, current_step_id,
@@ -132,7 +133,7 @@ func (s *Store) DeleteTask(ctx context.Context, idStr string) error {
 		res store.Result
 		err error
 	)
-	err = retryOnBusy(ctx, func() error {
+	err = sqlretry.OnBusy(ctx, func() error {
 		res, err = s.db.ExecContext(ctx, `DELETE FROM tasks WHERE id = ?`, idStr)
 		return err
 	})

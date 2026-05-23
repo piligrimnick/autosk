@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"autosk/internal/sqlretry"
 	"autosk/internal/store"
 )
 
@@ -25,7 +26,7 @@ func (s *Store) Block(ctx context.Context, id string, blockers ...string) error 
 	if len(blockers) == 0 {
 		return nil
 	}
-	return retryOnBusy(ctx, func() error { return s.blockOnce(ctx, id, blockers) })
+	return sqlretry.OnBusy(ctx, func() error { return s.blockOnce(ctx, id, blockers) })
 }
 
 func (s *Store) blockOnce(ctx context.Context, id string, blockers []string) error {
@@ -74,7 +75,7 @@ func (s *Store) Unblock(ctx context.Context, id string, blockers ...string) erro
 	if len(blockers) == 0 {
 		return nil
 	}
-	return retryOnBusy(ctx, func() error { return s.unblockOnce(ctx, id, blockers) })
+	return sqlretry.OnBusy(ctx, func() error { return s.unblockOnce(ctx, id, blockers) })
 }
 
 func (s *Store) unblockOnce(ctx context.Context, id string, blockers []string) error {
@@ -101,7 +102,7 @@ func (s *Store) UnblockAll(ctx context.Context, id string) (int, error) {
 		return 0, store.ErrNotOpen
 	}
 	var n int64
-	err := retryOnBusy(ctx, func() error {
+	err := sqlretry.OnBusy(ctx, func() error {
 		res, e := s.db.ExecContext(ctx,
 			`DELETE FROM task_deps WHERE blocked_id = ? AND kind = 'blocks'`, id)
 		if e != nil {
