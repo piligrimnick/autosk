@@ -186,9 +186,9 @@ func newDaemonServeCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&sockPath, "sock", "", "unix socket path (default: $AUTOSK_SOCK or ~/.autosk/daemon.sock)")
-	cmd.Flags().IntVar(&workers, "workers", 2, "max concurrent agent processes across all projects")
+	cmd.Flags().IntVar(&workers, "workers", 5, "max concurrent agent processes across all projects")
 	cmd.Flags().DurationVar(&grace, "grace", 10*time.Second, "SIGTERM grace before SIGKILL")
-	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 30*time.Minute, "per-turn idle timeout")
+	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 2*time.Hour, "per-turn idle timeout")
 	cmd.Flags().DurationVar(&pollInterval, "poll-interval", poller.DefaultInterval, "how often each project scans work tasks")
 	cmd.Flags().DurationVar(&gcInterval, "gc-interval", 0, "how often each project runs doltlite chunk-store GC (0=default 30m, <0=disabled)")
 	cmd.Flags().StringVar(&piBin, "pi-bin", "", "pi binary (default: 'pi' on PATH)")

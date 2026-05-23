@@ -29,7 +29,7 @@ brew install wierdbytes/autosk/autosk    # macOS / Linux
 make install
 ```
 
-- **Pi.dev** - installed and configured for at least one LLM provider
+- **[pi.dev](https://pi.dev)** - installed and configured for at least one LLM provider
 
 also you need installed extension to let agents manage their state
 ```bash
@@ -40,7 +40,7 @@ pi install npm:@wierdbytes/pi-autosk
 
 ## Quick start
 
-### Lazy mode
+### [Lazy mode](docs/lazy.md)
 
 Tasks, jobs, workflows, and agents in one screen. Selecting a job streams its transcript live into the Detail pane.
 
@@ -120,7 +120,7 @@ autosk agent list
 
 Each package decides which model to call, what initial prompt to use, and how to behave during a **step**. You reference agents by their full package name in **workflows**; `human` is the only non-package agent.
 
-### Workflows
+### [Workflows](docs/workflows.md)
 
 A **workflow** is a directed graph of **steps**, where each step has an agent and one or more outgoing transitions. Workflows can be as small as *one step, one agent*, or as branchy as *developer → reviewer → either back to developer or on to validator*.
 
@@ -141,7 +141,9 @@ to fork it.
 
 For one-off uses, skip the workflow file and pass `--agent <pkg>` to `enroll` — autosk creates a synthetic single-step workflow for you on the fly.
 
-### The daemon
+See [Make your own workflow](docs/workflows.md#make-your-own-workflow) to adapt for your dev pipeline.
+
+### The [daemon](docs/daemon.md)
 
 `autosk daemon serve` is a long-running process that drives tasks through their workflows. **One daemon per host serves any number of projects** — it picks the project from the autosk request that the CLI/lazy executes.
 

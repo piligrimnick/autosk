@@ -41,7 +41,7 @@ Daemon foundations:
 cd ~/work/project-a && autosk init        # one-time per project
 cd ~/work/project-b && autosk init
 
-# 1. Launch the daemon. Default socket = ~/.autosk/daemon.sock, workers = 2.
+# 1. Launch the daemon. Default socket = ~/.autosk/daemon.sock, workers = 5.
 autosk daemon serve &
 
 # 2. Enroll a task into a workflow from any project root. The per-project
@@ -82,9 +82,9 @@ route. Work enters the daemon through workflow enrolment; the poller
 | Flag | Default | Effect |
 |---|---|---|
 | `--sock` | `~/.autosk/daemon.sock` (env `AUTOSK_SOCK`) | Unix-domain socket path. Parent dir is created with mode `0700`, socket with mode `0600`. |
-| `--workers` | `2` | Max concurrent agent processes **across all projects** (single FIFO queue). |
+| `--workers` | `5` | Max concurrent agent processes **across all projects** (single FIFO queue). |
 | `--grace` | `10s` | Time SIGTERM has to bring the agent down before SIGKILL. |
-| `--idle-timeout` | `30m` | Max time between agent events on a single turn before failing the run. |
+| `--idle-timeout` | `2h` | Max time between agent events on a single turn before failing the run. |
 | `--poll-interval` | `2s` | Per-project workflow scan cadence. |
 | `--pi-bin` | `pi` | pi binary to spawn (looked up on PATH unless absolute). |
 | `--session-dir-root` | `<projectRoot>/.autosk/sessions` when unset | Literal parent dir for per-job session subdirs. When set, the same path is shared across **all** projects served by this daemon; when empty (the default) each project gets its own `<projectRoot>/.autosk/sessions`. No template substitution is performed. |

@@ -6,9 +6,6 @@ move through a directed graph of **steps**; each step is owned by an
 tasks in `work` status, spawns the step's agent, and advances the
 task when the agent emits a structural transition signal.
 
-If you haven't yet, read the design plan first:
-[`docs/plans/20260517-Workflows-Plan.md`](plans/20260517-Workflows-Plan.md).
-
 ---
 
 ## Concepts
@@ -669,10 +666,76 @@ These rows have `is_synthetic = 1` and are hidden from
 
 ---
 
+## Make your own workflow
+
+A workflow is a JSON file. Author it, import it, enroll tasks against it.
+
+```bash
+# 1. Install the agent packages your steps will reference.
+autosk agent install @your-org/developer
+autosk agent install @your-org/reviewer
+
+# 2. Write my-flow.json (shape below).
+
+# 3. Import it.
+autosk workflow create --file my-flow.json
+autosk workflow show my-flow
+
+# 4. Use it.
+autosk create "Implement feature X" --workflow my-flow
+autosk enroll ask-3f9b2c --workflow my-flow
+```
+
+### Minimal shape
+
+```jsonc
+{
+  "name":        "my-flow",                     // unique, must not start with "single:"
+  "description": "…",                           // optional, free text
+  "first_step":  "dev",                         // entry step; must exist in `steps`
+  "isolation":   "worktree",                    // "none" (default) or "worktree"
+  "steps": {
+    "dev": {
+      "agent": { "name": "@autogent/generic" }, // or your own "@your-org/developer"
+      "max_visits": 5,                          // 0 / absent = unlimited
+      "next_steps": [
+        { "step": "review", "prompt_rule": "When the implementation builds and tests pass." }
+      ]
+    },
+    "review": {
+      "agent": { "name": "@autogent/generic" }, // or your own "@your-org/reviewer"
+      "next_steps": [
+        { "task_status": "done",  "prompt_rule": "When the review found nothing to fix." },
+        { "step":        "dev",   "prompt_rule": "When fixes are needed." },
+        { "task_status": "human", "prompt_rule": "When a human decision is required." }
+      ]
+    }
+  }
+}
+```
+
+A worked example lives at
+[`docs/notes/workflow-example.json`](notes/workflow-example.json);
+the isolated variant is
+[`docs/notes/workflow-isolated-example.json`](notes/workflow-isolated-example.json).
+
+### What you can do in a workflow
+
+| Capability | Where | What it does |
+|---|---|---|
+| **Sibling-step transition** | `next_steps[].step` | Move the task to another step in this workflow. |
+| **Terminal transition** | `next_steps[].task_status` | Close (`done` / `cancel`) or park to a human (`human`). One per entry — never both `step` and `task_status`. |
+| **Prompt rule** | `next_steps[].prompt_rule` | Natural-language guidance the agent reads to decide which transition to emit. |
+| **Loop cap** | step `max_visits` | Fails the run with `step_max_visits_exceeded` and parks to `human` once the cap is hit. See [Visit limits](#visit-limits-max_visits). |
+| **Per-task git worktree** | top-level `isolation: "worktree"` | Allocates `~/.autosk/worktrees/<proj>/<task-id>` on branch `autosk/<task-id>`; each step runs there. See [Worktree isolation](#worktree-isolation). |
+| **Per-step agent overrides** | step `agent.params` | Override `model`, `thinking`, `first_message`/`first_message_file`, `extra_args`, `pi_extensions`, `pi_skills` for this step only. Standard agents only — see [Per-step agent overrides](#per-step-agent-overrides). |
+| **Single-step shortcut** | `autosk create … --agent <pkg>` | Skip the JSON entirely; autosk builds a hidden `single:<pkg>` workflow on the fly. |
+
+---
+
 ## CLI walkthrough
 
-This mirrors the W9 acceptance scenario (see plan §9), updated for the
-npm-package agent model.
+This mirrors the W9 acceptance scenario (see plan §9), updated for the npm-package agent model.
 
 ```bash
 # 1. Bootstrap.
@@ -724,9 +787,9 @@ autosk resume "$id"          # back to status=work at validator
 The single-agent shorthand:
 
 ```bash
-id=$(autosk create "Bump version to 0.2" --agent @autosk/developer --json | jq -r .id)
+id=$(autosk create "Bump version to 0.2" --agent @autogent/generic --json | jq -r .id)
 autosk show "$id"
-# status: work, workflow: single:@autosk/developer, current_step: do
+# status: work, workflow: single:@autogent/generic, current_step: do
 
 # The developer agent runs once, picks `--to done`, and the task closes.
 ```
@@ -738,7 +801,7 @@ If a task already exists (typically `status='new'`, created without
 
 ```bash
 autosk enroll ask-bea935 --workflow feature-dev
-autosk enroll ask-bea935 --agent    @autosk/developer   # single:@autosk/developer
+autosk enroll ask-bea935 --agent    @autogent/generic   # single:@autogent/generic
 ```
 
 `enroll` is the post-creation mirror of `create --workflow` /
