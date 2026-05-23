@@ -477,11 +477,16 @@ func renderJobsPanel(jobs []datasource.Job, _ int, scope scope, filter string) (
 
 // renderWorkflowsPanel renders the Workflows panel:
 //
-//	[name-WorkflowName] [N steps-Muted] [first=stepname-StepName] [(synthetic)-Muted]
+//	[name-WorkflowName] [[wt]-Muted] [N steps-Muted] [first=stepname-StepName] [(synthetic)-Muted]
 //
 // The `first=` label stays muted while the step value itself wears
 // the StepName hue so a glance at the list groups by workflow first,
 // step second.
+//
+// The `[wt]` marker is emitted exactly for non-synthetic workflows
+// with Isolation == "worktree". It stays muted so it reads as
+// metadata rather than as a focal point — the workflow name is the
+// row's anchor.
 func renderWorkflowsPanel(wfs []datasource.Workflow, _ int, filter string) (string, int) {
 	var b strings.Builder
 	header := 0
@@ -495,13 +500,20 @@ func renderWorkflowsPanel(wfs []datasource.Workflow, _ int, filter string) (stri
 	}
 	for _, w := range wfs {
 		name := styleWorkflowName.Render(fmt.Sprintf("%-24s", w.Name))
+		// Marker column is fixed-width so the `N steps` column lines
+		// up across rows regardless of the isolation mode. 4 cells =
+		// space + "[wt]".
+		marker := "    "
+		if !w.IsSynthetic && w.Isolation == "worktree" {
+			marker = styleMuted.Render("[wt]")
+		}
 		steps := styleMuted.Render(fmt.Sprintf("%d steps", len(w.Steps)))
 		first := styleMuted.Render("first=") + renderStepName(w.FirstStep)
 		synth := ""
 		if w.IsSynthetic {
 			synth = " " + styleMuted.Render("(synthetic)")
 		}
-		fmt.Fprintf(&b, "%s %s  %s%s\n", name, steps, first, synth)
+		fmt.Fprintf(&b, "%s %s %s  %s%s\n", name, marker, steps, first, synth)
 	}
 	return b.String(), header
 }
@@ -1094,6 +1106,22 @@ func renderWorkflowDetail(w datasource.Workflow, width int) string {
 	if w.IsSynthetic {
 		fmt.Fprintln(&b, styleMuted.Render("synthetic single-step workflow"))
 	}
+	// Isolation line: always render the mode so the operator can read
+	// it without opening `workflow show`. Synthetic rows include the
+	// pinned note so the `i` keybinding's status-bar message makes
+	// sense in context.
+	isolation := w.Isolation
+	if isolation == "" {
+		isolation = "none"
+	}
+	isoLine := "isolation: " + isolation
+	switch {
+	case w.IsSynthetic:
+		isoLine += styleMuted.Render("   (pinned: synthetic workflows always 'none')")
+	case w.NonTerminalTaskCount > 0:
+		isoLine += styleMuted.Render(fmt.Sprintf("   (%d non-terminal task(s) currently use this)", w.NonTerminalTaskCount))
+	}
+	fmt.Fprintln(&b, isoLine)
 	if w.Description != "" {
 		// Workflow.Description is operator-authored markdown (same
 		// shape as Task.Description). Render it through the same

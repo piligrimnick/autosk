@@ -25,6 +25,25 @@ func (gu *Gui) openMenu(title string, lines []string, onSelect func(int) error) 
 	gu.requestRedraw()
 }
 
+// openIsolationMenu is the workflow-isolation flavour of openMenu. The
+// renderer treats popupIsolation identically to popupMenu (same
+// layout, same key bindings, same view) so it routes through the same
+// drawPopup path; the only practical difference is the Kind field on
+// popupState, which lets tests pin the binding without relying on
+// title-string heuristics and keeps any future divergence cheap.
+func (gu *Gui) openIsolationMenu(title string, lines []string, onSelect func(int) error) {
+	gu.st.withLock(func() {
+		gu.st.popup = popupState{
+			Kind:     popupIsolation,
+			Title:    title,
+			Lines:    lines,
+			Cursor:   0,
+			OnSelect: onSelect,
+		}
+	})
+	gu.requestRedraw()
+}
+
 // openConfirm pushes a Confirm popup; onAccept runs on y/Enter.
 func (gu *Gui) openConfirm(prompt string, onAccept func() error) {
 	gu.st.withLock(func() {
@@ -227,7 +246,7 @@ func (gu *Gui) popupAccept(_ *gocui.Gui, v *gocui.View) error {
 		gu.st.popup = popupState{}
 	})
 	switch kind {
-	case popupMenu:
+	case popupMenu, popupIsolation:
 		if sel != nil {
 			return sel(cur)
 		}
@@ -243,7 +262,7 @@ func (gu *Gui) popupAccept(_ *gocui.Gui, v *gocui.View) error {
 func (gu *Gui) popupCursor(step int) func(*gocui.Gui, *gocui.View) error {
 	return func(*gocui.Gui, *gocui.View) error {
 		gu.st.withLock(func() {
-			if gu.st.popup.Kind != popupMenu {
+			if gu.st.popup.Kind != popupMenu && gu.st.popup.Kind != popupIsolation {
 				return
 			}
 			n := len(gu.st.popup.Lines)
@@ -285,7 +304,7 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 	})
 	activeSet := map[string]bool{}
 	switch kind {
-	case popupMenu:
+	case popupMenu, popupIsolation:
 		activeSet[winPopupMenu] = true
 	case popupConfirm:
 		activeSet[winPopupConfirm] = true
@@ -318,7 +337,7 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 		}
 	}
 	switch kind {
-	case popupMenu:
+	case popupMenu, popupIsolation:
 		gu.drawPopup(g, winPopupMenu, w, h, title, renderMenuBody(lines, cur))
 		pinOnTop(winPopupMenu)
 		if _, err := g.SetCurrentView(winPopupMenu); err != nil && !isUnknownView(err) {

@@ -18,6 +18,7 @@ import (
 	"autosk/internal/store/doltlite"
 	"autosk/internal/timeformat"
 	"autosk/internal/workflow"
+	"autosk/internal/worktree"
 )
 
 // workflowStoreFromCmd opens the project DB and returns a workflow.Store +
@@ -50,8 +51,243 @@ func newWorkflowCmd() *cobra.Command {
 		newWorkflowListCmd(),
 		newWorkflowShowCmd(),
 		newWorkflowDeleteCmd(),
+		newWorkflowUpdateCmd(),
 	)
 	return cmd
+}
+
+// newWorkflowUpdateCmd implements `autosk workflow update <name>
+// --isolation <none|worktree>`. See docs/plans/20260521-Workflow-Update-Isolation.md
+// for the safety semantics; in short:
+//
+//   - synthetic workflows are always rejected (single:<agent> is
+//     pinned to none by construction);
+//   - non-terminal tasks referencing the workflow refuse the update
+//     unless --force is passed;
+//   - none→worktree --force allocates a fresh worktree per task,
+//     atomically rolling back every prior Ensure on the first
+//     failure;
+//   - worktree→none --force does NOT remove leftover directories
+//     (that would discard uncommitted state); the leftover paths
+//     are printed for human cleanup via `autosk worktree rm`.
+func newWorkflowUpdateCmd() *cobra.Command {
+	var (
+		isolationFlag string
+		force         bool
+		dryRun        bool
+	)
+	cmd := &cobra.Command{
+		Use:   "update <name>",
+		Short: "Update mutable fields on a workflow (v0.4: only --isolation)",
+		Long: "Flip a workflow's isolation mode.\n\n" +
+			"The only mutable field today is --isolation. Other workflow fields\n" +
+			"(description, first_step, step graph) are immutable; delete+recreate\n" +
+			"the workflow instead.\n\n" +
+			"By default the verb refuses to run if any task currently references\n" +
+			"the workflow in a non-terminal state (new+workflow_id, work,\n" +
+			"human). --force overrides the refusal:\n\n" +
+			"  none → worktree   each non-terminal task gets a fresh worktree\n" +
+			"                    allocated from HEAD. The update is atomic: if any\n" +
+			"                    one Ensure fails, every prior Ensure for this run\n" +
+			"                    is rolled back.\n\n" +
+			"  worktree → none   leftover worktree directories are NOT removed\n" +
+			"                    (that would discard uncommitted state). Their\n" +
+			"                    paths are printed; clean them with\n" +
+			"                    'autosk worktree rm <task-id>' once you have\n" +
+			"                    salvaged anything you need.\n\n" +
+			"Use --dry-run to preview the side-effects without committing.\n\n" +
+			"Synthetic workflows (single:<agent>) are always rejected: their\n" +
+			"isolation is pinned to 'none' by construction.\n\n" +
+			"Daemon race: this verb does NOT lock against an in-flight daemon.\n" +
+			"A run that's already picked up will finish in its current cwd;\n" +
+			"the new mode takes effect on the next step run. Stop the daemon\n" +
+			"first if you need to be strict about the cutover.\n\n" +
+			"Examples:\n" +
+			"  autosk workflow update feature-dev --isolation worktree\n" +
+			"  autosk workflow update feature-dev --isolation worktree --force --dry-run\n" +
+			"  autosk workflow update feature-dev --isolation none --force\n",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			target, err := parseIsolationFlag(isolationFlag)
+			if err != nil {
+				return err
+			}
+			wf, dl, closeFn, err := workflowStoreFromCmd(cmd.Context(), !dryRun)
+			if err != nil {
+				return err
+			}
+			defer closeFn()
+
+			root, perr := projectRootFromCwd()
+			if perr != nil {
+				return perr
+			}
+			wtMgr := worktree.NewManager()
+			rep, err := wf.UpdateIsolation(cmd.Context(), name, target, workflow.UpdateIsolationOpts{
+				Force:       force,
+				DryRun:      dryRun,
+				ProjectRoot: root,
+				Worktrees:   wtMgr,
+			})
+			if err != nil {
+				return renderWorkflowUpdateError(err, rep)
+			}
+			if !dryRun && !rep.Noop {
+				msg := fmt.Sprintf("workflow update %s isolation=%s→%s", name, rep.From, rep.To)
+				_ = dl.DoltCommit(cmd.Context(), msg)
+			}
+			return emitWorkflowUpdateReport(rep)
+		},
+	}
+	cmd.Flags().StringVar(&isolationFlag, "isolation", "", "target isolation mode (none|worktree)")
+	_ = cmd.MarkFlagRequired("isolation")
+	cmd.Flags().BoolVar(&force, "force", false, "bypass the non-terminal-tasks guard with mode-specific side-effects")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what would happen without committing")
+	return cmd
+}
+
+// parseIsolationFlag validates the --isolation CLI value. We do this
+// in the verb rather than at flag-parse time so the error message
+// matches the contract spelled out in plan FR2.
+func parseIsolationFlag(raw string) (workflow.IsolationMode, error) {
+	switch raw {
+	case string(workflow.IsolationNone), string(workflow.IsolationWorktree):
+		return workflow.IsolationMode(raw), nil
+	default:
+		return "", fmt.Errorf("invalid --isolation: %q (want none|worktree)", raw)
+	}
+}
+
+// workflowUpdateJSON is the JSON projection of UpdateIsolationReport.
+// We re-emit it through a CLI-owned struct so the wire shape stays
+// stable across internal-package refactors (lazygit's HTTP API
+// pattern).
+type workflowUpdateJSON struct {
+	Workflow          string                 `json:"workflow"`
+	From              string                 `json:"from"`
+	To                string                 `json:"to"`
+	Noop              bool                   `json:"noop"`
+	DryRun            bool                   `json:"dry_run"`
+	NonTerminalTasks  []string               `json:"non_terminal_tasks,omitempty"`
+	EnsuredTasks      []workflowEnsureJSON   `json:"ensured_tasks,omitempty"`
+	LeftoverWorktrees []workflowLeftoverJSON `json:"leftover_worktrees,omitempty"`
+	RolledBackEnsures []workflowEnsureJSON   `json:"rolled_back_ensures,omitempty"`
+	FailedTask        string                 `json:"failed_task,omitempty"`
+}
+
+type workflowEnsureJSON struct {
+	TaskID   string `json:"task_id"`
+	Path     string `json:"path"`
+	Branch   string `json:"branch"`
+	Existing bool   `json:"existing"`
+}
+
+type workflowLeftoverJSON struct {
+	TaskID string `json:"task_id"`
+	Path   string `json:"path"`
+}
+
+func toWorkflowUpdateJSON(rep workflow.UpdateIsolationReport) workflowUpdateJSON {
+	out := workflowUpdateJSON{
+		Workflow:         rep.Workflow,
+		From:             string(rep.From),
+		To:               string(rep.To),
+		Noop:             rep.Noop,
+		DryRun:           rep.DryRun,
+		NonTerminalTasks: rep.NonTerminalTasks,
+		FailedTask:       rep.FailedTask,
+	}
+	for _, e := range rep.EnsuredTasks {
+		out.EnsuredTasks = append(out.EnsuredTasks, workflowEnsureJSON{
+			TaskID: e.TaskID, Path: e.Path, Branch: e.Branch, Existing: e.Existing,
+		})
+	}
+	for _, l := range rep.LeftoverWorktrees {
+		out.LeftoverWorktrees = append(out.LeftoverWorktrees, workflowLeftoverJSON{
+			TaskID: l.TaskID, Path: l.Path,
+		})
+	}
+	for _, e := range rep.RolledBackEnsures {
+		out.RolledBackEnsures = append(out.RolledBackEnsures, workflowEnsureJSON{
+			TaskID: e.TaskID, Path: e.Path, Branch: e.Branch, Existing: e.Existing,
+		})
+	}
+	return out
+}
+
+// emitWorkflowUpdateReport prints the report. Text and JSON branches
+// surface the same fields with the same semantics.
+func emitWorkflowUpdateReport(rep workflow.UpdateIsolationReport) error {
+	if flagJSON {
+		return json.NewEncoder(os.Stdout).Encode(toWorkflowUpdateJSON(rep))
+	}
+	if flagQuiet {
+		return nil
+	}
+	if rep.Noop {
+		fmt.Printf("workflow %s: isolation already %s (no-op)\n", rep.Workflow, rep.To)
+		return nil
+	}
+	prefix := ""
+	if rep.DryRun {
+		prefix = "DRY-RUN: "
+	}
+	fmt.Printf("%sworkflow %s: isolation %s → %s\n", prefix, rep.Workflow, rep.From, rep.To)
+	if len(rep.EnsuredTasks) > 0 {
+		fmt.Println("ensured worktrees:")
+		for _, e := range rep.EnsuredTasks {
+			state := "new"
+			if e.Existing {
+				state = "existing"
+			}
+			fmt.Printf("  %s  %s  (branch=%s, %s)\n", e.TaskID, e.Path, e.Branch, state)
+		}
+	}
+	if len(rep.LeftoverWorktrees) > 0 {
+		fmt.Println("leftover worktree (not removed):")
+		for _, l := range rep.LeftoverWorktrees {
+			fmt.Printf("  %s  %s\n", l.TaskID, l.Path)
+		}
+		fmt.Println("  (run `autosk worktree rm <task-id>` once you have salvaged uncommitted state)")
+	}
+	return nil
+}
+
+// renderWorkflowUpdateError emits structured details on the error
+// paths so the operator sees the offending task ids (refusal) or the
+// rolled-back set (mid-run Ensure failure) without having to re-run
+// with --json.
+func renderWorkflowUpdateError(err error, rep workflow.UpdateIsolationReport) error {
+	switch {
+	case errors.Is(err, workflow.ErrNonTerminalTasks):
+		var b strings.Builder
+		fmt.Fprintf(&b, "%v\n", err)
+		for _, id := range rep.NonTerminalTasks {
+			fmt.Fprintf(&b, "non-terminal task in workflow: %s\n", id)
+		}
+		b.WriteString("(pass --force to bypass)")
+		return errors.New(strings.TrimRight(b.String(), "\n"))
+	case errors.Is(err, workflow.ErrEnsureFailed):
+		var b strings.Builder
+		fmt.Fprintf(&b, "%v\n", err)
+		if rep.FailedTask != "" {
+			fmt.Fprintf(&b, "failed task: %s\n", rep.FailedTask)
+		}
+		if len(rep.RolledBackEnsures) > 0 {
+			b.WriteString("rolled back:\n")
+			for _, e := range rep.RolledBackEnsures {
+				fmt.Fprintf(&b, "  %s  %s\n", e.TaskID, e.Path)
+			}
+		}
+		b.WriteString("(workflows.isolation left unchanged)")
+		return errors.New(strings.TrimRight(b.String(), "\n"))
+	case errors.Is(err, workflow.ErrSyntheticImmutable):
+		return fmt.Errorf("cannot update synthetic workflow %q (single:<agent> rows are pinned to isolation=none)", rep.Workflow)
+	case errors.Is(err, workflow.ErrNotFound):
+		return fmt.Errorf("workflow not found: %s", rep.Workflow)
+	}
+	return err
 }
 
 func newWorkflowCreateCmd() *cobra.Command {

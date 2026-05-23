@@ -421,4 +421,3 @@ func TestRenderViews_DetailRepaintWithSameKeyPreservesScroll(t *testing.T) {
 		t.Errorf("same-entity repaint with body change clobbered scroll: oy=%d, want 7", oy)
 	}
 }
-

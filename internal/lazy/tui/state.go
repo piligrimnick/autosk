@@ -252,6 +252,15 @@ const (
 	// OnAccept as the submit callback — the contract matches
 	// popupPrompt, only the layout and the submit chords differ.
 	popupSingleCompose
+	// popupIsolation is the workflow-isolation flip popup chain. The
+	// `i` key on the Workflows panel opens a two-option popupMenu;
+	// confirming a non-current value chains into a popupConfirm whose
+	// body enumerates the affected non-terminal tasks. A dedicated
+	// popupKind value (rather than reusing popupMenu) makes the
+	// keymap-pin test (popup_test.go) trivially scoped and keeps the
+	// `i`-handler's accept callback isolated from any other future
+	// menu-based flow.
+	popupIsolation
 )
 
 // composePane identifies one of the two panes in the task-compose

@@ -97,6 +97,15 @@ type Workflow struct {
 	FirstStep   string
 	Steps       []WorkflowStep
 	TaskCount   int // tasks pointing at this workflow
+	// Isolation mirrors workflows.isolation ("none" | "worktree"). Empty
+	// in the on-disk row collapses to "none" at scan time. Surfaced on
+	// the Workflows panel ([wt] marker) and the workflow inspector.
+	Isolation string
+	// NonTerminalTaskCount is the number of tasks currently in a
+	// non-terminal state ({new+workflow_id, work, human}) pointing at
+	// this workflow. Lazy's isolation popup uses it to phrase the
+	// confirm body ("3 task(s) will get a fresh worktree...").
+	NonTerminalTaskCount int
 }
 
 // WorkflowStep is one row of a workflow's step graph.
@@ -203,6 +212,37 @@ func NewLiveHandle(ch <-chan LiveEvent, closeFn func() error) *LiveHandle {
 	return &LiveHandle{Events: ch, close: closeFn}
 }
 
+// UpdateIsolationReport is the lazy-side mirror of
+// workflow.UpdateIsolationReport. We keep a parallel struct so the
+// TUI never imports internal/workflow directly (the datasource
+// package is the only seam between the TUI and the rest of the
+// project).
+type UpdateIsolationReport struct {
+	Workflow          string
+	From              string
+	To                string
+	Noop              bool
+	NonTerminalTasks  []string
+	EnsuredTasks      []EnsureRecord
+	LeftoverWorktrees []LeftoverWorktree
+	RolledBackEnsures []EnsureRecord
+	FailedTask        string
+}
+
+// EnsureRecord and LeftoverWorktree mirror the workflow-package types
+// of the same names.
+type EnsureRecord struct {
+	TaskID   string
+	Path     string
+	Branch   string
+	Existing bool
+}
+
+type LeftoverWorktree struct {
+	TaskID string
+	Path   string
+}
+
 // Datasource is the read+write contract the TUI talks through.
 type Datasource interface {
 	// ---- reads (return promptly; safe to call from g.OnWorker) ----
@@ -249,6 +289,15 @@ type Datasource interface {
 
 	CreateWorkflow(ctx context.Context, jsonOrPath string) (string, error)
 	DeleteWorkflow(ctx context.Context, name string) error
+	// UpdateWorkflowIsolation flips the workflows.isolation column.
+	// The mode string is the same shape as `autosk workflow update
+	// --isolation`: "none" or "worktree". force=true bypasses the
+	// non-terminal-tasks guard with mode-specific side-effects (per
+	// task Ensure for none→worktree; leftover worktree paths surfaced
+	// in Report.LeftoverWorktrees for worktree→none). DryRun is not
+	// exposed at the datasource layer: the TUI's confirmation popup
+	// is the preview; the call always commits.
+	UpdateWorkflowIsolation(ctx context.Context, name, mode string, force bool) (UpdateIsolationReport, error)
 	InstallAgent(ctx context.Context, name, version string) error
 	UninstallAgent(ctx context.Context, name string) error
 

@@ -187,6 +187,9 @@ func (c *Compose) CreateWorkflow(ctx context.Context, path string) (string, erro
 func (c *Compose) DeleteWorkflow(ctx context.Context, name string) error {
 	return c.off.DeleteWorkflow(ctx, name)
 }
+func (c *Compose) UpdateWorkflowIsolation(ctx context.Context, name, mode string, force bool) (UpdateIsolationReport, error) {
+	return c.off.UpdateWorkflowIsolation(ctx, name, mode, force)
+}
 func (c *Compose) InstallAgent(ctx context.Context, name, version string) error {
 	if c.usingLive() {
 		return c.live.InstallAgent(ctx, name, version)

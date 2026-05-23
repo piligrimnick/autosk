@@ -102,6 +102,9 @@ func (f *refreshFakeDS) CreateWorkflow(_ context.Context, _ string) (string, err
 func (f *refreshFakeDS) DeleteWorkflow(_ context.Context, _ string) error {
 	return datasource.ErrDaemonRequired
 }
+func (f *refreshFakeDS) UpdateWorkflowIsolation(_ context.Context, _, _ string, _ bool) (datasource.UpdateIsolationReport, error) {
+	return datasource.UpdateIsolationReport{}, datasource.ErrDaemonRequired
+}
 func (f *refreshFakeDS) InstallAgent(_ context.Context, _, _ string) error {
 	return datasource.ErrDaemonRequired
 }

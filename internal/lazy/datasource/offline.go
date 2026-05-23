@@ -21,6 +21,7 @@ import (
 	"autosk/internal/store/doltlite"
 	"autosk/internal/tasksvc"
 	"autosk/internal/workflow"
+	"autosk/internal/worktree"
 )
 
 // Offline is a Datasource backed entirely by the project's .autosk/db
@@ -346,8 +347,10 @@ func (o *Offline) Workflows(ctx context.Context, includeSynthetic bool) ([]Workf
 }
 
 func projectWorkflow(ctx context.Context, db *sql.DB, w workflow.Workflow) Workflow {
+	iso := string(w.Isolation.Normalize())
 	out := Workflow{
 		ID: w.ID, Name: w.Name, Description: w.Description, IsSynthetic: w.IsSynthetic,
+		Isolation: iso,
 	}
 	firstStep := ""
 	for _, s := range w.Steps {
@@ -373,6 +376,17 @@ func projectWorkflow(ctx context.Context, db *sql.DB, w workflow.Workflow) Workf
 		out.Steps = append(out.Steps, ws)
 		out.TaskCount += n
 	}
+	// Non-terminal task count: surfaced in the inspector + the
+	// confirm-popup body so the operator can see the blast radius of
+	// an isolation flip without running `autosk list` first. Counts
+	// every status in {new, work, human}; mirrors the guard in
+	// workflow.Store.UpdateIsolation so the lazy popup and the CLI
+	// agree on what "non-terminal" means.
+	var ntc int
+	_ = db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tasks WHERE workflow_id = ? AND status IN ('new','work','human')`,
+		w.ID).Scan(&ntc)
+	out.NonTerminalTaskCount = ntc
 	return out
 }
 
@@ -853,6 +867,58 @@ func (o *Offline) DeleteWorkflow(ctx context.Context, name string) error {
 	}
 	_ = o.s.DoltCommit(ctx, "lazy: delete workflow "+name)
 	return nil
+}
+
+// UpdateWorkflowIsolation routes through workflow.Store.UpdateIsolation
+// so the CLI and the TUI share one code path (plan §2: "Lazy ↔ CLI
+// parity"). On success the doltlite commit message mirrors the CLI's
+// for consistency in `git log`.
+func (o *Offline) UpdateWorkflowIsolation(ctx context.Context, name, mode string, force bool) (UpdateIsolationReport, error) {
+	ws := workflow.New(o.s.DB(), agent.New(o.s.DB()))
+	wtMgr := worktree.NewManager()
+	rep, err := ws.UpdateIsolation(ctx, name, workflow.IsolationMode(mode), workflow.UpdateIsolationOpts{
+		Force:       force,
+		ProjectRoot: o.projectRoot,
+		Worktrees:   wtMgr,
+	})
+	out := toDatasourceUpdateIsolationReport(rep)
+	if err != nil {
+		return out, err
+	}
+	if !rep.Noop {
+		_ = o.s.DoltCommit(ctx, fmt.Sprintf("lazy: workflow update %s isolation=%s→%s", name, rep.From, rep.To))
+	}
+	return out, nil
+}
+
+// toDatasourceUpdateIsolationReport maps the workflow-package report
+// to the datasource-package mirror. Keeping the mirror lets the TUI
+// stay clear of internal/workflow imports.
+func toDatasourceUpdateIsolationReport(r workflow.UpdateIsolationReport) UpdateIsolationReport {
+	out := UpdateIsolationReport{
+		Workflow:         r.Workflow,
+		From:             string(r.From),
+		To:               string(r.To),
+		Noop:             r.Noop,
+		NonTerminalTasks: r.NonTerminalTasks,
+		FailedTask:       r.FailedTask,
+	}
+	for _, e := range r.EnsuredTasks {
+		out.EnsuredTasks = append(out.EnsuredTasks, EnsureRecord{
+			TaskID: e.TaskID, Path: e.Path, Branch: e.Branch, Existing: e.Existing,
+		})
+	}
+	for _, l := range r.LeftoverWorktrees {
+		out.LeftoverWorktrees = append(out.LeftoverWorktrees, LeftoverWorktree{
+			TaskID: l.TaskID, Path: l.Path,
+		})
+	}
+	for _, e := range r.RolledBackEnsures {
+		out.RolledBackEnsures = append(out.RolledBackEnsures, EnsureRecord{
+			TaskID: e.TaskID, Path: e.Path, Branch: e.Branch, Existing: e.Existing,
+		})
+	}
+	return out
 }
 
 // InstallAgent is the offline-mode shim that only adds the row to the

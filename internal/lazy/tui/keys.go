@@ -112,6 +112,7 @@ func (gu *Gui) bindKeys() error {
 		// Workflows write verbs.
 		{winWorkflows, 'n', gocui.ModNone, gu.workflowNew},
 		{winWorkflows, 'D', gocui.ModNone, gu.workflowDelete},
+		{winWorkflows, 'i', gocui.ModNone, gu.workflowIsolation},
 
 		// Agents "write" verbs are intentionally informational only:
 		// the daemon has no /v1/agents endpoint in v1, so both keys
@@ -1163,6 +1164,96 @@ func (gu *Gui) workflowDelete(*gocui.Gui, *gocui.View) error {
 		})
 	})
 	return nil
+}
+
+// workflowIsolation is the `i` handler on the Workflows panel. It
+// opens a two-option popupMenu listing the available isolation
+// modes; confirming a different value chains into a popupConfirm
+// whose body enumerates the affected non-terminal tasks (or notes
+// that none are affected). Synthetic rows respond with a status-bar
+// message instead — single:<agent> workflows are pinned to none by
+// construction so the menu has no useful action.
+//
+// The menu is implemented atop popupMenu (so j/k/Enter wiring is
+// reused); we wrap the OnSelect in a closure that captures the
+// selected workflow and the operator's choice. The destructive
+// branch (different value) chains into openConfirm.
+func (gu *Gui) workflowIsolation(*gocui.Gui, *gocui.View) error {
+	w, ok := gu.st.selectedWorkflowLocked()
+	if !ok {
+		return nil
+	}
+	if w.IsSynthetic {
+		gu.flashf("info", "isolation is locked to 'none' on synthetic workflows")
+		return nil
+	}
+	cur := w.Isolation
+	if cur == "" {
+		cur = "none"
+	}
+	modes := []string{"none", "worktree"}
+	lines := make([]string, 0, len(modes))
+	for _, m := range modes {
+		label := "isolation: " + m
+		if m == cur {
+			label += "   ← current"
+		}
+		lines = append(lines, label)
+	}
+	name := w.Name
+	nonTerminalCount := w.NonTerminalTaskCount
+	gu.openIsolationMenu("Flip isolation of "+name, lines, func(idx int) error {
+		if idx < 0 || idx >= len(modes) {
+			return nil
+		}
+		target := modes[idx]
+		if target == cur {
+			// No-op: close the popup silently.
+			return nil
+		}
+		body := buildIsolationConfirmBody(cur, target, nonTerminalCount)
+		force := nonTerminalCount > 0
+		gu.openConfirm(body, func() error {
+			gu.g.OnWorker(func(_ gocui.Task) error {
+				rep, err := gu.ds.UpdateWorkflowIsolation(gu.ctx, name, target, force)
+				if err != nil {
+					gu.flashf("err", "workflow isolation: %v", err)
+					return nil
+				}
+				if rep.Noop {
+					gu.flashf("info", "workflow %s: already %s", name, target)
+				} else {
+					gu.flashf("info", "workflow %s: isolation %s→%s", name, rep.From, rep.To)
+				}
+				if len(rep.LeftoverWorktrees) > 0 {
+					gu.flashf("warn", "%d worktree(s) left on disk; use `autosk worktree rm`", len(rep.LeftoverWorktrees))
+				}
+				gu.refreshAll()
+				return nil
+			})
+			return nil
+		})
+		return nil
+	})
+	return nil
+}
+
+// buildIsolationConfirmBody renders the popupConfirm body for the
+// isolation flip. Pure function so the layout pins in
+// popup_isolation_test.go can exercise the wording without driving a
+// gocui screen.
+func buildIsolationConfirmBody(from, to string, nonTerminal int) string {
+	head := fmt.Sprintf("Flip isolation: %s → %s", from, to)
+	switch {
+	case nonTerminal == 0:
+		return head + "\nNo tasks are currently affected."
+	case from == "none" && to == "worktree":
+		return head + fmt.Sprintf("\n%d non-terminal task(s) will get a fresh worktree allocated from HEAD.\nThis is the --force path. Continue?", nonTerminal)
+	case from == "worktree" && to == "none":
+		return head + fmt.Sprintf("\n%d non-terminal task(s) keep their worktree directories on disk.\nRemove them later with `autosk worktree rm <task-id>` once you have salvaged anything you need. Continue?", nonTerminal)
+	default:
+		return head + fmt.Sprintf("\n%d non-terminal task(s) affected. Continue?", nonTerminal)
+	}
 }
 
 // agentInstall and agentUninstall are intentionally informational in

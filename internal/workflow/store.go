@@ -11,6 +11,7 @@ import (
 
 	"autosk/internal/agent"
 	"autosk/internal/id"
+	"autosk/internal/worktree"
 )
 
 // ID prefixes for workflow/step rows.
@@ -25,6 +26,26 @@ var (
 	ErrNotFound     = errors.New("workflow not found")
 	ErrAlreadyExist = errors.New("workflow already exists")
 	ErrInUse        = errors.New("workflow has tasks pointing at it; refuse delete")
+
+	// ErrNonTerminalTasks is returned by UpdateIsolation when the
+	// workflow has at least one task in a non-terminal state
+	// referencing it AND the caller did not pass Force=true. The
+	// returned UpdateIsolationReport carries the offending task ids in
+	// NonTerminalTasks so callers can surface them.
+	ErrNonTerminalTasks = errors.New("workflow has non-terminal tasks; pass --force to update")
+
+	// ErrEnsureFailed wraps a worktree.Manager.Ensure failure that
+	// happened mid-rollout during a `none → worktree --force` flip.
+	// Every prior Ensure for the same run is rolled back via
+	// OnTerminal before this error is returned; the workflows row is
+	// left unchanged.
+	ErrEnsureFailed = errors.New("worktree allocation failed; isolation column not updated")
+
+	// ErrSyntheticImmutable is returned by UpdateIsolation when the
+	// targeted workflow is a synthetic single:<agent> row. Synthetic
+	// workflows are pinned to isolation='none' by construction; the
+	// guard fires regardless of Force.
+	ErrSyntheticImmutable = errors.New("cannot update synthetic workflow")
 )
 
 // Workflow is the materialised view of one `workflows` row.
@@ -299,6 +320,246 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 		return fmt.Errorf("reindex workflows after delete: %w", err)
 	}
 	return nil
+}
+
+// UpdateIsolationOpts controls UpdateIsolation. ProjectRoot and
+// Worktrees are only consulted when the update actually mutates the
+// column AND the transition is `none → worktree` with Force=true
+// (the only mode that performs per-task Ensure calls). DryRun
+// short-circuits both the writes and the side-effects.
+type UpdateIsolationOpts struct {
+	Force       bool
+	DryRun      bool
+	ProjectRoot string           // required when Force && transitioning none→worktree
+	Worktrees   worktree.Manager // required when Force && transitioning none→worktree
+}
+
+// EnsureRecord describes one worktree allocation produced by a
+// `none → worktree --force` flip. Existing reports whether the
+// directory was already on disk (no-op Ensure) at the time of the
+// run.
+type EnsureRecord struct {
+	TaskID   string `json:"task_id"`
+	Path     string `json:"path"`
+	Branch   string `json:"branch"`
+	Existing bool   `json:"existing"`
+}
+
+// LeftoverWorktree describes one (taskID, path) pair surfaced by a
+// `worktree → none --force` flip. The store does NOT remove the
+// directory — doing so would discard uncommitted state. Callers
+// render the list so the human can `autosk worktree rm` once
+// they've salvaged anything they need.
+type LeftoverWorktree struct {
+	TaskID string `json:"task_id"`
+	Path   string `json:"path"`
+}
+
+// UpdateIsolationReport carries the structured outcome of
+// UpdateIsolation. Populated up to the point of failure, so callers
+// can surface partial rollbacks even on the error path.
+type UpdateIsolationReport struct {
+	Workflow          string             `json:"workflow"`
+	From              IsolationMode      `json:"from"`
+	To                IsolationMode      `json:"to"`
+	Noop              bool               `json:"noop"`
+	DryRun            bool               `json:"dry_run"`
+	NonTerminalTasks  []string           `json:"non_terminal_tasks,omitempty"`
+	EnsuredTasks      []EnsureRecord     `json:"ensured_tasks,omitempty"`
+	LeftoverWorktrees []LeftoverWorktree `json:"leftover_worktrees,omitempty"`
+	// RolledBackEnsures lists the EnsureRecord entries whose worktrees
+	// were rolled back via OnTerminal because a later Ensure failed in
+	// the same run. Populated only on ErrEnsureFailed paths. Useful
+	// for the CLI's error rendering ("rolled back: X, Y, Z").
+	RolledBackEnsures []EnsureRecord `json:"rolled_back_ensures,omitempty"`
+	// FailedTask, when non-empty, names the task whose Ensure call
+	// failed during a `none → worktree --force` rollout. Populated
+	// only on ErrEnsureFailed paths.
+	FailedTask string `json:"failed_task,omitempty"`
+}
+
+// UpdateIsolation flips the workflows.isolation column on the named
+// workflow. The method is the single chokepoint for `workflow update
+// --isolation` (CLI) and for lazy's `i` keybinding — both reduce to
+// this call.
+//
+// Behavioural matrix (mirrors plan §4.2):
+//
+//	current     target      no-non-terminal-tasks   non-terminal (!force)   non-terminal (force)
+//	none        none        no-op                   no-op                   no-op
+//	worktree    worktree    no-op                   no-op                   no-op
+//	none        worktree    flip column             refuse                  Ensure each; flip
+//	worktree    none        flip column             refuse                  flip + leftover list
+//
+// The doltlite commit (the
+// dl.DoltCommit message) is the caller's responsibility; this method
+// only mutates the DB rows.
+//
+// Returns a populated UpdateIsolationReport even on error so callers
+// can render partial-rollback / refusal output.
+func (s *Store) UpdateIsolation(
+	ctx context.Context,
+	name string,
+	target IsolationMode,
+	opts UpdateIsolationOpts,
+) (UpdateIsolationReport, error) {
+	if s.db == nil {
+		return UpdateIsolationReport{Workflow: name}, ErrNotOpen
+	}
+	target = target.Normalize()
+	if !target.Valid() {
+		return UpdateIsolationReport{Workflow: name}, fmt.Errorf("invalid isolation mode %q (want none|worktree)", target)
+	}
+	w, err := s.GetByName(ctx, name)
+	if err != nil {
+		return UpdateIsolationReport{Workflow: name}, err
+	}
+	report := UpdateIsolationReport{
+		Workflow: w.Name,
+		From:     w.Isolation.Normalize(),
+		To:       target,
+		DryRun:   opts.DryRun,
+	}
+	if w.IsSynthetic {
+		return report, fmt.Errorf("%w: %s", ErrSyntheticImmutable, name)
+	}
+	if report.From == target {
+		report.Noop = true
+		return report, nil
+	}
+
+	nonTerminal, err := s.listNonTerminalTaskIDs(ctx, w.ID)
+	if err != nil {
+		return report, fmt.Errorf("list non-terminal tasks: %w", err)
+	}
+	report.NonTerminalTasks = nonTerminal
+	if len(nonTerminal) > 0 && !opts.Force {
+		return report, fmt.Errorf("%w (%d task(s))", ErrNonTerminalTasks, len(nonTerminal))
+	}
+
+	// Plan per-task side effects.
+	var plannedEnsures []EnsureRecord
+	var plannedLeftovers []LeftoverWorktree
+	switch {
+	case report.From == IsolationNone && target == IsolationWorktree && len(nonTerminal) > 0:
+		// Force is guaranteed by the guard above.
+		for _, tid := range nonTerminal {
+			path, perr := worktree.PathFor(opts.ProjectRoot, tid)
+			if perr != nil {
+				// Fall back to an empty path in the plan; the actual Ensure
+				// call (or dry-run) will surface the real error.
+				path = ""
+			}
+			plannedEnsures = append(plannedEnsures, EnsureRecord{
+				TaskID: tid,
+				Path:   path,
+				Branch: worktree.BranchFor(tid),
+			})
+		}
+	case report.From == IsolationWorktree && target == IsolationNone && len(nonTerminal) > 0:
+		for _, tid := range nonTerminal {
+			path, perr := worktree.PathFor(opts.ProjectRoot, tid)
+			if perr != nil {
+				path = ""
+			}
+			plannedLeftovers = append(plannedLeftovers, LeftoverWorktree{
+				TaskID: tid,
+				Path:   path,
+			})
+		}
+	}
+	report.EnsuredTasks = plannedEnsures
+	report.LeftoverWorktrees = plannedLeftovers
+
+	if opts.DryRun {
+		return report, nil
+	}
+
+	// Execute per-task side effects BEFORE the column flip so a mid-run
+	// Ensure failure leaves the column unchanged. (The doltlite store is
+	// single-writer; we don't open a tx that spans the Ensure shell-outs
+	// because git operations on a per-task path are independent of the
+	// DB row and a transaction held across N shell-outs would block
+	// every other writer for the duration of the flip.)
+	if report.From == IsolationNone && target == IsolationWorktree && len(plannedEnsures) > 0 {
+		if opts.Worktrees == nil {
+			return report, fmt.Errorf("%w: nil worktree.Manager", ErrEnsureFailed)
+		}
+		if opts.ProjectRoot == "" {
+			return report, fmt.Errorf("%w: empty project root", ErrEnsureFailed)
+		}
+		var applied []EnsureRecord
+		for _, rec := range plannedEnsures {
+			res, eerr := opts.Worktrees.Ensure(ctx, opts.ProjectRoot, rec.TaskID, "")
+			if eerr != nil {
+				// Roll back every prior Ensure: best-effort OnTerminal.
+				for _, prev := range applied {
+					_, _ = opts.Worktrees.OnTerminal(ctx, opts.ProjectRoot, prev.TaskID)
+				}
+				report.FailedTask = rec.TaskID
+				report.RolledBackEnsures = applied
+				report.EnsuredTasks = nil
+				return report, fmt.Errorf("%w: task %s: %v", ErrEnsureFailed, rec.TaskID, eerr)
+			}
+			applied = append(applied, EnsureRecord{
+				TaskID:   rec.TaskID,
+				Path:     res.Path,
+				Branch:   res.Branch,
+				Existing: res.Existing,
+			})
+		}
+		report.EnsuredTasks = applied
+	}
+
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE workflows SET isolation = ? WHERE id = ?`,
+		string(target), w.ID); err != nil {
+		// Roll back per-task Ensures we made for this run, otherwise we'd
+		// leak worktrees with no DB row claiming them.
+		if report.From == IsolationNone && target == IsolationWorktree {
+			for _, prev := range report.EnsuredTasks {
+				_, _ = opts.Worktrees.OnTerminal(ctx, opts.ProjectRoot, prev.TaskID)
+			}
+			report.RolledBackEnsures = report.EnsuredTasks
+			report.EnsuredTasks = nil
+		}
+		return report, fmt.Errorf("update workflows.isolation: %w", err)
+	}
+	return report, nil
+}
+
+// listNonTerminalTaskIDs returns the ids of tasks that reference the
+// workflow in a non-terminal state, ordered by id ASC for
+// deterministic rendering.
+//
+// The match set is:
+//
+//   - status='new'   AND workflow_id IS NOT NULL  (enrolled-but-not-started)
+//   - status='work'  AND workflow_id IS NOT NULL
+//   - status='human' AND workflow_id IS NOT NULL
+//
+// `done` / `cancel` rows are intentionally excluded — they cannot
+// touch the worktree at the next step run because there is no
+// next step run.
+func (s *Store) listNonTerminalTaskIDs(ctx context.Context, workflowID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id FROM tasks
+		 WHERE workflow_id = ?
+		   AND status IN ('new','work','human')
+		 ORDER BY id ASC`, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // FindStepByID returns the step row for the given step id, including its
