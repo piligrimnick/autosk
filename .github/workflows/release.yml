@@ -114,3 +114,98 @@ jobs:
             flags+=( --prerelease )
           fi
           gh release create "${GITHUB_REF_NAME}" "${flags[@]}" dist/*
+
+  # Push an updated Formula/autosk.rb into wierdbytes/homebrew-autosk so
+  # `brew install wierdbytes/autosk/autosk` (and `brew upgrade`) pick up
+  # the new release with no manual bookkeeping.
+  #
+  # Pre-releases (tag contains '-') skip the bump: brew has no
+  # 'pre-release channel' for taps, and we don't want rc/beta tags to
+  # become what `brew install autosk` resolves to.
+  bump-tap:
+    needs: release
+    if: "!contains(github.ref_name, '-')"
+    runs-on: ubuntu-latest
+    steps:
+      # HOMEBREW_TAP_TOKEN is a fine-grained PAT scoped to
+      # wierdbytes/homebrew-autosk with `contents: write`. github.token
+      # can't push to a different repo, so we need an explicit
+      # credential here.
+      - name: checkout tap
+        uses: actions/checkout@v5
+        with:
+          repository: wierdbytes/homebrew-autosk
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p assets
+          gh release download "${GITHUB_REF_NAME}" \
+            -R "${{ github.repository }}" \
+            -D assets
+
+      - name: render formula
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          version="${TAG#v}"
+          mac_sha=$(sha256sum assets/autosk-osx-arm64 | awk '{print $1}')
+          lin_sha=$(sha256sum assets/autosk-linux-x64 | awk '{print $1}')
+
+          cat > tap/Formula/autosk.rb <<EOF
+          # NOTE: this file is regenerated end-to-end by the release workflow in
+          # ${REPO} on every tagged release. Edit it by hand only if
+          # you know what you're doing -- your changes will be overwritten on the
+          # next release.
+          class Autosk < Formula
+            desc "Task manager and workflow manager for coding agents"
+            homepage "https://github.com/${REPO}"
+            version "${version}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/${REPO}/releases/download/v#{version}/autosk-osx-arm64"
+                sha256 "${mac_sha}"
+              end
+            end
+
+            on_linux do
+              on_intel do
+                url "https://github.com/${REPO}/releases/download/v#{version}/autosk-linux-x64"
+                sha256 "${lin_sha}"
+              end
+            end
+
+            def install
+              binary = OS.mac? ? "autosk-osx-arm64" : "autosk-linux-x64"
+              bin.install binary => "autosk"
+            end
+
+            test do
+              # \`autosk version\` prints the buildinfo Version string, which is
+              # the same tag we point the URL at. Substring-match so it works
+              # whether or not the build embedded a leading 'v'.
+              assert_match version.to_s, shell_output("#{bin}/autosk version")
+            end
+          end
+          EOF
+
+      - name: commit and push
+        working-directory: tap
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          git config user.name  "autosk-release-bot"
+          git config user.email "autosk-release-bot@users.noreply.github.com"
+          git add Formula/autosk.rb
+          if git diff --staged --quiet; then
+            echo "formula already up to date for ${TAG}; nothing to push"
+            exit 0
+          fi
+          git commit -m "autosk ${TAG}"
+          git push
