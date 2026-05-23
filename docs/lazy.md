@@ -62,7 +62,8 @@ The Detail pane always reflects the focused side panel:
   oldest first. For a running job a 6-row `input` textarea is
   pinned below the transcript.
 - **Workflows** — workflow name, description, step graph (rendered
-  with markdown).
+  with markdown), and an `isolation:` line carrying the current mode
+  plus the count of non-terminal tasks currently using it.
 - **Agents** — package name, version, install source (`builtin`,
   `installed`, or `db_only` when a referenced package isn't
   installed locally), and config summary.
@@ -136,6 +137,13 @@ stream.
 |---|---|
 | `n` | Create from a JSON file — prompts for the path. |
 | `D` | Delete (confirms). |
+| `i` | Update **isolation** (`none` ↔ `worktree`). Opens a two-option menu with the current mode marked. Selecting the current value closes the popup silently. Selecting the other value chains into a confirm popup that enumerates affected non-terminal tasks (capped at 10 with a `… and N more` suffix); `y` invokes `UpdateWorkflowIsolation(…, force=true)`. Synthetic `single:*` rows drop a status-bar flash (`isolation is locked to 'none' on synthetic workflows`) and do NOT open the menu. Routes through the same `workflow.Store.UpdateIsolation` the CLI uses — see [docs/workflows.md § Updating isolation](workflows.md#updating-isolation) for the safety semantics. |
+
+Isolated workflow rows render a muted `[wt]` marker after the
+workflow name; synthetic rows never carry it. After a successful
+`worktree → none` flip with leftover directories, the success
+acknowledgement plus a leftover-cleanup hint share one info-level
+flash (the leftover paths also land in the command log via `@`).
 
 ### Agents `[4]`
 

@@ -765,7 +765,7 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"  K          cancel job",
 		"",
 		"workflows:",
-		"  n new (from file)   D delete",
+		"  n new (from file)   D delete   i isolation (none↔worktree)",
 		"",
 		"agents:",
 		"  i install   u uninstall",

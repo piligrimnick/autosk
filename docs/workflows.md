@@ -337,9 +337,13 @@ isolated:
 
 Accepted values: `"none"` (the default — preserves previous behaviour)
 and `"worktree"`. Anything else is rejected at `workflow create` time
-with `unknown isolation mode: %q (want none|worktree)`. Synthetic
-`single:<agent>` workflows (created implicitly by `--agent NAME`) are
-pinned to `"none"` by the engine and cannot be flipped.
+with `unknown isolation mode: %q (want none|worktree)`. The mode is
+editable after create via
+[`autosk workflow update`](#updating-isolation) (with safety
+guards around in-flight tasks). Synthetic `single:<agent>` workflows
+(created implicitly by `--agent NAME`) are pinned to `"none"` by the
+engine and cannot be flipped at any point — not at create time and
+not by `workflow update`.
 
 When a task targets a workflow with `isolation: "worktree"`:
 
@@ -390,6 +394,103 @@ so existing JSON consumers don't see a new always-present key.
 verbatim. The `--json` shape always includes an `isolation` field
 (`"none"` or `"worktree"`); the text form only prints an
 `isolation:` line when the mode is non-default.
+
+#### Updating isolation
+
+The isolation field is editable after `workflow create` via:
+
+```bash
+autosk workflow update <name> --isolation <none|worktree>
+                              [--force] [--dry-run] [--json]
+```
+
+`--isolation` is the only mutable field in v0.4. Other workflow fields
+(`description`, `first_step`, the step graph) are still immutable —
+delete and recreate the workflow if you need to change them.
+
+By default the verb refuses when any task currently references the
+workflow in a non-terminal state (`new` with `workflow_id`, `work`,
+`human`). Each offending id is printed on its own line under
+`non-terminal task in workflow:` and the verb exits non-zero. Pass
+`--force` to bypass the guard with mode-specific extra work.
+
+Safety matrix (rows = current isolation; columns = target + `--force`):
+
+| Current → Target | No non-terminal tasks | Non-terminal tasks, no `--force` | Non-terminal tasks, with `--force` |
+|---|---|---|---|
+| `none` → `none` | no-op | no-op | no-op |
+| `worktree` → `worktree` | no-op | no-op | no-op |
+| `none` → `worktree` | flip + commit | refuse, list tasks | per task: `wt.Ensure(root, id, HEAD)`; atomic rollback on any Ensure failure; then flip + commit |
+| `worktree` → `none` | flip + commit | refuse, list tasks | flip + commit; report carries leftover worktree paths for human cleanup |
+
+The two `--force` paths in detail:
+
+- **`none → worktree --force`** allocates a fresh worktree at `HEAD`
+  for every non-terminal task before flipping the column. If any one
+  `Ensure` fails, every successful Ensure for this run is rolled back
+  via `worktree.OnTerminal` and the column is left unchanged; the
+  error names the failing task and lists the rolled-back set under
+  `rolled back:`.
+- **`worktree → none --force`** does **not** remove existing
+  worktree directories (that would discard uncommitted state). The
+  leftover `(taskID, path)` pairs are printed under
+  `leftover worktree (not removed):`; reap them later with
+  `autosk worktree rm <task-id>` once you have salvaged anything you
+  need.
+
+Synthetic `single:<agent>` workflows are always rejected with
+`cannot update synthetic workflow %q (single:<agent> rows are pinned
+to isolation=none)`, regardless of `--force`.
+
+No-op flips (target equals the current mode) exit 0 without writing
+or committing a doltlite change. `--json` still emits a well-formed
+report with `noop=true`.
+
+`--dry-run` runs the same guard logic and the same Ensure-planning
+logic, but performs no git operations and no DB writes. The printed
+report carries `dry_run=true`. Use it to preview the side-effects
+before committing.
+
+`--json` always emits `UpdateIsolationReport` to stdout — including
+on the refusal / synthetic / Ensure-failure paths. The exit code
+carries the failure signal; the JSON body carries the diagnosis
+(offending task ids, rolled-back ensures, leftover worktrees, etc.).
+Machine consumers should read the body unconditionally and inspect
+the exit code separately.
+
+On a successful flip the verb commits the doltlite write with
+`workflow update <name> isolation=<old>→<new>`.
+
+**Daemon race.** The verb does **not** lock against an in-flight
+daemon. A run that the daemon has already picked up finishes in its
+current cwd; the new mode takes effect on the next step run for each
+affected task. Stop the daemon first (`autosk daemon stop`) if you
+need a strict cutover.
+
+```bash
+# Preview a flip without committing — non-zero exit if the guard
+# would refuse, just like the real run.
+autosk workflow update feature-dev --isolation worktree --force --dry-run
+
+# Actually flip; atomic rollback if any Ensure fails.
+autosk workflow update feature-dev --isolation worktree --force
+
+# Back to non-isolated; the leftover dirs survive and are listed for
+# manual cleanup.
+autosk workflow update feature-dev --isolation none --force
+# workflow feature-dev: isolation worktree → none
+# leftover worktree (not removed):
+#   ask-bea935  /Users/me/.autosk/worktrees/myproj-7a3b9c2e/ask-bea935
+#   ...
+#   (run `autosk worktree rm <task-id>` once you have salvaged uncommitted state)
+```
+
+The legacy escape hatch (`autosk sql --write "UPDATE workflows SET
+isolation = '…'"`) still works but bypasses every safety check, makes
+no worktree-side-effect calls, and is invisible to `autosk lazy` —
+prefer the verb.
+
+Design: [`docs/plans/20260521-Workflow-Update-Isolation.md`](plans/20260521-Workflow-Update-Isolation.md).
 
 #### `enroll --base-ref`
 
