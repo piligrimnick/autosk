@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -160,8 +161,8 @@ func TestRenderTaskDetail_EmptyDescription(t *testing.T) {
 
 // TestRenderTaskDetail_CommentsMultiline pins the comment-rendering
 // contract from acceptance criterion #3: comments are not clipped
-// to 70 chars, multi-line text renders in full, and the "last 5"
-// cap is preserved.
+// to 70 chars, multi-line text renders in full, and EVERY comment
+// in the thread is rendered — there is no implicit cap.
 func TestRenderTaskDetail_CommentsMultiline(t *testing.T) {
 	long := strings.Repeat("word ", 30) // >70 chars on a single line
 	multi := "first line\nsecond line\nthird line"
@@ -179,14 +180,11 @@ func TestRenderTaskDetail_CommentsMultiline(t *testing.T) {
 	out := renderTaskDetail(task, comments, nil, 80)
 	visible := stripANSI(out)
 
-	// Cap kept: the oldest comment (c1, by alice) is dropped; the
-	// last 5 (bob..frank) are present.
-	if strings.Contains(visible, "alice") {
-		t.Errorf("oldest comment leaked past last-5 cap: %q", out)
-	}
-	for _, name := range []string{"bob", "carol", "dave", "eve", "frank"} {
+	// No cap: every author in the seed (including the oldest,
+	// alice) must show up in the rendered output.
+	for _, name := range []string{"alice", "bob", "carol", "dave", "eve", "frank"} {
 		if !strings.Contains(visible, name) {
-			t.Errorf("expected author %q in last-5 comments, got: %q", name, out)
+			t.Errorf("expected author %q in rendered comments, got: %q", name, out)
 		}
 	}
 
@@ -210,6 +208,38 @@ func TestRenderTaskDetail_CommentsMultiline(t *testing.T) {
 	}
 	if strings.Contains(out, "…") && strings.Contains(out, "word…") {
 		t.Errorf("comment appears clipped with ellipsis: %q", out)
+	}
+}
+
+// TestRenderTaskDetail_AllCommentsRendered pins the no-cap contract:
+// seeding a long comment thread (>>5) must render every comment
+// in the Detail pane. Guards against any future regression where
+// the display layer reintroduces a per-task trim.
+func TestRenderTaskDetail_AllCommentsRendered(t *testing.T) {
+	const n = 25
+	comments := make([]datasource.Comment, n)
+	authors := make([]string, n)
+	for i := 0; i < n; i++ {
+		author := fmt.Sprintf("author%02d", i)
+		authors[i] = author
+		comments[i] = datasource.Comment{
+			ID:         int64(i + 1),
+			AuthorName: author,
+			Text:       fmt.Sprintf("body %02d", i),
+			CreatedAt:  fixedTime,
+		}
+	}
+	task := datasource.Task{
+		ID: "ask-allcmt", Title: "f", Status: store.StatusNew,
+		CreatedAt: fixedTime, CommentCount: n,
+	}
+	out := renderTaskDetail(task, comments, nil, 80)
+	visible := stripANSI(out)
+
+	for _, name := range authors {
+		if !strings.Contains(visible, name) {
+			t.Errorf("author %q missing from rendered detail pane (expected all %d comments to render)", name, n)
+		}
 	}
 }
 

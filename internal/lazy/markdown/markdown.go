@@ -87,10 +87,16 @@ type rendererCache struct {
 var cache rendererCache
 
 // maxOutputCacheEntries caps the rendered-output LRU. A typical
-// `autosk lazy` session browses a few dozen tasks, each of which
-// contributes up to ~7 fragments (description + workflow note + up
-// to 5 trailing comments) to the cache; 64 is enough to hold the
-// working set without spending memory on rarely-revisited entries.
+// `autosk lazy` session browses a few dozen tasks; each contributes
+// 1 + N fragments to the cache (description + every non-empty
+// comment in the thread — the Detail pane has no display cap, see
+// renderTaskDetail). 64 is enough to hold the working set on a
+// short-thread workload (a handful of tasks × a few comments each)
+// without spending memory on rarely-revisited entries; on a
+// long-thread workload a single 60+ comment task can saturate the
+// LRU on its own and cause re-renders when revisiting after
+// browsing other tasks. If that becomes a measurable problem,
+// bumping this cap (e.g. 256) is the simplest mitigation.
 //
 // Setting this to 0 effectively disables the LRU — every Render
 // re-runs glamour. Lifted out as a const so a future regression in
