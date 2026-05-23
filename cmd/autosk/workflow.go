@@ -43,7 +43,7 @@ func newWorkflowCmd() *cobra.Command {
 		Short: "Manage workflows (step graphs that agents traverse)",
 		Long: "A workflow is a small directed graph of steps; each step has an agent\n" +
 			"and a list of transitions annotated with prompt_rule text. Define one\n" +
-			"in JSON (see docs/notes/workflow-example.json) and create it with\n" +
+			"in JSON (see docs/examples/workflows/workflow-example.json) and create it with\n" +
 			"`autosk workflow create --file PATH`.",
 	}
 	cmd.AddCommand(

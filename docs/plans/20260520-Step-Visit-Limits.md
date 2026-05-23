@@ -822,7 +822,7 @@ independently.
 | P3 | `workflow.EnterStep` helper + `MaxVisitsExceededError`. | helper unit tests (incl. concurrency). |
 | P4 | Wire `EnterStep` into `advanceTask`, `enroll`, `create --workflow`, `resume --to`. Adjust error messages. | executor cap tests; CLI enroll/create/resume tests. |
 | P5 | `autosk metadata {show,set,unset,reset-visits}` CLI. Extend `autosk show` rendering (human + JSON). | metadata CLI tests; golden updates for `show`. |
-| P6 | Docs: `docs/workflows.md` section, `docs/notes/workflow-example.json` example, `README.md` blurb. | none (docs). |
+| P6 | Docs: `docs/workflows.md` section, `docs/examples/workflows/workflow-example.json` example, `README.md` blurb. | none (docs). |
 | P7 | End-to-end loop test. | one new e2e in `workflow_e2e_test.go`. |
 
 ---

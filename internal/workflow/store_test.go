@@ -41,7 +41,7 @@ func TestCreate_RoundTripExample(t *testing.T) {
 	defer done()
 	ctx := context.Background()
 
-	def, err := workflow.ParseFile("../../docs/notes/workflow-example.json")
+	def, err := workflow.ParseFile("../../docs/examples/workflows/workflow-example.json")
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestCreate_DuplicateNameRejected(t *testing.T) {
 	wf, _, _, done := newWFFixture(t)
 	defer done()
 	ctx := context.Background()
-	def, _ := workflow.ParseFile("../../docs/notes/workflow-example.json")
+	def, _ := workflow.ParseFile("../../docs/examples/workflows/workflow-example.json")
 	if _, err := wf.Create(ctx, def, false); err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestCreate_DefaultIsolationIsNone(t *testing.T) {
 	wf, _, _, done := newWFFixture(t)
 	defer done()
 	ctx := context.Background()
-	def, err := workflow.ParseFile("../../docs/notes/workflow-example.json")
+	def, err := workflow.ParseFile("../../docs/examples/workflows/workflow-example.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func TestList_HidesSyntheticByDefault(t *testing.T) {
 	ctx := context.Background()
 
 	// Real workflow.
-	def, _ := workflow.ParseFile("../../docs/notes/workflow-example.json")
+	def, _ := workflow.ParseFile("../../docs/examples/workflows/workflow-example.json")
 	if _, err := wf.Create(ctx, def, false); err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +412,7 @@ func TestDelete_RefusesInUse(t *testing.T) {
 	wf, _, dl, done := newWFFixture(t)
 	defer done()
 	ctx := context.Background()
-	def, _ := workflow.ParseFile("../../docs/notes/workflow-example.json")
+	def, _ := workflow.ParseFile("../../docs/examples/workflows/workflow-example.json")
 	w, err := wf.Create(ctx, def, false)
 	if err != nil {
 		t.Fatal(err)
@@ -436,7 +436,7 @@ func TestDelete_Ok(t *testing.T) {
 	wf, _, _, done := newWFFixture(t)
 	defer done()
 	ctx := context.Background()
-	def, _ := workflow.ParseFile("../../docs/notes/workflow-example.json")
+	def, _ := workflow.ParseFile("../../docs/examples/workflows/workflow-example.json")
 	if _, err := wf.Create(ctx, def, false); err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +462,7 @@ func TestDelete_AllowsImmediateRecreate(t *testing.T) {
 	wf, _, _, done := newWFFixture(t)
 	defer done()
 	ctx := context.Background()
-	def, _ := workflow.ParseFile("../../docs/notes/workflow-example.json")
+	def, _ := workflow.ParseFile("../../docs/examples/workflows/workflow-example.json")
 	if _, err := wf.Create(ctx, def, false); err != nil {
 		t.Fatalf("Create #1: %v", err)
 	}
@@ -483,7 +483,7 @@ func TestFindStepByName(t *testing.T) {
 	wf, _, _, done := newWFFixture(t)
 	defer done()
 	ctx := context.Background()
-	def, _ := workflow.ParseFile("../../docs/notes/workflow-example.json")
+	def, _ := workflow.ParseFile("../../docs/examples/workflows/workflow-example.json")
 	w, err := wf.Create(ctx, def, false)
 	if err != nil {
 		t.Fatal(err)
