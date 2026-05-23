@@ -79,8 +79,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # download-artifact crossed the Node 24 line later than the rest:
+      # v6 is still on Node 20 (GitHub deprecation warning), v7 is the
+      # first major with `runs.using: node24`. v8 also exists but ships
+      # two behavioral breaks (digest-mismatch now fails, conditional
+      # unzip) that we don't need here.
       - name: download artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           path: dist
           # Flatten per-artifact subdirectories so every binary lands
