@@ -284,6 +284,20 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM workflows WHERE id = ?`, w.ID); err != nil {
 		return fmt.Errorf("delete workflow: %w", err)
 	}
+	// doltlite v0.10.8 workaround: a DELETE against a row with a UNIQUE
+	// constraint (here `workflows.name`) does not always evict the
+	// matching entry from the implicit unique index. A subsequent
+	// INSERT with the same name then trips a phantom UNIQUE violation
+	// even though SELECT-by-name reports the row as gone. REINDEX on
+	// the affected table rebuilds the auto-index from the live row
+	// set and clears the phantom. The workaround is cheap (small
+	// table) and idempotent.
+	//
+	// Tracked alongside the doltlite version pin in the Makefile;
+	// remove once upstream ships a fix and we bump DOLTLITE_VERSION.
+	if _, err := s.db.ExecContext(ctx, `REINDEX workflows`); err != nil {
+		return fmt.Errorf("reindex workflows after delete: %w", err)
+	}
 	return nil
 }
 

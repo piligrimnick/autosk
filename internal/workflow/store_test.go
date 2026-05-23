@@ -449,6 +449,36 @@ func TestDelete_Ok(t *testing.T) {
 	}
 }
 
+// TestDelete_AllowsImmediateRecreate is the regression guard for the
+// doltlite v0.10.8 phantom-unique-index bug: a DELETE against a row
+// with a UNIQUE constraint (workflows.name) used to leave the matching
+// entry in the implicit unique index, so a subsequent Create with the
+// same name tripped ErrAlreadyExist even though GetByName reported the
+// row as gone. Store.Delete works around the bug by running REINDEX
+// on the workflows table immediately after the DELETE; this test
+// pins that behaviour so a future doltlite bump that removes the
+// REINDEX call has to re-prove the round-trip still works.
+func TestDelete_AllowsImmediateRecreate(t *testing.T) {
+	wf, _, _, done := newWFFixture(t)
+	defer done()
+	ctx := context.Background()
+	def, _ := workflow.ParseFile("../../docs/notes/workflow-example.json")
+	if _, err := wf.Create(ctx, def, false); err != nil {
+		t.Fatalf("Create #1: %v", err)
+	}
+	if err := wf.Delete(ctx, def.Name); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	// Sanity: GetByName must NOT see the row.
+	if _, err := wf.GetByName(ctx, def.Name); !errors.Is(err, workflow.ErrNotFound) {
+		t.Fatalf("post-delete GetByName: want ErrNotFound, got %v", err)
+	}
+	// The key assertion: re-Create with the same name must succeed.
+	if _, err := wf.Create(ctx, def, false); err != nil {
+		t.Fatalf("Create #2 after Delete: %v (the phantom-index workaround in Store.Delete may have regressed)", err)
+	}
+}
+
 func TestFindStepByName(t *testing.T) {
 	wf, _, _, done := newWFFixture(t)
 	defer done()
