@@ -670,13 +670,13 @@ These rows have `is_synthetic = 1` and are hidden from
 
 A workflow is a JSON file. Author it, import it, enroll tasks against it.
 
-# 1. Write my-flow.json (shape below).
+### 1. Write my-flow.json (shape below).
 
-# 2. Import it.
+### 2. Import it.
 autosk workflow create --file my-flow.json
 autosk workflow show my-flow
 
-# 3. Use it.
+### 3. Use it.
 autosk create "Implement feature X" --workflow my-flow
 autosk enroll ask-3f9b2c --workflow my-flow
 ```
