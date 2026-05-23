@@ -36,6 +36,8 @@ cancel-job verb. See [Daemon dependency](#daemon-dependency).
 
 ## Layout
 
+![autosk lazy dashboard](lazy-mode.png)
+
 Four left panels stacked vertically, a Detail pane on the right.
 The focused side panel grows accordion-style so the highlighted row
 is always visible. The bottom bar shows project root, daemon health,
