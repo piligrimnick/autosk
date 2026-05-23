@@ -723,21 +723,26 @@ func (o *Offline) UpdatePriority(ctx context.Context, id string, p int) error {
 	return nil
 }
 
-// Enroll attaches an existing task to a workflow's first step.
+// Enroll (re-)attaches an existing task to a workflow's first step.
+//
+// Accepted source statuses: new, human, done, cancel. The only refusal
+// is status='work' — the task is currently owned by the engine and
+// re-stamping its workflow_id / current_step_id underneath would race
+// the daemon; the operator has to go through cancel + reopen + enroll
+// instead. Matches `autosk enroll` on the CLI exactly.
 //
 // Routes through workflow.EnterStep so the step_visits counter on the
-// entry step is bumped and any max_visits cap is enforced — same
-// semantics as `autosk enroll` on the CLI. A cap hit on first enroll
-// is exotic but legitimate (e.g. someone bumped the counter via
-// `metadata set`); we surface it as a clear flash message instead of
-// silently succeeding with a stale counter.
+// entry step is bumped and any max_visits cap is enforced. A cap hit
+// on first enroll is exotic but legitimate (e.g. someone bumped the
+// counter via `metadata set`); we surface it as a clear flash message
+// instead of silently succeeding with a stale counter.
 func (o *Offline) Enroll(ctx context.Context, id, wfName string) error {
 	t, err := o.s.GetTask(ctx, id)
 	if err != nil {
 		return err
 	}
-	if t.Status != store.StatusNew {
-		return fmt.Errorf("enroll: task is not 'new' (status=%s)", t.Status)
+	if t.Status == store.StatusWork {
+		return fmt.Errorf("enroll: task is 'work' (owned by engine); cancel + reopen + enroll to switch workflows")
 	}
 	ws := workflow.New(o.s.DB(), agent.New(o.s.DB()))
 	wf, err := ws.GetByName(ctx, wfName)

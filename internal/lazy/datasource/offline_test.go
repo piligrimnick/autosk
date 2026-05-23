@@ -516,3 +516,157 @@ func TestOfflineEnroll_CapHitOnFirstEntry(t *testing.T) {
 		t.Fatalf("status flipped on cap-fire: %s (want new)", tk.Status)
 	}
 }
+
+// TestOfflineEnroll_FromHuman_OK pins the lazy parity with the CLI's
+// `enroll from human` happy path: a parked task accepts enroll cleanly
+// and lands at the workflow's first step with status flipped back to
+// work. Mirrors cmd/autosk's TestEnroll_FromHuman_OK.
+func TestOfflineEnroll_FromHuman_OK(t *testing.T) {
+	ctx := context.Background()
+	ds, ts, closeFn := newOfflineFx(t)
+	defer closeFn()
+	wf, devID, _ := seedTwoStepWF(t, ts, 5, 5)
+
+	id, err := ds.CreateTask(ctx, "park me", "", 2)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := ds.Enroll(ctx, id, wf.Name); err != nil {
+		t.Fatalf("first enroll: %v", err)
+	}
+	// Force into human without touching current_step_id (the SQL
+	// CHECK allows that combination; only `status='work'` requires
+	// the pointer to be non-null).
+	parked := store.StatusHuman
+	if _, err := ts.UpdateTask(ctx, id, store.TaskPatch{Status: &parked}); err != nil {
+		t.Fatalf("park: %v", err)
+	}
+
+	if err := ds.Enroll(ctx, id, wf.Name); err != nil {
+		t.Fatalf("re-enroll from human: %v", err)
+	}
+	tk, _ := ts.GetTask(ctx, id)
+	if tk.Status != store.StatusWork {
+		t.Fatalf("status: %s (want work)", tk.Status)
+	}
+	if tk.CurrentStepID != devID {
+		t.Fatalf("current_step_id: %q (want dev=%q)", tk.CurrentStepID, devID)
+	}
+	if tk.WorkflowID != wf.ID {
+		t.Fatalf("workflow_id: %q (want %q)", tk.WorkflowID, wf.ID)
+	}
+}
+
+// TestOfflineEnroll_FromDone_OK pins parity with the CLI's
+// `enroll from done` happy path.
+func TestOfflineEnroll_FromDone_OK(t *testing.T) {
+	ctx := context.Background()
+	ds, ts, closeFn := newOfflineFx(t)
+	defer closeFn()
+	wf, devID, _ := seedTwoStepWF(t, ts, 5, 5)
+
+	id, err := ds.CreateTask(ctx, "done me", "", 2)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Force a terminal source state directly — mirrors what
+	// `autosk done` would leave behind (status flipped, no
+	// current_step_id pointer).
+	done := store.StatusDone
+	empty := ""
+	if _, err := ts.UpdateTask(ctx, id, store.TaskPatch{Status: &done, CurrentStepID: &empty}); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+
+	if err := ds.Enroll(ctx, id, wf.Name); err != nil {
+		t.Fatalf("enroll from done: %v", err)
+	}
+	tk, _ := ts.GetTask(ctx, id)
+	if tk.Status != store.StatusWork {
+		t.Fatalf("status: %s (want work)", tk.Status)
+	}
+	if tk.CurrentStepID != devID {
+		t.Fatalf("current_step_id: %q (want dev=%q)", tk.CurrentStepID, devID)
+	}
+	if tk.WorkflowID != wf.ID {
+		t.Fatalf("workflow_id: %q (want %q)", tk.WorkflowID, wf.ID)
+	}
+}
+
+// TestOfflineEnroll_FromCancel_OK pins parity with the CLI's
+// `enroll from cancel` happy path.
+func TestOfflineEnroll_FromCancel_OK(t *testing.T) {
+	ctx := context.Background()
+	ds, ts, closeFn := newOfflineFx(t)
+	defer closeFn()
+	wf, devID, _ := seedTwoStepWF(t, ts, 5, 5)
+
+	id, err := ds.CreateTask(ctx, "cancel me", "", 2)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	cancelled := store.StatusCancel
+	empty := ""
+	if _, err := ts.UpdateTask(ctx, id, store.TaskPatch{Status: &cancelled, CurrentStepID: &empty}); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+
+	if err := ds.Enroll(ctx, id, wf.Name); err != nil {
+		t.Fatalf("enroll from cancel: %v", err)
+	}
+	tk, _ := ts.GetTask(ctx, id)
+	if tk.Status != store.StatusWork {
+		t.Fatalf("status: %s (want work)", tk.Status)
+	}
+	if tk.CurrentStepID != devID {
+		t.Fatalf("current_step_id: %q (want dev=%q)", tk.CurrentStepID, devID)
+	}
+	if tk.WorkflowID != wf.ID {
+		t.Fatalf("workflow_id: %q (want %q)", tk.WorkflowID, wf.ID)
+	}
+}
+
+// TestOfflineEnroll_FromWork_Rejected fences the one remaining
+// status gate. A task currently in work is owned by the engine;
+// lazy must refuse to re-stamp workflow_id / current_step_id
+// underneath it and the surfaced message must hint at the
+// cancel + reopen + enroll detour.
+func TestOfflineEnroll_FromWork_Rejected(t *testing.T) {
+	ctx := context.Background()
+	ds, ts, closeFn := newOfflineFx(t)
+	defer closeFn()
+	wf, devID, _ := seedTwoStepWF(t, ts, 5, 5)
+
+	id, err := ds.CreateTask(ctx, "work me", "", 2)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := ds.Enroll(ctx, id, wf.Name); err != nil {
+		t.Fatalf("first enroll: %v", err)
+	}
+	pre, _ := ts.GetTask(ctx, id)
+	if pre.Status != store.StatusWork {
+		t.Fatalf("setup failed: status=%s (want work)", pre.Status)
+	}
+
+	err = ds.Enroll(ctx, id, wf.Name)
+	if err == nil {
+		t.Fatal("expected enroll on work task to fail")
+	}
+	if !strings.Contains(err.Error(), "work") {
+		t.Errorf("err %q should mention status='work'", err.Error())
+	}
+	if !strings.Contains(err.Error(), "cancel") || !strings.Contains(err.Error(), "reopen") {
+		t.Errorf("err %q should hint at cancel + reopen", err.Error())
+	}
+	post, _ := ts.GetTask(ctx, id)
+	// The task pointer must be byte-identical to the pre-state.
+	if post.WorkflowID != pre.WorkflowID || post.CurrentStepID != pre.CurrentStepID || post.Status != pre.Status {
+		t.Fatalf("work task mutated on refused enroll: pre=%+v post=%+v", pre, post)
+	}
+	// And the entry counter must NOT have bumped a second time.
+	sv, _ := post.Metadata["step_visits"].(map[string]any)
+	if v, _ := sv[devID].(float64); int(v) != 1 {
+		t.Errorf("step_visits[dev]=%v (want 1; refused enroll must not bump)", sv[devID])
+	}
+}
