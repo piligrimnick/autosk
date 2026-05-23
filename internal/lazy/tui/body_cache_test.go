@@ -185,6 +185,83 @@ func TestWriteView_Cache_InvalidatedOnResize(t *testing.T) {
 	}
 }
 
+// TestWriteView_Cache_StoresLineCount pins acceptance criterion 4
+// from ask-beab99: writeView must stamp bodyCacheEntry.lineCount so
+// writeViewSticky can read it instead of running
+// strings.Count(v.Buffer(), "\n") twice per frame on a multi-MB
+// transcript body.
+//
+// The recorded value must agree with viewBufferLineCount(v) for
+// the post-write buffer: writeViewSticky's bottom-anchor math
+// reads the cache as a drop-in replacement, so any drift here
+// silently shifts the sticky-tail origin by one row (= last
+// drawLabeledBox bottom border goes missing). Two body shapes
+// are exercised:
+//   - trailing-newline body ("a\nb\n") — gocui holds the final
+//     '\n' as pendingNewline so v.Buffer() ends up as "a\nb",
+//     and the cached count must reflect that quirk.
+//   - no-trailing-newline body ("a\nb") — v.Buffer() == body
+//     verbatim; cached count == newline count + 1.
+func TestWriteView_Cache_StoresLineCount(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"empty", ""},
+		{"single-line", "alpha"},
+		{"trailing-newline", "alpha\nbeta\n"},
+		{"no-trailing", "alpha\nbeta"},
+		{"five-lines-with-tail", "a\nb\nc\nd\ne\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gu := newHeadlessGui(t, 80, 24)
+			v, err := gu.g.SetView("probe", 0, 0, 40, 10, 0)
+			if err != nil && !isUnknownView(err) {
+				t.Fatalf("SetView: %v", err)
+			}
+			if v == nil {
+				t.Fatal("SetView returned nil view")
+			}
+			gu.writeView("probe", "Probe", tc.body)
+			e, ok := gu.bodyCache["probe"]
+			if !ok {
+				t.Fatalf("bodyCache entry missing after writeView")
+			}
+			want := viewBufferLineCount(v)
+			if e.lineCount != want {
+				t.Errorf("bodyCache lineCount = %d, want %d (matches viewBufferLineCount(v)); body=%q v.Buffer=%q",
+					e.lineCount, want, tc.body, v.Buffer())
+			}
+		})
+	}
+}
+
+// TestWriteView_ReportsChangedFlag pins the bool return contract:
+// writeView returns true on the slow (clear+write) path, false on
+// the cache-hit short-circuit. writeViewSticky's overlay-aware
+// re-anchor depends on a faithful "did we actually write?" signal
+// — though the production path now ignores the bool (the cached
+// lineCount makes the recompute O(1) regardless), keeping the
+// return value honest lets future callers introduce their own
+// short-circuits without re-deriving the diff. The flag is also
+// the natural seam future tests can pin against.
+func TestWriteView_ReportsChangedFlag(t *testing.T) {
+	gu := newHeadlessGui(t, 80, 24)
+	if _, err := gu.g.SetView("probe", 0, 0, 40, 5, 0); err != nil && !isUnknownView(err) {
+		t.Fatalf("SetView: %v", err)
+	}
+	if c := gu.writeView("probe", "Probe", "first"); !c {
+		t.Errorf("first writeView reported changed=false; should have written")
+	}
+	if c := gu.writeView("probe", "Probe", "first"); c {
+		t.Errorf("identical writeView reported changed=true; cache short-circuit broken")
+	}
+	if c := gu.writeView("probe", "Probe", "second"); !c {
+		t.Errorf("differing writeView reported changed=false; body change not detected")
+	}
+}
+
 // TestWriteView_Cache_InvalidatedByLayoutDeleteView is the
 // integration-style counterpart to the recreate test: drive the real
 // layout function through a transition that adds + removes a view

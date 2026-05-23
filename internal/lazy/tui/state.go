@@ -42,11 +42,27 @@ const jobLiveBufCap = 2000
 type jobTranscriptEntry struct {
 	events        []datasource.MessageEvent // archive + live appends, oldest first
 	renderedBoxes []string                  // pre-rendered drawLabeledBox per event
-	renderedWidth int                       // contentW used when boxes were built; invalidates on resize
-	loadedAt      time.Time                 // for TTL on terminal jobs
-	touchedAt     time.Time                 // last access; drives LRU eviction
-	truncated     bool                      // hit live cap, dropped oldest 25%
-	err           error                     // last archive load error (renders as plashka)
+	// joinedBody is the per-frame body string renderJobDetail
+	// concatenates from renderedBoxes — pre-joined as
+	//
+	//	"\n" + boxes[0] + "\n" + "\n" + boxes[1] + "\n" + ...
+	//
+	// so the renderer can emit it with a single b.WriteString
+	// instead of looping over the box slice on every frame. The
+	// loop is O(N) in the number of events and on a long live
+	// session (5000+ events) it was the dominant CPU cost of a
+	// spinner-tick redraw — see ask-beab99 for the benchmark.
+	// joinedDirty is set whenever the boxes slice mutates
+	// (append, truncate, full rebuild); renderJobDetail consults
+	// it AND the renderedWidth / count mismatch as the rebuild
+	// triggers.
+	joinedBody    string
+	joinedDirty   bool
+	renderedWidth int       // contentW used when boxes were built; invalidates on resize
+	loadedAt      time.Time // for TTL on terminal jobs
+	touchedAt     time.Time // last access; drives LRU eviction
+	truncated     bool      // hit live cap, dropped oldest 25%
+	err           error     // last archive load error (renders as plashka)
 }
 
 // panelID is the identifier of one of the four dashboard list

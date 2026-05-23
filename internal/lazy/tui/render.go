@@ -1034,17 +1034,29 @@ func renderJobDetail(j datasource.Job, te *jobTranscriptEntry, width int) string
 
 	// renderedBoxes is the cache the SSE pump appends into; rebuild
 	// if the pane width changed (resize) OR the slice is missing /
-	// stale.
-	if te.renderedWidth != contentW || len(te.renderedBoxes) != len(te.events) {
+	// stale. rebuildTranscriptBoxes folds the joinedBody rebuild
+	// into the same pass.
+	switch {
+	case te.renderedWidth != contentW || len(te.renderedBoxes) != len(te.events):
 		rebuildTranscriptBoxes(te, contentW)
+	case te.joinedDirty:
+		// Append-only path: boxes are current at contentW but the
+		// joined body is stale (one or more new boxes since the
+		// last join). One O(N) pass over the box slice rebuilds
+		// the body — but only once per SSE burst, not once per
+		// frame.
+		rebuildJoinedBody(te)
 	}
 
 	if te.truncated {
 		b.WriteString("\n" + styleMuted.Render("(transcript truncated; older events dropped to cap memory)") + "\n")
 	}
-	for _, box := range te.renderedBoxes {
-		b.WriteString("\n" + box + "\n")
-	}
+	// Single WriteString over the pre-joined body. The legacy
+	// per-event loop (b.WriteString("\n" + box + "\n") for each
+	// box) was O(N) in events on EVERY render call — including
+	// the ~10/sec spinner-tick frames that don't actually mutate
+	// the transcript. See ask-beab99 for the benchmark.
+	b.WriteString(te.joinedBody)
 	return b.String()
 }
 

@@ -100,6 +100,17 @@ func appendTranscriptEvent(te *jobTranscriptEntry, ev datasource.MessageEvent, c
 	te.events = append(te.events, ev)
 	box := renderTranscriptEventBox(ev, contentW)
 	te.renderedBoxes = append(te.renderedBoxes, box)
+	// joinedBody needs a rebuild — do NOT extend in place via
+	// joinedBody = joinedBody + "\n" + box + "\n": that reallocates
+	// the full prefix on every append and degrades the live-pump
+	// path to O(N²) over the session. We mark dirty and let
+	// renderJobDetail rebuild the whole joined string in one
+	// strings.Join pass on the next frame (which only fires when
+	// the Detail pane is actually visible). The dirty flag set
+	// here covers BOTH the plain append AND the cap-trim path
+	// below — the trim mutates renderedBoxes too, but dirty is
+	// already true so no second assignment is needed.
+	te.joinedDirty = true
 	if n := len(te.events); n > jobLiveBufCap {
 		keep := jobLiveBufCap - jobLiveBufCap/4 // drop oldest 25%
 		newEvs := make([]datasource.MessageEvent, keep)
@@ -115,6 +126,12 @@ func appendTranscriptEvent(te *jobTranscriptEntry, ev datasource.MessageEvent, c
 // rebuildTranscriptBoxes re-renders every per-event box at the
 // given contentW. Called when the pane width changes (resize) and
 // after loadJobArchive replaces te.events.
+//
+// Also rebuilds te.joinedBody in the same pass and clears the
+// dirty flag — a resize / archive replace is the worst case for
+// the join (every box is fresh string content), and folding it in
+// here saves a second loop over te.renderedBoxes when
+// renderJobDetail next runs.
 func rebuildTranscriptBoxes(te *jobTranscriptEntry, contentW int) {
 	if te == nil {
 		return
@@ -127,6 +144,44 @@ func rebuildTranscriptBoxes(te *jobTranscriptEntry, contentW int) {
 		te.renderedBoxes = append(te.renderedBoxes, renderTranscriptEventBox(te.events[i], contentW))
 	}
 	te.renderedWidth = contentW
+	rebuildJoinedBody(te)
+}
+
+// rebuildJoinedBody refreshes te.joinedBody from te.renderedBoxes in
+// a single strings.Builder pass and clears the dirty flag. The
+// emitted shape mirrors renderJobDetail's legacy per-event loop —
+//
+//	"\n" + box0 + "\n" + "\n" + box1 + "\n" + ...
+//
+// — so a resize / append / archive-replace produces a string the
+// renderer can flush with a single WriteString. Empty boxes slice
+// → empty body (no leading "\n" so the caller's preceding header
+// section keeps its own trailing newline budget).
+//
+// Pre-sizes the Builder via Grow(sum + 2*N) so the typical 5000-
+// event session avoids the usual doubling reallocs as the body
+// grows.
+func rebuildJoinedBody(te *jobTranscriptEntry) {
+	if te == nil {
+		return
+	}
+	te.joinedDirty = false
+	if len(te.renderedBoxes) == 0 {
+		te.joinedBody = ""
+		return
+	}
+	total := 0
+	for i := range te.renderedBoxes {
+		total += len(te.renderedBoxes[i]) + 2 // leading "\n" + trailing "\n"
+	}
+	var b strings.Builder
+	b.Grow(total)
+	for i := range te.renderedBoxes {
+		b.WriteByte('\n')
+		b.WriteString(te.renderedBoxes[i])
+		b.WriteByte('\n')
+	}
+	te.joinedBody = b.String()
 }
 
 // renderTranscriptEventBox renders one MessageEvent as a labeled

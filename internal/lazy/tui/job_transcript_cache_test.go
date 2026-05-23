@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,11 +121,44 @@ func TestAppendTranscriptEvent_HitCapDropsOldest(t *testing.T) {
 	if got := te.events[0].Text; got != wantFirst {
 		t.Errorf("first surviving event = %q, want %q", got, wantFirst)
 	}
+	// Cap-trim invalidates joinedBody. After a subsequent
+	// rebuildJoinedBody (the renderer's deferred path on the next
+	// frame), the joined string must contain ONLY the surviving
+	// 75% of boxes — not the dropped 25%. Pin the actual content
+	// invariant, not just the dirty flag: a future regression that
+	// keeps stale joined content (e.g. rebuilds from a wrong slice
+	// offset) would otherwise slip through.
+	if !te.joinedDirty {
+		t.Errorf("joinedDirty not set after cap-trim; renderer won't rebuild joinedBody")
+	}
+	rebuildJoinedBody(te)
+	// The first dropped event was "event 0". After the rebuild the
+	// joined body must not contain it. Use "event 0 " (trailing
+	// space) so we don't get a false positive from "event 0..."
+	// substrings of "event 0X" for X in 0..9 in the post-cap range.
+	if strings.Contains(te.joinedBody, "event 0 ") {
+		t.Errorf("joinedBody still contains pre-truncate \"event 0 \" after rebuild")
+	}
+	wantSurvivor := fmt.Sprintf("event %d ", dropped)
+	if !strings.Contains(te.joinedBody, wantSurvivor) {
+		t.Errorf("joinedBody missing first surviving event %q after rebuild", wantSurvivor)
+	}
 }
 
 // TestRebuildTranscriptBoxes_OnResize pins the per-event rebuild:
 // rebuildTranscriptBoxes(te, w) re-renders every box at the new
-// width and updates te.renderedWidth.
+// width and updates te.renderedWidth. It MUST also rebuild
+// te.joinedBody alongside renderedBoxes (acceptance criterion 3
+// from ask-beab99: a resize-driven width change invalidates both).
+// Without the joinedBody half of the contract, a regression that
+// drops the rebuildJoinedBody call from rebuildTranscriptBoxes
+// would leave joinedBody pointing at OLD-width bytes and
+// joinedDirty==false — renderJobDetail would take the cached
+// path and emit old-width content at the new pane width with no
+// test failure. Pinning joinedBody + joinedDirty here closes that
+// gap as a unit test (the renderer-level test only covers
+// joinedDirty==true / width-already-matching, not the resize
+// path).
 func TestRebuildTranscriptBoxes_OnResize(t *testing.T) {
 	te := &jobTranscriptEntry{}
 	for i := 0; i < 5; i++ {
@@ -135,6 +169,18 @@ func TestRebuildTranscriptBoxes_OnResize(t *testing.T) {
 		}, 40)
 	}
 	beforeFirst := te.renderedBoxes[0]
+	// Prime joinedBody at the OLD width so we can prove the resize
+	// invalidated it (and rebuilt it at the new width). Also flip
+	// joinedDirty to false so we can detect the rebuild clearing it.
+	rebuildJoinedBody(te)
+	oldJoined := te.joinedBody
+	if oldJoined == "" {
+		t.Fatalf("prime: rebuildJoinedBody produced empty joinedBody for 5 events")
+	}
+	if te.joinedDirty {
+		t.Fatalf("prime: rebuildJoinedBody must clear joinedDirty")
+	}
+
 	rebuildTranscriptBoxes(te, 100)
 	if te.renderedWidth != 100 {
 		t.Errorf("renderedWidth = %d, want 100", te.renderedWidth)
@@ -144,6 +190,19 @@ func TestRebuildTranscriptBoxes_OnResize(t *testing.T) {
 	}
 	if te.renderedBoxes[0] == beforeFirst {
 		t.Errorf("expected first box to re-render at width=100, got identical bytes")
+	}
+	// Acceptance criterion 3: joinedBody rebuilt in the same pass.
+	if te.joinedDirty {
+		t.Errorf("rebuildTranscriptBoxes must clear joinedDirty (criterion 3); still true after resize")
+	}
+	if te.joinedBody == "" {
+		t.Errorf("rebuildTranscriptBoxes must rebuild joinedBody (got empty)")
+	}
+	if te.joinedBody == oldJoined {
+		t.Errorf("joinedBody not rebuilt at new width: byte-identical to old-width version")
+	}
+	if !strings.Contains(te.joinedBody, te.renderedBoxes[0]) {
+		t.Errorf("joinedBody does not include the rebuilt first box content")
 	}
 }
 

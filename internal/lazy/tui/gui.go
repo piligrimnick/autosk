@@ -113,14 +113,25 @@ type Gui struct {
 	lastDetailKey string
 }
 
-// bodyCacheEntry is one entry in Gui.bodyCache: the body string and
-// the view dimensions it was paired with when it was committed. We
-// store dimensions because gocui's SetView calls clearViewLines()
+// bodyCacheEntry is one entry in Gui.bodyCache: the body string,
+// the view dimensions it was paired with when it was committed,
+// and the buffer-line count gocui will render for that body.
+//
+// We store dimensions because gocui's SetView calls clearViewLines()
 // internally on resize, so a stale-body short-circuit after a
 // resize would leave the pane visibly blank.
+//
+// lineCount is the viewBufferLineCount of the buffer AS IT EXISTS
+// in gocui after the last real Write — i.e. strings.Count(body,
+// "\n")+1 when body is non-empty. writeViewSticky reads it instead
+// of calling strings.Count on v.Buffer() twice per frame (the
+// previous shape did that even on cache-hit frames where the body
+// was byte-identical to last time; see ask-beab99 for the
+// benchmark). 0 means "no body committed" / "empty buffer".
 type bodyCacheEntry struct {
 	body           string
 	x0, y0, x1, y1 int
+	lineCount      int
 }
 
 // adaptiveDelay returns the next ticker delay given a base cadence and
@@ -931,10 +942,17 @@ func (gu *Gui) innerWidth(name string) int {
 // are substantial. Title and Wrap are still pushed onto the view
 // every call because they're cheap field assignments and not
 // covered by the body cache.
-func (gu *Gui) writeView(name, title, body string) {
+//
+// Returns true when the body / dimensions ACTUALLY changed (we
+// took the slow path and ran v.Clear()+v.Write()), false on a
+// cache-hit short-circuit. writeViewSticky reads this to skip its
+// own follow-up viewBufferLineCount calls — on a stable winDetail
+// (no live events, no resize) the spinner-tick path now does no
+// O(N) work at all past the body-string equality check.
+func (gu *Gui) writeView(name, title, body string) bool {
 	v, err := gu.g.View(name)
 	if err != nil {
-		return
+		return false
 	}
 	x0, y0, x1, y1 := v.Dimensions()
 	if e, ok := gu.bodyCache[name]; ok && e.body == body && e.x0 == x0 && e.y0 == y0 && e.x1 == x1 && e.y1 == y1 {
@@ -944,7 +962,7 @@ func (gu *Gui) writeView(name, title, body string) {
 			v.Title = title
 		}
 		v.Wrap = false
-		return
+		return false
 	}
 	v.Clear()
 	if title != "" {
@@ -955,7 +973,46 @@ func (gu *Gui) writeView(name, title, body string) {
 	if gu.bodyCache == nil {
 		gu.bodyCache = make(map[string]bodyCacheEntry)
 	}
-	gu.bodyCache[name] = bodyCacheEntry{body: body, x0: x0, y0: y0, x1: x1, y1: y1}
+	// Cache the line count alongside the body. viewBufferLineCount
+	// over v.Buffer() would be O(N) over the freshly-rendered
+	// (ANSI-laden) buffer; counting newlines in the source body is
+	// cheaper AND lets writeViewSticky reuse the count without
+	// re-scanning.
+	//
+	// The trailing '\n' on a non-editable view is held by gocui as
+	// pendingNewline (view.go::write: "if until>0 && p[until-1]=='\n'
+	// then pendingNewline=true; until--") so it does NOT add a line
+	// to v.lines until the NEXT write. v.Buffer() reflects v.lines
+	// only, which means the source body and v.Buffer() differ by
+	// one trailing newline when the body ends with '\n'. The
+	// trim+count formula below matches what viewBufferLineCount(v)
+	// would return after this write, so writeViewSticky can read
+	// the cached value instead of re-scanning the buffer twice
+	// per frame.
+	gu.bodyCache[name] = bodyCacheEntry{body: body, x0: x0, y0: y0, x1: x1, y1: y1, lineCount: bodyLineCount(body)}
+	return true
+}
+
+// bodyLineCount predicts viewBufferLineCount(v) for the v.Buffer()
+// gocui will hold after Write(body) on a non-editable view.
+// Mirrors viewBufferLineCount's "0 for empty, otherwise newline
+// count + 1" semantic, modulo the trailing-newline pendingNewline
+// quirk: gocui holds a final '\n' as pendingNewline so it does
+// NOT contribute a line to v.lines (and therefore to v.Buffer())
+// until the next Write fires. The trim below mirrors that quirk
+// so the cached count agrees byte-for-byte with what
+// viewBufferLineCount would return.
+func bodyLineCount(body string) int {
+	if body == "" {
+		return 0
+	}
+	if body[len(body)-1] == '\n' {
+		body = body[:len(body)-1]
+	}
+	if body == "" {
+		return 0
+	}
+	return strings.Count(body, "\n") + 1
 }
 
 // invalidateBodyCache drops the cached body for name, if any. Used
@@ -1029,7 +1086,18 @@ func (gu *Gui) writeViewSticky(name, title, body string) {
 	if fullH < 1 {
 		fullH = 1
 	}
-	prevLines := viewBufferLineCount(v)
+	// prevLines comes from the bodyCache when available — that's
+	// the line count writeView stamped after the last actual write.
+	// The viewBufferLineCount fallback covers two cases: the very
+	// first writeViewSticky call (before any bodyCache entry has
+	// been stamped) and a layout-driven invalidateBodyCache that
+	// dropped the entry after a view recreate / DeleteView.
+	prevLines := 0
+	if e, ok := gu.bodyCache[name]; ok {
+		prevLines = e.lineCount
+	} else {
+		prevLines = viewBufferLineCount(v)
+	}
 	// First frame OR user is at (or past) the bottom → sticky.
 	// `oy + fullH >= prevLines` is true exactly when the visible
 	// region [oy, oy+fullH) already covers the last line index
@@ -1044,19 +1112,29 @@ func (gu *Gui) writeViewSticky(name, title, body string) {
 		return
 	}
 	// writeView may have short-circuited (body unchanged); in that
-	// case the buffer is still the previous body and the origin is
-	// already where the user wanted it, so the recompute below is a
-	// no-op. When the body did change, we recompute the bottom-anchor
-	// origin against the NEW line count. The TARGET uses effective
-	// inner height so the last line of content lands just above the
-	// overlay (if any).
+	// case the buffer is still the previous body and the cached
+	// lineCount is still accurate. We deliberately DO NOT early-
+	// return on the short-circuit path: the winJobInput overlay can
+	// appear / disappear between two byte-identical body writes
+	// (e.g. cursor crosses from a terminal job to a non-terminal
+	// one), and that shrinks / grows the effective inner height
+	// used by the post-write target below — pinned by
+	// TestStickyTail_OverlayAppears_TailStaysVisible. The recompute
+	// is still O(1) because we read the line count from bodyCache
+	// (stamped by writeView, no second strings.Count pass over
+	// the ANSI-laden buffer).
 	var h int
 	if name == winDetail {
 		h = gu.detailEffectiveInnerH()
 	} else {
 		h = fullH
 	}
-	newLines := viewBufferLineCount(v)
+	newLines := 0
+	if e, ok := gu.bodyCache[name]; ok {
+		newLines = e.lineCount
+	} else {
+		newLines = viewBufferLineCount(v)
+	}
 	target := newLines - h
 	if target < 0 {
 		target = 0
