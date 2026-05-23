@@ -22,8 +22,10 @@ $ autosk enroll ask-3f9b2c --agent @your-org/coding-agent
 
 ## Prerequisites
 
-- **Build the binary** from the autosk checkout:
+- **Install autosk** — either via Homebrew or from source:
 ```bash
+brew install wierdbytes/autosk/autosk    # macOS / Linux
+# or from a local checkout:
 make install
 ```
 
