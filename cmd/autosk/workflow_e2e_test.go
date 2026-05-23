@@ -303,7 +303,7 @@ func TestE2E_FeatureDev_HumanFeedback(t *testing.T) {
 	defer stack.close()
 	ctx := context.Background()
 
-	def, err := workflow.ParseFile("../../docs/notes/workflow-example.json")
+	def, err := workflow.ParseFile("../../docs/examples/workflows/workflow-example.json")
 	if err != nil {
 		t.Fatal(err)
 	}

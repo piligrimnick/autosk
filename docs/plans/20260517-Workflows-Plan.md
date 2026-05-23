@@ -27,7 +27,7 @@ We introduce two first-class concepts:
 The CLI shape we want to ship:
 
 ```bash
-autosk workflow create --file docs/notes/workflow-example.json
+autosk workflow create --file docs/examples/workflows/workflow-example.json
 autosk create "Implement auth module with jwt..." --workflow feature-dev
 # → status=in_workflow, current_step=<first step of feature-dev>
 # → daemon picks it up, spawns the step's agent
@@ -476,7 +476,7 @@ The primary entry point is `autosk create --workflow|--agent` (or
 
 ### 6.2 `workflow create --file` input format
 
-The JSON in `docs/notes/workflow-example.json` is the v1 input. We fix the
+The JSON in `docs/examples/workflows/workflow-example.json` is the v1 input. We fix the
 typo at the schema level (`next_steps`, not `next_setps`) and add `description`:
 
 ```jsonc
@@ -549,7 +549,7 @@ noted.
 | **W7** | **`step next` pi-extension tool** | autosk pi-extension exposes `autosk step next <id> --to <name>`. CLI validates the transition target against the current step's outgoing edges and inserts into `step_signals`. Integration test with fake pi. |
 | **W8** | **Poller** | Daemon polls `in_workflow` tasks where current step's agent is non-human and feeds the scheduler. Restart recovery: in-flight runs marked `failed/daemon_restart`; tasks stay `in_workflow` and get re-picked. |
 | **W9** | **End-to-end test** | The acceptance scenario in §9 runs green against a fake pi that emits canned transition signals. |
-| **W10** | **Docs + AGENTS.md update + workflow example** | `docs/workflows.md` (concept + CLI), refreshed `docs/notes/workflow-example.json` (typo fixed), AGENTS.md gains "when running inside a step, call `autosk step next` before stopping". Update README roadmap section. |
+| **W10** | **Docs + AGENTS.md update + workflow example** | `docs/workflows.md` (concept + CLI), refreshed `docs/examples/workflows/workflow-example.json` (typo fixed), AGENTS.md gains "when running inside a step, call `autosk step next` before stopping". Update README roadmap section. |
 
 Each phase ends with a runnable artifact and lands as one PR. The
 `(P)`-items confirmed in W0 are the contract; later phases don't revisit
@@ -572,7 +572,7 @@ system_prompt = "You are the developer agent."
 EOF
 # (same for code-reviewer, task-validator)
 
-autosk workflow create --file docs/notes/workflow-example.json
+autosk workflow create --file docs/examples/workflows/workflow-example.json
 # wf-XXXX
 
 # Start a task in the workflow

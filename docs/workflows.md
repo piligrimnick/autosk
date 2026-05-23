@@ -130,7 +130,7 @@ A workflow is a small directed graph of steps. Define it as a JSON file
 and import:
 
 ```bash
-autosk workflow create --file docs/notes/workflow-example.json
+autosk workflow create --file docs/examples/workflows/workflow-example.json
 ```
 
 #### Shipped default: `feature-dev-generic`
@@ -616,7 +616,7 @@ this path with a warning.
   done.
 
 Design: [`docs/plans/20260521-Worktree-Isolation.md`](plans/20260521-Worktree-Isolation.md).
-Example: [`docs/notes/workflow-isolated-example.json`](notes/workflow-isolated-example.json).
+Example: [`docs/examples/workflows/workflow-isolated-example.json`](examples/workflows/workflow-isolated-example.json).
 
 ### Task metadata
 
@@ -663,7 +663,7 @@ A few notes:
   cap; bare `N` (no denominator) means the step is uncapped.
   `autosk show --json` includes the raw `metadata` object verbatim.
 
-See [`docs/notes/workflow-example.json`](notes/workflow-example.json)
+See [`docs/examples/workflows/workflow-example.json`](examples/workflows/workflow-example.json)
 for a working example with caps.
 
 ### Per-step agent overrides
@@ -811,9 +811,9 @@ autosk enroll ask-3f9b2c --workflow my-flow
 ```
 
 A worked example lives at
-[`docs/notes/workflow-example.json`](notes/workflow-example.json);
+[`docs/examples/workflows/workflow-example.json`](examples/workflows/workflow-example.json);
 the isolated variant is
-[`docs/notes/workflow-isolated-example.json`](notes/workflow-isolated-example.json).
+[`docs/examples/workflows/workflow-isolated-example.json`](examples/workflows/workflow-isolated-example.json).
 
 ### What you can do in a workflow
 
@@ -849,7 +849,7 @@ autosk agent install @autosk/task-validator
 # (each install reads the package's autosk.agent block from
 #  ~/.autosk/packages/node_modules/<pkg>/package.json and registers it)
 
-autosk workflow create --file docs/notes/workflow-example.json
+autosk workflow create --file docs/examples/workflows/workflow-example.json
 # wf-XXXX
 
 # 2. Create a task in the workflow.
@@ -1037,5 +1037,5 @@ every end-of-turn.
 - Worktree isolation: [`docs/plans/20260521-Worktree-Isolation.md`](plans/20260521-Worktree-Isolation.md)
 - Daemon details: [`docs/daemon.md`](daemon.md)
 - pi-extension surface: [`extension/src/`](../extension/src/)
-- Example workflow: [`docs/notes/workflow-example.json`](notes/workflow-example.json)
-- Isolated example: [`docs/notes/workflow-isolated-example.json`](notes/workflow-isolated-example.json)
+- Example workflow: [`docs/examples/workflows/workflow-example.json`](examples/workflows/workflow-example.json)
+- Isolated example: [`docs/examples/workflows/workflow-isolated-example.json`](examples/workflows/workflow-isolated-example.json)
