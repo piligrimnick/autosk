@@ -670,18 +670,13 @@ These rows have `is_synthetic = 1` and are hidden from
 
 A workflow is a JSON file. Author it, import it, enroll tasks against it.
 
-```bash
-# 1. Install the agent packages your steps will reference.
-autosk agent install @your-org/developer
-autosk agent install @your-org/reviewer
+# 1. Write my-flow.json (shape below).
 
-# 2. Write my-flow.json (shape below).
-
-# 3. Import it.
+# 2. Import it.
 autosk workflow create --file my-flow.json
 autosk workflow show my-flow
 
-# 4. Use it.
+# 3. Use it.
 autosk create "Implement feature X" --workflow my-flow
 autosk enroll ask-3f9b2c --workflow my-flow
 ```
