@@ -76,8 +76,13 @@ FETCH_SCRIPT := $(CURDIR)/scripts/fetch-doltlite.sh
 GO_TAGS := libsqlite3
 
 # CGO flags wire mattn/go-sqlite3 to libdoltlite.
+#
+# -lm is required on Linux: libdoltlite.a pulls in sqlite3 math functions
+# (log/log2/pow/sin/cos/exp/sqrt/expm1/...) and prolly_hash's Weibull check,
+# which on glibc live in libm. macOS folds libm into libSystem, so -lm is a
+# harmless no-op there.
 export CGO_CFLAGS  := -I$(DOLTLITE_DIR)
-export CGO_LDFLAGS := $(DOLTLITE_DIR)/libdoltlite.a -lz -lpthread
+export CGO_LDFLAGS := $(DOLTLITE_DIR)/libdoltlite.a -lz -lpthread -lm
 
 GO       ?= go
 BIN_DIR  := bin
