@@ -264,6 +264,74 @@ func TestWorkflowUpdate_Synthetic_AlwaysRejected(t *testing.T) {
 	}
 }
 
+// TestWorkflowUpdate_JSON_RefusalEmitsReport pins the FR10 contract
+// on the refusal path: --json always prints the
+// UpdateIsolationReport to stdout (populated with the offending
+// non-terminal task ids), and the CLI still exits non-zero so
+// tooling can read both pieces. Without this contract a wrapper
+// like `autosk workflow update ... --json | jq .non_terminal_tasks`
+// would get an empty stdout.
+func TestWorkflowUpdate_JSON_RefusalEmitsReport(t *testing.T) {
+	root := updateFixture(t, "wu-json-refuse", "none")
+	id := createBareTask(t, root, "refuse me")
+	if _, err := runRoot(t, root, "enroll", id, "--workflow", "wu-json-refuse"); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+	out, err := runRoot(t, root, "--json", "workflow", "update", "wu-json-refuse", "--isolation", "worktree")
+	if err == nil {
+		t.Fatal("expected refusal error")
+	}
+	var doc map[string]any
+	if jerr := json.Unmarshal([]byte(strings.TrimSpace(out)), &doc); jerr != nil {
+		t.Fatalf("decode json: %v\nout=%s", jerr, out)
+	}
+	if doc["workflow"] != "wu-json-refuse" {
+		t.Errorf("workflow: %v", doc["workflow"])
+	}
+	nts, _ := doc["non_terminal_tasks"].([]any)
+	if len(nts) != 1 || nts[0] != id {
+		t.Errorf("non_terminal_tasks: %v (want [%s])", nts, id)
+	}
+	// Sentinel-preservation: in --json mode the structured details
+	// (offending task ids) live in the JSON report; the error text
+	// is the raw sentinel itself so callers can still pattern-match
+	// the failure with errors.Is upstream.
+	if !strings.Contains(err.Error(), "non-terminal tasks") {
+		t.Errorf("sentinel text missing from err: %v", err)
+	}
+}
+
+// TestWorkflowUpdate_JSON_SyntheticEmitsReport pins the same
+// contract for the synthetic-rejection branch: a synthetic workflow
+// is always rejected, --json still emits the (mostly-empty) report
+// so the wrapping tool sees the workflow / from / to triple, and
+// the error message preserves the sentinel.
+func TestWorkflowUpdate_JSON_SyntheticEmitsReport(t *testing.T) {
+	root := makeIsolatedProject(t)
+	if _, err := runRoot(t, root, "agent", "install", "@autosk/dev-fixture"); err != nil {
+		t.Fatalf("agent install: %v", err)
+	}
+	id := createBareTask(t, root, "synth driver json")
+	if _, err := runRoot(t, root, "enroll", id, "--agent", "@autosk/dev-fixture"); err != nil {
+		t.Fatalf("enroll --agent: %v", err)
+	}
+	out, err := runRoot(t, root, "--json", "workflow", "update",
+		"single:@autosk/dev-fixture", "--isolation", "worktree")
+	if err == nil {
+		t.Fatal("expected synthetic rejection")
+	}
+	var doc map[string]any
+	if jerr := json.Unmarshal([]byte(strings.TrimSpace(out)), &doc); jerr != nil {
+		t.Fatalf("decode json: %v\nout=%s", jerr, out)
+	}
+	if doc["workflow"] != "single:@autosk/dev-fixture" {
+		t.Errorf("workflow: %v", doc["workflow"])
+	}
+	if !strings.Contains(err.Error(), "synthetic workflow") {
+		t.Errorf("sentinel text missing from err: %v", err)
+	}
+}
+
 // TestWorkflowUpdate_WorktreeToNone_Force_ReportsLeftovers pins FR7:
 // the leftover worktree paths are printed and the directory is NOT
 // removed (so subsequent `worktree list` still shows it).

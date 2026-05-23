@@ -101,11 +101,38 @@ type Workflow struct {
 	// in the on-disk row collapses to "none" at scan time. Surfaced on
 	// the Workflows panel ([wt] marker) and the workflow inspector.
 	Isolation string
-	// NonTerminalTaskCount is the number of tasks currently in a
-	// non-terminal state ({new+workflow_id, work, human}) pointing at
-	// this workflow. Lazy's isolation popup uses it to phrase the
-	// confirm body ("3 task(s) will get a fresh worktree...").
+	// NonTerminalTaskCount is the TOTAL number of tasks currently in a
+	// non-terminal state ({new, work, human}) pointing at this
+	// workflow. The workflow inspector uses it to render the
+	// "(N non-terminal task(s) currently use this)" hint. Lazy's
+	// isolation popup uses it as the denominator when rendering the
+	// per-task list with a cap-at-NonTerminalTaskSampleSize suffix.
 	NonTerminalTaskCount int
+	// NonTerminalTasks is a bounded sample (first
+	// NonTerminalTaskSampleSize by id ASC) of the workflow's
+	// non-terminal tasks. Lazy's isolation confirm popup
+	// enumerates this list (plan §6.3 + §8 risk #4: cap at 10 with
+	// `... and N more` suffix). The full list is always available
+	// via `autosk list --workflow <name>`.
+	NonTerminalTasks []NonTerminalTaskRef
+}
+
+// NonTerminalTaskSampleSize bounds Workflow.NonTerminalTasks (the
+// sample lazy renders in the isolation confirm popup body). Sized to
+// fit comfortably in the popup before the `... and N more` suffix
+// kicks in; pinned in popup_isolation_test.go.
+const NonTerminalTaskSampleSize = 10
+
+// NonTerminalTaskRef is one row of Workflow.NonTerminalTasks — the
+// information the isolation confirm popup needs to render one
+// "  - <id> (status=..., current step=...)" line per affected task.
+// Separate from TaskRef (which is used for blocker references and
+// intentionally carries only id+status) so the slimmer blocker
+// renderer doesn't grow a StepName field it doesn't use.
+type NonTerminalTaskRef struct {
+	ID       string
+	Status   store.Status
+	StepName string
 }
 
 // WorkflowStep is one row of a workflow's step graph.

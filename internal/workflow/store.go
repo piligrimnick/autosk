@@ -437,6 +437,20 @@ func (s *Store) UpdateIsolation(
 		return report, fmt.Errorf("%w (%d task(s))", ErrNonTerminalTasks, len(nonTerminal))
 	}
 
+	// Per-task side effects only matter when there is at least one
+	// non-terminal task AND the transition actually moves between
+	// modes (the noop guard above already short-circuited
+	// no-op flips). Hoist precondition checks here so the dry-run
+	// path (which renders the plan to the operator) errors
+	// loudly instead of shipping an empty Path that the operator
+	// cannot act on. Mirrors the predecessor plan's contract that
+	// a worktree.PathFor failure is an environment problem (HOME
+	// unset, project root not resolvable) and should never be
+	// silently masked.
+	if len(nonTerminal) > 0 && strings.TrimSpace(opts.ProjectRoot) == "" {
+		return report, fmt.Errorf("isolation flip requires a non-empty ProjectRoot when %d non-terminal task(s) reference the workflow", len(nonTerminal))
+	}
+
 	// Plan per-task side effects.
 	var plannedEnsures []EnsureRecord
 	var plannedLeftovers []LeftoverWorktree
@@ -446,9 +460,7 @@ func (s *Store) UpdateIsolation(
 		for _, tid := range nonTerminal {
 			path, perr := worktree.PathFor(opts.ProjectRoot, tid)
 			if perr != nil {
-				// Fall back to an empty path in the plan; the actual Ensure
-				// call (or dry-run) will surface the real error.
-				path = ""
+				return report, fmt.Errorf("plan worktree path for task %s: %w", tid, perr)
 			}
 			plannedEnsures = append(plannedEnsures, EnsureRecord{
 				TaskID: tid,
@@ -460,7 +472,7 @@ func (s *Store) UpdateIsolation(
 		for _, tid := range nonTerminal {
 			path, perr := worktree.PathFor(opts.ProjectRoot, tid)
 			if perr != nil {
-				path = ""
+				return report, fmt.Errorf("plan worktree path for task %s: %w", tid, perr)
 			}
 			plannedLeftovers = append(plannedLeftovers, LeftoverWorktree{
 				TaskID: tid,
@@ -485,7 +497,10 @@ func (s *Store) UpdateIsolation(
 		if opts.Worktrees == nil {
 			return report, fmt.Errorf("%w: nil worktree.Manager", ErrEnsureFailed)
 		}
-		if opts.ProjectRoot == "" {
+		// opts.ProjectRoot is guaranteed non-empty by the precondition
+		// hoist above; this defensive guard preserves the explicit
+		// ErrEnsureFailed surface if the precondition is ever moved.
+		if strings.TrimSpace(opts.ProjectRoot) == "" {
 			return report, fmt.Errorf("%w: empty project root", ErrEnsureFailed)
 		}
 		var applied []EnsureRecord
@@ -532,11 +547,11 @@ func (s *Store) UpdateIsolation(
 // workflow in a non-terminal state, ordered by id ASC for
 // deterministic rendering.
 //
-// The match set is:
-//
-//   - status='new'   AND workflow_id IS NOT NULL  (enrolled-but-not-started)
-//   - status='work'  AND workflow_id IS NOT NULL
-//   - status='human' AND workflow_id IS NOT NULL
+// The match set is exactly the SQL: every row where
+// workflow_id = <wf-id> AND status IN ('new','work','human').
+// workflowID is the row's PK and is never NULL or empty (callers
+// pass the value pulled from the workflows row), so the WHERE
+// clause implicitly excludes unenrolled rows.
 //
 // `done` / `cancel` rows are intentionally excluded — they cannot
 // touch the worktree at the next step run because there is no

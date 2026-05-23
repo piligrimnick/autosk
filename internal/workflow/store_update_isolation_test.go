@@ -24,16 +24,28 @@ type fakeMgr struct {
 	ensureCalls     []string // task ids in call order
 	onTerminalCalls []string
 	failOnTask      string // when non-empty, Ensure errors on this task
+	// afterEnsure runs (under m.mu released) after every successful
+	// Ensure call. Tests use it to trigger an external mutation
+	// (e.g. cancel the parent ctx) between the last Ensure and the
+	// subsequent workflows.isolation UPDATE so the UPDATE-failure
+	// rollback path can be pinned.
+	afterEnsure func(taskID string, callIdx int)
 }
 
 func (m *fakeMgr) Ensure(ctx context.Context, projectRoot, taskID, baseRef string) (worktree.Result, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.ensureCalls = append(m.ensureCalls, taskID)
-	if m.failOnTask != "" && taskID == m.failOnTask {
+	callIdx := len(m.ensureCalls)
+	failOn := m.failOnTask
+	after := m.afterEnsure
+	m.mu.Unlock()
+	if failOn != "" && taskID == failOn {
 		return worktree.Result{}, fmt.Errorf("synthetic ensure failure: %s", taskID)
 	}
 	path, _ := worktree.PathFor(projectRoot, taskID)
+	if after != nil {
+		after(taskID, callIdx)
+	}
 	return worktree.Result{
 		Path:   path,
 		Branch: worktree.BranchFor(taskID),
@@ -265,6 +277,80 @@ func TestUpdateIsolation_NoneToWorktree_Force_AtomicRollback(t *testing.T) {
 	got, _ := wf.GetByName(ctx, w.Name)
 	if got.Isolation != workflow.IsolationNone {
 		t.Fatalf("post-rollback isolation: %q (want unchanged none)", got.Isolation)
+	}
+}
+
+// TestUpdateIsolation_NoneToWorktree_Force_UpdateFailureRollback pins
+// the UPDATE-statement rollback branch: after every Ensure has
+// succeeded the workflows.isolation UPDATE itself fails (we cancel
+// the ctx in afterEnsure on the LAST Ensure, which forces
+// db.ExecContext to return ctx.Err). The rollback path must:
+//
+//   - mark every prior Ensure as RolledBackEnsures (mirrors the
+//     Ensure-failure rollback shape so callers can rely on one field);
+//   - reap every on-disk worktree via OnTerminal;
+//   - leave the workflows.isolation column unchanged.
+//
+// The Ensure-failure rollback path is exercised by
+// TestUpdateIsolation_NoneToWorktree_Force_AtomicRollback; this test
+// pins the symmetric branch downstream of the per-task loop.
+func TestUpdateIsolation_NoneToWorktree_Force_UpdateFailureRollback(t *testing.T) {
+	wf, _, dl, done := newWFFixture(t)
+	defer done()
+	ctx, cancel := context.WithCancel(context.Background())
+	// guarantee cancel is called even if the test fails early.
+	defer cancel()
+	w := newWorkflowWithIsolation(t, wf, "update-fail", workflow.IsolationNone)
+	var tids []string
+	for i := 0; i < 2; i++ {
+		tk, _ := dl.CreateTask(ctx, store.Task{
+			Title: fmt.Sprintf("t%d", i), Status: store.StatusNew, Priority: 2,
+		})
+		tids = append(tids, tk.ID)
+	}
+	if _, err := dl.DB().ExecContext(ctx,
+		`UPDATE tasks SET workflow_id = ?`, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Cancel ctx after the LAST Ensure so the subsequent
+	// `UPDATE workflows SET isolation = ?` ExecContext returns
+	// ctx.Err() rather than affecting any row.
+	fake := &fakeMgr{}
+	fake.afterEnsure = func(_ string, callIdx int) {
+		if callIdx == len(tids) {
+			cancel()
+		}
+	}
+
+	rep, err := wf.UpdateIsolation(ctx, w.Name, workflow.IsolationWorktree, workflow.UpdateIsolationOpts{
+		Force:       true,
+		ProjectRoot: "/tmp/fake-project",
+		Worktrees:   fake,
+	})
+	if err == nil {
+		t.Fatal("expected UPDATE failure, got nil error")
+	}
+	if !strings.Contains(err.Error(), "update workflows.isolation") {
+		t.Errorf("error should wrap the UPDATE failure; got %v", err)
+	}
+	if len(rep.RolledBackEnsures) != len(tids) {
+		t.Errorf("RolledBackEnsures: %d (want %d)", len(rep.RolledBackEnsures), len(tids))
+	}
+	if len(rep.EnsuredTasks) != 0 {
+		t.Errorf("EnsuredTasks should be cleared on rollback: %v", rep.EnsuredTasks)
+	}
+	// Rollback ran OnTerminal for every prior Ensure.
+	if len(fake.onTerminalCalls) != len(tids) {
+		t.Errorf("OnTerminal calls: %v (want %d rollbacks)", fake.onTerminalCalls, len(tids))
+	}
+	// Column unchanged — use a fresh ctx because the original is
+	// cancelled.
+	got, gerr := wf.GetByName(context.Background(), w.Name)
+	if gerr != nil {
+		t.Fatalf("GetByName: %v", gerr)
+	}
+	if got.Isolation != workflow.IsolationNone {
+		t.Errorf("post-rollback isolation: %q (want unchanged none)", got.Isolation)
 	}
 }
 

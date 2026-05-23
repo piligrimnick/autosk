@@ -353,10 +353,11 @@ func projectWorkflow(ctx context.Context, db *sql.DB, w workflow.Workflow) Workf
 		Isolation: iso,
 	}
 	firstStep := ""
+	stepNames := make(map[string]string, len(w.Steps))
 	for _, s := range w.Steps {
+		stepNames[s.ID] = s.Name
 		if s.ID == w.FirstStepID {
 			firstStep = s.Name
-			break
 		}
 	}
 	out.FirstStep = firstStep
@@ -376,18 +377,50 @@ func projectWorkflow(ctx context.Context, db *sql.DB, w workflow.Workflow) Workf
 		out.Steps = append(out.Steps, ws)
 		out.TaskCount += n
 	}
-	// Non-terminal task count: surfaced in the inspector + the
-	// confirm-popup body so the operator can see the blast radius of
-	// an isolation flip without running `autosk list` first. Counts
-	// every status in {new, work, human}; mirrors the guard in
-	// workflow.Store.UpdateIsolation so the lazy popup and the CLI
-	// agree on what "non-terminal" means.
-	var ntc int
-	_ = db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM tasks WHERE workflow_id = ? AND status IN ('new','work','human')`,
-		w.ID).Scan(&ntc)
-	out.NonTerminalTaskCount = ntc
+	// Non-terminal task list + count: one query yields the per-task
+	// rows lazy's isolation confirm popup needs (plan §6.3: the body
+	// enumerates every affected task) AND the total count surfaced in
+	// the inspector. Replaces the prior COUNT(*) round-trip so the
+	// Workflows panel doesn't pay two queries per workflow per
+	// refresh tick. Mirrors workflow.Store.UpdateIsolation's guard so
+	// the lazy popup and the CLI agree on what "non-terminal" means.
+	loadNonTerminalSample(ctx, db, w.ID, stepNames, &out)
 	return out
+}
+
+// loadNonTerminalSample populates out.NonTerminalTaskCount (total) and
+// out.NonTerminalTasks (capped sample of NonTerminalTaskSampleSize
+// entries, ordered by id ASC). Failures (closed conn, sql syntax
+// from a bad migration) are intentionally swallowed so a single
+// flaky query doesn't blank the Workflows panel — the inspector
+// just shows 0 non-terminal tasks. Same defensive shape the
+// per-step COUNT loop above uses.
+func loadNonTerminalSample(ctx context.Context, db *sql.DB, workflowID string, stepNames map[string]string, out *Workflow) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT id, status, COALESCE(current_step_id, '')
+		   FROM tasks
+		  WHERE workflow_id = ? AND status IN ('new','work','human')
+		  ORDER BY id ASC`, workflowID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	total := 0
+	for rows.Next() {
+		var id, status, stepID string
+		if err := rows.Scan(&id, &status, &stepID); err != nil {
+			return
+		}
+		total++
+		if len(out.NonTerminalTasks) < NonTerminalTaskSampleSize {
+			out.NonTerminalTasks = append(out.NonTerminalTasks, NonTerminalTaskRef{
+				ID:       id,
+				Status:   store.Status(status),
+				StepName: stepNames[stepID],
+			})
+		}
+	}
+	out.NonTerminalTaskCount = total
 }
 
 // Agents lists DB agents + registry / package metadata.

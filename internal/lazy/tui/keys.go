@@ -9,6 +9,7 @@ import (
 
 	"github.com/jesseduffield/gocui"
 
+	"autosk/internal/lazy/datasource"
 	"autosk/internal/store"
 )
 
@@ -1202,6 +1203,11 @@ func (gu *Gui) workflowIsolation(*gocui.Gui, *gocui.View) error {
 	}
 	name := w.Name
 	nonTerminalCount := w.NonTerminalTaskCount
+	// Copy the slice so the closure isn't tied to the lifetime of the
+	// model under the lock (the refresh goroutine rewrites
+	// w.NonTerminalTasks wholesale on the next tick).
+	nonTerminalTasks := make([]datasource.NonTerminalTaskRef, len(w.NonTerminalTasks))
+	copy(nonTerminalTasks, w.NonTerminalTasks)
 	gu.openIsolationMenu("Flip isolation of "+name, lines, func(idx int) error {
 		if idx < 0 || idx >= len(modes) {
 			return nil
@@ -1211,7 +1217,7 @@ func (gu *Gui) workflowIsolation(*gocui.Gui, *gocui.View) error {
 			// No-op: close the popup silently.
 			return nil
 		}
-		body := buildIsolationConfirmBody(cur, target, nonTerminalCount)
+		body := buildIsolationConfirmBody(cur, target, nonTerminalCount, nonTerminalTasks)
 		force := nonTerminalCount > 0
 		gu.openConfirm(body, func() error {
 			gu.g.OnWorker(func(_ gocui.Task) error {
@@ -1220,13 +1226,21 @@ func (gu *Gui) workflowIsolation(*gocui.Gui, *gocui.View) error {
 					gu.flashf("err", "workflow isolation: %v", err)
 					return nil
 				}
-				if rep.Noop {
+				// Single flash: state.flash is a one-slot field, so a
+				// success followed by a leftover-warning would otherwise
+				// overwrite the success ack between the Enter and the
+				// next paint. Combine the two pieces of information into
+				// one info-level toast; the command log keeps both
+				// lines via appendLog anyway.
+				switch {
+				case rep.Noop:
 					gu.flashf("info", "workflow %s: already %s", name, target)
-				} else {
+				case len(rep.LeftoverWorktrees) > 0:
+					gu.flashf("info",
+						"workflow %s: isolation %s→%s; %d worktree(s) left on disk, use `autosk worktree rm`",
+						name, rep.From, rep.To, len(rep.LeftoverWorktrees))
+				default:
 					gu.flashf("info", "workflow %s: isolation %s→%s", name, rep.From, rep.To)
-				}
-				if len(rep.LeftoverWorktrees) > 0 {
-					gu.flashf("warn", "%d worktree(s) left on disk; use `autosk worktree rm`", len(rep.LeftoverWorktrees))
 				}
 				gu.refreshAll()
 				return nil
@@ -1238,22 +1252,66 @@ func (gu *Gui) workflowIsolation(*gocui.Gui, *gocui.View) error {
 	return nil
 }
 
+// isolationConfirmTaskCap bounds the number of per-task lines
+// rendered inside the confirm popup body. Above this we append a
+// `... and N more` suffix. Sized to match
+// datasource.NonTerminalTaskSampleSize so the popup never asks for
+// more rows than the data source is willing to ship; plan §8 risk
+// #4.
+const isolationConfirmTaskCap = datasource.NonTerminalTaskSampleSize
+
 // buildIsolationConfirmBody renders the popupConfirm body for the
 // isolation flip. Pure function so the layout pins in
 // popup_isolation_test.go can exercise the wording without driving a
 // gocui screen.
-func buildIsolationConfirmBody(from, to string, nonTerminal int) string {
+//
+// total is the FULL non-terminal-task count (not len(tasks); tasks
+// may be a capped sample). The body enumerates every task in `tasks`
+// up to isolationConfirmTaskCap and appends `... and N more` when
+// the total exceeds the rendered prefix.
+func buildIsolationConfirmBody(from, to string, total int, tasks []datasource.NonTerminalTaskRef) string {
 	head := fmt.Sprintf("Flip isolation: %s → %s", from, to)
-	switch {
-	case nonTerminal == 0:
+	if total == 0 {
 		return head + "\nNo tasks are currently affected."
-	case from == "none" && to == "worktree":
-		return head + fmt.Sprintf("\n%d non-terminal task(s) will get a fresh worktree allocated from HEAD.\nThis is the --force path. Continue?", nonTerminal)
-	case from == "worktree" && to == "none":
-		return head + fmt.Sprintf("\n%d non-terminal task(s) keep their worktree directories on disk.\nRemove them later with `autosk worktree rm <task-id>` once you have salvaged anything you need. Continue?", nonTerminal)
-	default:
-		return head + fmt.Sprintf("\n%d non-terminal task(s) affected. Continue?", nonTerminal)
 	}
+
+	var header, tail string
+	switch {
+	case from == "none" && to == "worktree":
+		header = fmt.Sprintf("\n%d non-terminal task(s) will get a fresh worktree allocated from HEAD:", total)
+		tail = "\nThis is the --force path. Continue?"
+	case from == "worktree" && to == "none":
+		header = fmt.Sprintf("\n%d non-terminal task(s) keep their worktree directories on disk:", total)
+		tail = "\nRemove them later with `autosk worktree rm <task-id>` once you have salvaged anything you need. Continue?"
+	default:
+		header = fmt.Sprintf("\n%d non-terminal task(s) affected:", total)
+		tail = "\nContinue?"
+	}
+
+	var b strings.Builder
+	b.WriteString(head)
+	b.WriteString(header)
+	rendered := len(tasks)
+	if rendered > isolationConfirmTaskCap {
+		rendered = isolationConfirmTaskCap
+	}
+	for i := 0; i < rendered; i++ {
+		t := tasks[i]
+		status := string(t.Status)
+		if status == "" {
+			status = "unknown"
+		}
+		step := t.StepName
+		if step == "" {
+			step = "(none)"
+		}
+		fmt.Fprintf(&b, "\n  - %s (status=%s, current step=%s)", t.ID, status, step)
+	}
+	if total > rendered {
+		fmt.Fprintf(&b, "\n  ... and %d more", total-rendered)
+	}
+	b.WriteString(tail)
+	return b.String()
 }
 
 // agentInstall and agentUninstall are intentionally informational in

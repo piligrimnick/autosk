@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -217,13 +218,23 @@ func TestWorkflowIsolation_ConfirmDispatchesUpdate(t *testing.T) {
 		wantBodyContains string
 	}{
 		{"none_to_worktree_no_tasks", "none", 0, "worktree", false, "No tasks are currently affected."},
-		{"none_to_worktree_with_tasks", "none", 3, "worktree", true, "3 non-terminal task(s) will get a fresh worktree"},
+		{"none_to_worktree_with_tasks", "none", 3, "worktree", true, "3 non-terminal task(s) will get a fresh worktree allocated from HEAD:"},
 		{"worktree_to_none_no_tasks", "worktree", 0, "none", false, "No tasks are currently affected."},
-		{"worktree_to_none_with_tasks", "worktree", 2, "none", true, "2 non-terminal task(s) keep their worktree directories"},
+		{"worktree_to_none_with_tasks", "worktree", 2, "none", true, "2 non-terminal task(s) keep their worktree directories on disk:"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			body := buildIsolationConfirmBody(c.cur, c.selectMode, c.nonTerminalCount)
+			// Pad a representative slice; the body only renders the
+			// per-task list when nonTerminalCount > 0.
+			tasks := make([]datasource.NonTerminalTaskRef, c.nonTerminalCount)
+			for i := range tasks {
+				tasks[i] = datasource.NonTerminalTaskRef{
+					ID:       fmt.Sprintf("ask-%03d", i),
+					Status:   "work",
+					StepName: "dev",
+				}
+			}
+			body := buildIsolationConfirmBody(c.cur, c.selectMode, c.nonTerminalCount, tasks)
 			if !strings.Contains(body, c.wantBodyContains) {
 				t.Errorf("body missing %q:\n%s", c.wantBodyContains, body)
 			}
@@ -314,12 +325,84 @@ func TestWorkflowIsolation_DifferentValueOpensConfirm(t *testing.T) {
 // TestBuildIsolationConfirmBody_NoneToWorktree pins the worded body
 // for the canonical case (FR-derived AC).
 func TestBuildIsolationConfirmBody_NoneToWorktree(t *testing.T) {
-	body := buildIsolationConfirmBody("none", "worktree", 3)
+	tasks := []datasource.NonTerminalTaskRef{
+		{ID: "ask-aaa", Status: "work", StepName: "dev"},
+		{ID: "ask-bbb", Status: "human", StepName: "review"},
+		{ID: "ask-ccc", Status: "new", StepName: "dev"},
+	}
+	body := buildIsolationConfirmBody("none", "worktree", 3, tasks)
 	if !strings.Contains(body, "3 non-terminal task(s) will get a fresh worktree allocated from HEAD") {
 		t.Errorf("missing FR-specified phrasing: %q", body)
 	}
 	if !strings.Contains(body, "--force") {
 		t.Errorf("body should mention --force path: %q", body)
+	}
+	// Plan §6.3 + §5.4.3: every affected task must be enumerated.
+	for _, want := range []string{
+		"- ask-aaa (status=work, current step=dev)",
+		"- ask-bbb (status=human, current step=review)",
+		"- ask-ccc (status=new, current step=dev)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing per-task line %q in body:\n%s", want, body)
+		}
+	}
+}
+
+// TestBuildIsolationConfirmBody_CapsAtTenWithMoreSuffix pins the
+// plan §8 risk #4 mitigation: the per-task list is capped at
+// isolationConfirmTaskCap entries and overflow is summarised with
+// `... and N more`. Without the cap the popup would overflow when
+// many tasks reference the workflow.
+func TestBuildIsolationConfirmBody_CapsAtTenWithMoreSuffix(t *testing.T) {
+	// 15 sample rows + total=15 so we trip the cap; the body should
+	// render the first 10 and append `... and 5 more`.
+	tasks := make([]datasource.NonTerminalTaskRef, 15)
+	for i := range tasks {
+		tasks[i] = datasource.NonTerminalTaskRef{
+			ID:       fmt.Sprintf("ask-%03d", i),
+			Status:   "work",
+			StepName: "dev",
+		}
+	}
+	body := buildIsolationConfirmBody("none", "worktree", 15, tasks)
+	// First 10 ids must be present.
+	for i := 0; i < 10; i++ {
+		want := fmt.Sprintf("ask-%03d", i)
+		if !strings.Contains(body, want) {
+			t.Errorf("first-10 task %s missing from body:\n%s", want, body)
+		}
+	}
+	// Tasks past the cap must NOT be rendered.
+	if strings.Contains(body, "ask-010") {
+		t.Errorf("body rendered task beyond cap (ask-010):\n%s", body)
+	}
+	if !strings.Contains(body, "... and 5 more") {
+		t.Errorf("missing overflow suffix `... and 5 more`:\n%s", body)
+	}
+}
+
+// TestBuildIsolationConfirmBody_TotalGreaterThanSample pins the
+// case where the datasource shipped a partial sample (count > len)
+// — typical real-world shape, since loadNonTerminalSample caps at
+// NonTerminalTaskSampleSize. The overflow suffix reflects total -
+// rendered, not total - len(sample) (they're equal here, but the
+// invariant matters for future cap changes).
+func TestBuildIsolationConfirmBody_TotalGreaterThanSample(t *testing.T) {
+	tasks := []datasource.NonTerminalTaskRef{
+		{ID: "ask-aaa", Status: "work", StepName: "dev"},
+		{ID: "ask-bbb", Status: "human", StepName: "review"},
+	}
+	body := buildIsolationConfirmBody("worktree", "none", 50, tasks)
+	if !strings.Contains(body, "ask-aaa") || !strings.Contains(body, "ask-bbb") {
+		t.Errorf("sample tasks missing:\n%s", body)
+	}
+	if !strings.Contains(body, "... and 48 more") {
+		t.Errorf("expected `... and 48 more` (total=50 - rendered=2):\n%s", body)
+	}
+	// And the worktree→none flavour tail must still appear.
+	if !strings.Contains(body, "autosk worktree rm") {
+		t.Errorf("worktree→none body missing the cleanup hint:\n%s", body)
 	}
 }
 

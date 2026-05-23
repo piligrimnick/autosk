@@ -1110,6 +1110,12 @@ func renderWorkflowDetail(w datasource.Workflow, width int) string {
 	// it without opening `workflow show`. Synthetic rows include the
 	// pinned note so the `i` keybinding's status-bar message makes
 	// sense in context.
+	//
+	// Plan §5.4.2 spells the label `Isolation:` (capitalised); we use
+	// lowercase here for visual consistency with the surrounding pane
+	// (`first step:`, `tasks:` are both lowercase). The choice is
+	// pinned in render_isolation_test.go and called out as a
+	// deviation in the WU1-WU4 dev hand-off.
 	isolation := w.Isolation
 	if isolation == "" {
 		isolation = "none"

@@ -131,6 +131,18 @@ func newWorkflowUpdateCmd() *cobra.Command {
 				Worktrees:   wtMgr,
 			})
 			if err != nil {
+				// FR10 / report contract: --json must always emit the
+				// UpdateIsolationReport to stdout, even on the error
+				// paths, so tooling that parses the JSON output sees
+				// the structured outcome (offending task ids,
+				// rolled-back ensures, etc.) instead of an empty
+				// stdout + a string error on stderr. The exit code (set
+				// non-zero by cobra returning err) carries the failure
+				// signal; the JSON body carries the diagnosis.
+				if flagJSON {
+					_ = json.NewEncoder(os.Stdout).Encode(toWorkflowUpdateJSON(rep))
+					return err
+				}
 				return renderWorkflowUpdateError(err, rep)
 			}
 			if !dryRun && !rep.Noop {
@@ -258,34 +270,39 @@ func emitWorkflowUpdateReport(rep workflow.UpdateIsolationReport) error {
 // paths so the operator sees the offending task ids (refusal) or the
 // rolled-back set (mid-run Ensure failure) without having to re-run
 // with --json.
+//
+// Every branch preserves the sentinel via %w so callers higher up
+// (integration tests, future daemon wrappers) can still pattern-match
+// with errors.Is(err, workflow.ErrNonTerminalTasks) on the cobra
+// surface. errors.New() unwraps to nothing and would silently break
+// that contract.
 func renderWorkflowUpdateError(err error, rep workflow.UpdateIsolationReport) error {
 	switch {
 	case errors.Is(err, workflow.ErrNonTerminalTasks):
 		var b strings.Builder
-		fmt.Fprintf(&b, "%v\n", err)
 		for _, id := range rep.NonTerminalTasks {
-			fmt.Fprintf(&b, "non-terminal task in workflow: %s\n", id)
+			fmt.Fprintf(&b, "\nnon-terminal task in workflow: %s", id)
 		}
-		b.WriteString("(pass --force to bypass)")
-		return errors.New(strings.TrimRight(b.String(), "\n"))
+		// The sentinel's own message already includes a `pass
+		// --force to update` hint; we don't append a second copy.
+		return fmt.Errorf("%w%s", err, b.String())
 	case errors.Is(err, workflow.ErrEnsureFailed):
 		var b strings.Builder
-		fmt.Fprintf(&b, "%v\n", err)
 		if rep.FailedTask != "" {
-			fmt.Fprintf(&b, "failed task: %s\n", rep.FailedTask)
+			fmt.Fprintf(&b, "\nfailed task: %s", rep.FailedTask)
 		}
 		if len(rep.RolledBackEnsures) > 0 {
-			b.WriteString("rolled back:\n")
+			b.WriteString("\nrolled back:")
 			for _, e := range rep.RolledBackEnsures {
-				fmt.Fprintf(&b, "  %s  %s\n", e.TaskID, e.Path)
+				fmt.Fprintf(&b, "\n  %s  %s", e.TaskID, e.Path)
 			}
 		}
-		b.WriteString("(workflows.isolation left unchanged)")
-		return errors.New(strings.TrimRight(b.String(), "\n"))
+		b.WriteString("\n(workflows.isolation left unchanged)")
+		return fmt.Errorf("%w%s", err, b.String())
 	case errors.Is(err, workflow.ErrSyntheticImmutable):
-		return fmt.Errorf("cannot update synthetic workflow %q (single:<agent> rows are pinned to isolation=none)", rep.Workflow)
+		return fmt.Errorf("%w %q (single:<agent> rows are pinned to isolation=none)", err, rep.Workflow)
 	case errors.Is(err, workflow.ErrNotFound):
-		return fmt.Errorf("workflow not found: %s", rep.Workflow)
+		return fmt.Errorf("%w: %s", err, rep.Workflow)
 	}
 	return err
 }
