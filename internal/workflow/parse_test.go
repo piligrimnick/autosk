@@ -12,7 +12,7 @@ import (
 
 func TestParseFile_Example(t *testing.T) {
 	// The repo ships an example; round-trip through ParseFile.
-	def, err := workflow.ParseFile("../../docs/notes/workflow-example.json")
+	def, err := workflow.ParseFile("../../docs/examples/workflows/workflow-example.json")
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}

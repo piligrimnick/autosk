@@ -2,7 +2,7 @@
 
 This directory holds the reference autosk agent packages.
 
-The agents wired into [`docs/notes/workflow-example.json`](../docs/notes/workflow-example.json):
+The agents wired into [`docs/examples/workflows/workflow-example.json`](../docs/examples/workflows/workflow-example.json):
 
 | Name | Step in `feature-dev` | Package |
 |---|---|---|
@@ -48,10 +48,10 @@ to update the prefix's copy.
 ## Use them in a workflow
 
 The workflow definition that ties them together ships at
-[`docs/notes/workflow-example.json`](../docs/notes/workflow-example.json):
+[`docs/examples/workflows/workflow-example.json`](../docs/examples/workflows/workflow-example.json):
 
 ```bash
-autosk workflow create --file docs/notes/workflow-example.json
+autosk workflow create --file docs/examples/workflows/workflow-example.json
 autosk create "Implement auth module" --workflow feature-dev
 autosk daemon serve --workers 1
 ```

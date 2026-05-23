@@ -44,7 +44,7 @@ func newPollFixture(t *testing.T) *pollFixture {
 		}
 	}
 	wfs := workflow.New(ts.DB(), ag)
-	def, err := workflow.ParseFile("../../../docs/notes/workflow-example.json")
+	def, err := workflow.ParseFile("../../../docs/examples/workflows/workflow-example.json")
 	if err != nil {
 		_ = ts.Close()
 		t.Fatalf("ParseFile: %v", err)
