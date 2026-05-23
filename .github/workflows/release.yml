@@ -1,0 +1,111 @@
+name: Release
+
+# Publish a GitHub release with prebuilt binaries whenever a semver tag is
+# pushed.
+#
+# Tag pattern is strict semver with an optional pre-release suffix:
+#   v1.2.3        -> regular release
+#   v1.2.3-rc1    -> auto-marked as pre-release (doesn't become "latest")
+#
+# Build matrix mirrors ci.yml so we only ship what CI exercises.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+# Least privilege: build jobs only read; only the release job writes.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: autosk-linux-x64
+          - os: macos-26
+            asset: autosk-osx-arm64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # Pinned to Node.js 24 majors (see ci.yml for the deprecation context).
+      - uses: actions/checkout@v5
+        with:
+          # Makefile derives VERSION from `git describe --tags --always
+          # --dirty` and bakes it into internal/buildinfo via ldflags. We
+          # need the full history (and the tag itself) for the embedded
+          # version to match the released tag.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      # Same cache as ci.yml so a release right after a green CI run on the
+      # same SHA reuses the already-downloaded libdoltlite.
+      - name: Cache doltlite
+        uses: actions/cache@v5
+        with:
+          path: .doltlite
+          key: doltlite-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
+
+      - name: build
+        run: make build
+
+      - name: stage binary
+        run: |
+          mkdir -p dist
+          cp bin/autosk "dist/${{ matrix.asset }}"
+          chmod +x "dist/${{ matrix.asset }}"
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: download artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: dist
+          # Flatten per-artifact subdirectories so every binary lands
+          # directly under dist/ for the upload glob below.
+          merge-multiple: true
+
+      # Anything with a '-' in the tag (v1.2.3-rc1, v1.2.3-beta.2, ...) is
+      # treated as a pre-release: it won't be promoted to the repo's "latest"
+      # release on github.com.
+      - name: detect prerelease
+        id: meta
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [[ "$tag" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=( --title "${GITHUB_REF_NAME}" --generate-notes )
+          if [[ "${{ steps.meta.outputs.prerelease }}" == "true" ]]; then
+            flags+=( --prerelease )
+          fi
+          gh release create "${GITHUB_REF_NAME}" "${flags[@]}" dist/*
