@@ -249,7 +249,10 @@ The Detail pane renders user-supplied markdown as formatted ANSI:
 
 - `Task.Description` (the `description` block on a task).
 - Each entry in the `comments` block (multi-line bodies render in
-  full; the "last 5" cap is preserved).
+  full; the full thread is rendered, oldest at the top and newest
+  at the bottom — no display cap). The Detail pane scrolls and
+  sticky-tails, so the newest comment stays on screen by default
+  and older history is reachable by scrolling up.
 - `Workflow.Description`.
 - Assistant transcript events in the job Detail pane (any event
   whose `kind` begins with `assistant`).

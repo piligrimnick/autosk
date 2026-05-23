@@ -403,11 +403,13 @@ type state struct {
 	fallbacksLast uint64
 	fallbacksNow  uint64
 
-	// comments is a per-task last-N comment cache, hydrated by
-	// refreshAll on cursor change (RefreshHelper pattern). The
-	// rendered Tasks-detail pane reads it; the comment count is
-	// authoritative on the Task struct. Bounded at commentsCacheMax
-	// entries (refresh.go evicts on overflow).
+	// comments is a per-task comment cache holding the full thread
+	// per task (datasource.Comments is a pass-through over
+	// Store.ListByTask), hydrated by refreshAll on cursor change
+	// (RefreshHelper pattern). The rendered Tasks-detail pane reads
+	// it; the comment count is authoritative on the Task struct.
+	// Bounded at commentsCacheMax entries — one entry per task, NOT
+	// per comment — and refresh.go evicts the LRU task on overflow.
 	comments map[string][]datasource.Comment
 
 	// signals is a per-task signals cache: "tail of last open

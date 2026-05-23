@@ -703,7 +703,7 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 		} else {
 			b.WriteString("\n" + styleMuted.Render("(no description)") + "\n")
 		}
-		for _, c := range tailComments(comments) {
+		for _, c := range comments {
 			if strings.TrimSpace(c.Text) == "" {
 				continue
 			}
@@ -745,13 +745,14 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 	// ── Per-comment boxes ────────────────────────────────────────
 	// Each comment is its own labeled box; the label is
 	// "<smart-time> <author>" where smart-time drops the date for
-	// today's events and the author wears its agent hue. The "last
-	// 5" cap is preserved so long comment chains stay browsable
-	// from the Tasks panel without burying the rest of the pane.
-	// Empty-body comments are skipped entirely — an empty box would
-	// just be visual noise (autosk_comment rejects empty bodies
-	// upstream so this is defensive).
-	for _, c := range tailComments(comments) {
+	// today's events and the author wears its agent hue. The full
+	// thread is rendered — the pane is scrollable and sticky-tails
+	// the newest comment to the bottom, so long chains stay
+	// browsable without an implicit cap. Empty-body comments are
+	// skipped entirely — an empty box would just be visual noise
+	// (autosk_comment rejects empty bodies upstream so this is
+	// defensive).
+	for _, c := range comments {
 		if strings.TrimSpace(c.Text) == "" {
 			continue
 		}
@@ -815,17 +816,6 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 	}
 
 	return b.String()
-}
-
-// tailComments returns the trailing slice of comments to render —
-// the design pins this at the last 5, so long chains stay browsable
-// from the Tasks panel without taking over the pane.
-func tailComments(cs []datasource.Comment) []datasource.Comment {
-	const cap = 5
-	if len(cs) <= cap {
-		return cs
-	}
-	return cs[len(cs)-cap:]
 }
 
 // drawLabeledBox renders body inside a rounded box of the given
