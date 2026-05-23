@@ -17,10 +17,13 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      # All three actions are pinned to their Node.js 24 majors:
+      #   checkout v5 / setup-go v6 / cache v5. Node 20-based majors are
+      #   deprecated by GitHub and will be forced off on 2026-06-02.
+      - uses: actions/checkout@v5
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.25"
 
@@ -28,7 +31,7 @@ jobs:
       # every CI run. The Makefile pins DOLTLITE_VERSION, so the cache key is
       # stable per version + platform.
       - name: Cache doltlite
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .doltlite
           key: doltlite-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
