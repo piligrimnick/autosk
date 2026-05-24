@@ -297,6 +297,12 @@ func (gu *Gui) focusPanel(p panelID) func(*gocui.Gui, *gocui.View) error {
 		})
 		if changed {
 			gu.snapViewportToCursor(p)
+			if p == panelJobs {
+				// Hydrate the transcript cache for the now-selected job.
+				// Without this the Detail pane stays on "(loading...)"
+				// until the operator presses j/k — see settleOnPanelJobs.
+				gu.settleOnPanelJobs()
+			}
 		}
 		return nil
 	}
@@ -341,6 +347,13 @@ func (gu *Gui) cyclePanel(step int) func(*gocui.Gui, *gocui.View) error {
 		})
 		if changed {
 			gu.snapViewportToCursor(landed)
+			if landed == panelJobs {
+				// Same hydration reason as focusPanel: Tab/Shift-Tab
+				// landing on Jobs without moving the cursor would
+				// otherwise leave the Detail pane stuck on
+				// "(loading...)". See settleOnPanelJobs.
+				gu.settleOnPanelJobs()
+			}
 		}
 		return nil
 	}
@@ -424,10 +437,12 @@ func (gu *Gui) cursorUp(p panelID) func(*gocui.Gui, *gocui.View) error {
 //     the highlighted task's comments and signals.
 //   - panelWorkflows: applyScope so the Tasks panel auto-filters
 //     to the highlighted workflow.
-//   - panelJobs: scheduleRefresh + (debounced) SSE subscription
-//     for the highlighted job + (eager) archive hydration so the
-//     Detail pane has events to render. The chain is:
+//   - panelJobs: delegates to settleOnPanelJobs — the same per-job
+//     side-effect block that focusPanel('2'), cyclePanel Tab, and
+//     tasksEnter invoke when focus LANDS on Jobs without a cursor
+//     move. The chain is:
 //     afterCursorMove(panelJobs)
+//     → settleOnPanelJobs
 //     → scheduleJobLive (debounced timer)
 //     → scheduleJobArchive (eager OnWorker dispatch, coalesced).
 //     The Detail pane reads state.jobTranscript[jobID] every
@@ -438,22 +453,40 @@ func (gu *Gui) afterCursorMove(p panelID) {
 	case panelWorkflows:
 		gu.applyScope()
 	case panelJobs:
-		gu.scheduleRefresh()
-		if j, ok := gu.st.selectedJobLocked(); ok {
-			running := isJobRunning(j)
-			// Discard any input draft that belongs to a different job
-			// BEFORE we kick the live/archive scheduling — the next
-			// renderViews pass will repopulate the view from
-			// state.jobInput, which is now empty for this job.
-			gu.clearJobInputIfStale(j.JobID)
-			gu.scheduleJobLive(j.JobID, running)
-			gu.scheduleJobArchive(j.JobID, running)
-		} else {
-			gu.clearJobInputIfStale("")
-			gu.stopJobLive()
-		}
+		gu.settleOnPanelJobs()
 	default:
 		gu.scheduleRefresh()
+	}
+}
+
+// settleOnPanelJobs runs the per-job side effects that must follow
+// the operator arriving on the Jobs panel — whether by a j/k cursor
+// move OR by a focus change that LANDS on panelJobs (focusPanel '2',
+// cyclePanel Tab/Shift-Tab landing on Jobs, tasksEnter on a task).
+//
+// Without this on the focus-change paths the Detail pane would stay
+// stuck on "(loading...)" until the operator pressed j/k:
+// scheduleJobArchive is the only thing that seeds state.jobTranscript
+// for a fresh selection, and afterCursorMove was the only caller, so
+// arriving at panelJobs without moving the cursor left the transcript
+// cache unhydrated. Reusing the same body keeps cursor moves and
+// focus moves observationally equivalent — both arm the live SSE +
+// archive fetch and both drop a stale input draft authored against a
+// different job.
+func (gu *Gui) settleOnPanelJobs() {
+	gu.scheduleRefresh()
+	if j, ok := gu.st.selectedJobLocked(); ok {
+		running := isJobRunning(j)
+		// Discard any input draft that belongs to a different job
+		// BEFORE we kick the live/archive scheduling — the next
+		// renderViews pass will repopulate the view from
+		// state.jobInput, which is now empty for this job.
+		gu.clearJobInputIfStale(j.JobID)
+		gu.scheduleJobLive(j.JobID, running)
+		gu.scheduleJobArchive(j.JobID, running)
+	} else {
+		gu.clearJobInputIfStale("")
+		gu.stopJobLive()
 	}
 }
 
@@ -588,6 +621,10 @@ func (gu *Gui) toggleLog(*gocui.Gui, *gocui.View) error {
 func (gu *Gui) tasksEnter(*gocui.Gui, *gocui.View) error {
 	gu.applyScope()
 	gu.st.withLock(func() { gu.st.focused = panelJobs })
+	// Hydrate the Detail pane for the now-selected job. Without this
+	// the operator lands on the Jobs panel with the transcript stuck
+	// on "(loading...)" until they press j/k — see settleOnPanelJobs.
+	gu.settleOnPanelJobs()
 	return nil
 }
 

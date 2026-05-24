@@ -1044,3 +1044,107 @@ func TestJobInput_TextAreaClearedOnEscape(t *testing.T) {
 		t.Errorf("v.Buffer() after fresh keystroke = %q, want %q", got, "y")
 	}
 }
+
+// archiveFakeDS records ds.Messages() calls (the archive-load
+// entrypoint scheduleJobArchive eventually dispatches via
+// gu.g.OnWorker). Lets the focus-change regression test below poll
+// for the worker-dispatched fetch to fire.
+type archiveFakeDS struct {
+	refreshFakeDS
+	msgCalls atomic.Int32
+	lastJob  atomic.Value // string
+}
+
+func (f *archiveFakeDS) Messages(_ context.Context, jobID string, _ bool, _ int) ([]datasource.MessageEvent, error) {
+	f.msgCalls.Add(1)
+	f.lastJob.Store(jobID)
+	return nil, nil
+}
+
+// TestSettleOnPanelJobs_FocusChangeHydratesDetail pins the
+// regression a manual-test report flagged: switching focus TO the
+// Jobs panel without moving the cursor left the Detail pane stuck
+// on "(loading...)" forever — the transcript only appeared after the
+// operator pressed j/k. Root cause: scheduleJobArchive +
+// scheduleJobLive were wired into afterCursorMove(panelJobs) only,
+// so all three focus-change paths (focusPanel '2', cyclePanel Tab,
+// tasksEnter on a task) bypassed the hydration entirely.
+//
+// The fix routes the same per-job side-effect block through
+// settleOnPanelJobs and invokes it from every focus-change path
+// that LANDS on panelJobs. This test asserts the contract
+// observationally on two signals settleOnPanelJobs sets up:
+//
+//   - state.jobLiveTimer becomes non-nil synchronously (scheduleJobLive
+//     arms a time.AfterFunc on every call). Before the fix the timer
+//     stayed nil on the focus-change paths.
+//   - ds.Messages() is invoked exactly once for the selected jobID
+//     (scheduleJobArchive dispatches loadJobArchive on a worker; we
+//     poll because OnWorker is async). Before the fix the call
+//     never happened until a cursor move.
+func TestSettleOnPanelJobs_FocusChangeHydratesDetail(t *testing.T) {
+	cases := []struct {
+		name string
+		do   func(gu *Gui) error
+	}{
+		{"focusPanel('2')", func(gu *Gui) error { return gu.focusPanel(panelJobs)(gu.g, nil) }},
+		{"cyclePanel(+1)_from_Tasks_lands_on_Jobs", func(gu *Gui) error { return gu.cyclePanel(1)(gu.g, nil) }},
+		{"tasksEnter", func(gu *Gui) error { return gu.tasksEnter(nil, nil) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gu := jobDetailLayoutFixture(t)
+			ds := &archiveFakeDS{}
+			gu.ds = ds
+			// Seed: one running job; focus starts on Tasks (so the
+			// upcoming focus change crosses the panelTasks→panelJobs
+			// boundary we're testing).
+			gu.st.withLock(func() {
+				gu.st.jobs = []datasource.Job{{
+					JobResponse: api.JobResponse{JobID: "job-X", Status: "running", Streaming: true},
+				}}
+				gu.st.jobCursor = 0
+				gu.st.focused = panelTasks
+			})
+
+			// Setup sanity: live timer not armed, transcript cache empty.
+			gu.st.withRLock(func() {
+				if gu.st.jobLiveTimer != nil {
+					t.Fatalf("setup: jobLiveTimer should be nil before focus change")
+				}
+				if _, ok := gu.st.jobTranscript["job-X"]; ok {
+					t.Fatalf("setup: jobTranscript should be empty before focus change")
+				}
+			})
+
+			if err := tc.do(gu); err != nil {
+				t.Fatalf("focus handler: %v", err)
+			}
+			t.Cleanup(func() { gu.stopJobLive() })
+
+			// Signal 1 (synchronous): scheduleJobLive armed the
+			// debounce timer. Smoking-gun assertion for the bug —
+			// BEFORE the fix this stayed nil on focus changes.
+			gu.st.withRLock(func() {
+				if gu.st.jobLiveTimer == nil {
+					t.Errorf("jobLiveTimer not armed after focus change \u2014 settleOnPanelJobs was not invoked ('(loading...)' bug regression)")
+				}
+			})
+
+			// Signal 2 (async): scheduleJobArchive dispatched
+			// loadJobArchive on a worker, which called ds.Messages.
+			// Poll briefly because gocui's OnWorker runs on its own
+			// goroutine.
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) && ds.msgCalls.Load() == 0 {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if got := ds.msgCalls.Load(); got != 1 {
+				t.Errorf("ds.Messages calls = %d, want 1 (archive hydration not dispatched)", got)
+			}
+			if got, _ := ds.lastJob.Load().(string); got != "job-X" {
+				t.Errorf("ds.Messages last jobID = %q, want job-X", got)
+			}
+		})
+	}
+}
