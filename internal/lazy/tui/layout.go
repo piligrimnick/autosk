@@ -164,7 +164,7 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 	// already lists winDetail before winJobInput, and the status
 	// bar comes last.
 	visitOrder := append([]string(nil), allDashboardWindows...)
-	visitOrder = append(visitOrder, winStatusBar)
+	visitOrder = append(visitOrder, winStatusBar, winOptionsStrip)
 	for _, win := range visitOrder {
 		d, ok := dims[win]
 		if !ok {
@@ -188,7 +188,7 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 		}
 		v.Wrap = false
 		switch win {
-		case winStatusBar, winFlash:
+		case winStatusBar, winOptionsStrip, winFlash:
 			v.Frame = false
 		default:
 			v.Frame = true

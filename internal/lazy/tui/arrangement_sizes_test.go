@@ -26,7 +26,7 @@ func TestDashboardArrangement_Sizes(t *testing.T) {
 				focusedSide: winTasks,
 				state:       StateDashboard,
 			})
-			required := []string{winTasks, winJobs, winWorkflows, winAgents, winDetail, winStatusBar}
+			required := []string{winTasks, winJobs, winWorkflows, winAgents, winDetail, winStatusBar, winOptionsStrip}
 			for _, w := range required {
 				d, ok := dims[w]
 				if !ok {

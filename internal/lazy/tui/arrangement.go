@@ -15,8 +15,17 @@ const (
 	winJobInput     = "jobInput"
 	winLog          = "extras"
 	winStatusBar    = "statusbar"
+	// winOptionsStrip is the lazygit-style context-aware bindings
+	// hint row painted on the very bottom of the screen (one row
+	// below the status bar). Each entry is "<key>: <action>" joined
+	// with " | "; the focused panel's high-traffic bindings come
+	// first, then the global staples.
+	winOptionsStrip = "options"
 	winFlash        = "flash" // popup flash line (toast)
 	winPopupMenu    = "popupMenu"
+	// winPopupCheatsheet is the editable list view that backs the
+	// new `?` cheatsheet popup (sections + filter + Enter-to-execute).
+	winPopupCheatsheet = "popupCheatsheet"
 	winPopupConfirm = "popupConfirm"
 	winPopupPrompt  = "popupPrompt"
 	// Task-compose popup (lazygit-style two-pane commit editor).
@@ -46,12 +55,17 @@ var allPopupWindows = []string{
 	winSingleCompose,
 	winEnrollWorkflowList,
 	winEnrollStepList,
+	winPopupCheatsheet,
 }
 
 // allDashboardWindows is every window name owned by the dashboard
 // arrangement (excluding popups and the status bar). The layout
 // garbage-collects entries not present in the current frame's
 // boxlayout output.
+//
+// winOptionsStrip lives in the dashboard tree too (the
+// boxlayout-aware status bar + options-strip pair) so it is
+// allocated and GC'd alongside the other dashboard views.
 var allDashboardWindows = []string{
 	winTasks, winJobs, winWorkflows, winAgents,
 	winDetail, winJobInput, winLog,
@@ -87,11 +101,13 @@ type arrangeArgs struct {
 
 // dashboardArrangement returns the Box tree for the standard
 // dashboard view: four side panels stacked left, detail+log right,
-// status bar across the bottom. The focused side panel grows.
+// then a status bar + options strip pinned across the very bottom
+// of the screen.
 //
-// Frame=false views (the status bar) eat 2 cells of padding (see the
-// pre-redesign inspector comment for the gocui-side rationale) so
-// the status bar gets Size:3 to fit its single line of content.
+// Status bar + options strip both run Frame=false with Size:1: one
+// painted row each, no padding rows above or below. Matches
+// lazygit's `infoSectionSize=1` pattern in
+// pkg/gui/controllers/helpers/window_arrangement_helper.go.
 //
 // winJobInput does NOT appear in this tree. It is overlaid on top of
 // winDetail's bottom rows by layout.go when the selected job is
@@ -127,7 +143,8 @@ func dashboardArrangement(a arrangeArgs) *boxlayout.Box {
 					},
 				},
 			},
-			{Window: winStatusBar, Size: 3},
+			{Window: winStatusBar, Size: 1},
+			{Window: winOptionsStrip, Size: 1},
 		},
 	}
 }
