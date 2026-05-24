@@ -260,3 +260,88 @@ func TestBindKeys_AllSpecsRegister(t *testing.T) {
 		t.Fatalf("bindKeys: %v", err)
 	}
 }
+
+// TestLayout_BottomStripsHaveRenderableRow is the regression test
+// for the post-ask-ed8035 bug where both the status bar and the
+// new options strip rendered blank: the Size:1 + Frame=false
+// combo collapses gocui's InnerHeight to 0 (Height - 2 clamped to
+// 0), so the view's draw loop iterates zero content rows.
+//
+// layout.go compensates with lazygit's frameOffset trick — when
+// SetView is called for a Frame=false view it expands the
+// rectangle outward by 1 cell on each side, so the writeable area
+// lands exactly on the boxlayout dimensions. The check below
+// captures the post-fix invariant: after one layout pass each
+// strip must report InnerHeight >= 1 (room for the painted row)
+// AND a buffer that actually carries content (renderViews ran
+// and wrote into the view).
+func TestLayout_BottomStripsHaveRenderableRow(t *testing.T) {
+	g, err := gocui.NewGui(gocui.NewGuiOpts{Headless: true, Width: 120, Height: 40})
+	if err != nil {
+		t.Fatalf("gocui init: %v", err)
+	}
+	defer g.Close()
+	gu := &Gui{g: g, st: newState()}
+	if err := gu.layout(g); err != nil {
+		t.Fatalf("layout: %v", err)
+	}
+	for _, name := range []string{winStatusBar, winOptionsStrip} {
+		v, err := g.View(name)
+		if err != nil {
+			t.Errorf("%s: View missing after layout: %v", name, err)
+			continue
+		}
+		_, ih := v.InnerSize()
+		if ih < 1 {
+			t.Errorf("%s: InnerHeight=%d, want >=1 (Frame=false view collapsed; layout missing frameOffset trick)", name, ih)
+		}
+		if v.Frame {
+			t.Errorf("%s: Frame=true, want false", name)
+		}
+		if strings.TrimSpace(v.Buffer()) == "" {
+			t.Errorf("%s: buffer empty after layout; renderViews did not write anything visible", name)
+		}
+	}
+}
+
+// TestLayout_BottomStripsPaintAtScreenBottom pins where the two
+// strips actually land on screen: the status bar must paint its
+// row at height-2 and the options strip its row at height-1, so
+// they appear stacked at the very bottom with no blank padding
+// row between them or below them. Computed from the post-fix
+// SetView coordinates (expanded by 1 cell on each side) plus
+// gocui's `screen_y = v.y0 + content_y + 1` translation: a Size:1
+// Frame=false box at boxlayout y=Y renders its single content row
+// at screen y=Y.
+func TestLayout_BottomStripsPaintAtScreenBottom(t *testing.T) {
+	const w, h = 120, 40
+	g, err := gocui.NewGui(gocui.NewGuiOpts{Headless: true, Width: w, Height: h})
+	if err != nil {
+		t.Fatalf("gocui init: %v", err)
+	}
+	defer g.Close()
+	gu := &Gui{g: g, st: newState()}
+	if err := gu.layout(g); err != nil {
+		t.Fatalf("layout: %v", err)
+	}
+	cases := []struct {
+		name    string
+		screenY int
+	}{
+		{winStatusBar, h - 2},
+		{winOptionsStrip, h - 1},
+	}
+	for _, c := range cases {
+		v, err := g.View(c.name)
+		if err != nil {
+			t.Errorf("%s: View missing: %v", c.name, err)
+			continue
+		}
+		_, y0, _, y1 := v.Dimensions()
+		// gocui paints Frame=false content at (v.y0+y+1); for the
+		// row 0 of a single-row strip the paint y is v.y0+1.
+		if paintY := y0 + 1; paintY != c.screenY {
+			t.Errorf("%s: content row paints at screen y=%d, want %d (Dimensions y0=%d, y1=%d)", c.name, paintY, c.screenY, y0, y1)
+		}
+	}
+}

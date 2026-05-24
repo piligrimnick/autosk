@@ -109,6 +109,13 @@ type arrangeArgs struct {
 // lazygit's `infoSectionSize=1` pattern in
 // pkg/gui/controllers/helpers/window_arrangement_helper.go.
 //
+// Size:1 only works because layout.go expands the SetView
+// coordinates of these Frame=false views outward by 1 cell on each
+// side (lazygit's `frameOffset` trick); otherwise gocui's
+// `InnerHeight = Height - 2` quirk would collapse the writeable
+// area to zero and the row would render blank. If you ever stop
+// applying that offset in layout.go, bump these back to Size:3.
+//
 // winJobInput does NOT appear in this tree. It is overlaid on top of
 // winDetail's bottom rows by layout.go when the selected job is
 // live. boxlayout doesn't support overlapping boxes, so the input's

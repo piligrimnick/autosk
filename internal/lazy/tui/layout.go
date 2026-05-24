@@ -173,7 +173,28 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 		if d.X1-d.X0 < 1 || d.Y1-d.Y0 < 0 {
 			continue
 		}
-		v, err := g.SetView(win, d.X0, d.Y0, d.X1, d.Y1, 0)
+		// gocui quirk: a Frame=false view's writeable area is its
+		// outer rectangle shrunk by 1 cell on each side (InnerSize
+		// = Size - 2; tcell paints content at v.x0+x+1, v.y0+y+1).
+		// If we hand boxlayout's edges to SetView verbatim, a
+		// Frame=false box of Size:1 collapses to InnerHeight=0 and
+		// paints zero content rows — exactly what was happening to
+		// the bottom statusbar + options strip after ask-ed8035
+		// switched them from Size:3 to Size:1.
+		//
+		// Lazygit solves this by expanding Frame=false SetView
+		// coordinates outward by 1 cell on each side (see
+		// pkg/gui/layout.go:75-95 — `frameOffset := 1` when
+		// !view.Frame), which makes the writeable area land exactly
+		// on the boxlayout edges. We do the same here for the
+		// dashboard's only Frame=false views, the bottom statusbar
+		// and options strip.
+		frameOffset := 0
+		switch win {
+		case winStatusBar, winOptionsStrip:
+			frameOffset = 1
+		}
+		v, err := g.SetView(win, d.X0-frameOffset, d.Y0-frameOffset, d.X1+frameOffset, d.Y1+frameOffset, 0)
 		if err != nil && !isUnknownView(err) {
 			return err
 		}
