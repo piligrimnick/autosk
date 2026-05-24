@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/jesseduffield/gocui"
 
 	"autosk/internal/lazy/theme"
@@ -777,21 +778,27 @@ func minPopup(w, h int, body string) (int, int) {
 	return pw, ph
 }
 
-// maxLineWidth returns the rune count of the widest "\n"-separated
-// line in s. Counts runes (not bytes) so a multibyte cheatsheet
-// entry doesn't get measured by its UTF-8 byte length. Lipgloss
-// SGR escape codes (styleAccent.Render etc.) are NOT applied here
-// because the menu body's accent paint happens later in
-// renderMenuBody for the cursored row only — the popup is sized
-// against the plain text, which is what gocui actually advances
-// the cursor across.
+// maxLineWidth returns the visible cell width of the widest
+// "\n"-separated line in s.
+//
+// Goes through lipgloss.Width (NOT utf8.RuneCountInString) so SGR
+// escape codes — which renderMenuBody wraps the cursored row in
+// via styleAccent.Render — don't leak into the measurement. Without
+// this, sizing the popup against a body whose cursored row carries
+// a truecolor SGR envelope (~9 "runes" of `\x1b[38;2;R;G;Bm…\x1b[0m`
+// padding) would snap the popup ~9 cells wider whenever the cursor
+// landed on the widest line and snap back when it moved away — a
+// visible visual oscillation on a real TTY (review R8). lipgloss.Width
+// strips SGR before counting visible cells AND is rune-aware, so
+// multibyte cheatsheet entries still measure by their visible width
+// rather than UTF-8 byte length.
 func maxLineWidth(s string) int {
 	if s == "" {
 		return 0
 	}
 	max := 0
 	for _, line := range strings.Split(s, "\n") {
-		if n := utf8.RuneCountInString(line); n > max {
+		if n := lipgloss.Width(line); n > max {
 			max = n
 		}
 	}

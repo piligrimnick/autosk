@@ -89,3 +89,36 @@ func TestMaxLineWidthHandlesMultibyte(t *testing.T) {
 		t.Errorf("multibyte: %d want 5 rune count of Приве", got)
 	}
 }
+
+// TestMaxLineWidthStripsLipglossSGR pins review R8: the helper feeds
+// renderMenuBody's output to minPopup, which renders the cursored
+// row through styleAccent.Render. Under a real TTY (or once the test
+// pins TrueColor) that wraps the row in a `\x1b[38;2;…m…\x1b[0m`
+// envelope; counting that envelope as visible cells would over-size
+// the popup by ~9 cells whenever the cursor landed on the widest
+// row, then snap back when it moved away. lipgloss.Width strips SGR
+// before counting cells; this test verifies the cursored row and the
+// non-cursored row measure to the same plain-text width.
+func TestMaxLineWidthStripsLipglossSGR(t *testing.T) {
+	forceTrueColor(t)
+
+	// renderMenuBody emits "▶ " + styled cursored row + "\n" + "  "
+	// + plain non-cursored row + "\n". Visible widths are 2+5=7 for
+	// the cursored row and 2+18=20 for the non-cursored row. The
+	// SGR envelope around the cursored row adds ~9 "runes" the
+	// terminal never paints; lipgloss.Width must strip them.
+	rendered := renderMenuBody([]string{"alpha", "beta-very-long-row"}, 0)
+	const wantPlainNonCursored = 20 // "  beta-very-long-row"
+	if got := maxLineWidth(rendered); got != wantPlainNonCursored {
+		t.Errorf("maxLineWidth=%d want %d (SGR envelope leaked into measurement)", got, wantPlainNonCursored)
+	}
+
+	// Flip the cursor onto the WIDER row: the cursored row gets the
+	// SGR envelope but the visible width must still be 20 — if SGR
+	// leaked the result would jump to ~29 here and the popup would
+	// oscillate as the cursor moved.
+	rendered2 := renderMenuBody([]string{"alpha", "beta-very-long-row"}, 1)
+	if got := maxLineWidth(rendered2); got != wantPlainNonCursored {
+		t.Errorf("maxLineWidth=%d want %d (cursor on wide row must not widen popup via SGR)", got, wantPlainNonCursored)
+	}
+}

@@ -1078,6 +1078,25 @@ func (gu *Gui) taskEnroll(*gocui.Gui, *gocui.View) error {
 // current workflow in the cached slice (e.g. stale cache; the task
 // has WorkflowID == "") the picker is NOT opened and a flash hints
 // at a refresh.
+//
+// CLI-parity for the no-bump path (review R7): the CLI has two
+// distinct resume modes:
+//
+//   - `autosk resume <id>`           — status-only flip
+//     (StatusHuman → StatusWork), step_visits untouched,
+//     max_visits NOT enforced. Routes through Resume(id, "").
+//   - `autosk resume <id> --to STEP` — deliberate transition,
+//     step_visits[STEP]++, max_visits enforced. Routes through
+//     Resume(id, STEP).
+//
+// The picker always pre-selects the task's current step, so the
+// natural "just resume" gesture (Enter on the pre-selected row)
+// would otherwise dispatch the bumping --to path against the same
+// step the operator was parked on — firing max_visits on tasks
+// that hit human via the cap in the first place
+// (docs/plans/20260520-Step-Visit-Limits.md). To restore CLI
+// parity we collapse "picked step == current step" to the no-bump
+// branch; picking a DIFFERENT step still bumps as before.
 func (gu *Gui) taskResume(*gocui.Gui, *gocui.View) error {
 	t, ok := gu.st.selectedTaskLocked()
 	if !ok {
@@ -1104,21 +1123,56 @@ func (gu *Gui) taskResume(*gocui.Gui, *gocui.View) error {
 	wfs := []datasource.Workflow{*wf}
 	stepCursor := pickerInitialStepCursor(wfs, 0, t.CurrentStepID)
 	taskID := t.ID
+	currentStepName := resumeCurrentStepName(*wf, t.CurrentStepID)
 	gu.openEnrollPicker(
 		"Resume "+taskID+" — pick step",
 		wfs, 0, stepCursor, true,
 		func(_, stepName string) error {
+			// CLI parity: Enter on the pre-selected current step
+			// is the no-bump path (Resume(id, "")). Picking a
+			// different step routes through the bumping --to STEP
+			// path. resumeCurrentStepName returns "" when the task
+			// has no current step (or it isn't in the workflow's
+			// step list), which can't collide with any real step
+			// name — so the equality test stays inert in that case
+			// and Resume(id, stepName) takes the --to path.
+			toStep := stepName
+			noBump := currentStepName != "" && stepName == currentStepName
+			if noBump {
+				toStep = ""
+			}
 			gu.runDispatch(func() {
-				if err := gu.ds.Resume(gu.ctx, taskID, stepName); err != nil {
+				if err := gu.ds.Resume(gu.ctx, taskID, toStep); err != nil {
 					gu.flashf("err", "resume: %v", err)
 					return
 				}
-				gu.flashf("info", "resumed %s -> %s", taskID, stepName)
+				if noBump {
+					gu.flashf("info", "resumed %s (no transition)", taskID)
+				} else {
+					gu.flashf("info", "resumed %s -> %s", taskID, stepName)
+				}
 				gu.refreshAll()
 			})
 			return nil
 		})
 	return nil
+}
+
+// resumeCurrentStepName returns the human-readable name of the
+// task's current step inside wf, or "" when the task has no
+// current step OR the step id isn't present in the workflow's
+// step list (stale cache / hand-edit). Used by taskResume to
+// detect the no-bump branch (review R7).
+func resumeCurrentStepName(wf datasource.Workflow, currentStepID string) string {
+	if currentStepID == "" {
+		return ""
+	}
+	for _, s := range wf.Steps {
+		if s.ID == currentStepID {
+			return s.Name
+		}
+	}
+	return ""
 }
 
 // pickerInitialWorkflowCursor returns the index of the workflow row

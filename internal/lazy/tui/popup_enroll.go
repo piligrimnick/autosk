@@ -92,6 +92,16 @@ func (gu *Gui) enrollPickerCursor(pane pickerPane, step int) func(*gocui.Gui, *g
 				if len(wfs) == 0 {
 					return
 				}
+				// Defensive WorkflowCursor bounds check (review R6).
+				// In practice openEnrollPicker clamps the cursor at
+				// open time and the workflow-pane handler wraps via
+				// `% n`, but the assertion is two lines and the file
+				// is new — picking up the same shape StepCursor
+				// already uses keeps the panic surface zero under
+				// future popup-state mutations.
+				if gu.st.popup.WorkflowCursor < 0 || gu.st.popup.WorkflowCursor >= len(wfs) {
+					return
+				}
 				wf := wfs[gu.st.popup.WorkflowCursor]
 				n := len(wf.Steps)
 				if n == 0 {
@@ -141,6 +151,13 @@ func (gu *Gui) enrollPickerStepAccept(*gocui.Gui, *gocui.View) error {
 			return
 		}
 		if len(gu.st.popup.Workflows) == 0 {
+			return
+		}
+		// Defensive WorkflowCursor bounds check (review R6) —
+		// symmetric with the StepCursor guard below. Cheap and
+		// future-proofs the dispatch against popup-state mutations
+		// that bypass openEnrollPicker's clamp.
+		if gu.st.popup.WorkflowCursor < 0 || gu.st.popup.WorkflowCursor >= len(gu.st.popup.Workflows) {
 			return
 		}
 		wf := gu.st.popup.Workflows[gu.st.popup.WorkflowCursor]
@@ -290,15 +307,23 @@ func (gu *Gui) layoutEnrollPicker(g *gocui.Gui, termW, termH int) {
 		stColor = activeColor
 	}
 
-	// Workflow pane.
-	wfTitle := title
-	if wfTitle == "" {
-		wfTitle = "Workflow"
-	}
+	// Title placement (review R9): the popup carries one action
+	// title (e.g. "Resume ask-X — pick step") and we route it onto
+	// the pane the operator is actually acting on. For enroll
+	// (workflowLocked=false) the action lands on the workflow pane
+	// and the step pane gets the generic "Step" label; for resume
+	// (workflowLocked=true) the workflow pane is non-navigable so
+	// the action lands on the step pane and the workflow pane
+	// shows the inert "Workflow (locked)" label.
+	wfTitle := "Workflow"
+	stTitle := "Step"
 	if wfLocked {
-		// Visual hint that the workflow row is locked so the
-		// operator doesn't waste keystrokes trying to navigate it.
-		wfTitle = wfTitle + " (locked)"
+		wfTitle = "Workflow (locked)"
+		if title != "" {
+			stTitle = title
+		}
+	} else if title != "" {
+		wfTitle = title
 	}
 	wfV, err := g.SetView(winEnrollWorkflowList, wfX0, wfY0, wfX1, wfY1, 0)
 	if err != nil && !isUnknownView(err) {
@@ -324,13 +349,13 @@ func (gu *Gui) layoutEnrollPicker(g *gocui.Gui, termW, termH int) {
 		stV.FrameRunes = roundedFrameRunes
 		stV.FrameColor = stColor
 		stV.TitleColor = stColor
-		stV.Title = "Step"
+		stV.Title = stTitle
 		stV.Wrap = false
 		var steps []datasource.WorkflowStep
 		if wfCursor >= 0 && wfCursor < len(workflows) {
 			steps = workflows[wfCursor].Steps
 		}
-		gu.writeView(winEnrollStepList, "Step", renderEnrollStepBody(steps, stepCursor))
+		gu.writeView(winEnrollStepList, stTitle, renderEnrollStepBody(steps, stepCursor))
 	}
 
 	// Route focus to the active pane.

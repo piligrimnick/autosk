@@ -275,11 +275,15 @@ func TestEnrollPickerStepAccept_DispatchesEnroll(t *testing.T) {
 	if fake.enrollID != "ask-aaaaaa" {
 		t.Errorf("enroll id=%q want ask-aaaaaa", fake.enrollID)
 	}
+	// Smoke check that seedPickerWorkflows still names the canonical
+	// workflow row "feature-dev-generic" (review R10): if a future
+	// edit to the seed changes that, this assertion fires loudly
+	// instead of silently breaking the per-name dispatch check below.
+	if a.Name != "feature-dev-generic" {
+		t.Fatalf("seedPickerWorkflows changed the canonical workflow name to %q; update the test", a.Name)
+	}
 	if fake.enrollWF != a.Name {
 		t.Errorf("enroll workflow=%q want %q", fake.enrollWF, a.Name)
-	}
-	if fake.enrollWF != "feature-dev-generic" {
-		t.Errorf("enroll workflow=%q want feature-dev-generic", fake.enrollWF)
 	}
 	if fake.enrollStep != "review" {
 		t.Errorf("enroll step=%q want review", fake.enrollStep)
@@ -437,6 +441,61 @@ func TestResumePickerStepAccept_DispatchesResume(t *testing.T) {
 	}
 }
 
+// TestResumePickerStepAccept_OnCurrentStepUsesNoBumpPath pins
+// review R7 / CLI parity: Enter on the pre-selected current step
+// dispatches Resume(taskID, "") — the status-only flip that does
+// NOT bump step_visits or fire max_visits. Picking a DIFFERENT step
+// still dispatches Resume(taskID, stepName) (covered by
+// TestResumePickerStepAccept_DispatchesResume above).
+func TestResumePickerStepAccept_OnCurrentStepUsesNoBumpPath(t *testing.T) {
+	gu, fake := newPickerTestGui(t)
+	_, b, _ := seedPickerWorkflows(gu)
+	// Task parked on step "ship" (st-b-ship). The picker pre-selects
+	// it; Enter without moving the cursor must collapse to the
+	// no-bump branch.
+	gu.st.tasks = []datasource.Task{{ID: "ask-rrrrrr", WorkflowID: b.ID, CurrentStepID: "st-b-ship"}}
+	gu.st.taskCursor = 0
+	if err := gu.taskResume(nil, nil); err != nil {
+		t.Fatalf("taskResume: %v", err)
+	}
+	if gu.st.popup.StepCursor != 1 {
+		t.Fatalf("setup: StepCursor=%d want 1 (current step = ship at index 1)", gu.st.popup.StepCursor)
+	}
+	if err := gu.enrollPickerStepAccept(nil, nil); err != nil {
+		t.Fatalf("step accept: %v", err)
+	}
+	if !fake.resumeCalled {
+		t.Fatalf("Datasource.Resume was not dispatched")
+	}
+	if fake.resumeID != "ask-rrrrrr" {
+		t.Errorf("resume id=%q want ask-rrrrrr", fake.resumeID)
+	}
+	if fake.resumeStep != "" {
+		t.Errorf("resume step=%q want \"\" (no-bump path: Enter on the current step must NOT pass --to STEP, otherwise step_visits[ship]++ and max_visits could fire on a task that hit human via the cap)", fake.resumeStep)
+	}
+}
+
+// TestResumeCurrentStepName pins the small helper used by taskResume
+// to detect the no-bump branch (review R7).
+func TestResumeCurrentStepName(t *testing.T) {
+	wf := datasource.Workflow{
+		ID: "wf",
+		Steps: []datasource.WorkflowStep{
+			{ID: "s1", Name: "dev"},
+			{ID: "s2", Name: "review"},
+		},
+	}
+	if got := resumeCurrentStepName(wf, "s2"); got != "review" {
+		t.Errorf("match: got %q want review", got)
+	}
+	if got := resumeCurrentStepName(wf, ""); got != "" {
+		t.Errorf("empty: got %q want empty", got)
+	}
+	if got := resumeCurrentStepName(wf, "missing"); got != "" {
+		t.Errorf("stale id: got %q want empty (no false positive)", got)
+	}
+}
+
 // TestResumePickerStepEscape_ClosesPopup pins the back-step
 // behaviour on the resume flow: WorkflowLocked=true means Esc on
 // the step pane closes the picker (there is no workflow pane to
@@ -566,6 +625,107 @@ func TestLayoutEnrollPickerIsolation(t *testing.T) {
 		if _, err := gu.g.View(name); err != nil {
 			t.Errorf("enroll-picker view %q should exist while popupEnroll is active: %v", name, err)
 		}
+	}
+}
+
+// TestLayoutEnrollPickerTitlePlacement pins review R9: on the
+// enroll flow the action title rides the workflow pane (the
+// operator is acting on it); on the resume flow it rides the step
+// pane and the workflow pane shows the inert "Workflow (locked)"
+// label. Without this routing the resume flow would land the
+// "Resume — pick step" title on the workflow pane, which is
+// non-navigable, and the step pane would carry only the generic
+// "Step" header.
+func TestLayoutEnrollPickerTitlePlacement(t *testing.T) {
+	t.Run("enroll", func(t *testing.T) {
+		gu, _ := newPickerTestGui(t)
+		seedPickerWorkflows(gu)
+		gu.st.tasks = []datasource.Task{{ID: "ask-aaaaaa"}}
+		gu.st.taskCursor = 0
+		if err := gu.taskEnroll(nil, nil); err != nil {
+			t.Fatalf("taskEnroll: %v", err)
+		}
+		gu.layoutEnrollPicker(gu.g, 120, 40)
+		wfV, err := gu.g.View(winEnrollWorkflowList)
+		if err != nil {
+			t.Fatalf("workflow view: %v", err)
+		}
+		stV, err := gu.g.View(winEnrollStepList)
+		if err != nil {
+			t.Fatalf("step view: %v", err)
+		}
+		if !strings.Contains(wfV.Title, "pick workflow") {
+			t.Errorf("enroll workflow title = %q, want it to carry the action hint", wfV.Title)
+		}
+		if strings.Contains(wfV.Title, "locked") {
+			t.Errorf("enroll workflow title = %q, must NOT include `locked` (enroll allows navigation)", wfV.Title)
+		}
+		if stV.Title != "Step" {
+			t.Errorf("enroll step title = %q, want generic \"Step\" (action sits on the workflow pane)", stV.Title)
+		}
+	})
+	t.Run("resume", func(t *testing.T) {
+		gu, _ := newPickerTestGui(t)
+		_, b, _ := seedPickerWorkflows(gu)
+		gu.st.tasks = []datasource.Task{{ID: "ask-rrrrrr", WorkflowID: b.ID, CurrentStepID: "st-b-ship"}}
+		gu.st.taskCursor = 0
+		if err := gu.taskResume(nil, nil); err != nil {
+			t.Fatalf("taskResume: %v", err)
+		}
+		gu.layoutEnrollPicker(gu.g, 120, 40)
+		wfV, err := gu.g.View(winEnrollWorkflowList)
+		if err != nil {
+			t.Fatalf("workflow view: %v", err)
+		}
+		stV, err := gu.g.View(winEnrollStepList)
+		if err != nil {
+			t.Fatalf("step view: %v", err)
+		}
+		if wfV.Title != "Workflow (locked)" {
+			t.Errorf("resume workflow title = %q, want \"Workflow (locked)\" (action sits on the step pane)", wfV.Title)
+		}
+		if !strings.Contains(stV.Title, "pick step") {
+			t.Errorf("resume step title = %q, want it to carry the action hint", stV.Title)
+		}
+	})
+}
+
+// TestEnrollPickerCursor_BoundsDefensive pins review R6: even when
+// popup state is mutated past the helpers (an OnPick that re-opens
+// the popup with a stale cursor; a future programmatic test path;
+// etc.) the cursor handlers must not panic on an out-of-range
+// WorkflowCursor. Symmetric with the StepCursor guard the dispatch
+// already carries.
+func TestEnrollPickerCursor_BoundsDefensive(t *testing.T) {
+	gu, fake := newPickerTestGui(t)
+	seedPickerWorkflows(gu)
+	gu.st.tasks = []datasource.Task{{ID: "ask-aaaaaa"}}
+	gu.st.taskCursor = 0
+	if err := gu.taskEnroll(nil, nil); err != nil {
+		t.Fatalf("taskEnroll: %v", err)
+	}
+	// Force an out-of-range WorkflowCursor and a focus on the step
+	// pane (so the step-pane arm of enrollPickerCursor runs).
+	gu.st.withLock(func() {
+		gu.st.popup.WorkflowCursor = 99
+		gu.st.popup.ActivePane = pickerPaneStep
+	})
+
+	// Cursor move on the step pane: must not panic, must not move.
+	move := gu.enrollPickerCursor(pickerPaneStep, +1)
+	if err := move(nil, nil); err != nil {
+		t.Fatalf("cursor move: %v", err)
+	}
+	if gu.st.popup.StepCursor != 0 {
+		t.Errorf("StepCursor=%d want 0 (out-of-range workflow cursor must short-circuit)", gu.st.popup.StepCursor)
+	}
+
+	// Dispatch path: must not panic, must not call Enroll.
+	if err := gu.enrollPickerStepAccept(nil, nil); err != nil {
+		t.Fatalf("step accept: %v", err)
+	}
+	if fake.enrollCalled {
+		t.Errorf("Enroll dispatched with out-of-range WorkflowCursor")
 	}
 }
 
