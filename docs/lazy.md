@@ -40,8 +40,21 @@ cancel-job verb. See [Daemon dependency](#daemon-dependency).
 
 Four left panels stacked vertically, a Detail pane on the right.
 The focused side panel grows accordion-style so the highlighted row
-is always visible. The bottom bar shows project root, daemon health,
-worker stats, active filter / scope chips, and the help hint.
+is always visible. The bottom of the screen carries two pinned
+single-row strips:
+
+- The **status bar** shows project root, daemon health, worker
+  stats, and the active filter / scope chips. Top-level blocks are
+  separated with ` | `; tokens inside a block stay
+  single-space-separated. No `?=help` element — that hint now
+  lives on the options strip below.
+- The **options strip** (very bottom row) is a context-aware list
+  of `<key>: <action>` entries for the focused panel, joined with
+  ` | `. The focused panel's high-traffic verbs come first, then
+  the global staples (`?` help, `/` filter, `:` palette, `*`
+  clear scope, `q` quit). The strip truncates with `…` when it
+  overflows. Use it as a quick reminder of what the current panel
+  can do; press `?` for the full sectioned cheatsheet.
 
 For a **terminal** job status (done / failed / cancelled) the layout is
 identical but the input textarea is gone — the Detail pane reclaims
@@ -100,7 +113,7 @@ every other kind (`user_text`, `tool_call`, `tool_result`,
 | `tab` | Cycle left panels. |
 | `enter` | Drill into the focused row (see panel-specific tables). |
 | `esc` | Pop one level (input → Jobs panel, popup → close, filter chip → drop). |
-| `?` | Help cheatsheet overlay. |
+| `?` | Help cheatsheet overlay — sectioned `--- Local --- / --- Global --- / --- Navigation ---` view of the focused panel's bindings. Type to filter (case-insensitive substring against key + description), `j` / `k` / arrows / wheel move the cursor, `enter` closes the popup AND invokes the highlighted binding, `backspace` pops a filter rune, `esc` clears the filter or (if already empty) closes the popup. Only the focused panel's local bindings plus the global bindings are listed — bindings of other panels are hidden. |
 | `:` | Command palette. Verbs from every panel: `task new`, `task edit`, `task done`, `task cancel`, `task reopen`, `task priority`, `task resume`, `task enroll`, `task block`, `task unblock`, `task comment`, `task metadata`, `workflow create`, `workflow delete`, `job cancel`, `scope clear`, `refresh`, `quit`. |
 | `/` | Filter the focused panel — see [Filter syntax](#filter-syntax). |
 | `*` | Clear all scope chips. |
@@ -384,7 +397,7 @@ fresh fds immediately.
 | `daemon=down` but `autosk daemon list` works | Stale socket path. Pass `--sock` or set `$AUTOSK_SOCK`. |
 | No `input` textarea on a job you know is running | Daemon is down or the live datasource just flipped the job to a terminal status. Start the daemon (`autosk daemon serve`) and the textarea reappears on the next tick. |
 | Agents panel hotkey only flashes a message | Read-only by design — install / uninstall from the CLI. |
-| Help screen lists `ctrl+f` twice | Same chord, two view-scoped meanings: page-forward in the Detail pane, `follow_up` dispatch in the input textarea. The `?` overlay disambiguates by focus. |
+| `ctrl+f` does something different than I expected | Same chord, two view-scoped meanings: page-forward in the Detail pane, `follow_up` dispatch in the input textarea. The `?` overlay filters by focused panel, so only the meaning that's currently active is listed. |
 | Detail pane shows `(loading…)` and stays there | Archive load is in flight; if it never resolves, check the daemon log or press `ctrl+r` to drop the cache and retry. `(archive load failed: …)` means the underlying fetch errored — retry with `ctrl+r`. |
 | Signals / comments for a job are missing in the job Detail | They live on the parent **task** detail. Focus the Tasks panel (`1`) and move the cursor onto the parent task. |
 | External CLI writes don't show up | Press `R` to force a refresh; if the data is still stale, `ctrl+r` drops the DB connection and reopens. |
