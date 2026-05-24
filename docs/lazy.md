@@ -61,9 +61,16 @@ The Detail pane always reflects the focused side panel:
   `session:` / `error:`), then one labelled box per transcript event,
   oldest first. For a running job a 6-row `input` textarea is
   pinned below the transcript.
-- **Workflows** — workflow name, description, step graph (rendered
-  with markdown), and an `isolation:` line carrying the current mode
-  plus the count of non-terminal tasks currently using it.
+- **Workflows** — header line `<name> [wt]? first step: <step>`
+  (the `[wt]` chip appears iff the workflow is non-synthetic and its
+  isolation is `worktree`), the description rendered as markdown,
+  then a `Steps (N)` labelled box (same chrome as `Recent signals
+  (N)` on the task pane) with one row per step in
+  `<step> agent=<agent> next=<targets|(none)>` form. Columns are
+  aligned: the `agent=` chip starts at the same column on every
+  row, and the `next=` chip likewise. Sibling-step targets render
+  in the step hue; lifecycle terminals (`done` / `cancel` /
+  `human`) take their task-status hue.
 - **Agents** — package name, version, install source (`builtin`,
   `installed`, or `db_only` when a referenced package isn't
   installed locally), and config summary.
