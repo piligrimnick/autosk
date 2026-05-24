@@ -728,8 +728,14 @@ func (o *Offline) UpdatePriority(ctx context.Context, id string, p int) error {
 // Accepted source statuses: new, human, done, cancel. The only refusal
 // is status='work' — the task is currently owned by the engine and
 // re-stamping its workflow_id / current_step_id underneath would race
-// the daemon; the operator has to go through cancel + reopen + enroll
-// instead. Matches `autosk enroll` on the CLI exactly.
+// the daemon; the operator has to cancel then enroll instead.
+//
+// Matches the status matrix of `autosk enroll`, but unlike the CLI
+// verb this code path does NOT allocate a per-task worktree for
+// isolation=worktree workflows (a known limitation — the lazy prompt
+// is single-string `workflow name` and there is no --base-ref / --step
+// / --agent shorthand). For isolated workflows the operator should
+// still run `autosk enroll` on the CLI to allocate the worktree.
 //
 // Routes through workflow.EnterStep so the step_visits counter on the
 // entry step is bumped and any max_visits cap is enforced. A cap hit
@@ -742,7 +748,7 @@ func (o *Offline) Enroll(ctx context.Context, id, wfName string) error {
 		return err
 	}
 	if t.Status == store.StatusWork {
-		return fmt.Errorf("enroll: task is 'work' (owned by engine); cancel + reopen + enroll to switch workflows")
+		return fmt.Errorf("enroll: task is 'work' (owned by engine); cancel then enroll to switch workflows (or reopen first to inspect in 'new')")
 	}
 	ws := workflow.New(o.s.DB(), agent.New(o.s.DB()))
 	wf, err := ws.GetByName(ctx, wfName)

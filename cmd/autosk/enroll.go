@@ -27,8 +27,9 @@ import (
 //     stamped with the chosen workflow + entry step and flipped to
 //     status='work' atomically by workflow.EnterStep.
 //   - `work` → already owned by the engine; the daemon will advance
-//     the task on its own. To switch workflows go through
-//     cancel + reopen + enroll.
+//     the task on its own. To switch workflows, cancel then enroll
+//     (or reopen first if you want to inspect the task in 'new'
+//     state before re-enrolling).
 //
 // `metadata.step_visits` is preserved across enroll regardless of the
 // source status; re-enrolling into the same workflow keeps the
@@ -69,8 +70,9 @@ is required; they are mutually exclusive.
                     only have one step).
 
 Accepted source statuses: new, human, done, cancel. The only refusal
-is status='work' — the task is currently owned by the engine; to put
-it into a different workflow, run cancel + reopen + enroll.
+is status='work' — the task is currently owned by the engine. To
+put it into a different workflow, cancel then enroll (or reopen
+first if you want to inspect the task in 'new' state).
 
 Note: enroll never clears metadata.step_visits, so re-enrolling into
 the same workflow keeps the max_visits cap honest. If you want a
@@ -149,7 +151,13 @@ Examples:
 				if res.BaseRefIgnored && !flagQuiet {
 					fmt.Fprintf(os.Stderr, "warning: --base-ref ignored — branch %s already exists; reusing\n", res.Branch)
 				}
-				wtAllocated = true
+				// Only roll back the worktree on EnterStep failure if we
+				// actually allocated it. enroll from `human` is the typical
+				// case where Ensure reports Existing=true: the prior step
+				// (e.g. validator) parked the task in human and the
+				// worktree dir is still on disk; reaping it via OnTerminal
+				// would silently destroy the operator's working tree.
+				wtAllocated = !res.Existing
 				wtRoot = root
 			} else if baseRefArg != "" {
 				return errors.New("--base-ref requires the target workflow to use isolation=worktree")
@@ -228,7 +236,7 @@ func checkEnrollable(ctx context.Context, wfs *workflow.Store, t store.Task) err
 	case store.StatusWork:
 		wfRef, stepRef := refsForLocation(ctx, wfs, t)
 		return fmt.Errorf(
-			"task already enrolled in workflow %s at step %s; the daemon will advance it — to switch workflows, cancel + reopen + enroll",
+			"task already enrolled in workflow %s at step %s; the daemon will advance it — to switch workflows, cancel then enroll (or reopen first if you want to inspect the task in 'new' state)",
 			wfRef, stepRef,
 		)
 	default:

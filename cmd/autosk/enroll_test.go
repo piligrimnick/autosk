@@ -508,6 +508,103 @@ func TestEnroll_FromDone_Isolated_ReusesBranch(t *testing.T) {
 	}
 }
 
+// TestEnroll_FromHuman_Isolated_FailedRollbackPreservesWorktree is
+// the regression fence for the rollback-vs-existing-worktree edge
+// case fixed by gating wtAllocated on !res.Existing. Setup:
+//
+//   - isolated workflow with max_visits=1 on the entry step;
+//   - create + enroll a task; step_visits[<entry>]=1, status='work';
+//   - flip status to 'human' via raw SQL (worktree dir intact);
+//   - re-enroll into the SAME workflow — EnterStep MUST fail because
+//     the counter is already at the cap.
+//
+// Before the fix the failed enroll would unconditionally roll back the
+// worktree via OnTerminal, deleting the pre-existing worktree dir we
+// did NOT allocate (Ensure short-circuited with Existing=true). The
+// task would be left in status='human' with workflow_id pointing at
+// the old workflow and no worktree on disk — the daemon could no
+// longer run it. With the fix wtAllocated tracks whether WE actually
+// allocated the dir; rollback skips the no-op Ensure case and the
+// operator's worktree survives.
+func TestEnroll_FromHuman_Isolated_FailedRollbackPreservesWorktree(t *testing.T) {
+	root := makeIsolatedProject(t)
+	withIsolatedPackagesPrefix(t)
+	if _, err := runRoot(t, root, "agent", "install", "@autosk/dev-fixture"); err != nil {
+		t.Fatalf("agent install: %v", err)
+	}
+	// Inline workflow with max_visits=1 on the (sole) entry step.
+	wf := map[string]any{
+		"name":       "iso-cap",
+		"first_step": "do",
+		"isolation":  "worktree",
+		"steps": map[string]any{
+			"do": map[string]any{
+				"agent":      map[string]any{"name": "@autosk/dev-fixture"},
+				"max_visits": 1,
+				"next_steps": []any{
+					map[string]any{"task_status": "done", "prompt_rule": "ship"},
+				},
+			},
+		},
+	}
+	wfBody, _ := json.MarshalIndent(wf, "", "  ")
+	wfPath := filepath.Join(root, "iso-cap.json")
+	if err := os.WriteFile(wfPath, wfBody, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runRoot(t, root, "workflow", "create", "--file", wfPath); err != nil {
+		t.Fatalf("workflow create: %v\n%s", err, out)
+	}
+
+	// create + enroll: bumps step_visits[do]=1, allocates worktree.
+	out, err := runRoot(t, root, "create", "capped", "--workflow", "iso-cap")
+	if err != nil {
+		t.Fatalf("create: %v\n%s", err, out)
+	}
+	id := createIDFromOutput(out)
+	wtPath, err := worktree.PathFor(root, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(wtPath); statErr != nil {
+		t.Fatalf("worktree dir should exist post-create at %s: %v", wtPath, statErr)
+	}
+	if !gitBranchExists(t, root, "autosk/"+id) {
+		t.Fatalf("branch autosk/%s should exist after create", id)
+	}
+
+	// Park as 'human' via raw SQL (no daemon, no step engine). The DB
+	// CHECK allows human with a step set, and the on-disk worktree is
+	// untouched. This mirrors the typical post-validator state.
+	q := fmt.Sprintf("UPDATE tasks SET status='human' WHERE id='%s'", id)
+	if sqlOut, err := runRoot(t, root, "sql", "--write", q); err != nil {
+		t.Fatalf("force human: %v\n%s", err, sqlOut)
+	}
+	if _, statErr := os.Stat(wtPath); statErr != nil {
+		t.Fatalf("worktree dir should still exist after forcing human: %v", statErr)
+	}
+
+	// Re-enroll into the SAME workflow — step_visits[do]=1 is already
+	// at max_visits=1, so EnterStep must reject with the cap error.
+	_, err = runRoot(t, root, "enroll", id, "--workflow", "iso-cap")
+	if err == nil {
+		t.Fatal("expected enroll to fail with max_visits cap")
+	}
+	if !strings.Contains(err.Error(), "max_visits") {
+		t.Errorf("expected max_visits cap error, got: %v", err)
+	}
+
+	// REGRESSION FENCE: the failed enroll must NOT reap the
+	// pre-existing worktree dir or branch. Pre-fix, OnTerminal would
+	// have deleted the dir via `git worktree remove --force`.
+	if _, statErr := os.Stat(wtPath); statErr != nil {
+		t.Fatalf("worktree dir was reaped by failed-enroll rollback: %s gone (%v)", wtPath, statErr)
+	}
+	if !gitBranchExists(t, root, "autosk/"+id) {
+		t.Fatalf("branch autosk/%s was destroyed by failed-enroll rollback", id)
+	}
+}
+
 // TestEnroll_FlagValidation covers the mutual-exclusivity and
 // at-least-one-required rules on --workflow / --agent.
 func TestEnroll_FlagValidation(t *testing.T) {
