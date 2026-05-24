@@ -247,8 +247,16 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 	)
 	gu.st.withLock(func() {
 		if r.terr == nil {
+			oldTaskID := ""
+			if t, ok := gu.st.selectedTask(); ok {
+				oldTaskID = t.ID
+			}
 			gu.st.tasks = sortTasksByRecency(applyTaskSearch(r.tasks, r.taskSearch))
-			gu.st.taskCursor = clampCursor(gu.st.taskCursor, len(gu.st.tasks))
+			if idx, ok := findIndexByKey(gu.st.tasks, oldTaskID, func(t datasource.Task) string { return t.ID }); ok {
+				gu.st.taskCursor = idx
+			} else {
+				gu.st.taskCursor = clampCursor(gu.st.taskCursor, len(gu.st.tasks))
+			}
 		}
 		if r.jerr == nil {
 			// Detect transitions for the currently-selected job
@@ -268,8 +276,16 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 			//     paths would otherwise leave the caret in
 			//     phantom-focus on a deleted view.
 			prevJob, hadPrev := gu.st.selectedJob()
+			oldJobID := ""
+			if hadPrev {
+				oldJobID = prevJob.JobID
+			}
 			gu.st.jobs = applyJobSearch(r.jobs, r.jobsSearch)
-			gu.st.jobCursor = clampCursor(gu.st.jobCursor, len(gu.st.jobs))
+			if idx, ok := findIndexByKey(gu.st.jobs, oldJobID, func(j datasource.Job) string { return j.JobID }); ok {
+				gu.st.jobCursor = idx
+			} else {
+				gu.st.jobCursor = clampCursor(gu.st.jobCursor, len(gu.st.jobs))
+			}
 			gu.st.taskJobIdx = r.taskJobIdx
 			if cur, ok := gu.st.selectedJob(); ok {
 				if hadPrev && cur.JobID == prevJob.JobID {
@@ -315,12 +331,28 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 			}
 		}
 		if r.werr == nil {
+			oldWfID := ""
+			if w, ok := gu.st.selectedWorkflow(); ok {
+				oldWfID = w.ID
+			}
 			gu.st.workflows = applyWfSearch(r.visibleWorkflows, r.workflowSearch)
-			gu.st.workflowCursor = clampCursor(gu.st.workflowCursor, len(gu.st.workflows))
+			if idx, ok := findIndexByKey(gu.st.workflows, oldWfID, func(w datasource.Workflow) string { return w.ID }); ok {
+				gu.st.workflowCursor = idx
+			} else {
+				gu.st.workflowCursor = clampCursor(gu.st.workflowCursor, len(gu.st.workflows))
+			}
 		}
 		if r.aerr == nil {
+			oldAgentName := ""
+			if a, ok := gu.st.selectedAgent(); ok {
+				oldAgentName = a.Name
+			}
 			gu.st.agents = applyAgentSearch(r.agents, r.agentSearch)
-			gu.st.agentCursor = clampCursor(gu.st.agentCursor, len(gu.st.agents))
+			if idx, ok := findIndexByKey(gu.st.agents, oldAgentName, func(a datasource.Agent) string { return a.Name }); ok {
+				gu.st.agentCursor = idx
+			} else {
+				gu.st.agentCursor = clampCursor(gu.st.agentCursor, len(gu.st.agents))
+			}
 		}
 		gu.st.health = r.health
 		gu.st.fallbacksLast = gu.st.fallbacksNow
@@ -355,6 +387,18 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 // The parameter is named maxLen (not cap) to avoid shadowing the Go
 // built-in cap — a small landmine if anyone ever needs cap(slice)
 // inside this function in the future.
+// findIndexByKey searches slice for the first element whose extracted key
+// matches key.  Returns (index, true) on a hit, (0, false) when the slice
+// is empty or no element matches.
+func findIndexByKey[T any](slice []T, key string, keyFn func(T) string) (int, bool) {
+	for i, v := range slice {
+		if keyFn(v) == key {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
 func evictCacheIfNeeded[V any](m map[string]V, key string, maxLen int) {
 	if _, exists := m[key]; exists {
 		return

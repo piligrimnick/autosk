@@ -369,16 +369,13 @@ func TestRefreshApply_RunningToTerminal_PreservesNonInputFocus(t *testing.T) {
 	}
 }
 
-// TestRefreshApply_ReshuffleToNonLiveJob_RevertsFocusFromJobInput
-// pins the BLOCKING regression review flagged: a refresh-driven
-// reshuffle of the jobs slice can shift the cursor's underlying
-// jobID to a TERMINAL job (e.g. a brand-new terminal entry lands
-// at index 0 while the operator is mid-typing on the previously-
-// running cursor row). The same-job running→terminal check
-// doesn't catch this case because the jobID has changed. The
-// general phantom-focus guard "if focused == panelJobInput AND
-// post-swap selected job is not live, revert" handles it.
-func TestRefreshApply_ReshuffleToNonLiveJob_RevertsFocusFromJobInput(t *testing.T) {
+// TestRefreshApply_SelectedJobVanishes_RevertsFocusFromJobInput
+// pins the phantom-focus guard: when the currently-selected running
+// job disappears from the jobs slice (filter / scope removed it)
+// and the remaining job at the cursor is terminal, the caret must
+// revert to panelJobs so the next layout doesn't leave it on a
+// deleted view.
+func TestRefreshApply_SelectedJobVanishes_RevertsFocusFromJobInput(t *testing.T) {
 	gu := &Gui{st: newState()}
 	gu.ds = &refreshFakeDS{}
 
@@ -391,15 +388,12 @@ func TestRefreshApply_ReshuffleToNonLiveJob_RevertsFocusFromJobInput(t *testing.
 		gu.st.focused = panelJobInput
 	})
 
-	// Refresh-driven reshuffle: a brand-new terminal job-Z lands at
-	// index 0, shoving job-A down to index 1. jobCursor stays
-	// pinned at 0, so the (post-swap) selected job is now job-Z
-	// (terminal). The winJobInput view will disappear on the next
-	// layout pass because isJobLive(job-Z) == false.
+	// Refresh removes job-A entirely; only a terminal job-Z remains.
+	// ID-based restore won't find job-A, so the cursor falls back to
+	// index 0 (job-Z, terminal). The winJobInput view must go away.
 	r := refreshResult{
 		jobs: []datasource.Job{
 			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "done"}},
-			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true}},
 		},
 		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
 	}
@@ -408,7 +402,47 @@ func TestRefreshApply_ReshuffleToNonLiveJob_RevertsFocusFromJobInput(t *testing.
 	var focused panelID
 	gu.st.withRLock(func() { focused = gu.st.focused })
 	if focused != panelJobs {
-		t.Errorf("focused after reshuffle-to-non-live = %v, want panelJobs (input view goes away; revert)", focused)
+		t.Errorf("focused after selected-job-vanishes = %v, want panelJobs (input view goes away; revert)", focused)
+	}
+}
+
+// TestRefreshApply_ReshuffleKeepsCursorOnSameJob pins the ID-based
+// cursor restore: a refresh-driven reshuffle that re-orders the jobs
+// slice must keep the cursor anchored to the previously-selected
+// job, not to its old positional index.
+func TestRefreshApply_ReshuffleKeepsCursorOnSameJob(t *testing.T) {
+	gu := &Gui{st: newState()}
+	gu.ds = &refreshFakeDS{}
+
+	gu.st.withLock(func() {
+		gu.st.jobs = []datasource.Job{
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true}},
+		}
+		gu.st.jobCursor = 0
+		gu.st.focused = panelJobInput
+	})
+
+	// Reshuffle: job-Z lands at index 0, job-A moves to index 1.
+	r := refreshResult{
+		jobs: []datasource.Job{
+			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "running", Streaming: true}},
+			{JobResponse: api.JobResponse{JobID: "job-A", Status: "running", Streaming: true}},
+		},
+		taskJobIdx: taskJobIndex{Active: map[string]bool{}, Any: map[string]bool{}},
+	}
+	gu.applyRefreshLocked(r)
+
+	var cursor int
+	var focused panelID
+	gu.st.withRLock(func() {
+		cursor = gu.st.jobCursor
+		focused = gu.st.focused
+	})
+	if cursor != 1 {
+		t.Errorf("jobCursor after reshuffle = %d, want 1 (job-A)", cursor)
+	}
+	if focused != panelJobInput {
+		t.Errorf("focused after reshuffle = %v, want panelJobInput (job-A still live)", focused)
 	}
 }
 
@@ -480,5 +514,123 @@ func TestRefreshApply_NoTransitionPreservesArchive(t *testing.T) {
 	})
 	if !got.Equal(loadedAt) {
 		t.Errorf("unchanged-status refresh clobbered loadedAt; got=%v want=%v", got, loadedAt)
+	}
+}
+
+// TestRefreshApply_TasksCursorByID pins ID-based cursor restore for
+// the Tasks panel: a re-sort or re-filter that changes positional
+// indices must keep the selection anchored to the same task.
+func TestRefreshApply_TasksCursorByID(t *testing.T) {
+	gu := &Gui{st: newState()}
+	gu.ds = &refreshFakeDS{}
+
+	gu.st.withLock(func() {
+		gu.st.tasks = []datasource.Task{
+			{ID: "ask-aaaaaa", Title: "first", UpdatedAt: time.Now().Add(-time.Hour)},
+			{ID: "ask-bbbbbb", Title: "second", UpdatedAt: time.Now()},
+		}
+		gu.st.taskCursor = 0
+	})
+
+	// Refresh re-orders: ask-bbbbbb (newer) lands at index 0.
+	r := refreshResult{
+		tasks: []datasource.Task{
+			{ID: "ask-bbbbbb", Title: "second", UpdatedAt: time.Now()},
+			{ID: "ask-aaaaaa", Title: "first", UpdatedAt: time.Now().Add(-time.Hour)},
+		},
+	}
+	gu.applyRefreshLocked(r)
+
+	var cursor int
+	var id string
+	gu.st.withRLock(func() {
+		cursor = gu.st.taskCursor
+		if t, ok := gu.st.selectedTask(); ok {
+			id = t.ID
+		}
+	})
+	if id != "ask-aaaaaa" {
+		t.Errorf("selected task after reshuffle = %q, want ask-aaaaaa", id)
+	}
+	if cursor != 1 {
+		t.Errorf("taskCursor after reshuffle = %d, want 1", cursor)
+	}
+}
+
+// TestRefreshApply_WorkflowsCursorByID mirrors the tasks test for
+// the Workflows panel.
+func TestRefreshApply_WorkflowsCursorByID(t *testing.T) {
+	gu := &Gui{st: newState()}
+	gu.ds = &refreshFakeDS{}
+
+	gu.st.withLock(func() {
+		gu.st.workflows = []datasource.Workflow{
+			{ID: "wf-1", Name: "alpha"},
+			{ID: "wf-2", Name: "beta"},
+		}
+		gu.st.workflowCursor = 0
+	})
+
+	// Refresh re-orders: beta lands at index 0.
+	r := refreshResult{
+		visibleWorkflows: []datasource.Workflow{
+			{ID: "wf-2", Name: "beta"},
+			{ID: "wf-1", Name: "alpha"},
+		},
+	}
+	gu.applyRefreshLocked(r)
+
+	var cursor int
+	var id string
+	gu.st.withRLock(func() {
+		cursor = gu.st.workflowCursor
+		if w, ok := gu.st.selectedWorkflow(); ok {
+			id = w.ID
+		}
+	})
+	if id != "wf-1" {
+		t.Errorf("selected workflow after reshuffle = %q, want wf-1", id)
+	}
+	if cursor != 1 {
+		t.Errorf("workflowCursor after reshuffle = %d, want 1", cursor)
+	}
+}
+
+// TestRefreshApply_AgentsCursorByKey mirrors the tasks test for
+// the Agents panel (keyed by Name).
+func TestRefreshApply_AgentsCursorByKey(t *testing.T) {
+	gu := &Gui{st: newState()}
+	gu.ds = &refreshFakeDS{}
+
+	gu.st.withLock(func() {
+		gu.st.agents = []datasource.Agent{
+			{Name: "alice"},
+			{Name: "bob"},
+		}
+		gu.st.agentCursor = 0
+	})
+
+	// Refresh re-orders: bob lands at index 0.
+	r := refreshResult{
+		agents: []datasource.Agent{
+			{Name: "bob"},
+			{Name: "alice"},
+		},
+	}
+	gu.applyRefreshLocked(r)
+
+	var cursor int
+	var name string
+	gu.st.withRLock(func() {
+		cursor = gu.st.agentCursor
+		if a, ok := gu.st.selectedAgent(); ok {
+			name = a.Name
+		}
+	})
+	if name != "alice" {
+		t.Errorf("selected agent after reshuffle = %q, want alice", name)
+	}
+	if cursor != 1 {
+		t.Errorf("agentCursor after reshuffle = %d, want 1", cursor)
 	}
 }

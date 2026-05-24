@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **lazy:** redesigned Workflow Detail pane.
 
 ### Fixed
+- **lazy:** fix cursor jumping to a different row when a refresh re-sorted or re-filtered a panel.
 - **lazy:** hydrate the job transcript on focus change to the Jobs panel
   (previously the pane could stay blank until the next refresh tick).
 - **lazy:** address review round 3 remarks (R6–R10) on the two-pane

@@ -575,12 +575,11 @@ func (f *dispatchFakeDS) AbortJob(_ context.Context, jobID string) error {
 //
 //  1. Operator drafts "plan: refactor X" against job-A.
 //  2. Refresh tick reshuffles the jobs slice so job-Z is at
-//     index 0 and job-A at index 1; jobCursor stays at 0, so
-//     the selected job is now job-Z.
+//     index 0 and job-A at index 1; the cursor is restored to
+//     job-A by ID, so the selected job stays job-A.
 //  3. Operator presses Ctrl-D (liveSend / liveDispatch).
 //  4. SendInput must be called with jobID == "job-A" (the
-//     authored target, recorded in jobInputOwner), NOT
-//     "job-Z" (the post-reshuffle current cursor).
+//     authored target, recorded in jobInputOwner).
 func TestLiveDispatch_AfterReshuffle_DispatchesToOwner(t *testing.T) {
 	gu := jobDetailLayoutFixture(t)
 	ds := &dispatchFakeDS{}
@@ -598,7 +597,7 @@ func TestLiveDispatch_AfterReshuffle_DispatchesToOwner(t *testing.T) {
 	})
 
 	// Refresh-driven reshuffle: job-Z lands at index 0, job-A at index 1.
-	// jobCursor pinned at 0 → selected job is now job-Z.
+	// ID-based restore keeps the cursor on job-A (index 1).
 	r := refreshResult{
 		jobs: []datasource.Job{
 			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "running", Streaming: true}},
@@ -647,17 +646,18 @@ func TestLiveDispatch_AfterReshuffle_DispatchesToOwner(t *testing.T) {
 // pins the regression review flagged: even if the operator types
 // one more character AFTER a refresh-driven reshuffle of the
 // jobs slice, the dispatch target must remain the authored job
-// (jobInputOwner), NOT the post-reshuffle cursor's job.
+// (jobInputOwner), NOT whatever job happens to be under the
+// cursor.
 //
 // The previous round's TestLiveDispatch_AfterReshuffle_
-// DispatchesToOwner passed accidentally because it dispatched
-// immediately after the reshuffle, with no intervening keystroke.
-// The earlier liveEditor implementation re-stamped jobInputOwner
-// on EVERY keystroke, so a single character pressed between the
-// reshuffle and Ctrl-D would flip ownership to the wrong job and
-// silently route the draft there. The fix: liveEditor only
-// stamps jobInputOwner when it is currently empty (i.e. on the
-// first keystroke of a new draft).
+// DispatchesToOwner passed because the cursor was stuck at index 0
+// (the old positional behaviour).  With ID-based restore the
+// cursor now tracks the selected job, but the liveEditor must still
+// NOT re-stamp jobInputOwner on a keystroke when a draft already
+// exists, otherwise a later scope/filter change that removes the
+// authored job could flip ownership to the new cursor job.
+// The fix: liveEditor only stamps jobInputOwner when it is
+// currently empty (i.e. on the first keystroke of a new draft).
 func TestLiveDispatch_AfterReshuffleAndKeystroke_DispatchesToOwner(t *testing.T) {
 	gu := jobDetailLayoutFixture(t)
 	ds := &dispatchFakeDS{}
@@ -675,6 +675,7 @@ func TestLiveDispatch_AfterReshuffleAndKeystroke_DispatchesToOwner(t *testing.T)
 	})
 
 	// Refresh-driven reshuffle: job-Z lands at index 0, job-A at index 1.
+	// ID-based restore keeps the cursor on job-A (index 1).
 	r := refreshResult{
 		jobs: []datasource.Job{
 			{JobResponse: api.JobResponse{JobID: "job-Z", Status: "running", Streaming: true}},
@@ -770,7 +771,9 @@ func TestLiveAbort_AfterReshuffle_TargetsOwner(t *testing.T) {
 	}
 
 	// Fallback path: no authored draft → abort targets the current
-	// cursor (job-Z, still at index 0 in this fixture).
+	// cursor.  With ID-based cursor restore the selection stays on
+	// job-A (index 1) even after the reshuffle, so the fallback
+	// target is job-A.
 	gu.st.withLock(func() {
 		gu.st.jobInput = ""
 		gu.st.jobInputOwner = ""
@@ -784,8 +787,8 @@ func TestLiveAbort_AfterReshuffle_TargetsOwner(t *testing.T) {
 	for ds.abortCalls.Load() == 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if got, _ := ds.abortLastJob.Load().(string); got != "job-Z" {
-		t.Errorf("AbortJob fallback target = %q, want %q (current cursor when no draft)", got, "job-Z")
+	if got, _ := ds.abortLastJob.Load().(string); got != "job-A" {
+		t.Errorf("AbortJob fallback target = %q, want %q (current cursor when no draft)", got, "job-A")
 	}
 }
 
