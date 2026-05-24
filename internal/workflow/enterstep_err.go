@@ -30,7 +30,7 @@ func (e *EnterStepHint) Unwrap() error { return e.Wrapped }
 
 // MapEnterStepError translates a workflow.EnterStep error into a
 // user-facing message. The hint is identical across every surface
-// that calls EnterStep — CLI verbs (`autosk enroll/resume/assign/create`)
+// that calls EnterStep — CLI verbs (`autosk enroll/resume/create`)
 // and the lazy TUI — so an operator who bounces between the two sees
 // the same copy-pasteable command line either way.
 //

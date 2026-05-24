@@ -49,7 +49,6 @@ func newRootCmd() *cobra.Command {
 		newDaemonCmd(),
 		newAgentCmd(),
 		newWorkflowCmd(),
-		newAssignCmd(),
 		newEnrollCmd(),
 		newResumeCmd(),
 		newCommentCmd(),
