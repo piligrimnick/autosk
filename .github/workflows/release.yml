@@ -105,11 +105,24 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Extract release notes from CHANGELOG.md (Keep a Changelog 1.1.0
+      # `## [<version>]` section). The script exits non-zero if the section
+      # is missing or empty, which fails the job on purpose: every tag --
+      # including pre-releases like v1.2.3-rc1 -- must have a matching
+      # entry. No CHANGELOG entry, no release.
+      - name: extract release notes from CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          scripts/changelog-section.sh "$version" > release-notes.md
+          echo "--- release notes for ${GITHUB_REF_NAME} ---"
+          cat release-notes.md
+          echo "--- end release notes ---"
+
       - name: create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          flags=( --title "${GITHUB_REF_NAME}" --generate-notes )
+          flags=( --title "${GITHUB_REF_NAME}" --notes-file release-notes.md )
           if [[ "${{ steps.meta.outputs.prerelease }}" == "true" ]]; then
             flags+=( --prerelease )
           fi
