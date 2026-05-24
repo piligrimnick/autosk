@@ -100,7 +100,7 @@ func TestComposeDescriptionSubtitleFocusDependent(t *testing.T) {
 	if !strings.Contains(focused, "<tab>") {
 		t.Errorf("subtitle (description focused) must still mention <tab>: %q", focused)
 	}
-	for _, want := range []string{"<c-s>", "<a-enter>", "submit"} {
+	for _, want := range []string{"<ctrl+s>", "submit"} {
 		if !strings.Contains(focused, want) {
 			t.Errorf("subtitle (description focused) must mention %q: %q", want, focused)
 		}
@@ -141,7 +141,7 @@ func TestComposeDescriptionSubtitleFocusDependent(t *testing.T) {
 	_ = gu.taskComposeToggle(nil, nil)
 	gu.layoutPopup(g, 120, 40)
 	descV, _ = g.View(winTaskComposeDescription)
-	for _, want := range []string{"<tab>", "<c-s>", "<a-enter>"} {
+	for _, want := range []string{"<tab>", "<ctrl+s>"} {
 		if !strings.Contains(descV.Subtitle, want) {
 			t.Errorf("layout: description-focused subtitle missing %q: %q", want, descV.Subtitle)
 		}

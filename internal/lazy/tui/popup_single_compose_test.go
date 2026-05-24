@@ -112,9 +112,9 @@ func TestComposeSingleSubtitleAlwaysShowsSubmitHint(t *testing.T) {
 		hint string
 		want []string // substrings that must be present
 	}{
-		{"", []string{"<c-s>", "<a-enter>", "submit", "<esc>", "cancel"}},
-		{"markdown ok", []string{"<c-s>", "<a-enter>", "submit", "<esc>", "cancel", "markdown ok"}},
-		{"JSON object", []string{"<c-s>", "<a-enter>", "submit", "<esc>", "cancel", "JSON object"}},
+		{"", []string{"<ctrl+s>", "submit", "<esc>", "cancel"}},
+		{"markdown ok", []string{"<ctrl+s>", "submit", "<esc>", "cancel", "markdown ok"}},
+		{"JSON object", []string{"<ctrl+s>", "submit", "<esc>", "cancel", "JSON object"}},
 	}
 	for _, tc := range cases {
 		got := composeSingleSubtitle(tc.hint)
@@ -248,5 +248,57 @@ func TestArrangementHasSingleCompose(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("winSingleCompose missing from allPopupWindows: %v", allPopupWindows)
+	}
+}
+
+// TestComposeSubmitBindingsAndNoAltEnter pins the bug-fix for
+// ask-448dcd: Alt+Enter does NOT reliably reach gocui through most
+// terminals (it is consumed as ESC-prefix or eaten by the terminal
+// multiplexer), so the (KeyEnter, ModAlt) submit chord that used
+// to be advertised on the description / single-compose panes is
+// dead UI noise. We removed those rows, but the Ctrl+S rows must
+// stay so the user has a working submit chord.
+//
+// DeleteKeybinding(view, key, mod) returns nil iff a matching
+// binding exists — same falsifiable pattern as
+// TestPopupConfirmKeysNotGloballyBound.
+func TestComposeSubmitBindingsAndNoAltEnter(t *testing.T) {
+	g, err := gocui.NewGui(gocui.NewGuiOpts{
+		OutputMode: gocui.OutputNormal,
+		Headless:   true,
+		Width:      80,
+		Height:     24,
+	})
+	if err != nil {
+		t.Fatalf("gocui new: %v", err)
+	}
+	defer g.Close()
+	gu := &Gui{g: g, st: newState()}
+	if err := gu.bindKeys(); err != nil {
+		t.Fatalf("bindKeys: %v", err)
+	}
+
+	// Ctrl+S MUST be bound on every compose view — it's the only
+	// submit chord left after the Alt+Enter removal.
+	for _, view := range []string{
+		winTaskComposeSummary,
+		winTaskComposeDescription,
+		winSingleCompose,
+	} {
+		if err := g.DeleteKeybinding(view, gocui.KeyCtrlS, gocui.ModNone); err != nil {
+			t.Errorf("Ctrl+S must be bound on %q (compose submit); DeleteKeybinding returned %v", view, err)
+		}
+	}
+
+	// And no (KeyEnter, ModAlt) row for any compose view: Alt+Enter
+	// is dead UI noise on most terminals and was removed.
+	for _, view := range []string{
+		winTaskComposeSummary,
+		winTaskComposeDescription,
+		winSingleCompose,
+	} {
+		if err := g.DeleteKeybinding(view, gocui.KeyEnter, gocui.ModAlt); err == nil {
+			t.Errorf("(KeyEnter, ModAlt) must NOT be bound on %q; the Alt+Enter chord was removed", view)
+		}
 	}
 }
