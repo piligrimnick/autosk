@@ -59,52 +59,96 @@ func TestRenderWorkflowsPanel_NonIsolatedUnchanged(t *testing.T) {
 	}
 }
 
-// TestRenderWorkflowDetail_IsolationLine pins the workflow-inspector
-// isolation line: always present, includes the non-terminal-task
-// count when applicable.
+// TestRenderWorkflowDetail_IsolationLine pins the new header-chip
+// behaviour for the workflow Detail pane:
+//
+//   - the `[wt]` chip appears IFF !w.IsSynthetic &&
+//     w.Isolation == "worktree";
+//   - synthetic rows never carry the chip, regardless of their
+//     pinned isolation value;
+//   - the legacy `isolation: <mode>` line, the
+//     `... currently use this` suffix, the
+//     `synthetic single-step workflow` line, the
+//     `pinned: synthetic workflows always 'none'` suffix and the
+//     top-level `tasks:` / per-step `tasks=` chips are all gone.
+//
+// Run as a single table-driven test so every input case has the
+// banned-substring assertions applied in lockstep with the
+// chip-presence check.
 func TestRenderWorkflowDetail_IsolationLine(t *testing.T) {
 	cases := []struct {
-		name string
-		w    datasource.Workflow
-		want []string
+		name     string
+		w        datasource.Workflow
+		wantChip bool
 	}{
 		{
-			name: "isolated_with_tasks",
+			name: "isolated_worktree",
+			w: datasource.Workflow{
+				Name: "iso", Isolation: "worktree", FirstStep: "dev",
+			},
+			wantChip: true,
+		},
+		{
+			name: "isolated_worktree_with_tasks",
 			w: datasource.Workflow{
 				Name: "iso", Isolation: "worktree", FirstStep: "dev",
 				NonTerminalTaskCount: 3,
 			},
-			want: []string{"isolation: worktree", "3 non-terminal task(s)"},
+			wantChip: true,
 		},
 		{
-			name: "isolated_no_tasks",
+			name: "plain_none",
 			w: datasource.Workflow{
-				Name: "iso", Isolation: "worktree", FirstStep: "dev",
+				Name: "plain", Isolation: "none", FirstStep: "dev",
 			},
-			want: []string{"isolation: worktree"},
+			wantChip: false,
 		},
 		{
 			name: "plain_empty_string",
 			w: datasource.Workflow{
 				Name: "plain", Isolation: "", FirstStep: "dev",
 			},
-			want: []string{"isolation: none"},
+			wantChip: false,
 		},
 		{
-			name: "synthetic_pinned_note",
+			name: "synthetic_worktree_no_chip",
+			w: datasource.Workflow{
+				Name: "single:@autosk/dev", Isolation: "worktree", IsSynthetic: true, FirstStep: "do",
+			},
+			wantChip: false,
+		},
+		{
+			name: "synthetic_none",
 			w: datasource.Workflow{
 				Name: "single:@autosk/dev", Isolation: "none", IsSynthetic: true, FirstStep: "do",
 			},
-			want: []string{"isolation: none", "pinned: synthetic workflows always 'none'"},
+			wantChip: false,
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			visible := ansiutil.Strip(renderWorkflowDetail(c.w, 80))
-			for _, want := range c.want {
-				if !strings.Contains(visible, want) {
-					t.Errorf("missing %q in:\n%s", want, visible)
+			out := renderWorkflowDetail(c.w, 80)
+			visible := ansiutil.Strip(out)
+			if got := strings.Contains(visible, "[wt]"); got != c.wantChip {
+				t.Errorf("[wt] chip presence = %v, want %v in:\n%s", got, c.wantChip, visible)
+			}
+			// None of the legacy substrings may appear for any input.
+			for _, banned := range []string{
+				"isolation:",
+				"currently use this",
+				"synthetic single-step workflow",
+				"pinned: synthetic workflows always",
+				"tasks:",
+				"tasks=",
+			} {
+				if strings.Contains(visible, banned) {
+					t.Errorf("output contains banned substring %q in:\n%s", banned, visible)
 				}
+			}
+			// And the raw output must not lead with a `"workflow "` chip
+			// (the old styleHeader.Render("workflow") prefix).
+			if strings.HasPrefix(visible, "workflow ") {
+				t.Errorf("output should not start with legacy \"workflow \" chip:\n%s", visible)
 			}
 		})
 	}

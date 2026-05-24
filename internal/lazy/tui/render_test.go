@@ -969,3 +969,223 @@ func TestDrawLabeledBox_Dimensions(t *testing.T) {
 		t.Errorf("narrow box should fall back to body; got %q", got)
 	}
 }
+
+// TestRenderWorkflowDetail_HeaderLine pins the first line's order
+// and shape, ANSI-stripped:
+//
+//	^<name>( \[wt\])? first step: <step>$
+//
+// The `[wt]` chip appears IFF !w.IsSynthetic && w.Isolation ==
+// "worktree"; everything else is dropped. No leading `"workflow "`
+// chip survives.
+func TestRenderWorkflowDetail_HeaderLine(t *testing.T) {
+	cases := []struct {
+		name string
+		w    datasource.Workflow
+		want string
+	}{
+		{
+			name: "worktree",
+			w:    datasource.Workflow{Name: "iso", Isolation: "worktree", FirstStep: "dev"},
+			want: "iso [wt] first step: dev",
+		},
+		{
+			name: "none_mode",
+			w:    datasource.Workflow{Name: "plain", Isolation: "none", FirstStep: "dev"},
+			want: "plain first step: dev",
+		},
+		{
+			name: "empty_isolation",
+			w:    datasource.Workflow{Name: "blank", Isolation: "", FirstStep: "dev"},
+			want: "blank first step: dev",
+		},
+		{
+			name: "synthetic_pinned_worktree_no_chip",
+			w: datasource.Workflow{
+				Name: "single:@autosk/dev", Isolation: "worktree",
+				IsSynthetic: true, FirstStep: "do",
+			},
+			want: "single:@autosk/dev first step: do",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			visible := ansiutil.Strip(renderWorkflowDetail(c.w, 80))
+			firstLine := strings.SplitN(visible, "\n", 2)[0]
+			if firstLine != c.want {
+				t.Errorf("header line mismatch:\n got: %q\nwant: %q", firstLine, c.want)
+			}
+		})
+	}
+}
+
+// TestRenderWorkflowDetail_StepsBoxBorder pins the Steps box top
+// border shape: `╭─ Steps (N) ` (same chrome as `Recent signals
+// (N)` in renderTaskDetail).
+func TestRenderWorkflowDetail_StepsBoxBorder(t *testing.T) {
+	wf := datasource.Workflow{
+		Name: "wf", FirstStep: "dev",
+		Steps: []datasource.WorkflowStep{
+			{Name: "dev", AgentName: "a1", NextSteps: []string{"review"}},
+			{Name: "review", AgentName: "a2", NextStatus: []string{"done"}},
+		},
+	}
+	out := renderWorkflowDetail(wf, 80)
+	visible := ansiutil.Strip(out)
+	if !strings.Contains(visible, "╭─ Steps (2) ") {
+		t.Errorf("missing \"Steps (2)\" box header: %q", visible)
+	}
+	if !strings.Contains(visible, "╰─") {
+		t.Errorf("missing rounded-bottom-left corner: %q", visible)
+	}
+}
+
+// TestRenderWorkflowDetail_StepsAligned pins the column-alignment
+// contract: with step names and agent names of varying widths,
+// `agent=` and `next=` chips land at the same x on every row.
+func TestRenderWorkflowDetail_StepsAligned(t *testing.T) {
+	wf := datasource.Workflow{
+		Name: "feature-dev-generic", FirstStep: "dev",
+		Steps: []datasource.WorkflowStep{
+			{Name: "dev", AgentName: "@autogent/generic", NextSteps: []string{"review"}},
+			{Name: "review", AgentName: "@your-org/custom-agent", NextSteps: []string{"docs", "dev"}},
+			{Name: "docs", AgentName: "@autogent/generic", NextSteps: []string{"validator"}},
+			{Name: "validator", AgentName: "@autogent/generic", NextSteps: []string{"dev"}, NextStatus: []string{"human"}},
+		},
+	}
+	out := renderWorkflowDetail(wf, 120)
+	visible := ansiutil.Strip(out)
+
+	// Pull just the step rows (frame + interior containing `agent=`).
+	var rows []string
+	for _, ln := range strings.Split(visible, "\n") {
+		if !strings.HasPrefix(ln, "│ ") || !strings.HasSuffix(ln, " │") {
+			continue
+		}
+		if !strings.Contains(ln, "agent=") {
+			continue
+		}
+		inner := strings.TrimSuffix(strings.TrimPrefix(ln, "│ "), " │")
+		rows = append(rows, strings.TrimRight(inner, " "))
+	}
+	if len(rows) != len(wf.Steps) {
+		t.Fatalf("expected %d step rows; got %d: %q", len(wf.Steps), len(rows), rows)
+	}
+
+	// `agent=` chip starts at the same x on every row.
+	agentX := strings.Index(rows[0], "agent=")
+	if agentX < 0 {
+		t.Fatalf("row 0 has no agent= chip: %q", rows[0])
+	}
+	for i, r := range rows {
+		if x := strings.Index(r, "agent="); x != agentX {
+			t.Errorf("row %d: agent= chip x=%d, want %d: %q", i, x, agentX, r)
+		}
+	}
+	// `next=` chip starts at the same x on every row.
+	nextX := strings.Index(rows[0], "next=")
+	if nextX < 0 {
+		t.Fatalf("row 0 has no next= chip: %q", rows[0])
+	}
+	for i, r := range rows {
+		if x := strings.Index(r, "next="); x != nextX {
+			t.Errorf("row %d: next= chip x=%d, want %d: %q", i, x, nextX, r)
+		}
+	}
+
+	// On the widest-step row, the column separator is the ONLY
+	// thing between the rightmost char of the step name and
+	// `agent=` — i.e. exactly one space, no double-space gutter.
+	// Pick the row whose step name equals the widest known step
+	// (`validator` in this fixture) and verify the prefix is
+	// `validator ` (one space) immediately followed by `agent=`.
+	wantPrefix := "validator agent="
+	foundWidest := false
+	for _, r := range rows {
+		if strings.HasPrefix(r, "validator ") {
+			foundWidest = true
+			if !strings.HasPrefix(r, wantPrefix) {
+				t.Errorf("widest-step row must use a single-space column separator before `agent=`; got %q, want prefix %q", r, wantPrefix)
+			}
+			break
+		}
+	}
+	if !foundWidest {
+		t.Fatalf("could not find row for widest step `validator` in %q", rows)
+	}
+}
+
+// TestRenderWorkflowDetail_NextNone pins the `next=(none)` rendering
+// for a terminal step whose NextSteps and NextStatus are both empty.
+// `(none)` itself must wear styleMuted.
+func TestRenderWorkflowDetail_NextNone(t *testing.T) {
+	forceTrueColor(t)
+	wf := datasource.Workflow{
+		Name: "wf", FirstStep: "terminal",
+		Steps: []datasource.WorkflowStep{
+			{Name: "terminal", AgentName: "a1"},
+		},
+	}
+	out := renderWorkflowDetail(wf, 80)
+	visible := ansiutil.Strip(out)
+	if !strings.Contains(visible, "next=(none)") {
+		t.Errorf("missing \"next=(none)\" for terminal step: %q", visible)
+	}
+	// `(none)` must wear styleMuted (renderer wraps it explicitly).
+	if !strings.Contains(out, styleMuted.Render("(none)")) {
+		t.Errorf("\"(none)\" should wear styleMuted hue: %q", out)
+	}
+}
+
+// TestRenderWorkflowDetail_NoTasksSubstrings is a defence-in-depth
+// check for acceptance criterion #1: the per-step `tasks=N` chip
+// and the top-level `tasks: N` line are both gone for every input
+// shape, alongside the other legacy substrings.
+func TestRenderWorkflowDetail_NoTasksSubstrings(t *testing.T) {
+	inputs := []datasource.Workflow{
+		{
+			Name: "iso", Isolation: "worktree", FirstStep: "dev",
+			TaskCount: 7, NonTerminalTaskCount: 3,
+			Steps: []datasource.WorkflowStep{
+				{Name: "dev", AgentName: "a1", TaskCount: 2, NextSteps: []string{"review"}},
+				{Name: "review", AgentName: "a2", TaskCount: 5, NextStatus: []string{"done"}},
+			},
+		},
+		{
+			Name: "single:@autosk/dev", IsSynthetic: true, Isolation: "none", FirstStep: "do",
+			Steps: []datasource.WorkflowStep{
+				{Name: "do", AgentName: "@autosk/dev", TaskCount: 1},
+			},
+		},
+		{
+			Name: "plain", Isolation: "", FirstStep: "dev",
+			Steps: []datasource.WorkflowStep{
+				{Name: "dev", AgentName: "a1", TaskCount: 0},
+			},
+		},
+	}
+	banned := []string{
+		"isolation:",
+		"tasks:",
+		"tasks=",
+		"synthetic single-step workflow",
+		"currently use this",
+		"pinned: synthetic workflows always",
+	}
+	for _, w := range inputs {
+		t.Run(w.Name, func(t *testing.T) {
+			out := renderWorkflowDetail(w, 80)
+			visible := ansiutil.Strip(out)
+			for _, s := range banned {
+				if strings.Contains(visible, s) {
+					t.Errorf("output contains banned substring %q in:\n%s", s, visible)
+				}
+			}
+			// Raw output (pre-ANSI-strip) must not lead with the
+			// legacy `"workflow "` chip from styleHeader.Render.
+			if strings.HasPrefix(visible, "workflow ") {
+				t.Errorf("output should not lead with \"workflow \" chip:\n%s", visible)
+			}
+		})
+	}
+}

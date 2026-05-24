@@ -1178,51 +1178,81 @@ func styleForJobStatus(j datasource.Job) lipgloss.Style {
 	return styleMuted
 }
 
+// renderWorkflowDetail renders the right-hand Detail pane when a
+// workflow is selected in the Workflows panel.
+//
+// Layout:
+//
+//	<name>  [wt]?  first step: <step>
+//	<markdown(Description), if set>
+//	╭─ Steps (N) ─────────────────────────────────╮
+//	│ dev       agent=@autogent/generic next=review  │
+//	│ review    agent=@org/custom      next=docs, dev│
+//	...
+//	╰─────────────────────────────────────────────────╯
+//
+// Rules:
+//   - `[wt]` chip appears iff !w.IsSynthetic && w.Isolation ==
+//     "worktree" (the same condition the Workflows panel uses for
+//     its [wt] marker). Wears styleMuted so it reads as metadata,
+//     not a focal point.
+//   - `agent=` / `next=` / `(none)` literals are styleMuted; the
+//     value tokens keep their entity hues (renderStepName,
+//     renderAgentName; styleForTaskStatus for lifecycle terminals
+//     like done/cancel/human on the right-hand side of `next=`).
+//   - Step-name column is padded to the widest plain step name
+//     across w.Steps; agent-name column is padded so the `next=`
+//     chip lands at the same x on every row. Padding is emitted as
+//     plain spaces OUTSIDE the styled SGR spans (same discipline
+//     the `Recent signals (N)` table uses) so trailing whitespace
+//     doesn't pick up the entity hue.
+//   - The Steps table is wrapped in drawLabeledBox so its chrome
+//     mirrors the `Recent signals (N)` widget in renderTaskDetail.
 func renderWorkflowDetail(w datasource.Workflow, width int) string {
 	var b strings.Builder
-	fmt.Fprintln(&b,
-		styleHeader.Render("workflow")+" "+renderWorkflowName(w.Name))
-	if w.IsSynthetic {
-		fmt.Fprintln(&b, styleMuted.Render("synthetic single-step workflow"))
+
+	// Header line: <name> [wt]? first step: <step>. No leading
+	// "workflow" chip — the gocui frame title ("[3] Detail") already
+	// identifies the pane, and the row reads as a single scan line
+	// keyed on the workflow name in its entity hue.
+	hdr := renderWorkflowName(w.Name)
+	if !w.IsSynthetic && w.Isolation == "worktree" {
+		hdr += " " + styleMuted.Render("[wt]")
 	}
-	// Isolation line: always render the mode so the operator can read
-	// it without opening `workflow show`. Synthetic rows include the
-	// pinned note so the `i` keybinding's status-bar message makes
-	// sense in context.
-	//
-	// Plan §5.4.2 spells the label `Isolation:` (capitalised); we use
-	// lowercase here for visual consistency with the surrounding pane
-	// (`first step:`, `tasks:` are both lowercase). The choice is
-	// pinned in render_isolation_test.go and called out as a
-	// deviation in the WU1-WU4 dev hand-off.
-	isolation := w.Isolation
-	if isolation == "" {
-		isolation = "none"
-	}
-	isoLine := "isolation: " + isolation
-	switch {
-	case w.IsSynthetic:
-		isoLine += styleMuted.Render("   (pinned: synthetic workflows always 'none')")
-	case w.NonTerminalTaskCount > 0:
-		isoLine += styleMuted.Render(fmt.Sprintf("   (%d non-terminal task(s) currently use this)", w.NonTerminalTaskCount))
-	}
-	fmt.Fprintln(&b, isoLine)
+	hdr += " " + styleMuted.Render("first step:") + " " + renderStepName(w.FirstStep)
+	b.WriteString(hdr + "\n")
+
 	if w.Description != "" {
 		// Workflow.Description is operator-authored markdown (same
 		// shape as Task.Description). Render it through the same
 		// glamour pipeline so headings / lists / code fences match
 		// the visual language of the task pane.
-		fmt.Fprintln(&b, markdown.Render(w.Description, width))
+		b.WriteString(markdown.Render(w.Description, width))
+		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "first step: %s\n", renderStepName(w.FirstStep))
-	fmt.Fprintf(&b, "tasks: %d\n", w.TaskCount)
-	b.WriteString(styleMuted.Render("─ steps ─") + "\n")
+
+	// Compute column widths from the plain (un-styled) token widths so
+	// the ANSI escapes added by renderStepName / renderAgentName don't
+	// inflate the byte width past what the padding math can reason
+	// about.
+	stepW := 0
+	agentW := 0
+	for _, s := range w.Steps {
+		if n := utf8.RuneCountInString(s.Name); n > stepW {
+			stepW = n
+		}
+		if n := utf8.RuneCountInString(s.AgentName); n > agentW {
+			agentW = n
+		}
+	}
+
+	lines := make([]string, 0, len(w.Steps))
 	for _, s := range w.Steps {
 		// Format the next-target list with per-entry colouring: step
-		// names go red; lifecycle terminals (done/cancel/
-		// human) take their task-status hue. workflow's own
-		// step graph mixes both, so we colour each token before
-		// joining instead of styling the joined string.
+		// names go purple; lifecycle terminals (done/cancel/human)
+		// take their task-status hue. The workflow's own step graph
+		// mixes both, so we colour each token before joining
+		// instead of styling the joined string.
 		var tokens []string
 		for _, n := range s.NextSteps {
 			tokens = append(tokens, renderStepName(n))
@@ -1234,9 +1264,18 @@ func renderWorkflowDetail(w datasource.Workflow, width int) string {
 		if nexts == "" {
 			nexts = styleMuted.Render("(none)")
 		}
-		fmt.Fprintf(&b, "  %s  agent=%s  next=%s  tasks=%d\n",
-			renderStepName(s.Name), renderAgentName(s.AgentName), nexts, s.TaskCount)
+		stepPad := strings.Repeat(" ", stepW-utf8.RuneCountInString(s.Name))
+		agentPad := strings.Repeat(" ", agentW-utf8.RuneCountInString(s.AgentName))
+		lines = append(lines,
+			renderStepName(s.Name)+stepPad+" "+
+				styleMuted.Render("agent=")+renderAgentName(s.AgentName)+agentPad+" "+
+				styleMuted.Render("next=")+nexts)
 	}
+
+	label := styleMuted.Render(fmt.Sprintf("Steps (%d)", len(w.Steps)))
+	b.WriteString(drawLabeledBox(label, strings.Join(lines, "\n"), width))
+	b.WriteString("\n")
+
 	return b.String()
 }
 
