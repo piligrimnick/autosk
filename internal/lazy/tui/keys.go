@@ -213,14 +213,12 @@ func (gu *Gui) bindKeys() error {
 		// Description pane: Enter is INTENTIONALLY NOT bound here —
 		// gocui falls through to SimpleEditor which inserts "\n", which
 		// is the whole point of having a description pane. Submitting
-		// requires Ctrl+S or Alt+Enter (the user picked both). Tab
-		// toggles back to Summary, Esc closes.
+		// requires Ctrl+S. Tab toggles back to Summary, Esc closes.
 		{winTaskComposeSummary, gocui.KeyEnter, gocui.ModNone, gu.taskComposeConfirm},
 		{winTaskComposeSummary, gocui.KeyCtrlS, gocui.ModNone, gu.taskComposeConfirm},
 		{winTaskComposeSummary, gocui.KeyTab, gocui.ModNone, gu.taskComposeToggle},
 		{winTaskComposeSummary, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
 		{winTaskComposeDescription, gocui.KeyCtrlS, gocui.ModNone, gu.taskComposeConfirm},
-		{winTaskComposeDescription, gocui.KeyEnter, gocui.ModAlt, gu.taskComposeConfirm},
 		{winTaskComposeDescription, gocui.KeyTab, gocui.ModNone, gu.taskComposeToggle},
 		{winTaskComposeDescription, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
 
@@ -228,10 +226,9 @@ func (gu *Gui) bindKeys() error {
 		//
 		// Plain Enter is intentionally NOT bound — it falls through to
 		// gocui.DefaultEditor which inserts "\n", which is the whole
-		// point of the multi-line popup. Submitting requires Ctrl+S or
-		// Alt+Enter. Esc cancels without invoking OnAccept.
+		// point of the multi-line popup. Submitting requires Ctrl+S.
+		// Esc cancels without invoking OnAccept.
 		{winSingleCompose, gocui.KeyCtrlS, gocui.ModNone, gu.singleComposeConfirm},
-		{winSingleCompose, gocui.KeyEnter, gocui.ModAlt, gu.singleComposeConfirm},
 		{winSingleCompose, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
 		{winSingleCompose, gocui.KeyCtrlC, gocui.ModNone, gu.quit},
 	}
@@ -749,9 +746,9 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"  1..4 Tab     focus side panel    /   filter",
 		"  0            focus detail        :   palette",
 		"  R            refresh             *   clear scope",
-		"  Ctrl-R       hard refresh (reopen db conn; recover from cross-process gc)",
+		"  ctrl+R       hard refresh (reopen db conn; recover from cross-process gc)",
 		"  @            toggle log          ?   help",
-		"  q Ctrl-C     quit                Esc back/close",
+		"  q ctrl+C     quit                Esc back/close",
 		"",
 		"tasks:",
 		"  Space        filter Jobs by selected task (stay on Tasks)",
@@ -772,19 +769,19 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"",
 		"detail:",
 		"  j/k arrows                line scroll",
-		"  Ctrl-F/Ctrl-B/PgUp/PgDn   page scroll",
+		"  ctrl+F/ctrl+B/PgUp/PgDn   page scroll",
 		"  g/G                       top/bottom",
 		"  wheel                     scroll",
 		"",
 		"job input (non-terminal job):",
-		"  Ctrl-D send     Ctrl-F follow_up    Ctrl-A abort",
-		"  Esc cancel      Ctrl-B/PgUp/PgDn    scroll transcript above",
+		"  ctrl+D send     ctrl+F follow_up    ctrl+A abort",
+		"  Esc cancel      ctrl+B/PgUp/PgDn    scroll transcript above",
 		"",
 		"compose (new task / edit task):",
-		"  summary: Enter / Ctrl-S submit  Tab → description  Esc cancel",
-		"  description: Ctrl-S / Alt-Enter submit  Tab → summary  Esc cancel",
+		"  summary: Enter / ctrl+S submit  Tab → description  Esc cancel",
+		"  description: ctrl+S submit  Tab → summary  Esc cancel",
 		"compose (comment / metadata):",
-		"  Ctrl-S / Alt-Enter submit  Enter newline  Esc cancel",
+		"  ctrl+S submit  Enter newline  Esc cancel",
 	}
 	gu.openMenu("help", lines, func(_ int) error { return gu.popupClose(nil, nil) })
 	return nil
@@ -1087,10 +1084,10 @@ func (gu *Gui) taskComment(*gocui.Gui, *gocui.View) error {
 	if !ok {
 		return nil
 	}
-	// Single-pane multi-line compose: Enter inserts \n, Ctrl-S /
-	// Alt-Enter submit, Esc cancels. An empty submit (whitespace
-	// only) is a silent cancel — same semantics as the previous
-	// one-line prompt the comment popup used.
+	// Single-pane multi-line compose: Enter inserts \n, Ctrl+S
+	// submits, Esc cancels. An empty submit (whitespace only) is a
+	// silent cancel — same semantics as the previous one-line
+	// prompt the comment popup used.
 	gu.openSingleCompose("Comment on "+t.ID, "markdown ok", "", func(text string) error {
 		if strings.TrimSpace(text) == "" {
 			return nil

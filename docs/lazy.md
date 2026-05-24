@@ -115,7 +115,7 @@ every other kind (`user_text`, `tool_call`, `tool_result`,
 | `r` | Resume (`human` → `work`); optionally to a named step. |
 | `b` | Add a blocker (prompts for blocker id). |
 | `u` | Remove a blocker (prompts for blocker id). |
-| `m` | Add a comment — single-pane multi-line compose. `Enter` inserts a newline; `Ctrl-S` / `Alt-Enter` submits; `Esc` cancels. Empty submit is a silent cancel. |
+| `m` | Add a comment — single-pane multi-line compose. `Enter` inserts a newline; `ctrl+S` submits; `Esc` cancels. Empty submit is a silent cancel. |
 | `p` | Set priority (`0` … `3` picker). |
 | `M` | **Edit metadata** — single-pane editor pre-filled with the task's current `metadata` pretty-printed as JSON (`{}` when empty). On submit the body is parsed as a JSON object and replaces `tasks.metadata` wholesale. Invalid JSON or a non-object payload re-opens the popup with the error and the typed text intact. |
 | `J` / `K` | Scroll the task-detail viewport. |

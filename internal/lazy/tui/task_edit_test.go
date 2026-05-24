@@ -71,7 +71,7 @@ func TestTaskEditNoOpWithoutSelection(t *testing.T) {
 }
 
 // TestTaskEditHappyPathCallsDatasource drives the full edit path:
-// open compose via `c`, type into both panes, Ctrl-S submits. The
+// open compose via `c`, type into both panes, Ctrl+S submits. The
 // submit-path's worker body is routed through gu.runDispatch (so a
 // test can substitute a synchronous dispatcher) — that's the only
 // reason this test can assert UpdateTitleDescription was called
@@ -113,7 +113,7 @@ func TestTaskEditHappyPathCallsDatasource(t *testing.T) {
 		t.Fatalf("confirm: %v", err)
 	}
 	if k := gu.st.popup.Kind; k != popupNone {
-		t.Errorf("popup not cleared on Ctrl-S: kind=%v", k)
+		t.Errorf("popup not cleared on Ctrl+S: kind=%v", k)
 	}
 
 	// With the synchronous dispatcher in place the accept callback
@@ -158,7 +158,7 @@ func TestTaskEditEmptyTitleReopensPopup(t *testing.T) {
 	gu.st.taskCursor = 0
 	gu.st.focused = panelTasks
 
-	// Drive the accept callback directly: emulate Ctrl-S with an
+	// Drive the accept callback directly: emulate Ctrl+S with an
 	// empty summary. The popup must be re-opened.
 	gu.openTaskComposeForEdit("ask-cccccc", "x", "y")
 	gu.layoutPopup(g, 120, 40)

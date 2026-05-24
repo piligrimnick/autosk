@@ -247,10 +247,10 @@ const (
 	popupTaskCompose
 	// popupSingleCompose is the one-pane multi-line editor used by
 	// the comment and metadata flows: a single editable view with
-	// SimpleEditor (Enter inserts "\n"), Ctrl-S / Alt-Enter submit,
-	// Esc cancels. Reuses popupState.Input as the initial value and
+	// SimpleEditor (Enter inserts "\n"), Ctrl+S submits, Esc
+	// cancels. Reuses popupState.Input as the initial value and
 	// OnAccept as the submit callback — the contract matches
-	// popupPrompt, only the layout and the submit chords differ.
+	// popupPrompt, only the layout and the submit chord differ.
 	popupSingleCompose
 	// popupIsolation is the workflow-isolation flip popup chain. The
 	// `i` key on the Workflows panel opens a two-option popupMenu;
@@ -297,10 +297,10 @@ type popupState struct {
 	OnComposeAccept func(summary, description string) error
 
 	// Single-compose subtitle hint (popupSingleCompose). Short label
-	// drawn on the top frame next to the always-on "<c-s>/<a-enter>
-	// submit · <esc> cancel" string — e.g. "markdown ok" for the
-	// comment popup or "JSON object" for the metadata popup. Empty
-	// when the caller doesn't want a context label.
+	// drawn on the top frame next to the always-on "<ctrl+s> submit
+	// · <esc> cancel" string — e.g. "markdown ok" for the comment
+	// popup or "JSON object" for the metadata popup. Empty when the
+	// caller doesn't want a context label.
 	Hint string
 }
 

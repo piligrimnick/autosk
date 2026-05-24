@@ -44,7 +44,7 @@ func TestHelpScreen_NoInspectorReferences(t *testing.T) {
 	}
 	// And the new detail-pane / job-input sections must be present.
 	joined := strings.Join(lines, "\n")
-	for _, want := range []string{"detail:", "job input", "Ctrl-D send"} {
+	for _, want := range []string{"detail:", "job input", "ctrl+D send"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("help missing %q section/binding\n%s", want, joined)
 		}

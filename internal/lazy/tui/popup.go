@@ -74,8 +74,8 @@ func (gu *Gui) openPrompt(prompt, initial string, onAccept func(string) error) {
 // semantics as openPrompt (Input seeds the initial value, OnAccept
 // fires with the typed text on submit) — the differences are
 // layout (a tall textarea, not a one-line strip) and the submit
-// chords (Ctrl-S / Alt-Enter; plain Enter falls through to the
-// editor and inserts "\n").
+// chord (Ctrl+S; plain Enter falls through to the editor and
+// inserts "\n").
 //
 // hint is a short context label drawn alongside the always-on
 // submit/cancel keybinding hint; pass "" for no hint.
@@ -94,8 +94,8 @@ func (gu *Gui) openSingleCompose(title, hint, initial string, onAccept func(stri
 
 // singleComposeConfirm reads the typed text out of the single-compose
 // view and fires OnAccept with it. Symmetric to taskComposeConfirm,
-// just without the summary pane. Bound on Ctrl+S and Alt+Enter; Esc
-// dismisses without invoking OnAccept.
+// just without the summary pane. Bound on Ctrl+S; Esc dismisses
+// without invoking OnAccept.
 func (gu *Gui) singleComposeConfirm(*gocui.Gui, *gocui.View) error {
 	var accept func(string) error
 	var text string
@@ -159,7 +159,7 @@ func (gu *Gui) taskComposeToggle(*gocui.Gui, *gocui.View) error {
 // taskComposeConfirm reads the typed text out of both compose views
 // and fires the OnComposeAccept callback registered at openTaskCompose
 // time. Bound on Enter (summary only — Enter on description inserts a
-// newline via the editor) and on Ctrl+S / Alt+Enter (both views).
+// newline via the editor) and on Ctrl+S (both views).
 //
 // The view's TextArea is the source of truth, not popupState.Summary /
 // Description: those fields only seed the initial text on first
@@ -410,8 +410,7 @@ const composeMinDescriptionContent = 7
 // so the editor never sees Enter and can't insert a \n. The
 // description view has NO Enter binding — the keystroke falls
 // through to SimpleEditor which inserts "\n" verbatim. Submitting
-// from the description requires Ctrl+S or Alt+Enter (both bound
-// view-scoped).
+// from the description requires Ctrl+S (bound view-scoped).
 //
 // Like the single-pane prompt, view lifetime is load-bearing: the
 // typed text lives in the view's TextArea, which gocui's NewView
@@ -559,7 +558,7 @@ func (gu *Gui) layoutTaskCompose(g *gocui.Gui, w, h int, title string) {
 // pretty-printed JSON grows to fit.
 //
 // Editor: gocui.DefaultEditor. Enter inserts "\n" (no view-scoped
-// override on plain Enter); Ctrl-S and Alt-Enter are bound to
+// override on plain Enter); Ctrl+S is bound to
 // singleComposeConfirm, Esc to popupClose.
 func (gu *Gui) layoutSingleCompose(g *gocui.Gui, termW, termH int, title, hint, initial string) {
 	// Read the live content to size the panel — same trick as the
@@ -619,7 +618,7 @@ func (gu *Gui) layoutSingleCompose(g *gocui.Gui, termW, termH int, title, hint, 
 // for popupSingleCompose, optionally prefixed by a caller-supplied
 // context label (e.g. "markdown ok" or "JSON object").
 func composeSingleSubtitle(hint string) string {
-	base := "<c-s>/<a-enter> submit · <esc> cancel"
+	base := "<ctrl+s> submit · <esc> cancel"
 	if hint == "" {
 		return " " + base + " "
 	}
@@ -713,7 +712,7 @@ func composeDescriptionSubtitle(focused bool) string {
 		// description pane — it's the action they're most likely
 		// looking for the keybinding to. Tab-toggle is secondary
 		// once they've already navigated to the right pane.
-		return " <c-s>/<a-enter> submit · <tab> toggle "
+		return " <ctrl+s> submit · <tab> toggle "
 	}
 	return " <tab> toggle "
 }
