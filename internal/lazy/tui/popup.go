@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/jesseduffield/gocui"
 
 	"autosk/internal/lazy/theme"
@@ -315,6 +316,9 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 		activeSet[winTaskComposeDescription] = true
 	case popupSingleCompose:
 		activeSet[winSingleCompose] = true
+	case popupEnroll:
+		activeSet[winEnrollWorkflowList] = true
+		activeSet[winEnrollStepList] = true
 	}
 	for _, name := range allPopupWindows {
 		if activeSet[name] {
@@ -344,7 +348,7 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 			return
 		}
 	case popupConfirm:
-		gu.drawPopup(g, winPopupConfirm, w, h, title, "[y]es / [n]o / [Esc] cancel")
+		gu.drawPopup(g, winPopupConfirm, w, h, title, "[y]es / [n]o / [esc] cancel")
 		pinOnTop(winPopupConfirm)
 		if _, err := g.SetCurrentView(winPopupConfirm); err != nil && !isUnknownView(err) {
 			return
@@ -372,6 +376,9 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 		gu.st.withRLock(func() { hint = gu.st.popup.Hint })
 		gu.layoutSingleCompose(g, w, h, title, hint, input)
 		pinOnTop(winSingleCompose)
+	case popupEnroll:
+		gu.layoutEnrollPicker(g, w, h)
+		pinOnTop(winEnrollWorkflowList, winEnrollStepList)
 	}
 }
 
@@ -742,8 +749,21 @@ func (gu *Gui) drawPopup(g *gocui.Gui, name string, w, h int, title, body string
 	return v
 }
 
+// minPopup picks the popup outer dimensions:
+//
+//   - width = max(60, longest body line + 4 cells of padding),
+//     capped at termW-4. The padding accounts for the popup's left
+//     frame + the renderMenuBody "▶ "/"  " row prefix; without it
+//     the cheatsheet's wider lines (e.g. the `ctrl+r hard refresh
+//     ...` row) wrapped or got truncated by gocui's clipping.
+//   - height = 8 + body line count, capped at termH-4, floored at 5
+//     so the popup is always tall enough to show a frame + title +
+//     at least one content row even on very small terminals.
 func minPopup(w, h int, body string) (int, int) {
 	pw := 60
+	if lw := maxLineWidth(body) + 4; lw > pw {
+		pw = lw
+	}
 	ph := 8 + strings.Count(body, "\n")
 	if pw > w-4 {
 		pw = w - 4
@@ -755,6 +775,33 @@ func minPopup(w, h int, body string) (int, int) {
 		ph = 5
 	}
 	return pw, ph
+}
+
+// maxLineWidth returns the visible cell width of the widest
+// "\n"-separated line in s.
+//
+// Goes through lipgloss.Width (NOT utf8.RuneCountInString) so SGR
+// escape codes — which renderMenuBody wraps the cursored row in
+// via styleAccent.Render — don't leak into the measurement. Without
+// this, sizing the popup against a body whose cursored row carries
+// a truecolor SGR envelope (~9 "runes" of `\x1b[38;2;R;G;Bm…\x1b[0m`
+// padding) would snap the popup ~9 cells wider whenever the cursor
+// landed on the widest line and snap back when it moved away — a
+// visible visual oscillation on a real TTY (review R8). lipgloss.Width
+// strips SGR before counting visible cells AND is rune-aware, so
+// multibyte cheatsheet entries still measure by their visible width
+// rather than UTF-8 byte length.
+func maxLineWidth(s string) int {
+	if s == "" {
+		return 0
+	}
+	max := 0
+	for _, line := range strings.Split(s, "\n") {
+		if n := lipgloss.Width(line); n > max {
+			max = n
+		}
+	}
+	return max
 }
 
 func renderMenuBody(lines []string, cur int) string {

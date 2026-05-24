@@ -231,6 +231,36 @@ func (gu *Gui) bindKeys() error {
 		{winSingleCompose, gocui.KeyCtrlS, gocui.ModNone, gu.singleComposeConfirm},
 		{winSingleCompose, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
 		{winSingleCompose, gocui.KeyCtrlC, gocui.ModNone, gu.quit},
+
+		// Enroll / resume two-pane picker.
+		//
+		// Workflow pane: j/k/arrows + mouse wheel move the cursor and
+		// re-render the step pane (no datasource call). Enter confirms
+		// the workflow and moves focus to the step pane (with the step
+		// cursor reset to 0). Esc closes the popup without dispatching.
+		{winEnrollWorkflowList, 'j', gocui.ModNone, gu.enrollPickerCursor(pickerPaneWorkflow, +1)},
+		{winEnrollWorkflowList, 'k', gocui.ModNone, gu.enrollPickerCursor(pickerPaneWorkflow, -1)},
+		{winEnrollWorkflowList, gocui.KeyArrowDown, gocui.ModNone, gu.enrollPickerCursor(pickerPaneWorkflow, +1)},
+		{winEnrollWorkflowList, gocui.KeyArrowUp, gocui.ModNone, gu.enrollPickerCursor(pickerPaneWorkflow, -1)},
+		{winEnrollWorkflowList, gocui.MouseWheelDown, gocui.ModNone, gu.enrollPickerCursor(pickerPaneWorkflow, +1)},
+		{winEnrollWorkflowList, gocui.MouseWheelUp, gocui.ModNone, gu.enrollPickerCursor(pickerPaneWorkflow, -1)},
+		{winEnrollWorkflowList, gocui.KeyEnter, gocui.ModNone, gu.enrollPickerWorkflowAccept},
+		{winEnrollWorkflowList, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
+
+		// Step pane: j/k/arrows + mouse wheel move the cursor. Enter
+		// fires OnPick with (workflow, step) names. Esc returns focus
+		// to the workflow pane (preserving the workflow cursor); on
+		// the resume flow (WorkflowLocked) Esc falls through to
+		// popupClose instead because there is no workflow pane to
+		// return to.
+		{winEnrollStepList, 'j', gocui.ModNone, gu.enrollPickerCursor(pickerPaneStep, +1)},
+		{winEnrollStepList, 'k', gocui.ModNone, gu.enrollPickerCursor(pickerPaneStep, -1)},
+		{winEnrollStepList, gocui.KeyArrowDown, gocui.ModNone, gu.enrollPickerCursor(pickerPaneStep, +1)},
+		{winEnrollStepList, gocui.KeyArrowUp, gocui.ModNone, gu.enrollPickerCursor(pickerPaneStep, -1)},
+		{winEnrollStepList, gocui.MouseWheelDown, gocui.ModNone, gu.enrollPickerCursor(pickerPaneStep, +1)},
+		{winEnrollStepList, gocui.MouseWheelUp, gocui.ModNone, gu.enrollPickerCursor(pickerPaneStep, -1)},
+		{winEnrollStepList, gocui.KeyEnter, gocui.ModNone, gu.enrollPickerStepAccept},
+		{winEnrollStepList, gocui.KeyEsc, gocui.ModNone, gu.enrollPickerStepEscape},
 	}
 	for _, b := range bs {
 		if err := gu.g.SetKeybinding(b.view, b.key, b.mod, b.h); err != nil {
@@ -741,24 +771,32 @@ func (gu *Gui) dispatchPaletteCommand(cmd string) {
 
 // openHelp opens the per-binding cheatsheet.
 func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
+	// Hotkey-display convention (project rule): plain keys are
+	// shown in lowercase. The uppercase variant is reserved for
+	// chords where Shift is part of the press — e.g. `R` here
+	// means Shift+r (the binding is rune 'R'), `K` means Shift+k
+	// on Jobs, `D` means Shift+d on Workflows, `M` means Shift+m
+	// on Tasks. Modifier chords use the `ctrl+x` / `alt+enter`
+	// shape; uppercase letters after a modifier (e.g. `ctrl+S`)
+	// would similarly imply Shift on top.
 	lines := []string{
 		"global:",
-		"  1..4 Tab     focus side panel    /   filter",
+		"  1..4 tab     focus side panel    /   filter",
 		"  0            focus detail        :   palette",
 		"  R            refresh             *   clear scope",
-		"  ctrl+R       hard refresh (reopen db conn; recover from cross-process gc)",
+		"  ctrl+r       hard refresh (reopen db conn; recover from cross-process gc)",
 		"  @            toggle log          ?   help",
-		"  q ctrl+C     quit                Esc back/close",
+		"  q ctrl+c     quit                esc back/close",
 		"",
 		"tasks:",
-		"  Space        filter Jobs by selected task (stay on Tasks)",
-		"  Enter        filter Jobs by selected task and focus Jobs",
+		"  space        filter Jobs by selected task (stay on Tasks)",
+		"  enter        filter Jobs by selected task and focus Jobs",
 		"  n new    c edit    d done     x cancel   o reopen",
 		"  e enroll r resume  b block    u unblock  m comment",
 		"  p priority         M metadata",
 		"",
 		"jobs:",
-		"  Enter      focus input (non-terminal) / Detail pane (terminal)",
+		"  enter      focus input (non-terminal) / Detail pane (terminal)",
 		"  K          cancel job",
 		"",
 		"workflows:",
@@ -769,19 +807,23 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 		"",
 		"detail:",
 		"  j/k arrows                line scroll",
-		"  ctrl+F/ctrl+B/PgUp/PgDn   page scroll",
+		"  ctrl+f/ctrl+b/pgup/pgdn   page scroll",
 		"  g/G                       top/bottom",
 		"  wheel                     scroll",
 		"",
 		"job input (non-terminal job):",
-		"  ctrl+D send     ctrl+F follow_up    ctrl+A abort",
-		"  Esc cancel      ctrl+B/PgUp/PgDn    scroll transcript above",
+		"  ctrl+d send     ctrl+f follow_up    ctrl+a abort",
+		"  esc cancel      ctrl+b/pgup/pgdn    scroll transcript above",
 		"",
 		"compose (new task / edit task):",
-		"  summary: Enter / ctrl+S submit  Tab → description  Esc cancel",
-		"  description: ctrl+S submit  Tab → summary  Esc cancel",
+		"  summary: enter / ctrl+s submit  tab → description  esc cancel",
+		"  description: ctrl+s submit  tab → summary  esc cancel",
 		"compose (comment / metadata):",
-		"  ctrl+S submit  Enter newline  Esc cancel",
+		"  ctrl+s submit  enter newline  esc cancel",
+		"",
+		"enroll / resume picker (e / r on Tasks):",
+		"  j/k arrows  navigate    enter   confirm pane / step",
+		"  esc on step → back to workflow pane (enroll only); esc on workflow closes",
 	}
 	gu.openMenu("help", lines, func(_ int) error { return gu.popupClose(nil, nil) })
 	return nil
@@ -987,48 +1029,179 @@ func (gu *Gui) taskReopen(*gocui.Gui, *gocui.View) error {
 // with `--agent NAME`, into a synthetic single:<agent> flow); there is
 // no separate assign verb anymore.
 
+// taskEnroll opens the two-pane workflow + step picker. Synthetic
+// single:<agent> workflows are filtered out (operators still drive
+// those via `autosk enroll --agent NAME` on the CLI). On open the
+// workflow cursor pre-selects the task's current workflow when it
+// exists in the cached slice; otherwise row 0. Enter on the step
+// pane dispatches Datasource.Enroll(ctx, taskID, wfName, stepName).
 func (gu *Gui) taskEnroll(*gocui.Gui, *gocui.View) error {
 	t, ok := gu.st.selectedTaskLocked()
 	if !ok {
 		return nil
 	}
-	gu.openPrompt("enroll "+t.ID+" into workflow name:", "", func(wf string) error {
-		wf = strings.TrimSpace(wf)
-		if wf == "" {
-			return nil
-		}
-		gu.g.OnWorker(func(_ gocui.Task) error {
-			if err := gu.ds.Enroll(gu.ctx, t.ID, wf); err != nil {
-				gu.flashf("err", "enroll: %v", err)
-				return nil
-			}
-			gu.flashf("info", "enroll %s -> %s ok", t.ID, wf)
-			gu.refreshAll()
+	var wfs []datasource.Workflow
+	gu.st.withRLock(func() {
+		wfs = filterPickerWorkflows(gu.st.workflows)
+	})
+	if len(wfs) == 0 {
+		gu.flashf("info", "no workflows defined")
+		return nil
+	}
+	wfCursor := pickerInitialWorkflowCursor(wfs, t.WorkflowID)
+	stepCursor := pickerInitialStepCursor(wfs, wfCursor, t.CurrentStepID)
+	taskID := t.ID
+	gu.openEnrollPicker(
+		"Enroll "+taskID+" — pick workflow",
+		wfs, wfCursor, stepCursor, false,
+		func(wfName, stepName string) error {
+			gu.runDispatch(func() {
+				if err := gu.ds.Enroll(gu.ctx, taskID, wfName, stepName); err != nil {
+					gu.flashf("err", "enroll: %v", err)
+					return
+				}
+				gu.flashf("info", "enroll %s -> %s:%s ok", taskID, wfName, stepName)
+				gu.refreshAll()
+			})
 			return nil
 		})
-		return nil
-	})
 	return nil
 }
 
+// taskResume opens the same picker with the workflow pane locked to
+// the task's current workflow (resolved from the cached workflows
+// slice). Focus starts on the step pane. Enter dispatches
+// Datasource.Resume(ctx, taskID, stepName). If the task has no
+// current workflow in the cached slice (e.g. stale cache; the task
+// has WorkflowID == "") the picker is NOT opened and a flash hints
+// at a refresh.
+//
+// CLI-parity for the no-bump path (review R7): the CLI has two
+// distinct resume modes:
+//
+//   - `autosk resume <id>`           — status-only flip
+//     (StatusHuman → StatusWork), step_visits untouched,
+//     max_visits NOT enforced. Routes through Resume(id, "").
+//   - `autosk resume <id> --to STEP` — deliberate transition,
+//     step_visits[STEP]++, max_visits enforced. Routes through
+//     Resume(id, STEP).
+//
+// The picker always pre-selects the task's current step, so the
+// natural "just resume" gesture (Enter on the pre-selected row)
+// would otherwise dispatch the bumping --to path against the same
+// step the operator was parked on — firing max_visits on tasks
+// that hit human via the cap in the first place
+// (docs/plans/20260520-Step-Visit-Limits.md). To restore CLI
+// parity we collapse "picked step == current step" to the no-bump
+// branch; picking a DIFFERENT step still bumps as before.
 func (gu *Gui) taskResume(*gocui.Gui, *gocui.View) error {
 	t, ok := gu.st.selectedTaskLocked()
 	if !ok {
 		return nil
 	}
-	gu.openPrompt("resume "+t.ID+" to step (empty=current):", "", func(step string) error {
-		gu.g.OnWorker(func(_ gocui.Task) error {
-			if err := gu.ds.Resume(gu.ctx, t.ID, strings.TrimSpace(step)); err != nil {
-				gu.flashf("err", "resume: %v", err)
-				return nil
+	if t.WorkflowID == "" {
+		gu.flashf("warn", "task has no workflow; enroll first")
+		return nil
+	}
+	var wf *datasource.Workflow
+	gu.st.withRLock(func() {
+		for i := range gu.st.workflows {
+			if gu.st.workflows[i].ID == t.WorkflowID {
+				w := gu.st.workflows[i]
+				wf = &w
+				break
 			}
-			gu.flashf("info", "resumed %s", t.ID)
-			gu.refreshAll()
+		}
+	})
+	if wf == nil {
+		gu.flashf("warn", "task workflow not loaded; refresh and retry")
+		return nil
+	}
+	wfs := []datasource.Workflow{*wf}
+	stepCursor := pickerInitialStepCursor(wfs, 0, t.CurrentStepID)
+	taskID := t.ID
+	currentStepName := resumeCurrentStepName(*wf, t.CurrentStepID)
+	gu.openEnrollPicker(
+		"Resume "+taskID+" — pick step",
+		wfs, 0, stepCursor, true,
+		func(_, stepName string) error {
+			// CLI parity: Enter on the pre-selected current step
+			// is the no-bump path (Resume(id, "")). Picking a
+			// different step routes through the bumping --to STEP
+			// path. resumeCurrentStepName returns "" when the task
+			// has no current step (or it isn't in the workflow's
+			// step list), which can't collide with any real step
+			// name — so the equality test stays inert in that case
+			// and Resume(id, stepName) takes the --to path.
+			toStep := stepName
+			noBump := currentStepName != "" && stepName == currentStepName
+			if noBump {
+				toStep = ""
+			}
+			gu.runDispatch(func() {
+				if err := gu.ds.Resume(gu.ctx, taskID, toStep); err != nil {
+					gu.flashf("err", "resume: %v", err)
+					return
+				}
+				if noBump {
+					gu.flashf("info", "resumed %s (no transition)", taskID)
+				} else {
+					gu.flashf("info", "resumed %s -> %s", taskID, stepName)
+				}
+				gu.refreshAll()
+			})
 			return nil
 		})
-		return nil
-	})
 	return nil
+}
+
+// resumeCurrentStepName returns the human-readable name of the
+// task's current step inside wf, or "" when the task has no
+// current step OR the step id isn't present in the workflow's
+// step list (stale cache / hand-edit). Used by taskResume to
+// detect the no-bump branch (review R7).
+func resumeCurrentStepName(wf datasource.Workflow, currentStepID string) string {
+	if currentStepID == "" {
+		return ""
+	}
+	for _, s := range wf.Steps {
+		if s.ID == currentStepID {
+			return s.Name
+		}
+	}
+	return ""
+}
+
+// pickerInitialWorkflowCursor returns the index of the workflow row
+// matching workflowID, or 0 when no match exists (empty workflowID
+// or stale cache). Pure helper so the open-flow tests can pin the
+// pre-selection logic without driving the full handler chain.
+func pickerInitialWorkflowCursor(wfs []datasource.Workflow, workflowID string) int {
+	if workflowID == "" {
+		return 0
+	}
+	for i := range wfs {
+		if wfs[i].ID == workflowID {
+			return i
+		}
+	}
+	return 0
+}
+
+// pickerInitialStepCursor returns the index of the step row matching
+// stepID inside workflows[wfCursor].Steps, or 0 when no match
+// exists. Symmetric to pickerInitialWorkflowCursor and pulled out
+// for the same testing-isolation reason.
+func pickerInitialStepCursor(wfs []datasource.Workflow, wfCursor int, stepID string) int {
+	if stepID == "" || wfCursor < 0 || wfCursor >= len(wfs) {
+		return 0
+	}
+	for i, s := range wfs[wfCursor].Steps {
+		if s.ID == stepID {
+			return i
+		}
+	}
+	return 0
 }
 
 func (gu *Gui) taskBlock(*gocui.Gui, *gocui.View) error {

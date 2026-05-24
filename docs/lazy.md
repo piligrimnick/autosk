@@ -89,18 +89,25 @@ every other kind (`user_text`, `tool_call`, `tool_result`,
 | Key | Action |
 |---|---|
 | `1` … `4` | Focus left panel by number. |
-| `0` | Focus the Detail pane (`j/k/g/G/Ctrl-F/Ctrl-B/PgUp/PgDn` then scroll the detail content). |
-| `Tab` | Cycle left panels. |
-| `Enter` | Drill into the focused row (see panel-specific tables). |
-| `Esc` | Pop one level (input → Jobs panel, popup → close, filter chip → drop). |
+| `0` | Focus the Detail pane (`j/k/g/G/ctrl+f/ctrl+b/pgup/pgdn` then scroll the detail content). |
+| `tab` | Cycle left panels. |
+| `enter` | Drill into the focused row (see panel-specific tables). |
+| `esc` | Pop one level (input → Jobs panel, popup → close, filter chip → drop). |
 | `?` | Help cheatsheet overlay. |
 | `:` | Command palette. Verbs from every panel: `task new`, `task edit`, `task done`, `task cancel`, `task reopen`, `task priority`, `task resume`, `task enroll`, `task block`, `task unblock`, `task comment`, `task metadata`, `workflow create`, `workflow delete`, `job cancel`, `scope clear`, `refresh`, `quit`. |
 | `/` | Filter the focused panel — see [Filter syntax](#filter-syntax). |
 | `*` | Clear all scope chips. |
 | `R` | Force-refresh now (skip the periodic tick). |
-| `Ctrl-R` | Hard refresh: drop the pooled DB connection, clear job-transcript cache, tear down live SSE. Use when external writes (CLI, daemon, another `lazy`) still don't appear after pressing `R`. |
+| `ctrl+r` | Hard refresh: drop the pooled DB connection, clear job-transcript cache, tear down live SSE. Use when external writes (CLI, daemon, another `lazy`) still don't appear after pressing `R`. |
 | `@` | Toggle the command-log viewport. |
-| `q` / `Ctrl-C` | Quit. |
+| `q` / `ctrl+c` | Quit. |
+
+Hotkey notation: plain keys are lowercase (`j`, `tab`, `enter`,
+`esc`, `pgup`); uppercase letters mean shift+letter (`R` = shift+r,
+`K` = shift+k, `M` = shift+m); modifier chords use `ctrl+x` /
+`alt+enter`, and an uppercase letter after a modifier folds shift
+on top (`ctrl+S` = ctrl+shift+s). The in-app `?` cheatsheet uses
+the same spellings.
 
 ### Tasks `[1]`
 
@@ -111,20 +118,66 @@ every other kind (`user_text`, `tool_call`, `tool_result`,
 | `d` | Mark **done** (confirms when status was `work`). |
 | `x` | Cancel (confirms). |
 | `o` | Reopen (`done` / `cancel` → `new`, preserves `workflow_id`). |
-| `e` | Enroll into a workflow — prompts for the workflow name. |
-| `r` | Resume (`human` → `work`); optionally to a named step. |
+| `e` | Enroll into a workflow — opens the [two-pane workflow + step picker](#enroll--resume-picker). Synthetic `single:<agent>` workflows are filtered out (use `autosk enroll --agent NAME` on the CLI for those). Flashes `no workflows defined` and skips the popup when the project has zero real workflows. |
+| `r` | Resume (`human` → `work`) via the same picker, with the workflow pane locked to the task's current workflow. See [Enroll / resume picker](#enroll--resume-picker) for the step-selection semantics and the no-bump shortcut. |
 | `b` | Add a blocker (prompts for blocker id). |
 | `u` | Remove a blocker (prompts for blocker id). |
-| `m` | Add a comment — single-pane multi-line compose. `Enter` inserts a newline; `ctrl+S` submits; `Esc` cancels. Empty submit is a silent cancel. |
+| `m` | Add a comment — single-pane multi-line compose. `enter` inserts a newline; `ctrl+s` submits; `esc` cancels. Empty submit is a silent cancel. |
 | `p` | Set priority (`0` … `3` picker). |
 | `M` | **Edit metadata** — single-pane editor pre-filled with the task's current `metadata` pretty-printed as JSON (`{}` when empty). On submit the body is parsed as a JSON object and replaces `tasks.metadata` wholesale. Invalid JSON or a non-object payload re-opens the popup with the error and the typed text intact. |
 | `J` / `K` | Scroll the task-detail viewport. |
+
+#### Enroll / resume picker
+
+`e` and `r` open the same two-pane popup. Left pane is the list of
+workflows in the project; right pane is the step list of the
+workflow currently under the cursor.
+
+| Pane | Key | Action |
+|---|---|---|
+| workflow | `j` / `k` / `↑` / `↓` / wheel | Move cursor; the step pane on the right re-renders for the highlighted workflow. No datasource call is dispatched on cursor moves. |
+| workflow | `enter` | Confirm the workflow and move focus to the step pane (step cursor lands on row 0). |
+| workflow | `esc` | Close the popup. No enroll / resume is dispatched. |
+| step | `j` / `k` / `↑` / `↓` / wheel | Move cursor. |
+| step | `enter` | Confirm the step and dispatch the call: `Datasource.Enroll(taskID, workflow, step)` for `e`, `Datasource.Resume(taskID, step)` for `r`. |
+| step | `esc` | Enroll: return focus to the workflow pane, preserving its cursor. Resume (workflow pane locked): close the popup. |
+
+**Pre-selection.** On open the workflow cursor lands on the task's
+current workflow when it is present in the cached workflows slice,
+otherwise on row 0. The step cursor lands on the task's current
+step (`tasks.current_step_id`) when present in that workflow,
+otherwise on row 0.
+
+**Resume specifics.**
+
+- The workflow pane is locked to the task's current workflow
+  (single row, marked `Workflow (locked)`); focus starts on the
+  step pane.
+- `r` on a task with `workflow_id = NULL` flashes
+  `task has no workflow; enroll first` and does NOT open the popup.
+- `r` on a task whose workflow isn't in the cached slice (stale
+  cache after an external write) flashes
+  `task workflow not loaded; refresh and retry`. Press `R` (or
+  `ctrl+r`) and retry.
+- **No-bump shortcut.** Pressing `enter` on the pre-selected
+  current step dispatches the CLI's `autosk resume <id>` (status
+  flip only, `step_visits` untouched, `max_visits` not enforced).
+  The status-bar flash reads `resumed <id> (no transition)`.
+  Picking a *different* step routes through the bumping
+  `autosk resume <id> --to STEP` path and the flash reads
+  `resumed <id> -> STEP`. See
+  [docs/workflows.md § Visit limits](workflows.md#visit-limits-max_visits)
+  for the counter semantics this mirrors.
+
+Type-to-filter / fuzzy search inside the picker is not bound; the
+picker is navigation-only. To enroll into a synthetic `single:`
+flow, use `autosk enroll <id> --agent NAME` on the CLI.
 
 ### Jobs `[2]`
 
 | Key | Action |
 |---|---|
-| `Enter` | Running job → caret jumps into the `input` textarea below the Detail pane. Terminal job → logical focus moves to the Detail pane (`j` / `k` scroll the transcript). |
+| `enter` | Running job → caret jumps into the `input` textarea below the Detail pane. Terminal job → logical focus moves to the Detail pane (`j` / `k` scroll the transcript). |
 | `K` | Cancel job (confirms). |
 
 Cursor moves on a running job open a live SSE subscription after a
@@ -156,13 +209,13 @@ autosk agent uninstall @your-org/developer
 
 ### Detail pane (any entity)
 
-Applies whenever the Detail pane has focus (`0`, or `Enter` on a
+Applies whenever the Detail pane has focus (`0`, or `enter` on a
 terminal Jobs row).
 
 | Key | Action |
 |---|---|
 | `j` / `k` / `↑` / `↓` | Line scroll. |
-| `Ctrl-F` / `Ctrl-B` / `PgDn` / `PgUp` | Page scroll. |
+| `ctrl+f` / `ctrl+b` / `pgdn` / `pgup` | Page scroll. |
 | `g` / `G` | Jump to top / bottom. |
 | wheel | One line per tick. |
 
@@ -172,19 +225,19 @@ The 6-row `input` textarea pinned under the Detail pane.
 
 | Key | Action |
 |---|---|
-| `Ctrl-D` | Send the textarea contents to the agent. The daemon decides whether it's a fresh prompt or a steer based on the agent's state. |
-| `Ctrl-F` | Send the contents as a `follow_up` — queued and delivered at the start of the next agent turn. |
-| `Ctrl-A` | Abort the in-flight agent turn. |
-| `Esc` | Return focus to the Jobs panel; clear the buffer. |
-| `Ctrl-B` / `PgUp` / `PgDn` | Page-scroll the Detail pane above without losing the input's text. |
+| `ctrl+d` | Send the textarea contents to the agent. The daemon decides whether it's a fresh prompt or a steer based on the agent's state. |
+| `ctrl+f` | Send the contents as a `follow_up` — queued and delivered at the start of the next agent turn. |
+| `ctrl+a` | Abort the in-flight agent turn. |
+| `esc` | Return focus to the Jobs panel; clear the buffer. |
+| `ctrl+b` / `pgup` / `pgdn` | Page-scroll the Detail pane above without losing the input's text. |
 | wheel | Scroll the Detail pane above. |
 
 Dispatch targets the job the input was authored against — not the
 current cursor. If a refresh shuffles the cursor onto a different
-running job while you're typing, `Ctrl-D` / `Ctrl-F` / `Ctrl-A`
+running job while you're typing, `ctrl+d` / `ctrl+f` / `ctrl+a`
 still route to the original job. The buffer also persists while the
 cursor stays on the same running job; it clears on dispatch, on
-`Esc`, or when you explicitly move the cursor to a different job.
+`esc`, or when you explicitly move the cursor to a different job.
 
 When a running job transitions to a terminal status, the textarea
 disappears on the next layout pass and focus reverts to the Jobs
@@ -196,7 +249,7 @@ panel.
 
 `/` opens an incremental, case-insensitive filter on the focused
 panel. The filter is rendered as a chip in the bottom bar; press
-`Esc` to drop it.
+`esc` to drop it.
 
 Tasks accept structured facets followed by free text. The free text
 is matched as a substring against id + title.
@@ -234,7 +287,7 @@ bottom bar.
 | Cursor in **Tasks** | Jobs panel gets `scope: task=<id>` and filters to that task's runs. |
 | Cursor in **Workflows** | Tasks **and** Jobs get `scope: wf=<name>` and filter to that workflow. |
 | Cursor in **Jobs** | Detail pane updates only — no scope chip propagates back. |
-| `Enter` in **Agents** | Opens a small picker (`by author` / `by current step` / `cancel`); the chosen relation becomes the chip, e.g. `scope: agent=@autosk/developer (author)`. |
+| `enter` in **Agents** | Opens a small picker (`by author` / `by current step` / `cancel`); the chosen relation becomes the chip, e.g. `scope: agent=@autosk/developer (author)`. |
 | `*` (anywhere) | Clears every scope chip. |
 
 Scope is additive: `wf=X` + `task=Y` narrows Jobs to runs of task
@@ -300,7 +353,7 @@ waiting for the next tick.
 
 `.autosk/db` is shared between every `autosk` process (CLI,
 daemon, lazy). External writes appear on the next refresh tick.
-Press `R` to force-refresh sooner, or `Ctrl-R` to drop the pooled
+Press `R` to force-refresh sooner, or `ctrl+r` to drop the pooled
 DB connection entirely and re-read — useful if a long-running
 compactor (`autosk gc` / daemon GC) rewrote the file and you want
 fresh fds immediately.
@@ -324,7 +377,7 @@ fresh fds immediately.
 | `daemon=down` but `autosk daemon list` works | Stale socket path. Pass `--sock` or set `$AUTOSK_SOCK`. |
 | No `input` textarea on a job you know is running | Daemon is down or the live datasource just flipped the job to a terminal status. Start the daemon (`autosk daemon serve`) and the textarea reappears on the next tick. |
 | Agents panel hotkey only flashes a message | Read-only by design — install / uninstall from the CLI. |
-| Help screen lists `Ctrl-F` twice | Same chord, two view-scoped meanings: page-forward in the Detail pane, `follow_up` dispatch in the input textarea. The `?` overlay disambiguates by focus. |
-| Detail pane shows `(loading…)` and stays there | Archive load is in flight; if it never resolves, check the daemon log or press `Ctrl-R` to drop the cache and retry. `(archive load failed: …)` means the underlying fetch errored — retry with `Ctrl-R`. |
+| Help screen lists `ctrl+f` twice | Same chord, two view-scoped meanings: page-forward in the Detail pane, `follow_up` dispatch in the input textarea. The `?` overlay disambiguates by focus. |
+| Detail pane shows `(loading…)` and stays there | Archive load is in flight; if it never resolves, check the daemon log or press `ctrl+r` to drop the cache and retry. `(archive load failed: …)` means the underlying fetch errored — retry with `ctrl+r`. |
 | Signals / comments for a job are missing in the job Detail | They live on the parent **task** detail. Focus the Tasks panel (`1`) and move the cursor onto the parent task. |
-| External CLI writes don't show up | Press `R` to force a refresh; if the data is still stale, `Ctrl-R` drops the DB connection and reopens. |
+| External CLI writes don't show up | Press `R` to force a refresh; if the data is still stale, `ctrl+r` drops the DB connection and reopens. |

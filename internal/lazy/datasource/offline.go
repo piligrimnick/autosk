@@ -733,7 +733,14 @@ func (o *Offline) UpdatePriority(ctx context.Context, id string, p int) error {
 	return nil
 }
 
-// Enroll (re-)attaches an existing task to a workflow's first step.
+// Enroll (re-)attaches an existing task to a workflow's entry step.
+//
+// When stepName is empty the task lands on the workflow's first_step
+// (matching the CLI default for `autosk enroll`); when stepName is
+// non-empty the task lands on the named step inside the workflow
+// (matching `autosk enroll --step NAME`). Unknown step names are
+// rejected with the same shape error the CLI surfaces so the flash
+// hint is actionable.
 //
 // Accepted source statuses: new, human, done, cancel. The only refusal
 // is status='work' — the task is currently owned by the engine and
@@ -742,17 +749,17 @@ func (o *Offline) UpdatePriority(ctx context.Context, id string, p int) error {
 //
 // Matches the status matrix of `autosk enroll`, but unlike the CLI
 // verb this code path does NOT allocate a per-task worktree for
-// isolation=worktree workflows (a known limitation — the lazy prompt
-// is single-string `workflow name` and there is no --base-ref / --step
-// / --agent shorthand). For isolated workflows the operator should
-// still run `autosk enroll` on the CLI to allocate the worktree.
+// isolation=worktree workflows (a known limitation — the lazy picker
+// has no --base-ref / --agent shorthand). For isolated workflows the
+// operator should still run `autosk enroll` on the CLI to allocate
+// the worktree.
 //
 // Routes through workflow.EnterStep so the step_visits counter on the
 // entry step is bumped and any max_visits cap is enforced. A cap hit
 // on first enroll is exotic but legitimate (e.g. someone bumped the
 // counter via `metadata set`); we surface it as a clear flash message
 // instead of silently succeeding with a stale counter.
-func (o *Offline) Enroll(ctx context.Context, id, wfName string) error {
+func (o *Offline) Enroll(ctx context.Context, id, wfName, stepName string) error {
 	t, err := o.s.GetTask(ctx, id)
 	if err != nil {
 		return err
@@ -765,14 +772,41 @@ func (o *Offline) Enroll(ctx context.Context, id, wfName string) error {
 	if err != nil {
 		return fmt.Errorf("workflow %q: %w", wfName, err)
 	}
+	stepID := wf.FirstStepID
+	if stepName != "" {
+		resolved, found := "", false
+		for _, s := range wf.Steps {
+			if s.Name == stepName {
+				resolved = s.ID
+				found = true
+				break
+			}
+		}
+		if !found {
+			// Mirror cmd/autosk's stepByName error shape (review R3):
+			// include the available step names so the lazy flash hint
+			// is actionable on stale cache / hand-edited rows / future
+			// programmatic callers.
+			names := make([]string, 0, len(wf.Steps))
+			for _, s := range wf.Steps {
+				names = append(names, s.Name)
+			}
+			return fmt.Errorf("step %q not found in workflow %s (available: %s)", stepName, wfName, strings.Join(names, ", "))
+		}
+		stepID = resolved
+	}
 	if err := workflow.EnterStep(ctx, o.s, ws, workflow.EnterStepInput{
 		TaskID:     id,
-		StepID:     wf.FirstStepID,
+		StepID:     stepID,
 		WorkflowID: wf.ID,
 	}); err != nil {
 		return workflow.MapEnterStepError(id, err)
 	}
-	_ = o.s.DoltCommit(ctx, fmt.Sprintf("lazy: enroll %s -> %s", id, wfName))
+	commit := fmt.Sprintf("lazy: enroll %s -> %s", id, wfName)
+	if stepName != "" {
+		commit = fmt.Sprintf("lazy: enroll %s -> %s --step %s", id, wfName, stepName)
+	}
+	_ = o.s.DoltCommit(ctx, commit)
 	return nil
 }
 

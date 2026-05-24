@@ -530,7 +530,7 @@ func (gu *Gui) renderViews() {
 		// inner height for the transcript.
 		if isJobDetail {
 			if j, ok := gu.st.selectedJob(); ok && isJobLive(j) {
-				title := "input — Ctrl-D send  Ctrl-F follow_up  Ctrl-A abort  Esc cancel"
+				title := "input — ctrl+d send  ctrl+f follow_up  ctrl+a abort  esc cancel"
 				gu.writeView(winJobInput, title, gu.st.jobInput)
 			}
 		}

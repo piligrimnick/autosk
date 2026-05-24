@@ -305,7 +305,11 @@ type Datasource interface {
 	// the wipe) and submit a full pair. Returns an error when title
 	// is empty after trimming so the UI can render a flash.
 	UpdateTitleDescription(ctx context.Context, id, title, description string) error
-	Enroll(ctx context.Context, id, workflow string) error
+	// Enroll (re-)attaches a task to a workflow. When stepName is empty
+	// the task lands on the workflow's first step (CLI default);
+	// otherwise it lands on the named step (CLI parity with
+	// `autosk enroll --step NAME`).
+	Enroll(ctx context.Context, id, workflow, stepName string) error
 	Resume(ctx context.Context, id, toStep string) error
 	Block(ctx context.Context, id, blocker string) error
 	Unblock(ctx context.Context, id, blocker string) error
