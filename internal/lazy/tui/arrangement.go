@@ -24,6 +24,12 @@ const (
 	winTaskComposeDescription = "taskComposeDescription"
 	// Single-pane multi-line compose popup (comment / metadata).
 	winSingleCompose = "singleCompose"
+	// Two-pane enroll / resume picker (workflow list on the left,
+	// step list on the right). Layout draws both views as framed
+	// boxes side-by-side; the focused pane gets the PopupBox accent
+	// on its frame.
+	winEnrollWorkflowList = "enrollWorkflowList"
+	winEnrollStepList     = "enrollStepList"
 )
 
 // allPopupWindows is every window name that belongs to a popup. The
@@ -38,6 +44,8 @@ var allPopupWindows = []string{
 	winTaskComposeSummary,
 	winTaskComposeDescription,
 	winSingleCompose,
+	winEnrollWorkflowList,
+	winEnrollStepList,
 }
 
 // allDashboardWindows is every window name owned by the dashboard

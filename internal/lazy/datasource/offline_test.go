@@ -312,7 +312,7 @@ func TestOfflineEnroll_BumpsFirstStepCounter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := ds.Enroll(ctx, id, wf.Name); err != nil {
+	if err := ds.Enroll(ctx, id, wf.Name, ""); err != nil {
 		t.Fatalf("enroll: %v", err)
 	}
 	tk, err := ts.GetTask(ctx, id)
@@ -337,6 +337,79 @@ func TestOfflineEnroll_BumpsFirstStepCounter(t *testing.T) {
 	}
 }
 
+// TestOfflineEnroll_HonoursExplicitStep pins the CLI-parity branch
+// of the lazy two-pane picker (ask-52bb49): when stepName is
+// non-empty, Enroll lands on the named step instead of the
+// workflow's first_step, and the per-step step_visits counter for
+// the chosen step bumps to 1 (NOT first_step). Mirrors the CLI's
+// `autosk enroll --step review` shape covered in
+// cmd/autosk/enroll_test.go.
+func TestOfflineEnroll_HonoursExplicitStep(t *testing.T) {
+	ctx := context.Background()
+	ds, ts, closeFn := newOfflineFx(t)
+	defer closeFn()
+	wf, devID, revID := seedTwoStepWF(t, ts, 5, 5)
+
+	id, err := ds.CreateTask(ctx, "x", "", 2)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := ds.Enroll(ctx, id, wf.Name, "review"); err != nil {
+		t.Fatalf("enroll --step review: %v", err)
+	}
+	tk, err := ts.GetTask(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if tk.WorkflowID != wf.ID {
+		t.Fatalf("workflow_id: %q (want %q)", tk.WorkflowID, wf.ID)
+	}
+	if tk.CurrentStepID != revID {
+		t.Fatalf("current_step_id: %q (want review=%q; first_step was dev=%q)", tk.CurrentStepID, revID, devID)
+	}
+	if tk.Status != store.StatusWork {
+		t.Fatalf("status: %s (want work)", tk.Status)
+	}
+	sv, _ := tk.Metadata["step_visits"].(map[string]any)
+	if sv == nil {
+		t.Fatalf("step_visits missing; metadata=%+v", tk.Metadata)
+	}
+	if v, _ := sv[revID].(float64); int(v) != 1 {
+		t.Fatalf("step_visits[review]=%v (want 1)", sv[revID])
+	}
+	if v, _ := sv[devID].(float64); int(v) != 0 {
+		t.Fatalf("step_visits[dev]=%v (want 0; --step review must not bump first_step)", sv[devID])
+	}
+
+	// Unknown step name surfaces a clear hint and does NOT mutate
+	// the task (rolled back to a fresh task to exercise the empty
+	// starting state).
+	id2, err := ds.CreateTask(ctx, "y", "", 2)
+	if err != nil {
+		t.Fatalf("create2: %v", err)
+	}
+	err = ds.Enroll(ctx, id2, wf.Name, "nope")
+	if err == nil {
+		t.Fatal("expected error on unknown step name")
+	}
+	if !strings.Contains(err.Error(), "nope") || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("err %q should mention the missing step name", err.Error())
+	}
+	// CLI-parity (review R3): the error must enumerate the available
+	// step names so the lazy flash is actionable. Mirrors the CLI's
+	// TestEnroll_AtSpecificStep_Unknown assertion in
+	// cmd/autosk/enroll_test.go.
+	if !strings.Contains(err.Error(), "available:") ||
+		!strings.Contains(err.Error(), "dev") ||
+		!strings.Contains(err.Error(), "review") {
+		t.Errorf("err %q should list available step names (dev, review)", err.Error())
+	}
+	tk2, _ := ts.GetTask(ctx, id2)
+	if tk2.WorkflowID != "" || tk2.CurrentStepID != "" || tk2.Status != store.StatusNew {
+		t.Fatalf("unknown-step path mutated task: %+v", tk2)
+	}
+}
+
 // TestOfflineResume_WithTo_BumpsTargetStep covers the deliberate-
 // transition branch of Resume. Park a task on "dev", Resume(--to
 // review), assert the target counter bumped exactly once and
@@ -351,7 +424,7 @@ func TestOfflineResume_WithTo_BumpsTargetStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := ds.Enroll(ctx, id, wf.Name); err != nil {
+	if err := ds.Enroll(ctx, id, wf.Name, ""); err != nil {
 		t.Fatalf("enroll: %v", err)
 	}
 	// Park on dev so Resume is callable. We bypass the executor by
@@ -396,7 +469,7 @@ func TestOfflineResume_NoTo_NoCounterBump(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := ds.Enroll(ctx, id, wf.Name); err != nil {
+	if err := ds.Enroll(ctx, id, wf.Name, ""); err != nil {
 		t.Fatalf("enroll: %v", err)
 	}
 	pre, _ := ts.GetTask(ctx, id)
@@ -442,7 +515,7 @@ func TestOfflineResume_NoTo_RefusesWhenNoCurrentStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := ds.Enroll(ctx, id, wf.Name); err != nil {
+	if err := ds.Enroll(ctx, id, wf.Name, ""); err != nil {
 		t.Fatalf("enroll: %v", err)
 	}
 	// Hand-edit to mimic the pathological state: parked in
@@ -489,7 +562,7 @@ func TestOfflineEnroll_CapHitOnFirstEntry(t *testing.T) {
 	if _, err := ts.UpdateTask(ctx, id, store.TaskPatch{Metadata: &md}); err != nil {
 		t.Fatalf("prime metadata: %v", err)
 	}
-	err = ds.Enroll(ctx, id, wf.Name)
+	err = ds.Enroll(ctx, id, wf.Name, "")
 	if err == nil {
 		t.Fatal("expected cap-exceeded error")
 	}
@@ -531,7 +604,7 @@ func TestOfflineEnroll_FromHuman_OK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := ds.Enroll(ctx, id, wf.Name); err != nil {
+	if err := ds.Enroll(ctx, id, wf.Name, ""); err != nil {
 		t.Fatalf("first enroll: %v", err)
 	}
 	// Force into human without touching current_step_id (the SQL
@@ -542,7 +615,7 @@ func TestOfflineEnroll_FromHuman_OK(t *testing.T) {
 		t.Fatalf("park: %v", err)
 	}
 
-	if err := ds.Enroll(ctx, id, wf.Name); err != nil {
+	if err := ds.Enroll(ctx, id, wf.Name, ""); err != nil {
 		t.Fatalf("re-enroll from human: %v", err)
 	}
 	tk, _ := ts.GetTask(ctx, id)
@@ -578,7 +651,7 @@ func TestOfflineEnroll_FromDone_OK(t *testing.T) {
 		t.Fatalf("terminate: %v", err)
 	}
 
-	if err := ds.Enroll(ctx, id, wf.Name); err != nil {
+	if err := ds.Enroll(ctx, id, wf.Name, ""); err != nil {
 		t.Fatalf("enroll from done: %v", err)
 	}
 	tk, _ := ts.GetTask(ctx, id)
@@ -611,7 +684,7 @@ func TestOfflineEnroll_FromCancel_OK(t *testing.T) {
 		t.Fatalf("terminate: %v", err)
 	}
 
-	if err := ds.Enroll(ctx, id, wf.Name); err != nil {
+	if err := ds.Enroll(ctx, id, wf.Name, ""); err != nil {
 		t.Fatalf("enroll from cancel: %v", err)
 	}
 	tk, _ := ts.GetTask(ctx, id)
@@ -641,7 +714,7 @@ func TestOfflineEnroll_FromWork_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := ds.Enroll(ctx, id, wf.Name); err != nil {
+	if err := ds.Enroll(ctx, id, wf.Name, ""); err != nil {
 		t.Fatalf("first enroll: %v", err)
 	}
 	pre, _ := ts.GetTask(ctx, id)
@@ -649,7 +722,7 @@ func TestOfflineEnroll_FromWork_Rejected(t *testing.T) {
 		t.Fatalf("setup failed: status=%s (want work)", pre.Status)
 	}
 
-	err = ds.Enroll(ctx, id, wf.Name)
+	err = ds.Enroll(ctx, id, wf.Name, "")
 	if err == nil {
 		t.Fatal("expected enroll on work task to fail")
 	}

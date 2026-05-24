@@ -261,6 +261,25 @@ const (
 	// `i`-handler's accept callback isolated from any other future
 	// menu-based flow.
 	popupIsolation
+	// popupEnroll is the two-pane workflow + step picker used by both
+	// `e` (enroll) and `r` (resume) on the Tasks panel. Left pane
+	// lists workflows (synthetic single:<agent> entries filtered
+	// out), right pane mirrors the highlighted workflow's step list.
+	// `r` reuses the same popup with WorkflowLocked=true so the
+	// workflow pane only shows the task's current workflow as a
+	// single, non-navigable row. See popupEnrollState for the
+	// per-popup fields.
+	popupEnroll
+)
+
+// pickerPane identifies which side of the enroll/resume two-pane
+// picker currently owns input. j/k and Enter route differently per
+// pane (workflow vs step).
+type pickerPane int
+
+const (
+	pickerPaneWorkflow pickerPane = iota
+	pickerPaneStep
 )
 
 // composePane identifies one of the two panes in the task-compose
@@ -302,6 +321,22 @@ type popupState struct {
 	// comment popup or "JSON object" for the metadata popup. Empty
 	// when the caller doesn't want a context label.
 	Hint string
+
+	// Enroll-picker fields (popupEnroll). Workflows lists the
+	// pickable workflows (synthetic entries are pre-filtered by the
+	// open helper). WorkflowCursor / StepCursor index into Workflows
+	// and Workflows[WorkflowCursor].Steps respectively. ActivePane
+	// picks which side currentView lands on each layout pass.
+	// WorkflowLocked is set by openEnrollPicker(resume) so the
+	// workflow pane never accepts cursor moves (only one row is
+	// shown). OnPick fires from the Enter-on-step path with the
+	// (workflow name, step name) pair the operator chose.
+	Workflows      []datasource.Workflow
+	WorkflowCursor int
+	StepCursor     int
+	ActivePane     pickerPane
+	WorkflowLocked bool
+	OnPick         func(wfName, stepName string) error
 }
 
 // flashState is the ephemeral toast line. CreatedAt makes the layout

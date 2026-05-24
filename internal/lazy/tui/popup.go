@@ -315,6 +315,9 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 		activeSet[winTaskComposeDescription] = true
 	case popupSingleCompose:
 		activeSet[winSingleCompose] = true
+	case popupEnroll:
+		activeSet[winEnrollWorkflowList] = true
+		activeSet[winEnrollStepList] = true
 	}
 	for _, name := range allPopupWindows {
 		if activeSet[name] {
@@ -344,7 +347,7 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 			return
 		}
 	case popupConfirm:
-		gu.drawPopup(g, winPopupConfirm, w, h, title, "[y]es / [n]o / [Esc] cancel")
+		gu.drawPopup(g, winPopupConfirm, w, h, title, "[y]es / [n]o / [esc] cancel")
 		pinOnTop(winPopupConfirm)
 		if _, err := g.SetCurrentView(winPopupConfirm); err != nil && !isUnknownView(err) {
 			return
@@ -372,6 +375,9 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 		gu.st.withRLock(func() { hint = gu.st.popup.Hint })
 		gu.layoutSingleCompose(g, w, h, title, hint, input)
 		pinOnTop(winSingleCompose)
+	case popupEnroll:
+		gu.layoutEnrollPicker(g, w, h)
+		pinOnTop(winEnrollWorkflowList, winEnrollStepList)
 	}
 }
 
@@ -743,8 +749,21 @@ func (gu *Gui) drawPopup(g *gocui.Gui, name string, w, h int, title, body string
 	return v
 }
 
+// minPopup picks the popup outer dimensions:
+//
+//   - width = max(60, longest body line + 4 cells of padding),
+//     capped at termW-4. The padding accounts for the popup's left
+//     frame + the renderMenuBody "▶ "/"  " row prefix; without it
+//     the cheatsheet's wider lines (e.g. the `ctrl+r hard refresh
+//     ...` row) wrapped or got truncated by gocui's clipping.
+//   - height = 8 + body line count, capped at termH-4, floored at 5
+//     so the popup is always tall enough to show a frame + title +
+//     at least one content row even on very small terminals.
 func minPopup(w, h int, body string) (int, int) {
 	pw := 60
+	if lw := maxLineWidth(body) + 4; lw > pw {
+		pw = lw
+	}
 	ph := 8 + strings.Count(body, "\n")
 	if pw > w-4 {
 		pw = w - 4
@@ -756,6 +775,27 @@ func minPopup(w, h int, body string) (int, int) {
 		ph = 5
 	}
 	return pw, ph
+}
+
+// maxLineWidth returns the rune count of the widest "\n"-separated
+// line in s. Counts runes (not bytes) so a multibyte cheatsheet
+// entry doesn't get measured by its UTF-8 byte length. Lipgloss
+// SGR escape codes (styleAccent.Render etc.) are NOT applied here
+// because the menu body's accent paint happens later in
+// renderMenuBody for the cursored row only — the popup is sized
+// against the plain text, which is what gocui actually advances
+// the cursor across.
+func maxLineWidth(s string) int {
+	if s == "" {
+		return 0
+	}
+	max := 0
+	for _, line := range strings.Split(s, "\n") {
+		if n := utf8.RuneCountInString(line); n > max {
+			max = n
+		}
+	}
+	return max
 }
 
 func renderMenuBody(lines []string, cur int) string {

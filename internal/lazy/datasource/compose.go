@@ -163,8 +163,8 @@ func (c *Compose) UpdatePriority(ctx context.Context, id string, p int) error {
 func (c *Compose) UpdateTitleDescription(ctx context.Context, id, title, description string) error {
 	return c.off.UpdateTitleDescription(ctx, id, title, description)
 }
-func (c *Compose) Enroll(ctx context.Context, id, wf string) error {
-	return c.off.Enroll(ctx, id, wf)
+func (c *Compose) Enroll(ctx context.Context, id, wf, stepName string) error {
+	return c.off.Enroll(ctx, id, wf, stepName)
 }
 func (c *Compose) Resume(ctx context.Context, id, to string) error {
 	return c.off.Resume(ctx, id, to)

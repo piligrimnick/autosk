@@ -45,3 +45,47 @@ func TestMinPopupClampsToTerminal(t *testing.T) {
 		t.Fatalf("floor case: width %d should clamp", wf)
 	}
 }
+
+// TestMinPopupGrowsWithBodyWidth pins the regression flagged on the
+// help popup: lines wider than the 60-cell baseline (e.g. the
+// `ctrl+r hard refresh ...` row) were getting clipped. minPopup
+// must grow the outer width to fit the widest body line (plus a
+// small padding budget for the frame + cursor marker), capped by
+// termW-4.
+func TestMinPopupGrowsWithBodyWidth(t *testing.T) {
+	long := strings.Repeat("x", 90)
+	pw, _ := minPopup(200, 40, long)
+	if pw < 90 {
+		t.Errorf("popup width %d must accommodate the longest body line (90 cells)", pw)
+	}
+	// Cap by termW-4 still wins on a narrow terminal.
+	pw2, _ := minPopup(40, 40, long)
+	if pw2 > 36 {
+		t.Errorf("popup width %d must clamp to termW-4=36 on a narrow terminal", pw2)
+	}
+	// Short body still picks up the 60-cell baseline so menus with
+	// tiny labels don't shrink to a sliver.
+	pw3, _ := minPopup(200, 40, "a\nb\nc")
+	if pw3 < 60 {
+		t.Errorf("popup width %d must keep the 60-cell baseline for short bodies", pw3)
+	}
+}
+
+// TestMaxLineWidthHandlesMultibyte pins maxLineWidth: it must count
+// runes, not bytes, so a Cyrillic / CJK cheatsheet line gets sized
+// by its visible width and not by its UTF-8 byte length (which
+// would over-allocate).
+func TestMaxLineWidthHandlesMultibyte(t *testing.T) {
+	if got := maxLineWidth(""); got != 0 {
+		t.Errorf("empty: %d want 0", got)
+	}
+	if got := maxLineWidth("a\nbcd\nef"); got != 3 {
+		t.Errorf("ascii: %d want 3 (widest line=bcd)", got)
+	}
+	// 5 runes — each Cyrillic letter is 2 bytes in UTF-8 but 1
+	// visible cell. The byte length would be 10; the rune count
+	// is 5.
+	if got := maxLineWidth("приве\nx"); got != 5 {
+		t.Errorf("multibyte: %d want 5 rune count of Приве", got)
+	}
+}
