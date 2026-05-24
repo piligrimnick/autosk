@@ -13,6 +13,42 @@ import (
 	"autosk/internal/store"
 )
 
+// bindingSpec describes one TUI keybinding plus the metadata the
+// cheatsheet popup and the bottom options strip need to render it.
+//
+// View / Key / Mod / Handler are the gocui plumbing: bindKeys()
+// iterates the slice and pushes each entry through g.SetKeybinding.
+// The remaining fields drive the cheatsheet and options-strip
+// renderers:
+//
+//   - Description: human-readable label shown in the cheatsheet's
+//     description column. Empty means the binding is hidden from
+//     the cheatsheet (use for redundant aliases like Ctrl-C/q quit,
+//     or for popup-scoped keys that aren't part of the user's
+//     dashboard surface).
+//   - Short: optional compact label for the options strip. When
+//     empty the strip falls back to Description.
+//   - Tag: bucket the cheatsheet groups the entry under. "global"
+//     means the binding is in the Global bucket regardless of
+//     View. "navigation" means the binding is a per-panel viewport
+//     verb (j/k/arrows/page/wheel) and goes into the Navigation
+//     bucket. Empty Tag is treated as Local (panel-specific
+//     action).
+//   - DisplayOnScreen: true to surface the binding on the bottom
+//     options strip for whichever panel is focused. Plan picks a
+//     small set of high-traffic verbs so the strip stays scannable.
+type bindingSpec struct {
+	View    string
+	Key     any
+	Mod     gocui.Modifier
+	Handler func(*gocui.Gui, *gocui.View) error
+
+	Description     string
+	Short           string
+	Tag             string
+	DisplayOnScreen bool
+}
+
 // bindKeys wires every keybinding the TUI uses. Bindings are
 // per-view: the global ones bind ViewName="" (all views).
 //
@@ -22,98 +58,128 @@ import (
 //   - per-panel (Tasks/Jobs/Workflows/Agents list nav + write verbs)
 //   - Detail pane scroll (winDetail) + Job-input textarea
 //     (winJobInput) when a running job is selected
+//
+// The slice is materialised by bindingSpecs(); bindKeys() is the
+// thin loop that registers each entry with gocui.
 func (gu *Gui) bindKeys() error {
-	type binding struct {
-		view string
-		key  any
-		mod  gocui.Modifier
-		h    func(*gocui.Gui, *gocui.View) error
+	for _, b := range gu.bindingSpecs() {
+		if err := gu.g.SetKeybinding(b.View, b.Key, b.Mod, b.Handler); err != nil {
+			return err
+		}
 	}
+	return nil
+}
 
-	bs := []binding{
+// bindingSpecs returns the full registry of dashboard keybindings
+// plus their cheatsheet / options-strip metadata. Re-built on every
+// call (handler closures over `gu` are constructed in-line).
+// Callers: bindKeys() (once at startup), openHelp (once per popup
+// open), and renderOptionsStrip via renderViews (every redraw —
+// per input event and per refresh tick, ~80 closure allocations
+// per redraw). That's well within the budget for terminal-frame
+// rebuilds; if the strip ever becomes a measurable hotspot the
+// slice can be memoised on *Gui (the closures over `gu` are stable
+// for the lifetime of the Gui).
+func (gu *Gui) bindingSpecs() []bindingSpec {
+	return []bindingSpec{
 		// global quit + help. Space is intentionally NOT global — it
 		// has per-panel semantics (Tasks: commit scope) and a global
 		// space binding would swallow the per-view ones underneath.
-		{"", gocui.KeyCtrlC, gocui.ModNone, gu.quit},
-		{"", 'q', gocui.ModNone, gu.quit},
-		{"", '?', gocui.ModNone, gu.openHelp},
-		{"", gocui.KeyEsc, gocui.ModNone, gu.handleEsc},
+		//
+		// Ctrl-C and `q` both quit; only `q` carries the cheatsheet
+		// Description so the row isn't duplicated (lazygit's
+		// uniqueBindings dedup at registration time).
+		{View: "", Key: gocui.KeyCtrlC, Mod: gocui.ModNone, Handler: gu.quit, Tag: "global"},
+		{View: "", Key: 'q', Mod: gocui.ModNone, Handler: gu.quit, Description: "quit", Short: "quit", Tag: "global", DisplayOnScreen: true},
+		{View: "", Key: '?', Mod: gocui.ModNone, Handler: gu.openHelp, Description: "help cheatsheet", Short: "help", Tag: "global", DisplayOnScreen: true},
+		// Esc is universal across the TUI: it closes the active popup
+		// (or, with no popup open, clears the focused panel's filter).
+		// Deliberately NOT cheatsheet-visible: selecting a "back /
+		// close" row in the cheatsheet would route through handleEsc
+		// AFTER the popup is already cleared by cheatsheetAccept,
+		// which would wipe the focused panel's filter as a destructive
+		// side effect the operator did not signal. Discoverable by
+		// trying Esc once.
+		{View: "", Key: gocui.KeyEsc, Mod: gocui.ModNone, Handler: gu.handleEsc, Tag: "global"},
 		// panel switching
-		{"", '1', gocui.ModNone, gu.focusPanel(panelTasks)},
-		{"", '2', gocui.ModNone, gu.focusPanel(panelJobs)},
-		{"", '3', gocui.ModNone, gu.focusPanel(panelWorkflows)},
-		{"", '4', gocui.ModNone, gu.focusPanel(panelAgents)},
-		{"", '0', gocui.ModNone, gu.focusPanel(panelDetail)},
-		{"", gocui.KeyTab, gocui.ModNone, gu.cyclePanel(+1)},
+		{View: "", Key: '1', Mod: gocui.ModNone, Handler: gu.focusPanel(panelTasks), Description: "focus Tasks", Tag: "global"},
+		{View: "", Key: '2', Mod: gocui.ModNone, Handler: gu.focusPanel(panelJobs), Description: "focus Jobs", Tag: "global"},
+		{View: "", Key: '3', Mod: gocui.ModNone, Handler: gu.focusPanel(panelWorkflows), Description: "focus Workflows", Tag: "global"},
+		{View: "", Key: '4', Mod: gocui.ModNone, Handler: gu.focusPanel(panelAgents), Description: "focus Agents", Tag: "global"},
+		{View: "", Key: '0', Mod: gocui.ModNone, Handler: gu.focusPanel(panelDetail), Description: "focus Detail", Tag: "global"},
+		{View: "", Key: gocui.KeyTab, Mod: gocui.ModNone, Handler: gu.cyclePanel(+1), Description: "cycle side panel", Tag: "global"},
 		// refresh + scope + filter + palette
-		{"", 'R', gocui.ModNone, gu.handleRefresh},
+		{View: "", Key: 'R', Mod: gocui.ModNone, Handler: gu.handleRefresh, Description: "refresh now", Tag: "global"},
 		// Ctrl-R is the "hard refresh": force the doltlite store to drop
 		// its pooled connection (recover from a cross-process dolt_gc
 		// that atomic-rewrote .autosk/db). Plain R alone fires the same
 		// adaptive tick the 2s timer uses — useful as a one-shot kick;
 		// Ctrl-R is the escape hatch when the operator suspects the
 		// underlying fd is on an orphan inode.
-		{"", gocui.KeyCtrlR, gocui.ModNone, gu.handleForceReconnect},
-		{"", '*', gocui.ModNone, gu.handleClearScope},
-		{"", '/', gocui.ModNone, gu.openFilter},
-		{"", ':', gocui.ModNone, gu.openPalette},
-		{"", '@', gocui.ModNone, gu.toggleLog},
+		{View: "", Key: gocui.KeyCtrlR, Mod: gocui.ModNone, Handler: gu.handleForceReconnect, Description: "hard refresh (reopen db conn)", Tag: "global"},
+		{View: "", Key: '*', Mod: gocui.ModNone, Handler: gu.handleClearScope, Description: "clear scope chips", Short: "clear scope", Tag: "global", DisplayOnScreen: true},
+		{View: "", Key: '/', Mod: gocui.ModNone, Handler: gu.openFilter, Description: "filter focused panel", Short: "filter", Tag: "global", DisplayOnScreen: true},
+		{View: "", Key: ':', Mod: gocui.ModNone, Handler: gu.openPalette, Description: "command palette", Short: "palette", Tag: "global", DisplayOnScreen: true},
+		{View: "", Key: '@', Mod: gocui.ModNone, Handler: gu.toggleLog, Description: "toggle log", Tag: "global"},
 
 		// list nav (per panel; gocui binds per-view, so we attach once
-		// per side panel + the detail pane)
-		{winTasks, 'j', gocui.ModNone, gu.cursorDown(panelTasks)},
-		{winTasks, 'k', gocui.ModNone, gu.cursorUp(panelTasks)},
-		{winTasks, gocui.KeyArrowDown, gocui.ModNone, gu.cursorDown(panelTasks)},
-		{winTasks, gocui.KeyArrowUp, gocui.ModNone, gu.cursorUp(panelTasks)},
-		{winTasks, gocui.KeyEnter, gocui.ModNone, gu.tasksEnter},
+		// per side panel + the detail pane). Only j/k carry the
+		// cheatsheet Description — arrow keys + wheel are equivalent
+		// aliases and would just duplicate the Navigation bucket if
+		// they each surfaced their own row.
+		{View: winTasks, Key: 'j', Mod: gocui.ModNone, Handler: gu.cursorDown(panelTasks), Description: "down", Tag: "navigation"},
+		{View: winTasks, Key: 'k', Mod: gocui.ModNone, Handler: gu.cursorUp(panelTasks), Description: "up", Tag: "navigation"},
+		{View: winTasks, Key: gocui.KeyArrowDown, Mod: gocui.ModNone, Handler: gu.cursorDown(panelTasks), Tag: "navigation"},
+		{View: winTasks, Key: gocui.KeyArrowUp, Mod: gocui.ModNone, Handler: gu.cursorUp(panelTasks), Tag: "navigation"},
+		{View: winTasks, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.tasksEnter, Description: "filter Jobs + focus"},
 		// Space — commit the cursor row as the Jobs-panel scope chip
 		// without leaving the Tasks panel. The counterpart to Enter
 		// (which commits + jumps). j/k do NOT auto-commit anymore
 		// (operator complaint: cursor-driven re-filtering was noisy),
 		// so this is the only path on Tasks for setting scope.TaskID.
 		// Press * to clear.
-		{winTasks, ' ', gocui.ModNone, gu.tasksScopeFromCursor},
+		{View: winTasks, Key: ' ', Mod: gocui.ModNone, Handler: gu.tasksScopeFromCursor, Description: "set Jobs scope to selected task"},
 
-		{winJobs, 'j', gocui.ModNone, gu.cursorDown(panelJobs)},
-		{winJobs, 'k', gocui.ModNone, gu.cursorUp(panelJobs)},
-		{winJobs, gocui.KeyArrowDown, gocui.ModNone, gu.cursorDown(panelJobs)},
-		{winJobs, gocui.KeyArrowUp, gocui.ModNone, gu.cursorUp(panelJobs)},
-		{winJobs, gocui.KeyEnter, gocui.ModNone, gu.jobsEnter},
+		{View: winJobs, Key: 'j', Mod: gocui.ModNone, Handler: gu.cursorDown(panelJobs), Description: "down", Tag: "navigation"},
+		{View: winJobs, Key: 'k', Mod: gocui.ModNone, Handler: gu.cursorUp(panelJobs), Description: "up", Tag: "navigation"},
+		{View: winJobs, Key: gocui.KeyArrowDown, Mod: gocui.ModNone, Handler: gu.cursorDown(panelJobs), Tag: "navigation"},
+		{View: winJobs, Key: gocui.KeyArrowUp, Mod: gocui.ModNone, Handler: gu.cursorUp(panelJobs), Tag: "navigation"},
+		{View: winJobs, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.jobsEnter, Description: "focus input (live) / Detail (terminal)"},
 
-		{winWorkflows, 'j', gocui.ModNone, gu.cursorDown(panelWorkflows)},
-		{winWorkflows, 'k', gocui.ModNone, gu.cursorUp(panelWorkflows)},
-		{winWorkflows, gocui.KeyArrowDown, gocui.ModNone, gu.cursorDown(panelWorkflows)},
-		{winWorkflows, gocui.KeyArrowUp, gocui.ModNone, gu.cursorUp(panelWorkflows)},
-		{winWorkflows, gocui.KeyEnter, gocui.ModNone, gu.workflowsEnter},
+		{View: winWorkflows, Key: 'j', Mod: gocui.ModNone, Handler: gu.cursorDown(panelWorkflows), Description: "down", Tag: "navigation"},
+		{View: winWorkflows, Key: 'k', Mod: gocui.ModNone, Handler: gu.cursorUp(panelWorkflows), Description: "up", Tag: "navigation"},
+		{View: winWorkflows, Key: gocui.KeyArrowDown, Mod: gocui.ModNone, Handler: gu.cursorDown(panelWorkflows), Tag: "navigation"},
+		{View: winWorkflows, Key: gocui.KeyArrowUp, Mod: gocui.ModNone, Handler: gu.cursorUp(panelWorkflows), Tag: "navigation"},
+		{View: winWorkflows, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.workflowsEnter, Description: "filter Tasks by workflow + focus"},
 
-		{winAgents, 'j', gocui.ModNone, gu.cursorDown(panelAgents)},
-		{winAgents, 'k', gocui.ModNone, gu.cursorUp(panelAgents)},
-		{winAgents, gocui.KeyArrowDown, gocui.ModNone, gu.cursorDown(panelAgents)},
-		{winAgents, gocui.KeyArrowUp, gocui.ModNone, gu.cursorUp(panelAgents)},
-		{winAgents, gocui.KeyEnter, gocui.ModNone, gu.agentsEnter},
+		{View: winAgents, Key: 'j', Mod: gocui.ModNone, Handler: gu.cursorDown(panelAgents), Description: "down", Tag: "navigation"},
+		{View: winAgents, Key: 'k', Mod: gocui.ModNone, Handler: gu.cursorUp(panelAgents), Description: "up", Tag: "navigation"},
+		{View: winAgents, Key: gocui.KeyArrowDown, Mod: gocui.ModNone, Handler: gu.cursorDown(panelAgents), Tag: "navigation"},
+		{View: winAgents, Key: gocui.KeyArrowUp, Mod: gocui.ModNone, Handler: gu.cursorUp(panelAgents), Tag: "navigation"},
+		{View: winAgents, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.agentsEnter, Description: "agent-scope picker"},
 
 		// Tasks write verbs.
-		{winTasks, 'n', gocui.ModNone, gu.taskNew},
-		{winTasks, 'c', gocui.ModNone, gu.taskEdit},
-		{winTasks, 'd', gocui.ModNone, gu.taskDone},
-		{winTasks, 'x', gocui.ModNone, gu.taskCancel},
-		{winTasks, 'e', gocui.ModNone, gu.taskEnroll},
-		{winTasks, 'r', gocui.ModNone, gu.taskResume},
-		{winTasks, 'b', gocui.ModNone, gu.taskBlock},
-		{winTasks, 'u', gocui.ModNone, gu.taskUnblock},
-		{winTasks, 'm', gocui.ModNone, gu.taskComment},
-		{winTasks, 'M', gocui.ModNone, gu.taskMetadataEdit},
-		{winTasks, 'p', gocui.ModNone, gu.taskPriority},
-		{winTasks, 'o', gocui.ModNone, gu.taskReopen},
+		{View: winTasks, Key: 'n', Mod: gocui.ModNone, Handler: gu.taskNew, Description: "new task", Short: "new", DisplayOnScreen: true},
+		{View: winTasks, Key: 'c', Mod: gocui.ModNone, Handler: gu.taskEdit, Description: "edit task", Short: "edit", DisplayOnScreen: true},
+		{View: winTasks, Key: 'd', Mod: gocui.ModNone, Handler: gu.taskDone, Description: "mark done", Short: "done", DisplayOnScreen: true},
+		{View: winTasks, Key: 'x', Mod: gocui.ModNone, Handler: gu.taskCancel, Description: "cancel task", Short: "cancel", DisplayOnScreen: true},
+		{View: winTasks, Key: 'e', Mod: gocui.ModNone, Handler: gu.taskEnroll, Description: "enroll into workflow", Short: "enroll", DisplayOnScreen: true},
+		{View: winTasks, Key: 'r', Mod: gocui.ModNone, Handler: gu.taskResume, Description: "resume (human → work)", Short: "resume", DisplayOnScreen: true},
+		{View: winTasks, Key: 'b', Mod: gocui.ModNone, Handler: gu.taskBlock, Description: "add blocker", Short: "block", DisplayOnScreen: true},
+		{View: winTasks, Key: 'u', Mod: gocui.ModNone, Handler: gu.taskUnblock, Description: "remove blocker", Short: "unblock", DisplayOnScreen: true},
+		{View: winTasks, Key: 'm', Mod: gocui.ModNone, Handler: gu.taskComment, Description: "add comment", Short: "comment", DisplayOnScreen: true},
+		{View: winTasks, Key: 'M', Mod: gocui.ModNone, Handler: gu.taskMetadataEdit, Description: "edit metadata", Short: "metadata", DisplayOnScreen: true},
+		{View: winTasks, Key: 'p', Mod: gocui.ModNone, Handler: gu.taskPriority, Description: "set priority", Short: "prio", DisplayOnScreen: true},
+		{View: winTasks, Key: 'o', Mod: gocui.ModNone, Handler: gu.taskReopen, Description: "reopen task", Short: "reopen", DisplayOnScreen: true},
 		// Note: there is no `c claim` binding. The v0.2 schema has no
 		// claim verb — tasks self-advance via workflow steps. `c` is
 		// bound to `change` (edit title + description in the two-pane
 		// compose); use `e` to enroll instead.
 
 		// Workflows write verbs.
-		{winWorkflows, 'n', gocui.ModNone, gu.workflowNew},
-		{winWorkflows, 'D', gocui.ModNone, gu.workflowDelete},
-		{winWorkflows, 'i', gocui.ModNone, gu.workflowIsolation},
+		{View: winWorkflows, Key: 'n', Mod: gocui.ModNone, Handler: gu.workflowNew, Description: "new workflow (from file)", Short: "new", DisplayOnScreen: true},
+		{View: winWorkflows, Key: 'D', Mod: gocui.ModNone, Handler: gu.workflowDelete, Description: "delete workflow", Short: "delete", DisplayOnScreen: true},
+		{View: winWorkflows, Key: 'i', Mod: gocui.ModNone, Handler: gu.workflowIsolation, Description: "toggle isolation", Short: "iso", DisplayOnScreen: true},
 
 		// Agents "write" verbs are intentionally informational only:
 		// the daemon has no /v1/agents endpoint in v1, so both keys
@@ -121,43 +187,43 @@ func (gu *Gui) bindKeys() error {
 		// `autosk agent {install|uninstall} <pkg>` CLI invocation. The
 		// bindings stay so the help screen's 'i install / u uninstall'
 		// row is honest and discoverable.
-		{winAgents, 'i', gocui.ModNone, gu.agentInstall},
-		{winAgents, 'u', gocui.ModNone, gu.agentUninstall},
+		{View: winAgents, Key: 'i', Mod: gocui.ModNone, Handler: gu.agentInstall, Description: "install (via CLI hint)", Short: "install", DisplayOnScreen: true},
+		{View: winAgents, Key: 'u', Mod: gocui.ModNone, Handler: gu.agentUninstall, Description: "uninstall (via CLI hint)", Short: "uninstall", DisplayOnScreen: true},
 
 		// Jobs hotkeys.
-		{winJobs, 'K', gocui.ModNone, gu.jobCancel},
+		{View: winJobs, Key: 'K', Mod: gocui.ModNone, Handler: gu.jobCancel, Description: "cancel job", Short: "kill", DisplayOnScreen: true},
 
 		// Detail pane scroll bindings. Same shape that used to live on
 		// the Inspector body view — j/k single line, Ctrl-F/Ctrl-B page,
 		// g/G start/end. Applies to BOTH task-detail and job-detail
 		// content (the pane is one view; the renderer picks the body
 		// based on focused panel).
-		{winDetail, 'j', gocui.ModNone, gu.detailScroll(+1)},
-		{winDetail, 'k', gocui.ModNone, gu.detailScroll(-1)},
-		{winDetail, gocui.KeyArrowDown, gocui.ModNone, gu.detailScroll(+1)},
-		{winDetail, gocui.KeyArrowUp, gocui.ModNone, gu.detailScroll(-1)},
-		{winDetail, gocui.KeyCtrlF, gocui.ModNone, gu.detailScrollPage(+1)},
-		{winDetail, gocui.KeyCtrlB, gocui.ModNone, gu.detailScrollPage(-1)},
-		{winDetail, gocui.KeyPgdn, gocui.ModNone, gu.detailScrollPage(+1)},
-		{winDetail, gocui.KeyPgup, gocui.ModNone, gu.detailScrollPage(-1)},
-		{winDetail, 'g', gocui.ModNone, gu.detailScrollTo(false)},
-		{winDetail, 'G', gocui.ModNone, gu.detailScrollTo(true)},
+		{View: winDetail, Key: 'j', Mod: gocui.ModNone, Handler: gu.detailScroll(+1), Description: "line down", Tag: "navigation"},
+		{View: winDetail, Key: 'k', Mod: gocui.ModNone, Handler: gu.detailScroll(-1), Description: "line up", Tag: "navigation"},
+		{View: winDetail, Key: gocui.KeyArrowDown, Mod: gocui.ModNone, Handler: gu.detailScroll(+1), Tag: "navigation"},
+		{View: winDetail, Key: gocui.KeyArrowUp, Mod: gocui.ModNone, Handler: gu.detailScroll(-1), Tag: "navigation"},
+		{View: winDetail, Key: gocui.KeyCtrlF, Mod: gocui.ModNone, Handler: gu.detailScrollPage(+1), Description: "page down", Tag: "navigation"},
+		{View: winDetail, Key: gocui.KeyCtrlB, Mod: gocui.ModNone, Handler: gu.detailScrollPage(-1), Description: "page up", Tag: "navigation"},
+		{View: winDetail, Key: gocui.KeyPgdn, Mod: gocui.ModNone, Handler: gu.detailScrollPage(+1), Tag: "navigation"},
+		{View: winDetail, Key: gocui.KeyPgup, Mod: gocui.ModNone, Handler: gu.detailScrollPage(-1), Tag: "navigation"},
+		{View: winDetail, Key: 'g', Mod: gocui.ModNone, Handler: gu.detailScrollTo(false), Description: "top", Tag: "navigation"},
+		{View: winDetail, Key: 'G', Mod: gocui.ModNone, Handler: gu.detailScrollTo(true), Description: "bottom", Tag: "navigation"},
 
 		// Job-input bindings (relocated from the old fullscreen-inspector input view).
 		// Bound only on winJobInput; the view itself only exists when
 		// the selected job is running, so these bindings are dormant
 		// otherwise.
-		{winJobInput, gocui.KeyCtrlD, gocui.ModNone, gu.liveSend},
-		{winJobInput, gocui.KeyCtrlF, gocui.ModNone, gu.liveFollowUp},
-		{winJobInput, gocui.KeyCtrlA, gocui.ModNone, gu.liveAbort},
-		{winJobInput, gocui.KeyEsc, gocui.ModNone, gu.jobInputEscape},
-		{winJobInput, gocui.KeyCtrlC, gocui.ModNone, gu.quit},
+		{View: winJobInput, Key: gocui.KeyCtrlD, Mod: gocui.ModNone, Handler: gu.liveSend, Description: "send"},
+		{View: winJobInput, Key: gocui.KeyCtrlF, Mod: gocui.ModNone, Handler: gu.liveFollowUp, Description: "follow up"},
+		{View: winJobInput, Key: gocui.KeyCtrlA, Mod: gocui.ModNone, Handler: gu.liveAbort, Description: "abort agent turn"},
+		{View: winJobInput, Key: gocui.KeyEsc, Mod: gocui.ModNone, Handler: gu.jobInputEscape, Description: "cancel input"},
+		{View: winJobInput, Key: gocui.KeyCtrlC, Mod: gocui.ModNone, Handler: gu.quit},
 		// Scroll the Detail pane above without leaving the textarea.
-		{winJobInput, gocui.KeyCtrlB, gocui.ModNone, gu.detailScrollPage(-1)},
-		{winJobInput, gocui.KeyPgup, gocui.ModNone, gu.detailScrollPage(-1)},
-		{winJobInput, gocui.KeyPgdn, gocui.ModNone, gu.detailScrollPage(+1)},
-		{winJobInput, gocui.MouseWheelDown, gocui.ModNone, gu.detailScroll(+1)},
-		{winJobInput, gocui.MouseWheelUp, gocui.ModNone, gu.detailScroll(-1)},
+		{View: winJobInput, Key: gocui.KeyCtrlB, Mod: gocui.ModNone, Handler: gu.detailScrollPage(-1), Description: "page up Detail", Tag: "navigation"},
+		{View: winJobInput, Key: gocui.KeyPgup, Mod: gocui.ModNone, Handler: gu.detailScrollPage(-1), Tag: "navigation"},
+		{View: winJobInput, Key: gocui.KeyPgdn, Mod: gocui.ModNone, Handler: gu.detailScrollPage(+1), Description: "page down Detail", Tag: "navigation"},
+		{View: winJobInput, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.detailScroll(+1), Tag: "navigation"},
+		{View: winJobInput, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.detailScroll(-1), Tag: "navigation"},
 
 		// Mouse-wheel scroll bindings. gocui surfaces wheel events as
 		// MouseWheelUp/Down keys per-view; without these bindings the
@@ -170,38 +236,38 @@ func (gu *Gui) bindKeys() error {
 		// pkg/gui/controllers/list_controller.go:HandleScrollUp/Down).
 		// j/k after a wheel-scroll snap the viewport back so the
 		// selection is visible again (scrollOffAdjust's centring path).
-		{winTasks, gocui.MouseWheelDown, gocui.ModNone, gu.panelScroll(panelTasks, +panelScrollStep)},
-		{winTasks, gocui.MouseWheelUp, gocui.ModNone, gu.panelScroll(panelTasks, -panelScrollStep)},
-		{winJobs, gocui.MouseWheelDown, gocui.ModNone, gu.panelScroll(panelJobs, +panelScrollStep)},
-		{winJobs, gocui.MouseWheelUp, gocui.ModNone, gu.panelScroll(panelJobs, -panelScrollStep)},
-		{winWorkflows, gocui.MouseWheelDown, gocui.ModNone, gu.panelScroll(panelWorkflows, +panelScrollStep)},
-		{winWorkflows, gocui.MouseWheelUp, gocui.ModNone, gu.panelScroll(panelWorkflows, -panelScrollStep)},
-		{winAgents, gocui.MouseWheelDown, gocui.ModNone, gu.panelScroll(panelAgents, +panelScrollStep)},
-		{winAgents, gocui.MouseWheelUp, gocui.ModNone, gu.panelScroll(panelAgents, -panelScrollStep)},
+		{View: winTasks, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.panelScroll(panelTasks, +panelScrollStep), Tag: "navigation"},
+		{View: winTasks, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.panelScroll(panelTasks, -panelScrollStep), Tag: "navigation"},
+		{View: winJobs, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.panelScroll(panelJobs, +panelScrollStep), Tag: "navigation"},
+		{View: winJobs, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.panelScroll(panelJobs, -panelScrollStep), Tag: "navigation"},
+		{View: winWorkflows, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.panelScroll(panelWorkflows, +panelScrollStep), Tag: "navigation"},
+		{View: winWorkflows, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.panelScroll(panelWorkflows, -panelScrollStep), Tag: "navigation"},
+		{View: winAgents, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.panelScroll(panelAgents, +panelScrollStep), Tag: "navigation"},
+		{View: winAgents, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.panelScroll(panelAgents, -panelScrollStep), Tag: "navigation"},
 
 		// Detail pane: wheel scrolls the viewport (no cursor concept).
-		{winDetail, gocui.MouseWheelDown, gocui.ModNone, gu.detailScroll(+1)},
-		{winDetail, gocui.MouseWheelUp, gocui.ModNone, gu.detailScroll(-1)},
+		{View: winDetail, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.detailScroll(+1), Tag: "navigation"},
+		{View: winDetail, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.detailScroll(-1), Tag: "navigation"},
 
 		// Popup menus also benefit from wheel-driven cursor motion.
-		{winPopupMenu, gocui.MouseWheelDown, gocui.ModNone, gu.popupCursor(+1)},
-		{winPopupMenu, gocui.MouseWheelUp, gocui.ModNone, gu.popupCursor(-1)},
+		{View: winPopupMenu, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.popupCursor(+1)},
+		{View: winPopupMenu, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.popupCursor(-1)},
 
 		// Popup keys.
-		{winPopupMenu, 'j', gocui.ModNone, gu.popupCursor(+1)},
-		{winPopupMenu, 'k', gocui.ModNone, gu.popupCursor(-1)},
-		{winPopupMenu, gocui.KeyArrowDown, gocui.ModNone, gu.popupCursor(+1)},
-		{winPopupMenu, gocui.KeyArrowUp, gocui.ModNone, gu.popupCursor(-1)},
-		{winPopupMenu, gocui.KeyEnter, gocui.ModNone, gu.popupAccept},
-		{winPopupMenu, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
-		{winPopupConfirm, 'y', gocui.ModNone, gu.popupConfirmYes},
-		{winPopupConfirm, 'Y', gocui.ModNone, gu.popupConfirmYes},
-		{winPopupConfirm, 'n', gocui.ModNone, gu.popupClose},
-		{winPopupConfirm, 'N', gocui.ModNone, gu.popupClose},
-		{winPopupConfirm, gocui.KeyEnter, gocui.ModNone, gu.popupConfirmYes},
-		{winPopupConfirm, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
-		{winPopupPrompt, gocui.KeyEnter, gocui.ModNone, gu.popupAccept},
-		{winPopupPrompt, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
+		{View: winPopupMenu, Key: 'j', Mod: gocui.ModNone, Handler: gu.popupCursor(+1)},
+		{View: winPopupMenu, Key: 'k', Mod: gocui.ModNone, Handler: gu.popupCursor(-1)},
+		{View: winPopupMenu, Key: gocui.KeyArrowDown, Mod: gocui.ModNone, Handler: gu.popupCursor(+1)},
+		{View: winPopupMenu, Key: gocui.KeyArrowUp, Mod: gocui.ModNone, Handler: gu.popupCursor(-1)},
+		{View: winPopupMenu, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.popupAccept},
+		{View: winPopupMenu, Key: gocui.KeyEsc, Mod: gocui.ModNone, Handler: gu.popupClose},
+		{View: winPopupConfirm, Key: 'y', Mod: gocui.ModNone, Handler: gu.popupConfirmYes},
+		{View: winPopupConfirm, Key: 'Y', Mod: gocui.ModNone, Handler: gu.popupConfirmYes},
+		{View: winPopupConfirm, Key: 'n', Mod: gocui.ModNone, Handler: gu.popupClose},
+		{View: winPopupConfirm, Key: 'N', Mod: gocui.ModNone, Handler: gu.popupClose},
+		{View: winPopupConfirm, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.popupConfirmYes},
+		{View: winPopupConfirm, Key: gocui.KeyEsc, Mod: gocui.ModNone, Handler: gu.popupClose},
+		{View: winPopupPrompt, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.popupAccept},
+		{View: winPopupPrompt, Key: gocui.KeyEsc, Mod: gocui.ModNone, Handler: gu.popupClose},
 
 		// Task-compose popup keys (lazygit commit-message editor parity).
 		//
@@ -214,13 +280,13 @@ func (gu *Gui) bindKeys() error {
 		// gocui falls through to SimpleEditor which inserts "\n", which
 		// is the whole point of having a description pane. Submitting
 		// requires Ctrl+S. Tab toggles back to Summary, Esc closes.
-		{winTaskComposeSummary, gocui.KeyEnter, gocui.ModNone, gu.taskComposeConfirm},
-		{winTaskComposeSummary, gocui.KeyCtrlS, gocui.ModNone, gu.taskComposeConfirm},
-		{winTaskComposeSummary, gocui.KeyTab, gocui.ModNone, gu.taskComposeToggle},
-		{winTaskComposeSummary, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
-		{winTaskComposeDescription, gocui.KeyCtrlS, gocui.ModNone, gu.taskComposeConfirm},
-		{winTaskComposeDescription, gocui.KeyTab, gocui.ModNone, gu.taskComposeToggle},
-		{winTaskComposeDescription, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
+		{View: winTaskComposeSummary, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.taskComposeConfirm},
+		{View: winTaskComposeSummary, Key: gocui.KeyCtrlS, Mod: gocui.ModNone, Handler: gu.taskComposeConfirm},
+		{View: winTaskComposeSummary, Key: gocui.KeyTab, Mod: gocui.ModNone, Handler: gu.taskComposeToggle},
+		{View: winTaskComposeSummary, Key: gocui.KeyEsc, Mod: gocui.ModNone, Handler: gu.popupClose},
+		{View: winTaskComposeDescription, Key: gocui.KeyCtrlS, Mod: gocui.ModNone, Handler: gu.taskComposeConfirm},
+		{View: winTaskComposeDescription, Key: gocui.KeyTab, Mod: gocui.ModNone, Handler: gu.taskComposeToggle},
+		{View: winTaskComposeDescription, Key: gocui.KeyEsc, Mod: gocui.ModNone, Handler: gu.popupClose},
 
 		// Single-pane multi-line compose popup (comment / metadata).
 		//
@@ -228,9 +294,9 @@ func (gu *Gui) bindKeys() error {
 		// gocui.DefaultEditor which inserts "\n", which is the whole
 		// point of the multi-line popup. Submitting requires Ctrl+S.
 		// Esc cancels without invoking OnAccept.
-		{winSingleCompose, gocui.KeyCtrlS, gocui.ModNone, gu.singleComposeConfirm},
-		{winSingleCompose, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
-		{winSingleCompose, gocui.KeyCtrlC, gocui.ModNone, gu.quit},
+		{View: winSingleCompose, Key: gocui.KeyCtrlS, Mod: gocui.ModNone, Handler: gu.singleComposeConfirm},
+		{View: winSingleCompose, Key: gocui.KeyEsc, Mod: gocui.ModNone, Handler: gu.popupClose},
+		{View: winSingleCompose, Key: gocui.KeyCtrlC, Mod: gocui.ModNone, Handler: gu.quit},
 
 		// Enroll / resume two-pane picker.
 		//
@@ -238,14 +304,14 @@ func (gu *Gui) bindKeys() error {
 		// re-render the step pane (no datasource call). Enter confirms
 		// the workflow and moves focus to the step pane (with the step
 		// cursor reset to 0). Esc closes the popup without dispatching.
-		{winEnrollWorkflowList, 'j', gocui.ModNone, gu.enrollPickerCursor(pickerPaneWorkflow, +1)},
-		{winEnrollWorkflowList, 'k', gocui.ModNone, gu.enrollPickerCursor(pickerPaneWorkflow, -1)},
-		{winEnrollWorkflowList, gocui.KeyArrowDown, gocui.ModNone, gu.enrollPickerCursor(pickerPaneWorkflow, +1)},
-		{winEnrollWorkflowList, gocui.KeyArrowUp, gocui.ModNone, gu.enrollPickerCursor(pickerPaneWorkflow, -1)},
-		{winEnrollWorkflowList, gocui.MouseWheelDown, gocui.ModNone, gu.enrollPickerCursor(pickerPaneWorkflow, +1)},
-		{winEnrollWorkflowList, gocui.MouseWheelUp, gocui.ModNone, gu.enrollPickerCursor(pickerPaneWorkflow, -1)},
-		{winEnrollWorkflowList, gocui.KeyEnter, gocui.ModNone, gu.enrollPickerWorkflowAccept},
-		{winEnrollWorkflowList, gocui.KeyEsc, gocui.ModNone, gu.popupClose},
+		{View: winEnrollWorkflowList, Key: 'j', Mod: gocui.ModNone, Handler: gu.enrollPickerCursor(pickerPaneWorkflow, +1)},
+		{View: winEnrollWorkflowList, Key: 'k', Mod: gocui.ModNone, Handler: gu.enrollPickerCursor(pickerPaneWorkflow, -1)},
+		{View: winEnrollWorkflowList, Key: gocui.KeyArrowDown, Mod: gocui.ModNone, Handler: gu.enrollPickerCursor(pickerPaneWorkflow, +1)},
+		{View: winEnrollWorkflowList, Key: gocui.KeyArrowUp, Mod: gocui.ModNone, Handler: gu.enrollPickerCursor(pickerPaneWorkflow, -1)},
+		{View: winEnrollWorkflowList, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.enrollPickerCursor(pickerPaneWorkflow, +1)},
+		{View: winEnrollWorkflowList, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.enrollPickerCursor(pickerPaneWorkflow, -1)},
+		{View: winEnrollWorkflowList, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.enrollPickerWorkflowAccept},
+		{View: winEnrollWorkflowList, Key: gocui.KeyEsc, Mod: gocui.ModNone, Handler: gu.popupClose},
 
 		// Step pane: j/k/arrows + mouse wheel move the cursor. Enter
 		// fires OnPick with (workflow, step) names. Esc returns focus
@@ -253,21 +319,31 @@ func (gu *Gui) bindKeys() error {
 		// the resume flow (WorkflowLocked) Esc falls through to
 		// popupClose instead because there is no workflow pane to
 		// return to.
-		{winEnrollStepList, 'j', gocui.ModNone, gu.enrollPickerCursor(pickerPaneStep, +1)},
-		{winEnrollStepList, 'k', gocui.ModNone, gu.enrollPickerCursor(pickerPaneStep, -1)},
-		{winEnrollStepList, gocui.KeyArrowDown, gocui.ModNone, gu.enrollPickerCursor(pickerPaneStep, +1)},
-		{winEnrollStepList, gocui.KeyArrowUp, gocui.ModNone, gu.enrollPickerCursor(pickerPaneStep, -1)},
-		{winEnrollStepList, gocui.MouseWheelDown, gocui.ModNone, gu.enrollPickerCursor(pickerPaneStep, +1)},
-		{winEnrollStepList, gocui.MouseWheelUp, gocui.ModNone, gu.enrollPickerCursor(pickerPaneStep, -1)},
-		{winEnrollStepList, gocui.KeyEnter, gocui.ModNone, gu.enrollPickerStepAccept},
-		{winEnrollStepList, gocui.KeyEsc, gocui.ModNone, gu.enrollPickerStepEscape},
+		{View: winEnrollStepList, Key: 'j', Mod: gocui.ModNone, Handler: gu.enrollPickerCursor(pickerPaneStep, +1)},
+		{View: winEnrollStepList, Key: 'k', Mod: gocui.ModNone, Handler: gu.enrollPickerCursor(pickerPaneStep, -1)},
+		{View: winEnrollStepList, Key: gocui.KeyArrowDown, Mod: gocui.ModNone, Handler: gu.enrollPickerCursor(pickerPaneStep, +1)},
+		{View: winEnrollStepList, Key: gocui.KeyArrowUp, Mod: gocui.ModNone, Handler: gu.enrollPickerCursor(pickerPaneStep, -1)},
+		{View: winEnrollStepList, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.enrollPickerCursor(pickerPaneStep, +1)},
+		{View: winEnrollStepList, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.enrollPickerCursor(pickerPaneStep, -1)},
+		{View: winEnrollStepList, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.enrollPickerStepAccept},
+		{View: winEnrollStepList, Key: gocui.KeyEsc, Mod: gocui.ModNone, Handler: gu.enrollPickerStepEscape},
+
+		// Cheatsheet popup (winPopupCheatsheet). The view is editable
+		// so printable runes flow through its Editor and append to
+		// state.popup.CheatsheetFilter; non-char keys (Enter / Esc /
+		// Backspace / arrows / wheel) are routed via these view-scoped
+		// keybindings. gocui's matchView rejects char bindings on
+		// editable views, so we don't need to enumerate every printable
+		// rune here — the editor is the one source of truth for them.
+		{View: winPopupCheatsheet, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.cheatsheetAccept},
+		{View: winPopupCheatsheet, Key: gocui.KeyEsc, Mod: gocui.ModNone, Handler: gu.cheatsheetEscape},
+		{View: winPopupCheatsheet, Key: gocui.KeyBackspace, Mod: gocui.ModNone, Handler: gu.cheatsheetBackspace},
+		{View: winPopupCheatsheet, Key: gocui.KeyBackspace2, Mod: gocui.ModNone, Handler: gu.cheatsheetBackspace},
+		{View: winPopupCheatsheet, Key: gocui.KeyArrowDown, Mod: gocui.ModNone, Handler: gu.cheatsheetCursor(+1)},
+		{View: winPopupCheatsheet, Key: gocui.KeyArrowUp, Mod: gocui.ModNone, Handler: gu.cheatsheetCursor(-1)},
+		{View: winPopupCheatsheet, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.cheatsheetCursor(+1)},
+		{View: winPopupCheatsheet, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.cheatsheetCursor(-1)},
 	}
-	for _, b := range bs {
-		if err := gu.g.SetKeybinding(b.view, b.key, b.mod, b.h); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // focusPanel returns a handler that focuses the named panel. After
@@ -806,64 +882,192 @@ func (gu *Gui) dispatchPaletteCommand(cmd string) {
 	}
 }
 
-// openHelp opens the per-binding cheatsheet.
+// openHelp opens the lazygit-style sectioned + filterable
+// cheatsheet popup. The bucket build is driven entirely by the
+// bindingSpecs() registry — nothing in the help text is
+// hand-curated anymore.
+//
+// Bucketing rules (lazygit's uniqueBindings parity):
+//
+//   - Local      = entries whose View == focused panel's window AND
+//                  Tag != "navigation".
+//   - Global     = entries with Tag == "global" (or View == "").
+//   - Navigation = entries whose View == focused panel's window AND
+//                  Tag == "navigation".
+//
+// Dedup is by Description within bucket (keep first occurrence) so
+// equivalent aliases (j vs ArrowDown, q vs Ctrl-C) only surface
+// once. Bindings whose Description is empty are excluded entirely
+// — that's how we hide popup-scoped registrations and other
+// non-discoverable plumbing.
 func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
-	// Hotkey-display convention (project rule): plain keys are
-	// shown in lowercase. The uppercase variant is reserved for
-	// chords where Shift is part of the press — e.g. `R` here
-	// means Shift+r (the binding is rune 'R'), `K` means Shift+k
-	// on Jobs, `D` means Shift+d on Workflows, `M` means Shift+m
-	// on Tasks. Modifier chords use the `ctrl+x` / `alt+enter`
-	// shape; uppercase letters after a modifier (e.g. `ctrl+S`)
-	// would similarly imply Shift on top.
-	lines := []string{
-		"global:",
-		"  1..4 tab     focus side panel    /   filter",
-		"  0            focus detail        :   palette",
-		"  R            refresh             *   clear scope",
-		"  ctrl+r       hard refresh (reopen db conn; recover from cross-process gc)",
-		"  @            toggle log          ?   help",
-		"  q ctrl+c     quit                esc back/close",
-		"",
-		"tasks:",
-		"  space        filter Jobs by selected task (stay on Tasks)",
-		"  enter        filter Jobs by selected task and focus Jobs",
-		"  n new    c edit    d done     x cancel   o reopen",
-		"  e enroll r resume  b block    u unblock  m comment",
-		"  p priority         M metadata",
-		"",
-		"jobs:",
-		"  enter      focus input (non-terminal) / Detail pane (terminal)",
-		"  K          cancel job",
-		"",
-		"workflows:",
-		"  n new (from file)   D delete   i isolation (none↔worktree)",
-		"",
-		"agents:",
-		"  i install   u uninstall",
-		"",
-		"detail:",
-		"  j/k arrows                line scroll",
-		"  ctrl+f/ctrl+b/pgup/pgdn   page scroll",
-		"  g/G                       top/bottom",
-		"  wheel                     scroll",
-		"",
-		"job input (non-terminal job):",
-		"  ctrl+d send     ctrl+f follow_up    ctrl+a abort",
-		"  esc cancel      ctrl+b/pgup/pgdn    scroll transcript above",
-		"",
-		"compose (new task / edit task):",
-		"  summary: enter / ctrl+s submit  tab → description  esc cancel",
-		"  description: ctrl+s submit  tab → summary  esc cancel",
-		"compose (comment / metadata):",
-		"  ctrl+s submit  enter newline  esc cancel",
-		"",
-		"enroll / resume picker (e / r on Tasks):",
-		"  j/k arrows  navigate    enter   confirm pane / step",
-		"  esc on step → back to workflow pane (enroll only); esc on workflow closes",
-	}
-	gu.openMenu("help", lines, func(_ int) error { return gu.popupClose(nil, nil) })
+	var focused panelID
+	gu.st.withRLock(func() {
+		focused = gu.st.focused
+	})
+	gu.openCheatsheet(focused)
 	return nil
+}
+
+// openCheatsheet builds the sectioned bucket of items for the given
+// focused panel and seeds the popup state. Pulled out of openHelp
+// so unit tests can drive the build directly without going through
+// the openHelp keybinding handler.
+func (gu *Gui) openCheatsheet(focused panelID) {
+	specs := gu.bindingSpecs()
+	items := buildCheatsheetItems(specs, focused)
+	gu.st.withLock(func() {
+		gu.st.popup = popupState{
+			Kind:              popupCheatsheet,
+			Title:             "Keybindings — type to filter · enter executes · esc close",
+			CheatsheetItems:   items,
+			CheatsheetFilter:  "",
+			CheatsheetCursor:  0,
+			CheatsheetFocused: focused,
+		}
+	})
+	gu.requestRedraw()
+}
+
+// buildCheatsheetItems assembles the section markers + binding rows
+// for the cheatsheet given the binding spec registry and the
+// currently focused panel. Pure function so the bucketing /
+// deduplication contracts (AC2) can be exercised without a gui.
+//
+// The returned slice is the FULL list (header markers + non-header
+// rows). The popup applies the filter at render time — the items
+// slice is captured once at open and never mutated for the
+// lifetime of the popup.
+func buildCheatsheetItems(specs []bindingSpec, focused panelID) []cheatsheetItem {
+	focusedWin := focused.window()
+
+	dedup := map[string]map[string]bool{}
+	local := []cheatsheetItem{}
+	global := []cheatsheetItem{}
+	navigation := []cheatsheetItem{}
+
+	push := func(section string, dst *[]cheatsheetItem, sp bindingSpec) {
+		if sp.Description == "" {
+			return
+		}
+		if dedup[section] == nil {
+			dedup[section] = map[string]bool{}
+		}
+		if dedup[section][sp.Description] {
+			return
+		}
+		dedup[section][sp.Description] = true
+		handler := sp.Handler
+		item := cheatsheetItem{
+			Section:     section,
+			KeyLabel:    keyLabel(sp.Key),
+			Description: sp.Description,
+			Handler: func() error {
+				if handler == nil {
+					return nil
+				}
+				return handler(nil, nil)
+			},
+		}
+		*dst = append(*dst, item)
+	}
+
+	for _, sp := range specs {
+		isGlobal := sp.Tag == "global" || sp.View == ""
+		isFocusedView := focusedWin != "" && sp.View == focusedWin
+		switch {
+		case isFocusedView && sp.Tag == "navigation":
+			push("Navigation", &navigation, sp)
+		case isFocusedView:
+			push("Local", &local, sp)
+		case isGlobal:
+			push("Global", &global, sp)
+		}
+	}
+
+	var items []cheatsheetItem
+	appendBucket := func(section string, rows []cheatsheetItem) {
+		if len(rows) == 0 {
+			return
+		}
+		items = append(items, cheatsheetItem{IsHeader: true, Section: section})
+		items = append(items, rows...)
+	}
+	appendBucket("Local", local)
+	appendBucket("Global", global)
+	appendBucket("Navigation", navigation)
+	return items
+}
+
+// keyLabel renders a binding key (rune or gocui.Key) as the
+// canonical operator-facing string. Project rule (kept stable
+// across the cheatsheet, the options strip, and any future
+// inline hint): plain letters are lowercase; uppercase letters
+// mean shift+letter; modifier chords use the `ctrl+x` /
+// `alt+enter` shape.
+func keyLabel(k any) string {
+	switch v := k.(type) {
+	case rune:
+		switch v {
+		case ' ':
+			return "space"
+		}
+		return string(v)
+	case gocui.Key:
+		switch v {
+		case gocui.KeyEnter:
+			return "enter"
+		case gocui.KeyEsc:
+			return "esc"
+		case gocui.KeyTab:
+			return "tab"
+		case gocui.KeyArrowUp:
+			return "↑"
+		case gocui.KeyArrowDown:
+			return "↓"
+		case gocui.KeyArrowLeft:
+			return "←"
+		case gocui.KeyArrowRight:
+			return "→"
+		case gocui.KeyPgup:
+			return "pgup"
+		case gocui.KeyPgdn:
+			return "pgdn"
+		case gocui.KeyHome:
+			return "home"
+		case gocui.KeyEnd:
+			return "end"
+		case gocui.KeySpace:
+			return "space"
+		case gocui.KeyBackspace, gocui.KeyBackspace2:
+			return "backspace"
+		case gocui.KeyDelete:
+			return "delete"
+		case gocui.KeyCtrlA:
+			return "ctrl+a"
+		case gocui.KeyCtrlB:
+			return "ctrl+b"
+		case gocui.KeyCtrlC:
+			return "ctrl+c"
+		case gocui.KeyCtrlD:
+			return "ctrl+d"
+		case gocui.KeyCtrlE:
+			return "ctrl+e"
+		case gocui.KeyCtrlF:
+			return "ctrl+f"
+		case gocui.KeyCtrlR:
+			return "ctrl+r"
+		case gocui.KeyCtrlS:
+			return "ctrl+s"
+		case gocui.KeyCtrlU:
+			return "ctrl+u"
+		case gocui.MouseWheelUp:
+			return "wheel↑"
+		case gocui.MouseWheelDown:
+			return "wheel↓"
+		}
+	}
+	return fmt.Sprintf("%v", k)
 }
 
 // taskNew opens the lazygit-style two-pane compose editor and

@@ -1313,6 +1313,15 @@ func renderAgentDetail(a datasource.Agent) string {
 }
 
 // renderStatusBar returns the bottom-line status string.
+//
+// Layout is a sequence of "blocks" joined with the literal three
+// characters " | " (space-pipe-space). Inside a block tokens stay
+// single-space-separated; the renderer never emits two consecutive
+// spaces. The previous shape used a two-space separator AND padded
+// the bar with empty rows above and below — both gone now (the
+// arrangement allocates Size:1 to the bar so there is no padding
+// to render, and the options strip below carries the `?=help` hint
+// that used to trail the status line).
 func renderStatusBar(s *state, projectRoot string) string {
 	var parts []string
 	parts = append(parts, "autosk")
@@ -1345,7 +1354,9 @@ func renderStatusBar(s *state, projectRoot string) string {
 		// workflow / agent). Labels stay default-coloured so the
 		// status bar reads as a sequence of "label=<value>" pairs and
 		// the values themselves are visually grouped with their panel
-		// counterparts.
+		// counterparts. Inside this single "scope" block chips stay
+		// single-space-separated; the " | " separator only appears
+		// BETWEEN top-level blocks.
 		var bits []string
 		if s.scope.TaskID != "" {
 			bits = append(bits, "task="+renderTaskID(s.scope.TaskID))
@@ -1364,8 +1375,116 @@ func renderStatusBar(s *state, projectRoot string) string {
 		scopeStr = strings.Join(bits, " ")
 	}
 	parts = append(parts, "scope: "+scopeStr)
-	parts = append(parts, "?=help")
-	return strings.Join(parts, "  ")
+	return strings.Join(parts, styleMuted.Render(" | "))
+}
+
+// renderOptionsStrip renders the bottom-row options hint: a
+// context-aware "<key>: <action> | <key>: <action> | …" string
+// pinned to the very bottom of the screen. Each entry comes from
+// a bindingSpec whose DisplayOnScreen flag is set; Local entries
+// (View == focused window) appear first, then Global entries
+// (Tag == "global"). The running width is truncated with `…` once
+// it exceeds innerWidth.
+//
+// Pure function (takes the binding spec slice as a parameter) so
+// the truncation and ordering rules can be exercised without a
+// full gocui screen.
+func renderOptionsStrip(specs []bindingSpec, focusedWin string, innerWidth int) string {
+	// Locals: bindings whose View matches the focused window.
+	// Globals: bindings tagged "global" (or View == ""). Lazygit
+	// orders locals first because they're the panel-specific verbs
+	// the operator is most likely reaching for.
+	seen := map[string]bool{}
+	locals := make([]bindingSpec, 0, 8)
+	globals := make([]bindingSpec, 0, 8)
+	for _, b := range specs {
+		if !b.DisplayOnScreen {
+			continue
+		}
+		label := b.Short
+		if label == "" {
+			label = b.Description
+		}
+		if label == "" {
+			continue
+		}
+		dedupKey := ""
+		isLocal := focusedWin != "" && b.View == focusedWin
+		isGlobal := b.Tag == "global" || b.View == ""
+		switch {
+		case isLocal:
+			dedupKey = "L:" + label
+			if seen[dedupKey] {
+				continue
+			}
+			seen[dedupKey] = true
+			locals = append(locals, b)
+		case isGlobal:
+			dedupKey = "G:" + label
+			if seen[dedupKey] {
+				continue
+			}
+			seen[dedupKey] = true
+			globals = append(globals, b)
+		}
+	}
+	ordered := append(locals, globals...)
+	if len(ordered) == 0 {
+		return ""
+	}
+
+	sep := styleMuted.Render(" | ")
+	ellipsis := styleMuted.Render("…")
+	sepVisible := lipgloss.Width(" | ")     // 3
+	ellipsisVisible := lipgloss.Width("…") // 1
+
+	// Compose left-to-right, truncating with "…" once we'd exceed
+	// the inner width. Lazygit's formatBindingInfos does the same:
+	// the last entry that overflows is dropped wholesale and a
+	// muted " | …" is appended in its place.
+	//
+	// Two contracts pinned here:
+	//
+	//  1. The first entry (i==0) is always written verbatim — we
+	//     never bail out with a leading " | …" (which would render
+	//     as a stray space-pipe-space at column 0). This matches
+	//     lazygit's formatBindingInfos, which gates the overflow
+	//     path on i > 0.
+	//  2. The budget reserves room for the actual truncation marker
+	//     (" | …" = sepVisible + ellipsisVisible cells), so the
+	//     rendered total never exceeds innerWidth. gocui clips
+	//     overshoot silently and the "…" is the first thing clipped
+	//     — leaving the operator with no visible truncation hint.
+	budget := innerWidth - sepVisible - ellipsisVisible
+	if innerWidth <= 0 {
+		budget = 0
+	}
+	var b strings.Builder
+	visibleW := 0
+	for i, sp := range ordered {
+		label := sp.Short
+		if label == "" {
+			label = sp.Description
+		}
+		key := keyLabel(sp.Key)
+		entry := styleAccent.Render(key) + ": " + label
+		entryW := lipgloss.Width(entry)
+		prefix := 0
+		if i > 0 {
+			prefix = sepVisible
+		}
+		if i > 0 && budget > 0 && visibleW+prefix+entryW > budget {
+			b.WriteString(sep)
+			b.WriteString(ellipsis)
+			return b.String()
+		}
+		if i > 0 {
+			b.WriteString(sep)
+		}
+		b.WriteString(entry)
+		visibleW += prefix + entryW
+	}
+	return b.String()
 }
 
 // renderCommandLog returns the bottom-right log block.

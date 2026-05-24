@@ -270,6 +270,15 @@ const (
 	// single, non-navigable row. See popupEnrollState for the
 	// per-popup fields.
 	popupEnroll
+	// popupCheatsheet is the lazygit-style sectioned, filterable,
+	// executable keybinding cheatsheet opened by `?`. It owns one
+	// editable view (winPopupCheatsheet) on top of which printable
+	// runes go through the view's Editor and accumulate into
+	// state.popup.CheatsheetFilter; non-char keys (Enter / Esc /
+	// Backspace / arrows / wheel) are routed via view-scoped
+	// keybindings. See keys.go's bindingSpec doc for the metadata
+	// model that feeds the cheatsheet items.
+	popupCheatsheet
 )
 
 // pickerPane identifies which side of the enroll/resume two-pane
@@ -337,6 +346,35 @@ type popupState struct {
 	ActivePane     pickerPane
 	WorkflowLocked bool
 	OnPick         func(wfName, stepName string) error
+
+	// Cheatsheet fields (popupCheatsheet). CheatsheetItems is the
+	// full unfiltered list of section markers + binding rows,
+	// captured once at openCheatsheet time from the focused
+	// panel's metadata view of bindingSpecs(). CheatsheetFilter is
+	// the live case-insensitive substring filter the editor types
+	// into. CheatsheetCursor is the index INTO THE FILTERED set of
+	// non-header rows; the renderer translates it back to an
+	// absolute index on every paint. CheatsheetFocused is the
+	// panel that was focused at open time — used by the renderer
+	// for the title-row hint.
+	CheatsheetItems   []cheatsheetItem
+	CheatsheetFilter  string
+	CheatsheetCursor  int
+	CheatsheetFocused panelID
+}
+
+// cheatsheetItem is one row of the cheatsheet body. A row is either
+// a section header (IsHeader=true, Section set, Handler/Key/Desc
+// empty) or a binding row (IsHeader=false, KeyLabel + Description
+// set, Handler bound). The Section field on binding rows tracks
+// which bucket the row belongs to so the renderer can re-group
+// after filtering.
+type cheatsheetItem struct {
+	IsHeader    bool
+	Section     string
+	KeyLabel    string
+	Description string
+	Handler     func() error
 }
 
 // flashState is the ephemeral toast line. CreatedAt makes the layout

@@ -517,6 +517,12 @@ func (gu *Gui) renderViews() {
 		}
 		gu.writeView(winLog, "log", renderCommandLog(gu.st.logBuf, gu.st.flash))
 		gu.writeView(winStatusBar, "", renderStatusBar(gu.st, gu.opts.ProjectRoot))
+		// Options strip: context-aware bottom-row hint for the
+		// focused panel. Reads from the same bindingSpec registry
+		// that drives the cheatsheet popup; the renderer truncates
+		// to the strip's inner width with a "…" suffix when needed.
+		optsWin := gu.st.focused.normalizeForDetail().window()
+		gu.writeView(winOptionsStrip, "", renderOptionsStrip(gu.bindingSpecs(), optsWin, gu.innerWidth(winOptionsStrip)))
 
 		// Job-input textarea is allocated by layout whenever the
 		// selected job is non-terminal AND the Detail pane is

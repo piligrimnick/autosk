@@ -3,6 +3,7 @@ package tui
 import (
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
@@ -319,6 +320,8 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 	case popupEnroll:
 		activeSet[winEnrollWorkflowList] = true
 		activeSet[winEnrollStepList] = true
+	case popupCheatsheet:
+		activeSet[winPopupCheatsheet] = true
 	}
 	for _, name := range allPopupWindows {
 		if activeSet[name] {
@@ -379,6 +382,9 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 	case popupEnroll:
 		gu.layoutEnrollPicker(g, w, h)
 		pinOnTop(winEnrollWorkflowList, winEnrollStepList)
+	case popupCheatsheet:
+		gu.layoutCheatsheet(g, w, h, title)
+		pinOnTop(winPopupCheatsheet)
 	}
 }
 
@@ -814,4 +820,316 @@ func renderMenuBody(lines []string, cur int) string {
 		}
 	}
 	return b.String()
+}
+
+// ---- cheatsheet popup ---------------------------------------------------
+//
+// The cheatsheet popup is a lazygit-style sectioned, filterable,
+// executable bindings menu. State lives on popupState
+// (CheatsheetItems / CheatsheetFilter / CheatsheetCursor /
+// CheatsheetFocused). The view (winPopupCheatsheet) is editable so
+// printable runes flow through the gocui Editor into the filter;
+// non-char keys are routed via view-scoped keybindings (see
+// bindingSpecs() under the winPopupCheatsheet block).
+
+// filterCheatsheetItems returns the subset of items that match the
+// (case-insensitive) substring filter, preserving section headers
+// for buckets that still have at least one matching row. An empty
+// filter returns the input unchanged.
+func filterCheatsheetItems(items []cheatsheetItem, filter string) []cheatsheetItem {
+	if filter == "" {
+		return items
+	}
+	needle := strings.ToLower(filter)
+	out := make([]cheatsheetItem, 0, len(items))
+	var pendingHeader *cheatsheetItem
+	flushHeader := func() {
+		if pendingHeader != nil {
+			out = append(out, *pendingHeader)
+			pendingHeader = nil
+		}
+	}
+	for i, it := range items {
+		if it.IsHeader {
+			hdr := items[i]
+			pendingHeader = &hdr
+			continue
+		}
+		hay := strings.ToLower(it.Description + " " + it.KeyLabel)
+		if !strings.Contains(hay, needle) {
+			continue
+		}
+		flushHeader()
+		out = append(out, it)
+	}
+	return out
+}
+
+// renderCheatsheetBody renders the filtered cheatsheet item slice as
+// a multi-line body. Section headers wear styleHeader; binding rows
+// are two-column (right-aligned key + space + left-aligned
+// description). The cursored row (relative to the non-header rows in
+// the filtered slice) is wrapped in styleAccent and prefixed with
+// "▶ ". keyColW is computed from the widest visible key in the
+// filtered set (using lipgloss.Width so SGR escapes don't leak).
+func renderCheatsheetBody(items []cheatsheetItem, cursor int) string {
+	keyW := 0
+	for _, it := range items {
+		if it.IsHeader {
+			continue
+		}
+		if n := lipgloss.Width(it.KeyLabel); n > keyW {
+			keyW = n
+		}
+	}
+	var b strings.Builder
+	rowIdx := -1
+	for _, it := range items {
+		if it.IsHeader {
+			b.WriteString("  " + styleHeader.Render("--- "+it.Section+" ---") + "\n")
+			continue
+		}
+		rowIdx++
+		pad := keyW - lipgloss.Width(it.KeyLabel)
+		if pad < 0 {
+			pad = 0
+		}
+		keyCell := strings.Repeat(" ", pad) + styleAccent.Render(it.KeyLabel)
+		line := keyCell + "  " + it.Description
+		if rowIdx == cursor {
+			b.WriteString("▶ " + styleAccent.Render(line) + "\n")
+		} else {
+			b.WriteString("  " + line + "\n")
+		}
+	}
+	if b.Len() == 0 {
+		b.WriteString("  " + styleMuted.Render("(no matches)") + "\n")
+	}
+	return b.String()
+}
+
+// cheatsheetVisibleRowCount returns the number of non-header items
+// in the filtered slice. Used to clamp CheatsheetCursor when the
+// filter shrinks the list.
+func cheatsheetVisibleRowCount(items []cheatsheetItem) int {
+	n := 0
+	for _, it := range items {
+		if !it.IsHeader {
+			n++
+		}
+	}
+	return n
+}
+
+// cheatsheetSelectedItem returns the (filtered slice index, item)
+// pair for the currently-cursored binding row, or (-1, zero) when
+// the filtered list is empty.
+func cheatsheetSelectedItem(items []cheatsheetItem, cursor int) (int, cheatsheetItem) {
+	row := -1
+	for i, it := range items {
+		if it.IsHeader {
+			continue
+		}
+		row++
+		if row == cursor {
+			return i, it
+		}
+	}
+	return -1, cheatsheetItem{}
+}
+
+// layoutCheatsheet draws the popup view, sized to fit the filtered
+// body. The view is editable so the cheatsheet editor receives
+// printable runes (everything not bound view-scoped); see
+// cheatsheetEditor for the keystroke contract.
+func (gu *Gui) layoutCheatsheet(g *gocui.Gui, w, h int, title string) {
+	var (
+		items  []cheatsheetItem
+		filter string
+		cursor int
+	)
+	gu.st.withRLock(func() {
+		items = gu.st.popup.CheatsheetItems
+		filter = gu.st.popup.CheatsheetFilter
+		cursor = gu.st.popup.CheatsheetCursor
+	})
+	filtered := filterCheatsheetItems(items, filter)
+	visible := cheatsheetVisibleRowCount(filtered)
+	// Clamp cursor to the visible row count so the rendered marker
+	// always lands on an actual binding row.
+	if visible == 0 {
+		cursor = 0
+	} else if cursor >= visible {
+		cursor = visible - 1
+	} else if cursor < 0 {
+		cursor = 0
+	}
+	// Title row: append a live filter hint when the operator has
+	// typed something, so they can see what's narrowing the list.
+	displayTitle := title
+	if filter != "" {
+		displayTitle = title + " — /" + filter
+	}
+	body := renderCheatsheetBody(filtered, cursor)
+	v := gu.drawPopup(g, winPopupCheatsheet, w, h, displayTitle, body)
+	if v == nil {
+		return
+	}
+	v.Editable = true
+	v.Editor = gocui.EditorFunc(gu.cheatsheetEditor)
+	v.Wrap = false
+	if _, err := g.SetCurrentView(winPopupCheatsheet); err != nil && !isUnknownView(err) {
+		return
+	}
+}
+
+// cheatsheetEditor is the gocui Editor attached to the cheatsheet
+// view. Returns `matched=true` to swallow the keystroke (don't
+// fall through to global keybindings); `matched=false` leaves
+// gocui's standard "global keybinding after editor" fallback in
+// effect (so e.g. Ctrl-R hard-refresh still works while the popup
+// is open).
+//
+// Every printable rune (including 'j' / 'k' / digits / punctuation
+// like '*', '/', ':', '?', '@') appends to the live filter — the
+// plan and AC2 say "typing any printable rune appends it to the
+// filter," with no exemptions. Cursor motion lives entirely on
+// view-scoped bindings (arrows, mouse wheel) registered on
+// winPopupCheatsheet. j/k are deliberately NOT a navigation
+// short-circuit: doing so would silently swallow them from the
+// filter, breaking searches for verbs like "block" / "kill" /
+// "unblock". Modifier-bearing chords are ignored — Backspace,
+// Esc, Enter, arrows and wheel are already covered by view-scoped
+// keybindings.
+func (gu *Gui) cheatsheetEditor(v *gocui.View, key gocui.Key, ch rune, mod gocui.Modifier) bool {
+	// gocui only exposes ModNone / ModAlt / ModMotion — there's no
+	// explicit ModShift. Shift+letter arrives as the already-cased
+	// rune (e.g. 'A') with ModNone, so a strict "only ModNone"
+	// check is safe.
+	if mod != gocui.ModNone {
+		return false
+	}
+	if ch != 0 && unicode.IsPrint(ch) {
+		gu.cheatsheetAppendRune(ch)
+		return true
+	}
+	return false
+}
+
+// cheatsheetMoveCursor steps the cursor by `step` rows over the
+// CURRENT filtered set (the post-filter visible-row count is the
+// modulus). No-op when the popup isn't a cheatsheet — defensive
+// against late-arriving wheel events after popupClose has reset the
+// state.
+func (gu *Gui) cheatsheetMoveCursor(step int) {
+	gu.st.withLock(func() {
+		if gu.st.popup.Kind != popupCheatsheet {
+			return
+		}
+		filtered := filterCheatsheetItems(gu.st.popup.CheatsheetItems, gu.st.popup.CheatsheetFilter)
+		n := cheatsheetVisibleRowCount(filtered)
+		if n == 0 {
+			gu.st.popup.CheatsheetCursor = 0
+			return
+		}
+		gu.st.popup.CheatsheetCursor = (gu.st.popup.CheatsheetCursor + step + n) % n
+	})
+	gu.requestRedraw()
+}
+
+// cheatsheetCursor wraps cheatsheetMoveCursor as a keybinding
+// handler factory. Used by the j/k and arrow + wheel bindings.
+func (gu *Gui) cheatsheetCursor(step int) func(*gocui.Gui, *gocui.View) error {
+	return func(*gocui.Gui, *gocui.View) error {
+		gu.cheatsheetMoveCursor(step)
+		return nil
+	}
+}
+
+// cheatsheetAppendRune appends ch to the live filter and resets
+// the cursor so the first matching row is selected. Without the
+// reset a tight filter (1–2 rows) inherited a stale cursor from
+// a wider previous filter and the highlight could land out of
+// view.
+func (gu *Gui) cheatsheetAppendRune(ch rune) {
+	gu.st.withLock(func() {
+		if gu.st.popup.Kind != popupCheatsheet {
+			return
+		}
+		gu.st.popup.CheatsheetFilter += string(ch)
+		gu.st.popup.CheatsheetCursor = 0
+	})
+	gu.requestRedraw()
+}
+
+// cheatsheetBackspace pops the last rune off the filter, ignoring
+// the gocui keybinding's (*gocui.Gui, *gocui.View) signature. With
+// an empty filter the keystroke is a no-op (a previous press
+// already cleared everything; Esc is the close path).
+func (gu *Gui) cheatsheetBackspace(*gocui.Gui, *gocui.View) error {
+	gu.st.withLock(func() {
+		if gu.st.popup.Kind != popupCheatsheet {
+			return
+		}
+		rs := []rune(gu.st.popup.CheatsheetFilter)
+		if len(rs) == 0 {
+			return
+		}
+		gu.st.popup.CheatsheetFilter = string(rs[:len(rs)-1])
+		gu.st.popup.CheatsheetCursor = 0
+	})
+	gu.requestRedraw()
+	return nil
+}
+
+// cheatsheetEscape implements the two-step Esc semantics: a
+// non-empty filter is cleared (the popup stays open), an empty
+// filter closes the popup.
+func (gu *Gui) cheatsheetEscape(g *gocui.Gui, v *gocui.View) error {
+	var close bool
+	gu.st.withLock(func() {
+		if gu.st.popup.Kind != popupCheatsheet {
+			close = true
+			return
+		}
+		if gu.st.popup.CheatsheetFilter == "" {
+			close = true
+			return
+		}
+		gu.st.popup.CheatsheetFilter = ""
+		gu.st.popup.CheatsheetCursor = 0
+	})
+	if close {
+		return gu.popupClose(g, v)
+	}
+	gu.requestRedraw()
+	return nil
+}
+
+// cheatsheetAccept fires the cursored binding's handler. The popup
+// is closed BEFORE the handler runs so any handler that inspects
+// g.CurrentView() sees the dashboard underneath instead of the
+// dismissed cheatsheet view.
+func (gu *Gui) cheatsheetAccept(g *gocui.Gui, v *gocui.View) error {
+	var handler func() error
+	gu.st.withLock(func() {
+		if gu.st.popup.Kind != popupCheatsheet {
+			return
+		}
+		filtered := filterCheatsheetItems(gu.st.popup.CheatsheetItems, gu.st.popup.CheatsheetFilter)
+		_, item := cheatsheetSelectedItem(filtered, gu.st.popup.CheatsheetCursor)
+		handler = item.Handler
+		gu.st.popup = popupState{}
+	})
+	// Drop the cheatsheet view BEFORE invoking the handler so any
+	// handler that opens another popup doesn't fight the
+	// just-dismissed view for current-view ownership.
+	if g != nil {
+		_ = g.DeleteView(winPopupCheatsheet)
+	}
+	gu.requestRedraw()
+	if handler != nil {
+		return handler()
+	}
+	return nil
 }

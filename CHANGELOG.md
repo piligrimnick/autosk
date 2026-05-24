@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **lazy:** two-pane workflow + step picker for `enroll` / `resume` actions.
 - **lazy:** redesigned Workflow Detail pane.
+- **lazy:** `?` opens a sectioned, filterable cheatsheet popup; Enter runs the highlighted binding (ask-ed8035).
+- **lazy:** context-aware bindings hint row pinned across the bottom of the dashboard (ask-ed8035).
+
+### Changed
+- **lazy:** status bar collapsed to a single row with ` | ` separators; legacy `?=help` hint moved into the cheatsheet popup (ask-ed8035).
 
 ### Fixed
 - **lazy:** fix cursor jumping to a different row when a refresh re-sorted or re-filtered a panel.
