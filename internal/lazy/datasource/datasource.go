@@ -186,6 +186,8 @@ type Signal struct {
 	JobID        string
 	StepID       string
 	StepName     string
+	WorkflowID   string
+	WorkflowName string
 	Target       string // sibling step name OR done|cancel|human
 	AgentID      string
 	AgentName    string

@@ -588,12 +588,12 @@ func TestRenderTaskDetail_SignalsBoxAll(t *testing.T) {
 		ID: "ask-516001", Status: store.StatusWork, CreatedAt: fixedTime,
 	}
 	signals := []datasource.Signal{
-		{StepName: "step-a", Target: "step-b", CreatedAt: fixedTime},
-		{StepName: "step-b", Target: "step-c", CreatedAt: fixedTime},
-		{StepName: "step-c", Target: "step-d", CreatedAt: fixedTime},
-		{StepName: "step-d", Target: "step-e", CreatedAt: fixedTime},
-		{StepName: "step-e", Target: "step-f", CreatedAt: fixedTime},
-		{StepName: "step-f", Target: "done", CreatedAt: fixedTime},
+		{WorkflowName: "wf", StepName: "step-a", Target: "step-b", CreatedAt: fixedTime},
+		{WorkflowName: "wf", StepName: "step-b", Target: "step-c", CreatedAt: fixedTime},
+		{WorkflowName: "wf", StepName: "step-c", Target: "step-d", CreatedAt: fixedTime},
+		{WorkflowName: "wf", StepName: "step-d", Target: "step-e", CreatedAt: fixedTime},
+		{WorkflowName: "wf", StepName: "step-e", Target: "step-f", CreatedAt: fixedTime},
+		{WorkflowName: "wf", StepName: "step-f", Target: "done", CreatedAt: fixedTime},
 	}
 	out := renderTaskDetail(task, nil, signals, 80)
 	visible := ansiutil.Strip(out)
@@ -629,10 +629,10 @@ func TestRenderTaskDetail_SignalsTargetColored(t *testing.T) {
 		// of the same name appearing only on the target side, so a
 		// substring search for "\u001b...<target>\u001b" finds the
 		// target's styling and nothing else.
-		{StepName: "src1", Target: "validator", CreatedAt: fixedTime},
-		{StepName: "src2", Target: "done", CreatedAt: fixedTime},
-		{StepName: "src3", Target: "cancel", CreatedAt: fixedTime},
-		{StepName: "src4", Target: "human", CreatedAt: fixedTime},
+		{WorkflowName: "wf", StepName: "src1", Target: "validator", CreatedAt: fixedTime},
+		{WorkflowName: "wf", StepName: "src2", Target: "done", CreatedAt: fixedTime},
+		{WorkflowName: "wf", StepName: "src3", Target: "cancel", CreatedAt: fixedTime},
+		{WorkflowName: "wf", StepName: "src4", Target: "human", CreatedAt: fixedTime},
 	}
 	out := renderTaskDetail(task, nil, signals, 80)
 
@@ -650,6 +650,122 @@ func TestRenderTaskDetail_SignalsTargetColored(t *testing.T) {
 		want := styleForTaskStatus(st).Render(string(st))
 		if !strings.Contains(out, want) {
 			t.Errorf("lifecycle terminal %q not styled with task-status hue\nwant substring: %q\n         in: %q", st, want, out)
+		}
+	}
+}
+
+// TestRenderTaskDetail_SignalsSourceWorkflowStep pins the contract
+// that the source side of every signal row carries the same
+// `workflow:step` formatting as the Jobs panel: yellow workflow
+// name (styleWorkflowName), default-colour colon, purple step name
+// (styleStepName). The canonical composition is produced by
+// renderWorkflowStep, so the assertion checks the rendered substring
+// directly — a regression to bare renderStepName on the source side
+// would drop the styleWorkflowName escapes and fail the substring
+// check.
+func TestRenderTaskDetail_SignalsSourceWorkflowStep(t *testing.T) {
+	forceTrueColor(t)
+	task := datasource.Task{
+		ID: "ask-516010", Status: store.StatusWork, CreatedAt: fixedTime,
+	}
+	signals := []datasource.Signal{
+		{WorkflowName: "feature-dev", StepName: "dev", Target: "review", CreatedAt: fixedTime},
+		{WorkflowName: "feature-dev", StepName: "review", Target: "done", CreatedAt: fixedTime},
+	}
+	out := renderTaskDetail(task, nil, signals, 80)
+	if !strings.Contains(out, "\x1b") {
+		t.Fatalf("output carries no ANSI escapes at all — forceTrueColor did not take effect: %q", out)
+	}
+	for _, s := range signals {
+		want := renderWorkflowStep(s.WorkflowName, s.StepName)
+		if !strings.Contains(out, want) {
+			t.Errorf("signal source not rendered via renderWorkflowStep\nwant substring: %q\n         in: %q", want, out)
+		}
+		// Defence-in-depth: both halves must carry their canonical
+		// entity hues (yellow workflow, purple step), with a
+		// default-colour colon in between. A renderStepName-only
+		// regression would drop the workflow escape.
+		if !strings.Contains(out, styleWorkflowName.Render(s.WorkflowName)) {
+			t.Errorf("workflow name %q missing styleWorkflowName hue in: %q", s.WorkflowName, out)
+		}
+		if !strings.Contains(out, styleStepName.Render(s.StepName)) {
+			t.Errorf("step name %q missing styleStepName hue in: %q", s.StepName, out)
+		}
+	}
+}
+
+// TestRenderTaskDetail_SignalsSourceAlignment pins that the arrow
+// stays aligned at the same x even when one row has a much longer
+// workflow name than the others — i.e. the source column is padded
+// to the widest `workflowStepPlainWidth(wf, step)` in the visible
+// row set, not to the widest step name alone.
+func TestRenderTaskDetail_SignalsSourceAlignment(t *testing.T) {
+	old := time.Now().Add(-72 * time.Hour)
+	signals := []datasource.Signal{
+		// `long-feature-workflow:a` is much wider than `wf:b`, so
+		// padding the source to `len(step)` only would land the
+		// arrow at different x positions on each row.
+		{WorkflowName: "long-feature-workflow", StepName: "a", Target: "b", CreatedAt: old.Add(3 * time.Hour)},
+		{WorkflowName: "wf", StepName: "b", Target: "c", CreatedAt: old.Add(2 * time.Hour)},
+		// Orphaned/legacy row (WorkflowName empty) renders via
+		// renderWorkflowStep's `(no-wf)` muted fallback. Plain width
+		// of that fallback is exactly len("(no-wf)")=7, so the row
+		// participates in the same alignment math without panicking.
+		{WorkflowName: "", StepName: "", Target: "human", CreatedAt: old.Add(1 * time.Hour)},
+		{WorkflowName: "wf", StepName: "c", Target: "done", CreatedAt: old},
+	}
+	task := datasource.Task{ID: "ask-516011", Status: store.StatusWork, CreatedAt: old}
+	out := renderTaskDetail(task, nil, signals, 120)
+	visible := ansiutil.Strip(out)
+
+	var rows []string
+	for _, ln := range strings.Split(visible, "\n") {
+		if !strings.HasPrefix(ln, "│ ") || !strings.HasSuffix(ln, " │") {
+			continue
+		}
+		if !strings.Contains(ln, "→") {
+			continue
+		}
+		inner := strings.TrimSuffix(strings.TrimPrefix(ln, "│ "), " │")
+		rows = append(rows, strings.TrimRight(inner, " "))
+	}
+	if len(rows) != 4 {
+		t.Fatalf("expected 4 signal rows; got %d: %q", len(rows), rows)
+	}
+	// Orphan row must render the muted `(no-wf)` fallback rather
+	// than panic or produce a bare-step-name line.
+	if !strings.Contains(visible, "(no-wf)") {
+		t.Errorf("orphaned row did not render via renderWorkflowStep's (no-wf) fallback: %q", visible)
+	}
+
+	// Arrows align at the same x across all rows.
+	arrowX := strings.Index(rows[0], "→")
+	for i, r := range rows {
+		if x := strings.Index(r, "→"); x != arrowX {
+			t.Errorf("row %d: arrow not aligned (x=%d, want %d): %q", i, x, arrowX, r)
+		}
+	}
+
+	// Source column width matches the widest workflowStepPlainWidth
+	// in the row set. Layout: <19-cell datetime>  <source><pad>  →  <target>.
+	// Strip the datetime + 2-space gutter and measure from the
+	// start of source to the two-space gutter preceding the arrow.
+	wantSrcW := 0
+	for _, s := range signals {
+		if w := workflowStepPlainWidth(s.WorkflowName, s.StepName); w > wantSrcW {
+			wantSrcW = w
+		}
+	}
+	for i, r := range rows {
+		// row layout: 19 cells + 2 spaces + source + 2 spaces + "→" + ...
+		const dateW = 19
+		srcStart := dateW + 2
+		srcEnd := arrowX - 2 // back over the "  " gutter before the arrow
+		if srcEnd <= srcStart {
+			t.Fatalf("row %d: cannot extract source column from %q", i, r)
+		}
+		if got := srcEnd - srcStart; got != wantSrcW {
+			t.Errorf("row %d: source column width %d, want %d: %q", i, got, wantSrcW, r)
 		}
 	}
 }
@@ -674,10 +790,10 @@ func TestRenderTaskDetail_SignalsStacked(t *testing.T) {
 	// smart format is guaranteed to emit the full datetime form.
 	old := time.Now().Add(-72 * time.Hour)
 	signals := []datasource.Signal{
-		{StepName: "validate", Target: "human", CreatedAt: old.Add(2 * time.Hour)},
-		{StepName: "docs", Target: "validate", CreatedAt: old.Add(1 * time.Hour)},
-		{StepName: "review", Target: "docs", CreatedAt: old.Add(30 * time.Minute)},
-		{StepName: "dev", Target: "review", CreatedAt: old},
+		{WorkflowName: "wf", StepName: "validate", Target: "human", CreatedAt: old.Add(2 * time.Hour)},
+		{WorkflowName: "wf", StepName: "docs", Target: "validate", CreatedAt: old.Add(1 * time.Hour)},
+		{WorkflowName: "wf", StepName: "review", Target: "docs", CreatedAt: old.Add(30 * time.Minute)},
+		{WorkflowName: "wf", StepName: "dev", Target: "review", CreatedAt: old},
 	}
 	task := datasource.Task{ID: "ask-516003", Status: store.StatusWork, CreatedAt: old}
 	out := renderTaskDetail(task, nil, signals, 80)

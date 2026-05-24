@@ -84,6 +84,15 @@ func TestOffline_SignalsScopedByJobID(t *testing.T) {
 	if sigs1[0].JobID != r1.JobID {
 		t.Fatalf("Signals(r1)[0].JobID=%q want %q", sigs1[0].JobID, r1.JobID)
 	}
+	// Workflow id/name are projected via the steps→workflows join so
+	// the TUI can render the source side of each row as `wf:step`
+	// (matching the Jobs panel). A regression here would silently
+	// blank the workflow half and degrade the Recent signals box to
+	// the muted `(no-wf)` fallback.
+	if sigs1[0].WorkflowID != "wf-1" || sigs1[0].WorkflowName != "t" {
+		t.Errorf("Signals(r1)[0] workflow=%q/%q, want \"wf-1\"/\"t\"",
+			sigs1[0].WorkflowID, sigs1[0].WorkflowName)
+	}
 
 	sigs2, err := ds.Signals(ctx, r2.JobID)
 	if err != nil {
@@ -105,6 +114,15 @@ func TestOffline_SignalsScopedByJobID(t *testing.T) {
 	if len(all) != 2 {
 		t.Fatalf("SignalsForTask(taskID) returned %d, want 2 (jobs=%s,%s)",
 			len(all), r1.JobID, r2.JobID)
+	}
+	// Both rows surface the same workflow id/name. SignalsForTask
+	// shares signalsBaseQuery with Signals, so pinning it on both
+	// rows here guards the join for the task-scoped verb too.
+	for i, s := range all {
+		if s.WorkflowID != "wf-1" || s.WorkflowName != "t" {
+			t.Errorf("SignalsForTask[%d] workflow=%q/%q, want \"wf-1\"/\"t\"",
+				i, s.WorkflowID, s.WorkflowName)
+		}
 	}
 
 	// And calling Signals(taskID) returns nothing — the prefix-sniff

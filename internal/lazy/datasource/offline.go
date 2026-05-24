@@ -496,15 +496,23 @@ func (o *Offline) Comments(ctx context.Context, taskID string) ([]Comment, error
 // signalsBaseQuery is the shared projection for the two Signals
 // verbs. step_signals has no synthetic id column (PK = run_id), so
 // Signal carries TransitionID + JobID instead.
+//
+// The workflow id/name come from st.workflow_id → workflows; an
+// INNER JOIN is safe because every step row carries a non-NULL
+// workflow_id (schema invariant). The TUI uses these to render the
+// source side of each signal row as `workflow:step` (matching the
+// Jobs panel) instead of the bare step name.
 const signalsBaseQuery = `
 	SELECT ss.transition_id, ss.task_id, ss.run_id, ss.created_at,
 	       dr.step_id, st.name,
+	       st.workflow_id, w.name,
 	       COALESCE(t.next_step_id, ''), COALESCE(t.task_status, ''),
 	       COALESCE(ns.name, ''),
 	       st.agent_id, a.name
 	  FROM step_signals ss
 	  JOIN daemon_runs dr      ON dr.job_id = ss.run_id
 	  JOIN steps st            ON st.id = dr.step_id
+	  JOIN workflows w         ON w.id = st.workflow_id
 	  JOIN agents a            ON a.id = st.agent_id
 	  LEFT JOIN step_transitions t  ON t.id = ss.transition_id
 	  LEFT JOIN steps ns       ON ns.id = t.next_step_id`
@@ -556,7 +564,9 @@ func (o *Offline) scanSignals(ctx context.Context, query, arg string) ([]Signal,
 			nextName string
 		)
 		if err := rows.Scan(&s.TransitionID, &s.TaskID, &s.JobID, &created,
-			&s.StepID, &s.StepName, &nextID, &status, &nextName,
+			&s.StepID, &s.StepName,
+			&s.WorkflowID, &s.WorkflowName,
+			&nextID, &status, &nextName,
 			&s.AgentID, &s.AgentName); err != nil {
 			return nil, err
 		}
