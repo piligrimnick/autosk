@@ -39,7 +39,12 @@ fi
 # awk walks the file once:
 #   - looks for the heading "## [<version>]" (matched as a literal substring
 #     including the brackets, so 0.1.4 doesn't accidentally hit 0.1.40),
-#   - then captures every following line until the next "## [" heading,
+#   - then captures every following line until either the next "## ["
+#     heading OR the start of the Markdown link-reference-definition block
+#     Keep a Changelog parks at the bottom of the file (lines like
+#     "[0.1.4]: https://github.com/.../compare/..."). Those are part of
+#     the file as a whole, not of any single version section, and would
+#     otherwise leak into the last version's release notes.
 #   - and finally strips leading and trailing blank lines from the buffer.
 body="$(awk -v marker="[${version}]" '
   /^## \[/ {
@@ -49,6 +54,7 @@ body="$(awk -v marker="[${version}]" '
       next
     }
   }
+  in_section && /^\[[^]]+\]:[[:space:]]+[^[:space:]]/ { exit }
   in_section {
     lines[++n] = $0
     if (NF) last = n
