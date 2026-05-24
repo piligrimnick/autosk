@@ -843,13 +843,23 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 		// "YYYY-MM-DD HH:MM:SS" form; today's events render time-only
 		// (8 cells) so they fall under the time half of yesterday's
 		// full stamps with the date half left blank. The source
-		// column is padded to the longest step name across all rows
-		// so the arrow lands in the same place on every line.
+		// column is padded to the widest workflowStepPlainWidth
+		// across all rows so the arrow lands in the same place on
+		// every line.
 		//
-		// Both sides of the arrow wear their entity colour: the
-		// source is always a step name (purple), the target is
-		// either a sibling step name (purple) or a lifecycle
-		// terminal (done/cancel/human), which picks up its
+		// Both sides of the arrow wear their entity colour. The
+		// source is rendered as `workflow:step` via
+		// renderWorkflowStep — yellow workflow name, default-colour
+		// colon, purple step name — so a glance at the kickback
+		// history tells which workflow each transition belongs to.
+		// This matches the wf/step column rendered by
+		// renderJobsPanel. Orphaned/legacy rows whose workflow id
+		// can't be resolved degrade to renderWorkflowStep's muted
+		// `(no-wf)` fallback so the layout still aligns.
+		//
+		// The target stays a single token: either a sibling step
+		// name (purple, via renderStepName) or a lifecycle
+		// terminal (done/cancel/human) which picks up its
 		// task-status hue via renderSignalTarget. Same per-token
 		// strategy renderWorkflowDetail uses on the step graph.
 		//
@@ -861,17 +871,17 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 		const dateW = 19 // len("2006-01-02 15:04:05")
 		srcW := 1
 		for _, s := range signals {
-			if w := utf8.RuneCountInString(s.StepName); w > srcW {
+			if w := workflowStepPlainWidth(s.WorkflowName, s.StepName); w > srcW {
 				srcW = w
 			}
 		}
 		lines := make([]string, 0, len(signals))
 		for _, s := range signals {
 			stamp := fmt.Sprintf("%*s", dateW, timeformat.FormatDateTimeSmart(s.CreatedAt))
-			srcPad := strings.Repeat(" ", srcW-utf8.RuneCountInString(s.StepName))
+			srcPad := strings.Repeat(" ", srcW-workflowStepPlainWidth(s.WorkflowName, s.StepName))
 			lines = append(lines, fmt.Sprintf("%s  %s%s  →  %s",
 				stamp,
-				renderStepName(s.StepName), srcPad,
+				renderWorkflowStep(s.WorkflowName, s.StepName), srcPad,
 				renderSignalTarget(s.Target)))
 		}
 		label := styleMuted.Render(fmt.Sprintf("Recent signals (%d)", len(signals)))
