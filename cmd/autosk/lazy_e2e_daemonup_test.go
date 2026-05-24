@@ -27,7 +27,10 @@ import (
 // The test wires a fake daemon over UDS that returns one job with
 // Streaming=true / AttachCount=3, points a Compose datasource at it,
 // runs the TUI in headless mode, and asserts the rendered Jobs
-// panel contains the "*live*" string + "(3)" attach count.
+// panel contains the "stream" status glyph (running+Streaming branch
+// of glyphForJobStatus) + "(3)" attach count. The old "*live*" chip
+// was removed in favour of colouring the "stream" glyph green, the
+// same way Job Detail's status badge has always rendered.
 func TestLazy_DaemonUp_RendersStreamingGlyph(t *testing.T) {
 	if raceEnabled {
 		// The test fixture (findInScreen/injectResize/dumpScreen)
@@ -112,15 +115,21 @@ func TestLazy_DaemonUp_RendersStreamingGlyph(t *testing.T) {
 			Refresh:     50 * time.Millisecond,
 			Headless:    true,
 			Width:       240, // wide enough that the Jobs panel inner area
-			Height:      40,  // fits the full row (id + status + wf + age + (N) + *live*)
+			Height:      40,  // fits the full row (worktime + id + glyph + wf + taskid + (N))
 		})
 	}()
 
 	// Poll the screen until we see the live glyph + attach count.
 	// 5s budget — initial probe + first refresh + render.
+	// `stream` is the glyphForJobStatus output for running+Streaming
+	// rows; with Streaming=true on the wire we expect it to land in
+	// the status column (and to be coloured green — the hue itself
+	// isn't asserted by findInScreen since it strips ANSI, but the
+	// presence of the literal substring proves the streaming branch
+	// of glyphForJobStatus fired). "(3)" is the AttachCount chip.
 	ok := waitFor(5*time.Second, func() bool {
 		injectResize(240, 40)
-		return findInScreen("job-live") && findInScreen("(3)") && findInScreen("*live*")
+		return findInScreen("job-live") && findInScreen("(3)") && findInScreen("stream")
 	})
 	if !ok {
 		t.Logf("---- screen dump ----\n%s\n---- end ----", dumpScreen())

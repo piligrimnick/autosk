@@ -465,7 +465,7 @@ func (gu *Gui) renderViews() {
 		gu.writeView(winTasks, "[1] Tasks", tasksBody)
 		gu.applyRowHighlight(winTasks, tasksHdr, gu.st.taskCursor, len(gu.st.tasks), focused == panelTasks)
 
-		jobsBody, jobsHdr := renderJobsPanel(gu.st.jobs, gu.st.jobCursor, gu.st.scope, gu.st.filter.Jobs)
+		jobsBody, jobsHdr := renderJobsPanel(gu.st.jobs, gu.st.jobCursor, gu.st.scope, gu.st.filter.Jobs, gu.innerWidth(winJobs))
 		gu.writeView(winJobs, "[2] Jobs", jobsBody)
 		// Keep the Jobs row highlight on while the caret is in
 		// winJobInput (panelJobInput) — the operator is still working

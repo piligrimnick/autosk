@@ -419,7 +419,7 @@ func renderTasksPanel(
 // renderJobsPanel renders the Jobs panel. See renderTasksPanel for
 // the per-column colour rationale; jobs use:
 //
-//	[age-Muted] [jobid-JobID] [glyph-Muted] [wf-WorkflowName:step-StepName] [attached-Muted] [*live*-OK]
+//	[worktime-Muted] [jobid-JobID] [glyph-status-hue] [wf-WorkflowName:step-StepName] [attached-Muted] … [taskid-TaskID]
 //
 // The wf:step column is composed in entity colours via
 // renderWorkflowStep (yellow workflow + default-colour colon +
@@ -427,12 +427,31 @@ func renderTasksPanel(
 // visible width (workflowStepPlainWidth) so ANSI escapes don't
 // bleed into the %-20s budget.
 //
-// Age sits leftmost (lazygit-commits layout) so glance-scanning a
-// long Jobs list answers "when did this run start?" without horizontal
-// eye motion. The 4-char column accommodates humanAge's longest output
-// (e.g. "23h", "7d", or the rare "100d") without misaligning the rest
-// of the row.
-func renderJobsPanel(jobs []datasource.Job, _ int, scope scope, filter string) (string, int) {
+// The leftmost column is the job's actual work time — StartedAt → now
+// while running, StartedAt → FinishedAt once terminal, and a muted
+// em-dash for jobs that haven't started yet (status=queued). This
+// answers "how long is this run actually taking?" at a glance, which
+// for a worker-pool dashboard is more useful than the queued-at age
+// the column used to show. The 4-char column accommodates
+// humanDuration's longest output (e.g. "23h", "7d", or the rare
+// "100d") without misaligning the rest of the row.
+//
+// The status glyph is coloured by styleForJobStatus, the same helper
+// the Job Detail header uses, so the running+streaming case reads as
+// a green "◐ stream" badge (no separate `*live*` chip on the right
+// — the old chip duplicated information the glyph itself can carry).
+//
+// The task-id column is right-aligned to the panel's inner right
+// edge so the column lines up at the same x regardless of how long
+// the workflow:step text in front of it is. It wears the same blue
+// TaskID hue as the Tasks panel id column so a glance lets the
+// operator cross-reference a job row back to its task. width is the
+// panel's inner cell width; on the first layout pass it can be 0,
+// in which case the renderer falls back to a single-space gap
+// between wf:step (+attached) and the task id — the next frame will
+// redraw with the real width and the column will snap to the right
+// edge.
+func renderJobsPanel(jobs []datasource.Job, _ int, scope scope, filter string, width int) (string, int) {
 	var b strings.Builder
 	header := 0
 	if scope.TaskID != "" {
@@ -453,24 +472,68 @@ func renderJobsPanel(jobs []datasource.Job, _ int, scope scope, filter string) (
 		b.WriteString(styleMuted.Render("(no jobs)") + "\n")
 		return b.String(), header
 	}
-	const wfstepCol = 20
+	// Fixed-width columns up to (and including) wf:step. wfstepCol
+	// is the MIN width — longer workflow:step values overflow it (the
+	// padding helper only adds spaces when the text is shorter), so
+	// the per-row leftW is computed from max(wfstepCol, actualWfW)
+	// rather than the constant. Without that, a long workflow name
+	// like "feature-dev-generic:validator" would shift the right
+	// edge math by the overflow amount and push the task id past
+	// the frame on that row only.
+	const (
+		worktimeW = 4
+		jobidW    = 9
+		// glyphW = max visible width across glyphForJobStatus outputs
+		// ("· queued", "◐ stream", "✗ failed", "‣ cancel" — 8 cells
+		// each). The previous value was 9, which added a stray
+		// trailing space inside the column on top of the inter-column
+		// separator and made the gap before wf:step read as two
+		// spaces. 8 is tight against the longest glyph, so the
+		// separator alone carries the visual gap.
+		glyphW    = 8
+		wfstepCol = 20
+		// 4 single-space separators between the 5 fixed left columns.
+		leftBaseW = worktimeW + 1 + jobidW + 1 + glyphW + 1
+	)
 	for _, j := range jobs {
-		age := styleMuted.Render(fmt.Sprintf("%-4s", humanAge(j.CreatedAt)))
-		id := styleJobID.Render(fmt.Sprintf("%-9s", j.JobID))
-		glyph := styleMuted.Render(fmt.Sprintf("%-9s", glyphForJobStatus(j)))
+		work := styleMuted.Render(fmt.Sprintf("%-*s", worktimeW, jobWorkTime(j)))
+		id := styleJobID.Render(fmt.Sprintf("%-*s", jobidW, j.JobID))
+		// Pad the raw glyph text BEFORE styling so the trailing
+		// spaces pick up the status hue (cosmetic on whitespace,
+		// keeps the byte width matching the visible width budget).
+		glyph := styleForJobStatus(j).Render(fmt.Sprintf("%-*s", glyphW, glyphForJobStatus(j)))
 		wfstep := renderWorkflowStep(j.WorkflowName, j.StepName)
-		if pad := wfstepCol - workflowStepPlainWidth(j.WorkflowName, j.StepName); pad > 0 {
+		wfW := workflowStepPlainWidth(j.WorkflowName, j.StepName)
+		if pad := wfstepCol - wfW; pad > 0 {
 			wfstep += strings.Repeat(" ", pad)
+			wfW = wfstepCol
 		}
 		attached := ""
+		attachedW := 0
 		if j.AttachCount > 0 {
-			attached = styleMuted.Render(fmt.Sprintf(" (%d)", j.AttachCount))
+			chip := fmt.Sprintf(" (%d)", j.AttachCount)
+			attached = styleMuted.Render(chip)
+			attachedW = utf8.RuneCountInString(chip)
 		}
-		live := ""
-		if j.Streaming {
-			live = " " + styleOK.Render("*live*")
+		taskIDLen := utf8.RuneCountInString(j.TaskID)
+		// Filler pushes the task id to the panel's right edge.
+		// Floor at 1 so the column never collides with attached / wf:step
+		// when the pane is too narrow (or when width hasn't been wired
+		// yet on the first layout pass).
+		//
+		// The `-1` reserves the rightmost cell: gocui's View.InnerSize
+		// reports the column count, but a row whose visible width
+		// equals that count loses its last cell at render time (the
+		// wrap-on-edge boundary eats it). Leaving one cell of slack on
+		// the right keeps the task id's last hex digit visible.
+		filler := width - 1 - (leftBaseW + wfW) - attachedW - taskIDLen
+		if filler < 1 {
+			filler = 1
 		}
-		fmt.Fprintf(&b, "%s %s %s %s%s%s\n", age, id, glyph, wfstep, attached, live)
+		taskID := styleTaskID.Render(j.TaskID)
+		fmt.Fprintf(&b, "%s %s %s %s%s%s%s\n",
+			work, id, glyph, wfstep, attached,
+			strings.Repeat(" ", filler), taskID)
 	}
 	return b.String(), header
 }
@@ -1065,28 +1128,44 @@ func renderJobDetail(j datasource.Job, te *jobTranscriptEntry, width int) string
 // renderJobStatusGlyph paints glyphForJobStatus's text in the
 // matching task-status hue. The status enum is mapped onto the
 // existing styleStatus* slots so a green DONE row in Tasks reads
-// as a green "done" glyph in Job Detail.
+// as a green "done" glyph in Job Detail. The Jobs panel uses the
+// same hue scheme via styleForJobStatus directly (it needs to pad
+// the glyph string before styling, so it bypasses the helper).
 func renderJobStatusGlyph(j datasource.Job) string {
 	txt := glyphForJobStatus(j)
 	if txt == "" {
 		return ""
 	}
+	return styleForJobStatus(j).Render(txt)
+}
+
+// styleForJobStatus returns the lipgloss style that paints a job's
+// status glyph in its semantic hue. Pulled out of renderJobStatusGlyph
+// so the Jobs panel can apply the same colouring to a pre-padded
+// glyph string without duplicating the switch. running+streaming is
+// the only "alive" state that reads green (styleOK) — same hue Detail
+// uses for the badge, which is what replaced the old per-row `*live*`
+// chip. done/cancel both fade to styleMuted (gray): a finished job
+// is historical context, not something the operator needs the panel
+// to scream about. failed stays red (styleErr) because failures DO
+// want attention.
+func styleForJobStatus(j datasource.Job) lipgloss.Style {
 	switch runstore.RunStatus(j.Status) {
 	case runstore.StatusRunning:
 		if j.Streaming {
-			return styleOK.Render(txt)
+			return styleOK
 		}
-		return styleStatusWork.Render(txt)
+		return styleStatusWork
 	case runstore.StatusQueued:
-		return styleMuted.Render(txt)
+		return styleMuted
 	case runstore.StatusDone:
-		return styleOK.Render(txt)
+		return styleMuted
 	case runstore.StatusFailed:
-		return styleErr.Render(txt)
+		return styleErr
 	case runstore.StatusCancel:
-		return styleMuted.Render(txt)
+		return styleMuted
 	}
-	return txt
+	return styleMuted
 }
 
 func renderWorkflowDetail(w datasource.Workflow, width int) string {
@@ -1279,12 +1358,24 @@ func truncate(s string, n int) string {
 	return string(rs[:n-1]) + "…"
 }
 
-// humanAge returns "3m", "1h", "2d" etc.
+// humanAge returns "3m", "1h", "2d" etc. since t.
 func humanAge(t time.Time) string {
 	if t.IsZero() {
 		return "—"
 	}
-	d := time.Since(t)
+	return humanDuration(time.Since(t))
+}
+
+// humanDuration is the elapsed-time formatter shared by humanAge
+// (Tasks panel) and jobWorkTime (Jobs panel). Same four buckets —
+// seconds, minutes, hours, days — so the two columns visually rhyme.
+// Negative durations (clock skew between a daemon-set timestamp and
+// the local now) clamp to "0s" rather than printing a misleading
+// negative count.
+func humanDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
 	switch {
 	case d < time.Minute:
 		return fmt.Sprintf("%ds", int(d.Seconds()))
@@ -1295,6 +1386,29 @@ func humanAge(t time.Time) string {
 	default:
 		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
+}
+
+// jobWorkTime returns the rendered "how long has pi actually been
+// working on this job" string for the Jobs panel's leftmost column:
+//
+//   - StartedAt unset (status=queued)   → "—"
+//   - FinishedAt set (status=done/...)  → FinishedAt − StartedAt
+//   - otherwise (status=running)         → now − StartedAt
+//
+// The Jobs panel used to render time.Since(CreatedAt) here, which on
+// a busy queue could read as "7m" for a job that had only been doing
+// real work for two seconds. Switching to StartedAt-based elapsed
+// time makes the column answer the question operators actually ask
+// when triaging the Jobs list.
+func jobWorkTime(j datasource.Job) string {
+	if j.StartedAt == nil || j.StartedAt.IsZero() {
+		return "—"
+	}
+	end := time.Now()
+	if j.FinishedAt != nil && !j.FinishedAt.IsZero() {
+		end = *j.FinishedAt
+	}
+	return humanDuration(end.Sub(*j.StartedAt))
 }
 
 // renderTranscript turns a list of MessageEvents into a single-string
