@@ -267,8 +267,8 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 			// the operator nuked ~/.autosk/worktrees by hand. The branch
 			// is the load-bearing piece (it survives terminal cleanup
 			// by design); re-allocating the dir on the existing branch
-			// is a safe no-op-equivalent and saves the human a four-step
-			// cancel/reopen/enroll dance.
+			// is a safe no-op-equivalent and saves the human a manual
+			// cancel + enroll dance.
 			//
 			// Stranded / not-a-git-repo are NOT auto-recovered: they
 			// signal that the project itself moved or git state broke,

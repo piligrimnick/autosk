@@ -179,8 +179,14 @@ Examples:
 				// won't reach this case via `autosk cancel`: EnterStep
 				// failure means workflow_id never got stamped, so the
 				// cancel-time guard `t.WorkflowID == ""` short-circuits
-				// before the cleanup runs. Symmetric to create.go's
-				// rollback.
+				// before the cleanup runs. Unlike create.go's rollback
+				// (which unconditionally treats the freshly-allocated
+				// worktree as ours — the task id is brand-new so
+				// collisions are impossible by construction), enroll
+				// gates on res.Existing above so the typical
+				// human-source case (pre-existing tracked worktree from
+				// a prior step) doesn't get its dir reaped. See
+				// TestEnroll_FromHuman_Isolated_FailedRollbackPreservesWorktree.
 				if wtAllocated {
 					// Reuse the outer wtMgr (already constructed for
 					// Ensure) so we don't accidentally split the
@@ -220,9 +226,11 @@ Examples:
 // The only refusal is status='work': the task is currently owned by
 // the engine, so re-stamping workflow_id / current_step_id underneath
 // it would race the daemon. To switch a work task into a different
-// workflow the operator goes through cancel + reopen + enroll, which
-// also cleans up any per-task worktree before the next enroll re-
-// allocates it.
+// workflow, cancel then enroll (or reopen first if you want to
+// inspect the task in 'new' state). tasksvc.Cancel removes any
+// per-task worktree dir via cleanupWorktreeOnTerminal; the next
+// enroll re-allocates a fresh dir on the surviving autosk/<id>
+// branch.
 //
 // `new`, `human`, `done`, and `cancel` all fall through cleanly:
 // workflow.EnterStep stamps workflow_id + current_step_id +

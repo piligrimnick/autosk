@@ -505,10 +505,10 @@ autosk enroll ask-bea935 --workflow feature-dev --base-ref origin/main
 isolated workflows on a fresh allocation — passing it with `--agent`
 or against a non-isolated workflow fails with `--base-ref requires the
 target workflow to use isolation=worktree`. When the branch
-`autosk/<task-id>` already exists (typical `reopen` → `enroll` cycle
-after the worktree dir was reaped), `--base-ref` is ignored with a
-stderr warning and the worktree is re-allocated on the existing
-branch.
+`autosk/<task-id>` already exists (typical `cancel → enroll` or
+`reopen → enroll` cycle after the worktree dir was reaped),
+`--base-ref` is ignored with a stderr warning and the worktree is
+re-allocated on the existing branch.
 
 #### `autosk worktree`
 
@@ -578,11 +578,15 @@ or re-allocate the worktree and retry:
 autosk worktree rm ask-bea935     # clean up the stranded dir
 autosk cancel  ask-bea935         # human → cancel (‘reopen’ doesn’t
                                   # take human as a source state)
-autosk reopen  ask-bea935         # cancel → new; current_step_id cleared
 autosk enroll  ask-bea935 --workflow feature-dev   # Ensure re-allocates dir + branch
 # the daemon picks it up automatically; the branch (autosk/ask-bea935)
 # survived the round-trip so the worktree reuses it.
 ```
+
+There is no need to detour through `reopen` before `enroll`: `enroll`
+now accepts `cancel` directly. The longer `cancel → reopen → enroll`
+chain remains valid if you specifically want the task to spend a beat
+in `new` for inspection.
 
 A shorter recovery via plain `autosk resume` is **not** possible:
 `resume` flips status back to `work` at the same step without
@@ -597,6 +601,10 @@ re-allocates a fresh worktree directory on the existing branch (so
 whatever was committed before is still in `git log`), and the engine
 resumes the workflow from the entry step. `--base-ref` is ignored on
 this path with a warning.
+
+The `reopen` detour is optional: `enroll` accepts `done` / `cancel`
+directly and re-allocates the same way. Use `reopen` when you want
+the task to spend a beat in `new` for inspection before re-enrolling.
 
 #### Limitations
 
@@ -741,7 +749,7 @@ new | work | human | done | cancel
 
 Every spelling is ≤ 7 chars so the persisted columns stay tight and
 the TUI doesn't need to truncate. (`claimed` is gone — replaced by
-`assign --agent`. `blocked` is still **not** a stored status: it's
+`enroll --agent`. `blocked` is still **not** a stored status: it's
 derived from open blocker edges.) The legacy spellings
 (`in_workflow`, `human_feedback`, `cancelled`) are not accepted on
 any input surface (CLI flags, YAML/JSON workflow definitions, the
@@ -750,13 +758,13 @@ in-place by a one-shot migration; see
 [`docs/plans/20260521-Short-Statuses.md`](plans/20260521-Short-Statuses.md).
 
 A SQL CHECK ties `status = 'work'` to `current_step_id IS NOT
-NULL`. The CLI verbs (`create`, `assign`, `resume`, `done`, `cancel`,
+NULL`. The CLI verbs (`create`, `enroll`, `resume`, `done`, `cancel`,
 `reopen`) take care of keeping this invariant satisfied; you should not
 need to think about it.
 
 ### `single:<agent>` synthetic workflows
 
-`autosk create … --agent NAME` (and `autosk assign … --agent NAME`)
+`autosk create … --agent NAME` (and `autosk enroll … --agent NAME`)
 auto-create a hidden workflow named `single:NAME` with one step `do`
 whose transitions go to `{done, cancel, human}`. The
 executor uses the same code path as a real workflow — there is no
@@ -905,14 +913,26 @@ autosk enroll ask-bea935 --agent    @autogent/generic   # single:@autogent/gener
 workflow.first_step` and flips status to `work`. Exactly one of
 `--workflow` / `--agent` is required.
 
-Only `status='new'` is accepted; other states get pointed at the right
-verb instead:
+`enroll` accepts `new`, `human`, `done`, and `cancel` source
+statuses. The only refusal is `work`:
 
-| Current status   | Error hint                                                        |
-|------------------|-------------------------------------------------------------------|
-| `work`           | the daemon will advance this task — to switch workflows, `cancel + reopen + enroll`. |
-| `human`          | use `autosk resume <id> [--to STEP]` to put it back into the workflow. |
-| `done` / `cancel` | use `autosk reopen <id>` first.                                  |
+| Current status                | Behaviour                                                                                                                                                       |
+|-------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `new`                         | enroll succeeds; the task is stamped with the chosen workflow + entry step and flipped to `work` atomically.                                                    |
+| `human`                       | enroll succeeds; the same atomic stamp re-attaches the task to the workflow (same or different from before). `resume` remains available for the explicit `human → work` no-switch path. |
+| `done` / `cancel`             | enroll succeeds; the task is re-attached without going through `reopen` first. `reopen` remains available for the explicit `done|cancel → new` path when you want to inspect the task in `new` state before re-enrolling. |
+| `work`                        | rejected: the task is currently owned by the engine. To switch workflows, `cancel` then `enroll` (or `reopen` first if you want to inspect the task in `new` state). |
+
+`metadata.step_visits` is **not** cleared at enroll time — re-enrolling
+into the same workflow keeps `step.max_visits` honest. If you want a
+clean slate, run `autosk metadata reset-visits <id>` first. Stale
+entries from a prior workflow are left in place; clear them the same
+way.
+
+For `isolation=worktree` workflows the per-task `autosk/<id>` branch
+is preserved across `done`/`cancel` (only the worktree dir is
+reaped); the next enroll re-allocates the dir on the existing branch
+without needing `--base-ref`.
 
 `enroll --json` emits the same shape as `autosk show --json`
 (including the derived `blocked` / `blocked_by` / `blocks` fields).

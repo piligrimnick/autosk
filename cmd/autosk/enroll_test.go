@@ -528,7 +528,8 @@ func TestEnroll_FromDone_Isolated_ReusesBranch(t *testing.T) {
 // operator's worktree survives.
 func TestEnroll_FromHuman_Isolated_FailedRollbackPreservesWorktree(t *testing.T) {
 	root := makeIsolatedProject(t)
-	withIsolatedPackagesPrefix(t)
+	// makeIsolatedProject already calls withIsolatedPackagesPrefix(t),
+	// so no second packages-prefix call is needed here.
 	if _, err := runRoot(t, root, "agent", "install", "@autosk/dev-fixture"); err != nil {
 		t.Fatalf("agent install: %v", err)
 	}
