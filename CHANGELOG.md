@@ -9,8 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Lazygit-style sectioned + filterable `?` cheatsheet popup and a context-aware bottom options strip in the `autosk lazy` TUI (ask-ed8035).
+- **lazy:** `?` opens a sectioned, filterable cheatsheet popup; Enter runs the highlighted binding (ask-ed8035).
+- **lazy:** context-aware bindings hint row pinned across the bottom of the dashboard (ask-ed8035).
 
-### Fixed
+### Changed
 
-- Collapsed the `autosk lazy` status bar to a single row with ` | ` separators and dropped the trailing `?=help` hint (ask-ed8035).
+- **lazy:** status bar collapsed to a single row with ` | ` separators; legacy `?=help` hint moved into the cheatsheet popup (ask-ed8035).
