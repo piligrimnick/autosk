@@ -17,20 +17,24 @@ import (
 )
 
 // newEnrollCmd: `autosk enroll <id> --workflow NAME|--agent NAME` —
-// attach an already-created task to a workflow or single-agent flow.
+// (re-)attach an existing task to a workflow or single-agent flow.
 //
 // Mirror of the --workflow / --agent flags on `autosk create`, but for
-// tasks that were created without a workflow (status='new').
+// tasks that already exist in the project DB.
 //
 // Status guard:
-//   - `new`            → enroll succeeds.
-//   - `work`           → already owned by the engine; rejection points
-//     the user at cancel+reopen+enroll for a workflow switch (the
-//     daemon will otherwise advance it on its own).
-//   - `human`          → parked for human input; rejection points the
-//     user at `autosk resume --to STEP`.
-//   - `done` / `cancel` → terminal; rejection points the user at
-//     `autosk reopen <id>`.
+//   - `new`, `human`, `done`, `cancel` → enroll succeeds. The task is
+//     stamped with the chosen workflow + entry step and flipped to
+//     status='work' atomically by workflow.EnterStep.
+//   - `work` → already owned by the engine; the daemon will advance
+//     the task on its own. To switch workflows, cancel then enroll
+//     (or reopen first if you want to inspect the task in 'new'
+//     state before re-enrolling).
+//
+// `metadata.step_visits` is preserved across enroll regardless of the
+// source status; re-enrolling into the same workflow keeps the
+// max_visits cap honest. Operators who want a clean slate run
+// `autosk metadata reset-visits <id>` themselves.
 func newEnrollCmd() *cobra.Command {
 	var (
 		workflowArg string
@@ -41,16 +45,16 @@ func newEnrollCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "enroll <id>",
 		Short: "Enroll an existing task into a workflow (or single-agent flow)",
-		Long: `Attach an existing task to a workflow.
+		Long: `(Re-)attach an existing task to a workflow.
 
 This is the post-creation equivalent of:
 
   autosk create ... --workflow NAME
   autosk create ... --agent    NAME
 
-Use it when a task already exists (status='new') and you want to put it
-into a workflow without recreating it. Exactly one of --workflow /
---agent is required; they are mutually exclusive.
+Use it when the task already exists and you want to put it into a
+workflow without recreating it. Exactly one of --workflow / --agent
+is required; they are mutually exclusive.
 
   --workflow NAME   enroll into the named workflow at its first step
                     (status becomes 'work'). Pair with --step NAME
@@ -65,13 +69,15 @@ into a workflow without recreating it. Exactly one of --workflow /
                     incompatible with --agent (single:<agent> flows
                     only have one step).
 
-Only tasks in status='new' can be enrolled:
-  - work          → the daemon will advance this task; to put it
-                    into a different workflow, cancel + reopen +
-                    enroll.
-  - human         → use 'autosk resume --to STEP' to move the task
-                    within its current workflow.
-  - done / cancel → use 'autosk reopen <id>' first.
+Accepted source statuses: new, human, done, cancel. The only refusal
+is status='work' — the task is currently owned by the engine. To
+put it into a different workflow, cancel then enroll (or reopen
+first if you want to inspect the task in 'new' state).
+
+Note: enroll never clears metadata.step_visits, so re-enrolling into
+the same workflow keeps the max_visits cap honest. If you want a
+clean slate, run 'autosk metadata reset-visits <id>' first. Stale
+keys from a prior workflow are left in place; clear them the same way.
 
 Examples:
 
@@ -145,7 +151,13 @@ Examples:
 				if res.BaseRefIgnored && !flagQuiet {
 					fmt.Fprintf(os.Stderr, "warning: --base-ref ignored — branch %s already exists; reusing\n", res.Branch)
 				}
-				wtAllocated = true
+				// Only roll back the worktree on EnterStep failure if we
+				// actually allocated it. enroll from `human` is the typical
+				// case where Ensure reports Existing=true: the prior step
+				// (e.g. validator) parked the task in human and the
+				// worktree dir is still on disk; reaping it via OnTerminal
+				// would silently destroy the operator's working tree.
+				wtAllocated = !res.Existing
 				wtRoot = root
 			} else if baseRefArg != "" {
 				return errors.New("--base-ref requires the target workflow to use isolation=worktree")
@@ -167,8 +179,14 @@ Examples:
 				// won't reach this case via `autosk cancel`: EnterStep
 				// failure means workflow_id never got stamped, so the
 				// cancel-time guard `t.WorkflowID == ""` short-circuits
-				// before the cleanup runs. Symmetric to create.go's
-				// rollback.
+				// before the cleanup runs. Unlike create.go's rollback
+				// (which unconditionally treats the freshly-allocated
+				// worktree as ours — the task id is brand-new so
+				// collisions are impossible by construction), enroll
+				// gates on res.Existing above so the typical
+				// human-source case (pre-existing tracked worktree from
+				// a prior step) doesn't get its dir reaped. See
+				// TestEnroll_FromHuman_Isolated_FailedRollbackPreservesWorktree.
 				if wtAllocated {
 					// Reuse the outer wtMgr (already constructed for
 					// Ensure) so we don't accidentally split the
@@ -203,30 +221,32 @@ Examples:
 	return cmd
 }
 
-// checkEnrollable returns nil when `t` is in a state that admits enroll
-// (currently: only status='new'). Otherwise it returns a CLI-style error
-// pointing the user at the right verb to make progress. The two
-// already-enrolled states get distinct hints: `human` can be unparked
-// with `autosk resume --to`, while `work` is owned by the engine —
-// switching workflows means cancel+reopen+enroll.
+// checkEnrollable returns nil when `t` is in a state that admits enroll.
+//
+// The only refusal is status='work': the task is currently owned by
+// the engine, so re-stamping workflow_id / current_step_id underneath
+// it would race the daemon. To switch a work task into a different
+// workflow, cancel then enroll (or reopen first if you want to
+// inspect the task in 'new' state). tasksvc.Cancel removes any
+// per-task worktree dir via cleanupWorktreeOnTerminal; the next
+// enroll re-allocates a fresh dir on the surviving autosk/<id>
+// branch.
+//
+// `new`, `human`, `done`, and `cancel` all fall through cleanly:
+// workflow.EnterStep stamps workflow_id + current_step_id +
+// status='work' atomically and the SQL CHECK invariant
+// (status='work' ⇔ current_step_id IS NOT NULL) is upheld across every
+// source status.
 func checkEnrollable(ctx context.Context, wfs *workflow.Store, t store.Task) error {
 	switch t.Status {
-	case store.StatusNew:
+	case store.StatusNew, store.StatusHuman, store.StatusDone, store.StatusCancel:
 		return nil
 	case store.StatusWork:
 		wfRef, stepRef := refsForLocation(ctx, wfs, t)
 		return fmt.Errorf(
-			"task already enrolled in workflow %s at step %s; the daemon will advance it — to switch workflows, cancel + reopen + enroll",
+			"task already enrolled in workflow %s at step %s; the daemon will advance it — to switch workflows, cancel then enroll (or reopen first if you want to inspect the task in 'new' state)",
 			wfRef, stepRef,
 		)
-	case store.StatusHuman:
-		wfRef, stepRef := refsForLocation(ctx, wfs, t)
-		return fmt.Errorf(
-			"task is parked in workflow %s at step %s for human feedback; use 'autosk resume %s [--to STEP]' to put it back into the workflow",
-			wfRef, stepRef, t.ID,
-		)
-	case store.StatusDone, store.StatusCancel:
-		return fmt.Errorf("task is terminal (%s); reopen first ('autosk reopen %s')", t.Status, t.ID)
 	default:
 		return fmt.Errorf("cannot enroll task in status %q", t.Status)
 	}

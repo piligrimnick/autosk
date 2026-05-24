@@ -108,9 +108,9 @@ func newWorktreeRmCmd() *cobra.Command {
 			"is never touched.\n\n" +
 			"Refuses tasks that are status=work: the daemon may be executing\n" +
 			"inside that worktree right now, and yanking it would crash the\n" +
-			"live run. Parked (human) and new tasks are fair game \u2014 the\n" +
-			"documented recovery flow for `worktree_stranded` (run parks \u2192\n" +
-			"worktree rm \u2192 cancel \u2192 reopen \u2192 enroll) relies on this. The\n" +
+			"live run. Parked (human), new, done, and cancel tasks are all\n" +
+			"fair game \u2014 the documented recovery flow for `worktree_stranded`\n" +
+			"(run parks \u2192 worktree rm \u2192 cancel \u2192 enroll) relies on this. The\n" +
 			"`worktree_missing` case is auto-recovered by the daemon itself \u2014\n" +
 			"no manual `rm` needed.",
 		Args: cobra.ExactArgs(1),

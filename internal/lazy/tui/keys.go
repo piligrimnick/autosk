@@ -986,7 +986,9 @@ func (gu *Gui) taskReopen(*gocui.Gui, *gocui.View) error {
 }
 
 // taskClaim was removed: the v0.2 schema has no claim verb. See the
-// design plan + the help screen — 'e' enrolls, 'a' (palette) assigns.
+// design plan + the help screen — 'e' enrolls into a workflow (or,
+// with `--agent NAME`, into a synthetic single:<agent> flow); there is
+// no separate assign verb anymore.
 
 func (gu *Gui) taskEnroll(*gocui.Gui, *gocui.View) error {
 	t, ok := gu.st.selectedTaskLocked()
