@@ -39,6 +39,12 @@ const (
 	// on its frame.
 	winEnrollWorkflowList = "enrollWorkflowList"
 	winEnrollStepList     = "enrollStepList"
+	// Changelog modal — the auto-popup on first run of a new release
+	// and the ctrl+w re-opener. Layout sizes it at ~80% width /
+	// 80% height; the body is markdown-rendered through
+	// internal/lazy/markdown.Render so the popup wears the same
+	// glamour theme as the Detail pane.
+	winPopupChangelog = "popupChangelog"
 )
 
 // allPopupWindows is every window name that belongs to a popup. The
@@ -56,6 +62,7 @@ var allPopupWindows = []string{
 	winEnrollWorkflowList,
 	winEnrollStepList,
 	winPopupCheatsheet,
+	winPopupChangelog,
 }
 
 // allDashboardWindows is every window name owned by the dashboard

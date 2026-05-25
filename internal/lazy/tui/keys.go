@@ -92,6 +92,14 @@ func (gu *Gui) bindingSpecs() []bindingSpec {
 		{View: "", Key: gocui.KeyCtrlC, Mod: gocui.ModNone, Handler: gu.quit, Tag: "global"},
 		{View: "", Key: 'q', Mod: gocui.ModNone, Handler: gu.quit, Description: "quit", Short: "quit", Tag: "global", DisplayOnScreen: true},
 		{View: "", Key: '?', Mod: gocui.ModNone, Handler: gu.openHelp, Description: "help cheatsheet", Short: "help", Tag: "global", DisplayOnScreen: true},
+		// Ctrl-W is the "what's new" re-opener: pops the changelog
+		// modal with the FULL embedded CHANGELOG.md regardless of
+		// `last_seen_changelog`, and does NOT mutate state.json on
+		// dismiss. The auto-popup that fires once per release on
+		// the first start of a new release uses the same
+		// popupChangelog kind but carries an OnDismiss callback;
+		// see internal/changelog and cmd/autosk/lazy.go.
+		{View: "", Key: gocui.KeyCtrlW, Mod: gocui.ModNone, Handler: gu.handleWhatsNew, Description: "what's new (open CHANGELOG.md)", Short: "what's new", Tag: "global"},
 		// Esc is universal across the TUI: it closes the active popup
 		// (or, with no popup open, clears the focused panel's filter).
 		// Deliberately NOT cheatsheet-visible: selecting a "back /
@@ -343,6 +351,29 @@ func (gu *Gui) bindingSpecs() []bindingSpec {
 		{View: winPopupCheatsheet, Key: gocui.KeyArrowUp, Mod: gocui.ModNone, Handler: gu.cheatsheetCursor(-1)},
 		{View: winPopupCheatsheet, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.cheatsheetCursor(+1)},
 		{View: winPopupCheatsheet, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.cheatsheetCursor(-1)},
+
+		// Changelog popup (winPopupChangelog). Same scroll key set as
+		// the Detail pane (j/k/arrows/ctrl-f/ctrl-b/pgup/pgdn/g/G +
+		// mouse wheel) so the operator browses the body with muscle
+		// memory; Esc / Enter dismisses (firing OnDismissChangelog
+		// once on the auto-popup path so last_seen_changelog gets
+		// stamped into ~/.autosk/state.json). The bindings carry no
+		// Description so they don't pollute the cheatsheet — the
+		// popup itself shows a scroll/dismiss hint in its top frame.
+		{View: winPopupChangelog, Key: 'j', Mod: gocui.ModNone, Handler: gu.changelogScroll(+1)},
+		{View: winPopupChangelog, Key: 'k', Mod: gocui.ModNone, Handler: gu.changelogScroll(-1)},
+		{View: winPopupChangelog, Key: gocui.KeyArrowDown, Mod: gocui.ModNone, Handler: gu.changelogScroll(+1)},
+		{View: winPopupChangelog, Key: gocui.KeyArrowUp, Mod: gocui.ModNone, Handler: gu.changelogScroll(-1)},
+		{View: winPopupChangelog, Key: gocui.KeyCtrlF, Mod: gocui.ModNone, Handler: gu.changelogScrollPage(+1)},
+		{View: winPopupChangelog, Key: gocui.KeyCtrlB, Mod: gocui.ModNone, Handler: gu.changelogScrollPage(-1)},
+		{View: winPopupChangelog, Key: gocui.KeyPgdn, Mod: gocui.ModNone, Handler: gu.changelogScrollPage(+1)},
+		{View: winPopupChangelog, Key: gocui.KeyPgup, Mod: gocui.ModNone, Handler: gu.changelogScrollPage(-1)},
+		{View: winPopupChangelog, Key: 'g', Mod: gocui.ModNone, Handler: gu.changelogScrollTo(false)},
+		{View: winPopupChangelog, Key: 'G', Mod: gocui.ModNone, Handler: gu.changelogScrollTo(true)},
+		{View: winPopupChangelog, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.changelogScroll(+1)},
+		{View: winPopupChangelog, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.changelogScroll(-1)},
+		{View: winPopupChangelog, Key: gocui.KeyEsc, Mod: gocui.ModNone, Handler: gu.changelogDismiss},
+		{View: winPopupChangelog, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.changelogDismiss},
 	}
 }
 
@@ -916,15 +947,16 @@ func (gu *Gui) openHelp(*gocui.Gui, *gocui.View) error {
 func (gu *Gui) openCheatsheet(focused panelID) {
 	specs := gu.bindingSpecs()
 	items := buildCheatsheetItems(specs, focused)
-	gu.st.withLock(func() {
-		gu.st.popup = popupState{
-			Kind:              popupCheatsheet,
-			Title:             "Keybindings — type to filter · enter executes · esc close",
-			CheatsheetItems:   items,
-			CheatsheetFilter:  "",
-			CheatsheetCursor:  0,
-			CheatsheetFocused: focused,
-		}
+	// Routes through replacePopup so any active popupChangelog
+	// auto-popup gets its OnDismissChangelog fired before this
+	// popup replaces it (review R10) — same contract as openMenu.
+	gu.replacePopup(popupState{
+		Kind:              popupCheatsheet,
+		Title:             "Keybindings — type to filter · enter executes · esc close",
+		CheatsheetItems:   items,
+		CheatsheetFilter:  "",
+		CheatsheetCursor:  0,
+		CheatsheetFocused: focused,
 	})
 	gu.requestRedraw()
 }
@@ -1061,6 +1093,8 @@ func keyLabel(k any) string {
 			return "ctrl+s"
 		case gocui.KeyCtrlU:
 			return "ctrl+u"
+		case gocui.KeyCtrlW:
+			return "ctrl+w"
 		case gocui.MouseWheelUp:
 			return "wheel↑"
 		case gocui.MouseWheelDown:

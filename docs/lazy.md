@@ -114,6 +114,7 @@ every other kind (`user_text`, `tool_call`, `tool_result`,
 | `enter` | Drill into the focused row (see panel-specific tables). |
 | `esc` | Pop one level (input → Jobs panel, popup → close, filter chip → drop). |
 | `?` | Help cheatsheet overlay — sectioned `--- Local --- / --- Global --- / --- Navigation ---` view of the focused panel's bindings. Type to filter (case-insensitive substring against key + description), `j` / `k` / arrows / wheel move the cursor, `enter` closes the popup AND invokes the highlighted binding, `backspace` pops a filter rune, `esc` clears the filter or (if already empty) closes the popup. Only the focused panel's local bindings plus the global bindings are listed — bindings of other panels are hidden. |
+| `ctrl+w` | What's new — open the [changelog modal](#changelog-modal) with the full embedded `CHANGELOG.md`. Does NOT mutate `~/.autosk/state.json`. |
 | `:` | Command palette. Verbs from every panel: `task new`, `task edit`, `task done`, `task cancel`, `task reopen`, `task priority`, `task resume`, `task enroll`, `task block`, `task unblock`, `task comment`, `task metadata`, `workflow create`, `workflow delete`, `job cancel`, `scope clear`, `refresh`, `quit`. |
 | `/` | Filter the focused panel — see [Filter syntax](#filter-syntax). |
 | `*` | Clear all scope chips. |
@@ -349,6 +350,111 @@ the raw text rather than blanking.
 
 ---
 
+## Changelog modal
+
+The first time you launch a release build of `autosk lazy` that you
+haven't seen before, a modal popup opens over the dashboard showing
+the embedded `CHANGELOG.md`. It's rendered through the same
+`internal/lazy/markdown` pipeline as the Detail pane (Tokyo Night
+glamour theme, syntax-highlighted fenced code blocks), so headings,
+lists, and inline code all look identical to the task / workflow
+descriptions.
+
+The popup is entirely client-side to `autosk lazy`: the changelog
+body is baked into the binary at build time via `go:embed`, and the
+"have I seen this version yet?" bit lives in a per-user file at
+`~/.autosk/state.json`. There is no network call, no daemon
+interaction, no project DB read — the popup works on a fresh
+clone, in offline CI, and inside `--no-daemon` smoke tests alike.
+
+### When the popup fires
+
+| State | Popup body | On dismiss |
+|---|---|---|
+| **First run** — `~/.autosk/state.json` missing OR `last_seen_changelog` empty. | The **full** embedded `CHANGELOG.md`, every parsed entry, newest semver first. So a brand-new operator gets the complete project history once. | `last_seen_changelog` is stamped to the newest embedded version. Subsequent starts stay silent until the next release. |
+| **New release seen** — embedded changelog has versions strictly newer than `last_seen_changelog`. | Only those unseen sections, newest first. | `last_seen_changelog` is stamped to the newest embedded version. |
+| **Up to date** — nothing newer than `last_seen_changelog`. | No popup. | `state.json` is not touched. |
+| **Dev build** — `buildinfo.Version` is `dev`, empty, or any `git describe` output that doesn't normalise to a clean `vX.Y.Z` (e.g. `v0.3.1-5-gabc1234-dirty`). | No popup, ever. | `state.json` is not touched, so a dev session can't accidentally mark a future release as seen. |
+| **`--no-changelog` passed** | No popup, ever. | `state.json` is not touched. |
+
+### Keymap (popup open)
+
+| Key | Action |
+|---|---|
+| `j` / `k` / `↑` / `↓` | Line scroll. |
+| `ctrl+f` / `ctrl+b` / `pgdn` / `pgup` | Page scroll. |
+| `g` / `G` | Jump to top / bottom. |
+| wheel | One line per tick. |
+| `esc` / `enter` | Dismiss. On the auto-popup, also stamps `last_seen_changelog`. On the `ctrl+w` re-opener, dismiss is read-only. |
+
+If you press `ctrl+w` (or open another popup — `?`, `/`, `:`)
+*while* the auto-popup is on screen, the pending `state.json` stamp
+is preserved or applied automatically. You can't accidentally skip
+the "mark seen" step by reaching for a different hotkey first.
+
+### Manually re-opening
+
+- `ctrl+w` is bound globally and opens the modal with the **full**
+  embedded `CHANGELOG.md`, regardless of `last_seen_changelog`. It
+  does NOT mutate `state.json`, so re-reading the history any
+  number of times is free.
+- The `?` help cheatsheet lists the binding under the Global
+  section as `ctrl+w  what's new (open CHANGELOG.md)`.
+
+### `~/.autosk/state.json` — the seen-state store
+
+The popup's per-user state lives in a tiny JSON file co-located
+with `daemon.sock`:
+
+```json
+{
+  "last_seen_changelog": "0.1.4"
+}
+```
+
+- **Location.** `$HOME/.autosk/state.json`. Override with
+  `$AUTOSK_STATE_FILE` (used by tests and golden runs that need to
+  redirect the file without touching `$HOME`). When `$HOME` is
+  unset, falls back to `./.autosk/state.json` — the same shape
+  `defaultSockPath` uses for the daemon socket.
+- **Permissions.** `0600` on the file, `0700` on the parent
+  directory. Nothing sensitive lives here today, but the per-user
+  scope means tighter perms keep weird multi-user setups
+  predictable.
+- **Atomic write.** Save goes through a tempfile in the same
+  directory + `os.Rename`, so a crash mid-write can never leave a
+  half-flushed struct on disk.
+- **Missing file.** Treated as a zero `State{}` (`last_seen_changelog: ""`),
+  which is exactly the "brand-new operator" first-run path.
+- **Scope.** The store is operator-scoped, not project-scoped —
+  reading the changelog once in any project silences the popup
+  across every project on the machine.
+
+### Authoring — how new entries get into the popup
+
+The changelog is **manually authored**. Every PR that ships a
+user-visible change (CLI verb, flag, TUI hotkey, output format,
+env knob, …) extends the top-of-file `## [Unreleased]` block in
+`CHANGELOG.md` following [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/);
+release tagging promotes the block to a dated
+`## [X.Y.Z] - YYYY-MM-DD` header.
+
+`CHANGELOG.md` at the repo root is a relative symlink to
+`internal/changelog/CHANGELOG.md`, which is the canonical file the
+binary `go:embed`s. Editing either path resolves to the same file;
+release tooling (`scripts/changelog-section.sh`,
+`.github/workflows/release.yml`, GitHub's auto-rendered
+release-notes view) keeps using the familiar repo-root path while
+the `go:embed` directive sees a real file inside the package.
+
+Version ordering inside the popup is by semver, not file order, so
+`0.10.0` correctly outranks `0.9.9`. Malformed sections (bad date,
+missing version) are silently skipped at parse time, the valid
+neighbours survive, and the binary never panics on a broken
+changelog — the popup is a UX nicety, not a release gate.
+
+---
+
 ## Daemon dependency
 
 `autosk lazy` adapts to the daemon's state — the status bar shows
@@ -387,6 +493,7 @@ fresh fds immediately.
 | `--sock <path>` | `$AUTOSK_SOCK` or `~/.autosk/daemon.sock` | Daemon UDS path. |
 | `--refresh <dur>` | `2s` | Panel refresh cadence. |
 | `--db <path>` | DB discovery rules | Override `.autosk/db` discovery. Equivalent to setting `$AUTOSK_DB`. |
+| `--no-changelog` | `false` | Suppress the [changelog modal](#changelog-modal) auto-popup on lazy start. Read-only — `~/.autosk/state.json` is NOT modified, so re-launching without the flag picks up where you left off. Needed for golden tests and headless CI runs. |
 
 ---
 

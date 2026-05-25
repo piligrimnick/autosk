@@ -279,6 +279,16 @@ const (
 	// keybindings. See keys.go's bindingSpec doc for the metadata
 	// model that feeds the cheatsheet items.
 	popupCheatsheet
+	// popupChangelog is the scrollable modal that fires on first
+	// lazy start of a new release (auto-popup) or on `ctrl+w`
+	// (manual re-opener). The body is operator-facing markdown
+	// rendered through internal/lazy/markdown.Render. Dismissing
+	// fires popupState.OnDismissChangelog (when non-nil) before
+	// the popup is cleared so the auto-popup path can write
+	// `last_seen_changelog` to ~/.autosk/state.json. The re-opener
+	// path leaves OnDismissChangelog nil so dismissal doesn't
+	// mutate state.json.
+	popupChangelog
 )
 
 // pickerPane identifies which side of the enroll/resume two-pane
@@ -361,6 +371,23 @@ type popupState struct {
 	CheatsheetFilter  string
 	CheatsheetCursor  int
 	CheatsheetFocused panelID
+
+	// Changelog-specific fields (popupChangelog).
+	//
+	// ChangelogBody is the rendered ANSI markdown blob (sized for
+	// the popup's content width on the first layout pass).
+	// ChangelogSource is the raw markdown body it was rendered
+	// from; on resize we re-render against the new contentW from
+	// the source instead of re-running glamour on a stale blob.
+	// ChangelogWidth tracks the width the body was rendered at
+	// so the layout pass can detect a resize and rebuild.
+	// OnDismissChangelog fires once on Esc / Enter; the auto-popup
+	// path uses it to stamp last_seen_changelog. nil for the
+	// ctrl+w re-opener path.
+	ChangelogBody      string
+	ChangelogSource    string
+	ChangelogWidth     int
+	OnDismissChangelog func() error
 }
 
 // cheatsheetItem is one row of the cheatsheet body. A row is either

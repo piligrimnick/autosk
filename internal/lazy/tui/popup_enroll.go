@@ -45,17 +45,18 @@ func (gu *Gui) openEnrollPicker(title string, workflows []datasource.Workflow, w
 		// workflow is implicit.
 		active = pickerPaneStep
 	}
-	gu.st.withLock(func() {
-		gu.st.popup = popupState{
-			Kind:           popupEnroll,
-			Title:          title,
-			Workflows:      workflows,
-			WorkflowCursor: workflowCursor,
-			StepCursor:     stepCursor,
-			ActivePane:     active,
-			WorkflowLocked: workflowLocked,
-			OnPick:         onPick,
-		}
+	// Routes through replacePopup so any active popupChangelog
+	// auto-popup gets its OnDismissChangelog fired before this
+	// popup replaces it (review R10) — same contract as openMenu.
+	gu.replacePopup(popupState{
+		Kind:           popupEnroll,
+		Title:          title,
+		Workflows:      workflows,
+		WorkflowCursor: workflowCursor,
+		StepCursor:     stepCursor,
+		ActivePane:     active,
+		WorkflowLocked: workflowLocked,
+		OnPick:         onPick,
 	})
 	gu.requestRedraw()
 }

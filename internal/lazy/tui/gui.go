@@ -38,6 +38,22 @@ type Options struct {
 	Headless bool
 	Width    int
 	Height   int
+	// ChangelogModal, when non-nil, causes the gui to push a
+	// popupChangelog state on the first layout pass. The caller
+	// (cmd/autosk/lazy.go) decides whether to fire the popup based
+	// on buildinfo.Version + userstate.State.LastSeenChangelog;
+	// the TUI is intentionally dumb about the policy.
+	ChangelogModal *ChangelogModalOptions
+}
+
+// ChangelogModalOptions carries the inputs to the startup-pushed
+// changelog popup. Title + Body land on popupState; OnDismiss
+// fires once on Esc / Enter so the caller can stamp
+// last_seen_changelog into ~/.autosk/state.json.
+type ChangelogModalOptions struct {
+	Title     string
+	Body      string
+	OnDismiss func() error
 }
 
 // Gui ties together the gocui main loop, the model, the datasource,
@@ -228,6 +244,18 @@ func Run(ctx context.Context, opts Options) error {
 	if err := gu.bindKeys(); err != nil {
 		cancel()
 		return fmt.Errorf("bind keys: %w", err)
+	}
+
+	// Push the startup changelog popup BEFORE the first refresh so
+	// the popup is laid out on the very first frame the operator
+	// sees. The popup state is captured under the model lock; the
+	// layout pass picks it up on the next g.MainLoop iteration.
+	if opts.ChangelogModal != nil {
+		gu.openChangelog(
+			opts.ChangelogModal.Title,
+			opts.ChangelogModal.Body,
+			opts.ChangelogModal.OnDismiss,
+		)
 	}
 
 	// Kick an initial refresh + adaptive ticker. Both go via

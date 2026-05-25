@@ -9,20 +9,62 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jesseduffield/gocui"
 
+	"autosk/internal/lazy/markdown"
 	"autosk/internal/lazy/theme"
 )
 
+// replacePopup atomically swaps in `next` for gu.st.popup. When the
+// outgoing popup is a popupChangelog with a non-nil
+// OnDismissChangelog, the callback is dispatched onto the worker
+// pool BEFORE the next render lands so the auto-popup's save-to-
+// state.json side effect always fires once — opening another
+// popup over the auto-popup counts as implicit acknowledgment of
+// the changelog (review R10).
+//
+// Without this, any open helper that fires while the auto-popup
+// is on screen (?, /, :, m, c, …) would silently drop the save
+// callback. The first dismiss after that would clear the
+// replacement popup via popupClose, which has no notion of the
+// changelog contract; last_seen_changelog stays unwritten and the
+// auto-popup re-fires on the next start — a popup loop on every
+// curious operator.
+//
+// openChangelog deliberately does NOT route through this helper:
+// handleWhatsNew already CARRIES the OnDismissChangelog into the
+// upgraded popup so the dismiss-once contract still holds, and
+// routing through replacePopup would either double-fire (when the
+// new state also carries a callback) or, worse, fire the old
+// callback at the same moment a fresh one is installed.
+func (gu *Gui) replacePopup(next popupState) {
+	var dismiss func() error
+	gu.st.withLock(func() {
+		if gu.st.popup.Kind == popupChangelog {
+			dismiss = gu.st.popup.OnDismissChangelog
+		}
+		gu.st.popup = next
+	})
+	if dismiss != nil {
+		gu.runDispatch(func() {
+			if err := dismiss(); err != nil {
+				gu.flashf("warn", "changelog: dismiss callback: %v", err)
+			}
+		})
+	}
+}
+
 // openMenu pushes a Menu popup with the given title, lines, and the
 // onSelect handler. Esc cancels; Enter calls onSelect(cursor).
+//
+// Routes through replacePopup so any active popupChangelog auto-
+// popup gets its OnDismissChangelog fired before this popup
+// replaces it (review R10).
 func (gu *Gui) openMenu(title string, lines []string, onSelect func(int) error) {
-	gu.st.withLock(func() {
-		gu.st.popup = popupState{
-			Kind:     popupMenu,
-			Title:    title,
-			Lines:    lines,
-			Cursor:   0,
-			OnSelect: onSelect,
-		}
+	gu.replacePopup(popupState{
+		Kind:     popupMenu,
+		Title:    title,
+		Lines:    lines,
+		Cursor:   0,
+		OnSelect: onSelect,
 	})
 	gu.requestRedraw()
 }
@@ -33,40 +75,38 @@ func (gu *Gui) openMenu(title string, lines []string, onSelect func(int) error) 
 // drawPopup path; the only practical difference is the Kind field on
 // popupState, which lets tests pin the binding without relying on
 // title-string heuristics and keeps any future divergence cheap.
+//
+// Routes through replacePopup (see openMenu for the R10 rationale).
 func (gu *Gui) openIsolationMenu(title string, lines []string, onSelect func(int) error) {
-	gu.st.withLock(func() {
-		gu.st.popup = popupState{
-			Kind:     popupIsolation,
-			Title:    title,
-			Lines:    lines,
-			Cursor:   0,
-			OnSelect: onSelect,
-		}
+	gu.replacePopup(popupState{
+		Kind:     popupIsolation,
+		Title:    title,
+		Lines:    lines,
+		Cursor:   0,
+		OnSelect: onSelect,
 	})
 	gu.requestRedraw()
 }
 
 // openConfirm pushes a Confirm popup; onAccept runs on y/Enter.
+// Routes through replacePopup (see openMenu for the R10 rationale).
 func (gu *Gui) openConfirm(prompt string, onAccept func() error) {
-	gu.st.withLock(func() {
-		gu.st.popup = popupState{
-			Kind:     popupConfirm,
-			Title:    prompt,
-			OnAccept: func(string) error { return onAccept() },
-		}
+	gu.replacePopup(popupState{
+		Kind:     popupConfirm,
+		Title:    prompt,
+		OnAccept: func(string) error { return onAccept() },
 	})
 	gu.requestRedraw()
 }
 
 // openPrompt pushes a Prompt popup; onAccept gets the typed value.
+// Routes through replacePopup (see openMenu for the R10 rationale).
 func (gu *Gui) openPrompt(prompt, initial string, onAccept func(string) error) {
-	gu.st.withLock(func() {
-		gu.st.popup = popupState{
-			Kind:     popupPrompt,
-			Title:    prompt,
-			Input:    initial,
-			OnAccept: onAccept,
-		}
+	gu.replacePopup(popupState{
+		Kind:     popupPrompt,
+		Title:    prompt,
+		Input:    initial,
+		OnAccept: onAccept,
 	})
 	gu.requestRedraw()
 }
@@ -82,14 +122,12 @@ func (gu *Gui) openPrompt(prompt, initial string, onAccept func(string) error) {
 // hint is a short context label drawn alongside the always-on
 // submit/cancel keybinding hint; pass "" for no hint.
 func (gu *Gui) openSingleCompose(title, hint, initial string, onAccept func(string) error) {
-	gu.st.withLock(func() {
-		gu.st.popup = popupState{
-			Kind:     popupSingleCompose,
-			Title:    title,
-			Hint:     hint,
-			Input:    initial,
-			OnAccept: onAccept,
-		}
+	gu.replacePopup(popupState{
+		Kind:     popupSingleCompose,
+		Title:    title,
+		Hint:     hint,
+		Input:    initial,
+		OnAccept: onAccept,
 	})
 	gu.requestRedraw()
 }
@@ -126,17 +164,82 @@ func (gu *Gui) openTaskCompose(title, initialSummary, initialDescription string,
 	if title == "" {
 		title = "New task"
 	}
-	gu.st.withLock(func() {
-		gu.st.popup = popupState{
-			Kind:            popupTaskCompose,
-			Title:           title,
-			Summary:         initialSummary,
-			Description:     initialDescription,
-			ComposeFocus:    composeSummary,
-			OnComposeAccept: onAccept,
-		}
+	gu.replacePopup(popupState{
+		Kind:            popupTaskCompose,
+		Title:           title,
+		Summary:         initialSummary,
+		Description:     initialDescription,
+		ComposeFocus:    composeSummary,
+		OnComposeAccept: onAccept,
 	})
 	gu.requestRedraw()
+}
+
+// openChangelog pushes a popupChangelog state with the given title +
+// markdown body. onDismiss (when non-nil) fires exactly once on the
+// dismiss handler before the popup is cleared; the auto-popup path
+// uses it to stamp last_seen_changelog in ~/.autosk/state.json. The
+// ctrl+w re-opener passes nil so dismissal doesn't mutate state.
+//
+// The body is the raw markdown source. layout renders it through
+// internal/lazy/markdown.Render against the popup's inner content
+// width on every pass and re-renders on resize (the source is held
+// in popupState so a resize doesn't have to thread through the
+// caller).
+func (gu *Gui) openChangelog(title, body string, onDismiss func() error) {
+	gu.st.withLock(func() {
+		gu.st.popup = popupState{
+			Kind:               popupChangelog,
+			Title:              title,
+			ChangelogSource:    body,
+			OnDismissChangelog: onDismiss,
+		}
+	})
+	// Drop any stale bodyCache entry for the popup view: the
+	// previous open (if any) may have committed a different body
+	// that writeView would otherwise short-circuit against. The
+	// view itself is recreated on the next layout pass because
+	// popupClose / changelogDismiss runs DeleteView through
+	// layoutPopup's activeSet eviction, but writeView's body cache
+	// is keyed by view name + dimensions and survives DeleteView.
+	gu.invalidateBodyCache(winPopupChangelog)
+	gu.requestRedraw()
+}
+
+// changelogDismiss is the handler bound on Esc / Enter when the
+// changelog popup is active. Clears the popup synchronously so
+// the next redraw repaints without the modal, then dispatches
+// OnDismissChangelog (when set) onto the worker pool via
+// runDispatch (review R8). Routing the dismiss callback through a
+// worker matters because the auto-popup path's callback is
+// userstate.Save — synchronous file I/O (MkdirAll, OpenFile,
+// Write, Close, Rename, Chmod) that on a slow NFS-mounted $HOME
+// can take tens to hundreds of milliseconds. Running it on the
+// gocui main goroutine would freeze the redraw for that window
+// (the rest of the TUI's file/network I/O routes the same way for
+// the same reason). Errors from the callback are surfaced via a
+// flash from the worker side.
+//
+// Tests that drive changelogDismiss without a real gocui.Gui set
+// gu.dispatch to a synchronous shim; runDispatch's nil-dispatch
+// fallback (gu.g.OnWorker) is only used in production.
+func (gu *Gui) changelogDismiss(*gocui.Gui, *gocui.View) error {
+	var onDismiss func() error
+	gu.st.withLock(func() {
+		if gu.st.popup.Kind != popupChangelog {
+			return
+		}
+		onDismiss = gu.st.popup.OnDismissChangelog
+		gu.st.popup = popupState{}
+	})
+	if onDismiss != nil {
+		gu.runDispatch(func() {
+			if err := onDismiss(); err != nil {
+				gu.flashf("warn", "changelog: dismiss callback: %v", err)
+			}
+		})
+	}
+	return nil
 }
 
 // taskComposeToggle flips focus between the summary and description
@@ -322,6 +425,8 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 		activeSet[winEnrollStepList] = true
 	case popupCheatsheet:
 		activeSet[winPopupCheatsheet] = true
+	case popupChangelog:
+		activeSet[winPopupChangelog] = true
 	}
 	for _, name := range allPopupWindows {
 		if activeSet[name] {
@@ -385,7 +490,127 @@ func (gu *Gui) layoutPopup(g *gocui.Gui, w, h int) {
 	case popupCheatsheet:
 		gu.layoutCheatsheet(g, w, h, title)
 		pinOnTop(winPopupCheatsheet)
+	case popupChangelog:
+		gu.layoutChangelog(g, w, h, title)
+		pinOnTop(winPopupChangelog)
+		if _, err := g.SetCurrentView(winPopupChangelog); err != nil && !isUnknownView(err) {
+			return
+		}
 	}
+}
+
+// layoutChangelog draws the changelog modal at ~80% width / 80%
+// height (a generous envelope: the embedded changelog can carry
+// many sections of subsection lists and the operator needs a tall
+// scroll buffer). The body is rendered through
+// internal/lazy/markdown.Render at the popup's inner content
+// width so a resize re-flows the markdown to the new width
+// instead of clipping the previous render.
+//
+// View lifetime + body caching: the rendered ANSI blob lives on
+// popupState as ChangelogBody; we re-render only when the source
+// changes (rare — only on open) or when the content width
+// changes (resize). gocui's NewView wipes view state on creation,
+// so the layoutPopup activeSet keeps the view alive across
+// passes — the rendered ANSI just goes through writeView's body
+// cache like every other panel.
+//
+// Editable=false: the view is read-only; j/k/g/G/ctrl+f/ctrl+b
+// scroll bindings are wired in bindKeys against winPopupChangelog
+// so the operator can browse the body the same way as the Detail
+// pane.
+func (gu *Gui) layoutChangelog(g *gocui.Gui, termW, termH int, title string) {
+	var (
+		source  string
+		cached  string
+		cachedW int
+	)
+	gu.st.withRLock(func() {
+		source = gu.st.popup.ChangelogSource
+		cached = gu.st.popup.ChangelogBody
+		cachedW = gu.st.popup.ChangelogWidth
+	})
+
+	// Outer rect — 80% of the terminal in both dims, centred, with
+	// the now-standard "minPopup" floors so a degenerate small
+	// terminal still renders a usable frame.
+	pw := termW * 4 / 5
+	ph := termH * 4 / 5
+	if pw < 60 {
+		pw = 60
+	}
+	if ph < 10 {
+		ph = 10
+	}
+	if pw > termW-4 {
+		pw = termW - 4
+	}
+	if ph > termH-4 {
+		ph = termH - 4
+	}
+	if pw < 10 || ph < 5 {
+		return
+	}
+	x0 := (termW - pw) / 2
+	y0 := (termH - ph) / 2
+	x1 := x0 + pw
+	y1 := y0 + ph
+
+	v, err := g.SetView(winPopupChangelog, x0, y0, x1, y1, 0)
+	if err != nil && !isUnknownView(err) {
+		return
+	}
+	if v == nil {
+		return
+	}
+	v.Title = title
+	v.Subtitle = changelogPopupSubtitle()
+	v.Frame = true
+	v.FrameRunes = roundedFrameRunes
+	v.FrameColor = theme.Active().PopupBox.Gocui()
+	v.TitleColor = theme.Active().PopupBox.Gocui()
+	v.Editable = false
+	v.Wrap = false
+
+	// Inner content width — outer width minus the two frame cells
+	// minus one cell of padding on each side. Floor at 1 so a
+	// degenerate width doesn't make markdown.Render's wrap math
+	// blow up (it falls back to raw text at width≤0 anyway).
+	contentW := pw - 4
+	if contentW < 1 {
+		contentW = 1
+	}
+
+	render := cached
+	if render == "" || cachedW != contentW {
+		render = markdown.Render(source, contentW)
+		gu.st.withLock(func() {
+			if gu.st.popup.Kind != popupChangelog {
+				return
+			}
+			gu.st.popup.ChangelogBody = render
+			gu.st.popup.ChangelogWidth = contentW
+		})
+	}
+
+	// Route through writeView so the spinner-tick / refresh-loop
+	// repaints short-circuit against the body cache and don't re-
+	// run gocui's per-byte ANSI-SGR parser on the rendered blob
+	// (review R6). writeView keys the cache by view name +
+	// dimensions, so a resize—which already invalidates our own
+	// ChangelogBody cache via the cachedW!=contentW guard above—
+	// also bypasses the writeView cache because the dimensions
+	// will differ. The popup’s title is set above on `v` so we
+	// pass an empty title here to keep writeView from clobbering
+	// it with a stale value.
+	gu.writeView(winPopupChangelog, "", render)
+}
+
+// changelogPopupSubtitle renders the always-on "scroll + dismiss"
+// hint on the changelog popup's top frame. Same shape the
+// single-compose popup uses for its submit/cancel hint.
+func changelogPopupSubtitle() string {
+	return " j/k g/G ctrl+f/ctrl+b scroll · esc/enter dismiss "
 }
 
 // composePanelMaxWidth is the cap on the compose popup's outer
