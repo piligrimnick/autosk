@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-05-25
+
 ### Added
 - **lazy:** two-pane workflow + step picker for `enroll` / `resume` actions.
 - **lazy:** redesigned Workflow Detail pane.
