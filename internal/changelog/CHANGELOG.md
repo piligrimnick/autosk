@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **bootstrap:** `feature-dev-generic` workflow now ships with `isolation: worktree` by default.
 
+### Fixed
+- **daemon:** fix empty lazy transcript and `HTTP 410 session_missing` from `daemon messages <job>`
+
 ## [0.1.5] — 2026-05-25
 
 ### Added

@@ -325,10 +325,10 @@ func TestRun_Worktree_Concurrent_TwoTasksNoInterference(t *testing.T) {
 	idA, jobA := makeTaskRun("ask-c00001")
 	idB, jobB := makeTaskRun("ask-c00002")
 
-	// Per-job stubs that emit `done` on first prompt. We use a custom
-	// factory that captures the cwd for each job in a map keyed by
-	// job id (extracted from stubRunner pointer identity since pi.Opts
-	// doesn't carry a job id).
+	// Per-job stubs that emit `done` on first prompt. The factory
+	// below demuxes them by the job id extracted from
+	// `opts.SessionDir` (executor passes `<sessionRoot>/<jobID>`) and
+	// captures each job's cwd into a shared map.
 	var (
 		captureMu sync.Mutex
 		cwdByJob  = map[string]string{}
@@ -347,33 +347,18 @@ func TestRun_Worktree_Concurrent_TwoTasksNoInterference(t *testing.T) {
 	stubA := makeStub(idA, jobA)
 	stubB := makeStub(idB, jobB)
 
-	// Use the runner-pointer identity to demux which stub the factory
-	// was just asked for.
-	var nextStub func() (*stubRunner, string)
-	{
-		queue := []struct {
-			s  *stubRunner
-			id string
-		}{
-			{stubA, jobA},
-			{stubB, jobB},
-		}
-		var qMu sync.Mutex
-		nextStub = func() (*stubRunner, string) {
-			qMu.Lock()
-			defer qMu.Unlock()
-			if len(queue) == 0 {
-				return nil, ""
-			}
-			x := queue[0]
-			queue = queue[1:]
-			return x.s, x.id
-		}
-	}
+	// Demux by the per-job SessionDir (`<sessionRoot>/<jobID>`): the
+	// executor passes one in via pi.Opts, and there is exactly one
+	// stub per real job id. Indexing by job id keeps the assignment
+	// stable regardless of which goroutine wins the race to spawn,
+	// which matters now that there's no synchronous GetState between
+	// MarkRunning and SendPrompt to serialise the two runs' setup.
+	stubByJob := map[string]*stubRunner{jobA: stubA, jobB: stubB}
 	factory := func(_ context.Context, opts pi.Opts) (executor.PiRunner, error) {
-		s, jobID := nextStub()
-		if s == nil {
-			t.Fatalf("factory called more times than expected")
+		jobID := filepath.Base(opts.SessionDir)
+		s, ok := stubByJob[jobID]
+		if !ok {
+			t.Fatalf("factory called with unknown SessionDir %q (jobID=%q)", opts.SessionDir, jobID)
 		}
 		captureMu.Lock()
 		cwdByJob[jobID] = opts.Cwd

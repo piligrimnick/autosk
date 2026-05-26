@@ -83,8 +83,15 @@ type scriptedPi struct {
 
 func (r *scriptedPi) PID() int                { return 4242 }
 func (r *scriptedPi) Events() <-chan pi.Event { return nil }
+
+// GetState mirrors pi 0.74-0.75 at spawn time: SessionFile is empty
+// until the first persist after SendPrompt. Combined with the tiny
+// SessionPollBudget set in startEngine below, this keeps the
+// background session-info poll from racing with the executor's
+// mainline writes in the high-throughput e2e tests (see the
+// max-visits-loop fixture which churns dozens of runs back-to-back).
 func (r *scriptedPi) GetState(ctx context.Context) (pi.SessionInfo, error) {
-	return pi.SessionInfo{SessionID: "sess-e2e", SessionFile: "/tmp/e2e.jsonl"}, nil
+	return pi.SessionInfo{}, nil
 }
 func (r *scriptedPi) SendPrompt(ctx context.Context, m string) error {
 	if r.onPrompt != nil {
@@ -175,6 +182,10 @@ func (s *e2eStack) startEngine(t *testing.T, factory executor.Factory) func() {
 		ProjectRoot: s.projDir,
 		Grace:       100 * time.Millisecond,
 		IdleTimeout: 5 * time.Second,
+		// Keep the background session-info poll out of the DB:
+		// scriptedPi.GetState returns SessionFile="" and a 1ms budget
+		// makes the goroutine exit before any test assertion fires.
+		SessionPollBudget: time.Millisecond,
 	})
 	sched := scheduler.New(scheduler.ExecutorFunc(func(ctx context.Context, job scheduler.Job) error {
 		return exec.Run(ctx, job.ID)
