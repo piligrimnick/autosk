@@ -134,6 +134,11 @@ type Config struct {
 	Grace time.Duration
 	// IdleTimeout caps a single WaitForAgentEnd.
 	IdleTimeout time.Duration
+	// SessionPollBudget caps the total wall-clock the background
+	// session-info poller spends waiting for pi to stamp sessionFile
+	// after SendPrompt. Zero falls back to sessionPollBudget (~30s).
+	// Tests set this small so the goroutine doesn't outlive their DB.
+	SessionPollBudget time.Duration
 }
 
 // Executor wires everything together. Implements scheduler.Executor.
@@ -358,15 +363,34 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 	if pid := runner.PID(); pid > 0 {
 		_ = e.deps.Runs.SetPID(ctx, jobID, pid)
 	}
-	stateCtx, stateCancel := context.WithTimeout(ctx, 10*time.Second)
-	if info, sterr := runner.GetState(stateCtx); sterr == nil {
-		_ = e.deps.Runs.SetPISession(ctx, jobID, info.SessionID, info.SessionFile)
-	}
-	stateCancel()
 
 	// 5. Initial prompt / JSON seed.
 	if err := runner.SendPrompt(ctx, initialMsg); err != nil {
 		return e.handleRunError(ctx, bg, jobID, runner, err)
+	}
+
+	// 5a. Record pi's session info in the background.
+	//
+	// pi 0.74-0.75 creates session.jsonl lazily — only on the first
+	// persist *after* SendPrompt has been preflight-accepted. The
+	// previous synchronous pre-SendPrompt get_state call returned
+	// SessionFile="" and we never re-queried, leaving daemon_runs
+	// .session_path empty for the life of the run (and the lazy
+	// Detail pane stuck on "(no transcript events yet)"). Polling in
+	// the background lets us record the path as soon as pi stamps
+	// it, without blocking the turn loop — the executor proceeds
+	// into WaitForAgentEnd immediately after this go.
+	//
+	// Gated on the pi-runner branch: agentnode.Runner.GetState
+	// returns an empty SessionInfo unconditionally (custom Node
+	// runners don't have a pi session at all), so polling them is
+	// pure waste — a fresh goroutine burning the full budget on no-op
+	// RPCs for every Node-runner job. Mirrors the agentCfg.Runner
+	// switch that picked the runner type above.
+	if agentCfg.Runner == "" {
+		go pollSessionInfo(ctx, runner, e.deps.Runs, jobID, pollSessionOpts{
+			Budget: e.cfg.SessionPollBudget,
+		})
 	}
 
 	// 6. Turn loop: WaitForAgentEnd, then check step_signals; kickback on miss.

@@ -33,7 +33,7 @@ stdin   →  RpcExtensionUIResponse  (only as replies to a request)
 | `prompt`             | `message`                             | Start a fresh user turn on an idle agent (initial run prompt + every kickback). |
 | `follow_up`          | `message`                             | Queue an additional user turn while the agent is still streaming. Daemon does not use this in v0. |
 | `abort`              | —                                     | Stop the current run. Used by cancel before SIGTERM. |
-| `get_state`          | —                                     | Read `sessionFile`, `sessionId`, `messageCount`. Used once after spawn to record `pi_session_id` / `session_path`. |
+| `get_state`          | —                                     | Read `sessionFile`, `sessionId`, `messageCount`. Re-polled with backoff in the background after the first `prompt` until `sessionFile` populates, then recorded as `pi_session_id` / `session_path`. |
 | `set_model`          | `provider`, `modelId`                 | Reserved; daemon prefers `--model` CLI flag. |
 | `set_thinking_level` | `level` (`off|minimal|low|medium|high|xhigh`) | Reserved; daemon prefers `--thinking` CLI flag. |
 
@@ -133,9 +133,20 @@ long-lived stdin handling.
 
 ## Pi session id & session file path
 
-Captured right after spawn via `{type:"get_state"}`. The response's `data`
-contains `sessionId` and `sessionFile`. The daemon writes both to
+Captured via `{type:"get_state"}`. The response's `data` contains
+`sessionId` and `sessionFile`. The daemon writes both to
 `daemon_runs.pi_session_id` / `daemon_runs.session_path`.
+
+**Why we poll, not query once.** pi 0.74-0.75 creates `session.jsonl`
+lazily inside its session manager — the file path is stamped on the
+first persist (after the first prompt is preflight-accepted), not at
+spawn time. A `get_state` issued right after spawn therefore comes
+back with `sessionFile == ""`. The executor kicks off a background
+goroutine after a successful `prompt` send that re-issues `get_state`
+with exponential backoff (100 ms → 5 s cap, ~30 s total budget) until
+`sessionFile` populates, then writes through `SetPISession` exactly
+once. The poll is gated on the runner type: it only runs for pi-based
+agents, since custom Node runners have no pi session.
 
 `session_path` is the file we tail for `GET /v1/jobs/{id}/messages` —
 the daemon does NOT mirror events into its own table.

@@ -96,8 +96,16 @@ func newStub() *stubRunner {
 
 func (r *stubRunner) PID() int                { return 4242 }
 func (r *stubRunner) Events() <-chan pi.Event { return r.events }
+
+// GetState mirrors pi 0.74-0.75 at spawn time: SessionFile is empty
+// until the first persist after SendPrompt. The executor's background
+// session poll therefore makes no SetPISession write here, which
+// keeps the fixture's DB free of races with the main turn-loop writes.
+// The poll-helper-level tests in session_poll_test.go exercise the
+// late-arriving-sessionFile case directly without going through this
+// stub.
 func (r *stubRunner) GetState(ctx context.Context) (pi.SessionInfo, error) {
-	return pi.SessionInfo{SessionID: "sess-stub", SessionFile: "/tmp/stub.jsonl"}, nil
+	return pi.SessionInfo{}, nil
 }
 
 func (r *stubRunner) SendPrompt(ctx context.Context, m string) error {
@@ -216,6 +224,11 @@ func newExecFixture(t *testing.T) *execFixture {
 			ProjectRoot: dir,
 			Grace:       100 * time.Millisecond,
 			IdleTimeout: 5 * time.Second,
+			// Keep the background session-info poll out of the
+			// way of test assertions: with the stub above
+			// always returning SessionFile="" plus a 1ms budget,
+			// the goroutine exits before any test can observe it.
+			SessionPollBudget: time.Millisecond,
 		},
 		wf:    wf,
 		close: func() { _ = ts.Close() },
@@ -1064,6 +1077,117 @@ func (s *idleTimeoutAfterSignalStub) WaitForAgentEnd(ctx context.Context) error 
 func idleTimeoutAfterSignalFactory(stub *idleTimeoutAfterSignalStub) executor.Factory {
 	return func(ctx context.Context, opts pi.Opts) (executor.PiRunner, error) {
 		return stub, nil
+	}
+}
+
+// latePathStub mirrors real pi 0.74-0.75 spawn-time behaviour: the
+// first GetState returns SessionFile="" (the session manager hasn't
+// stamped session.jsonl yet) and subsequent GetState calls return a
+// populated SessionFile. Attempt counter is atomic so the executor's
+// background poll goroutine can hammer it safely while Run() is
+// active on another goroutine.
+type latePathStub struct {
+	*stubRunner
+	attempts atomic.Int64
+	latePath string
+	sessID   string
+}
+
+func (s *latePathStub) GetState(_ context.Context) (pi.SessionInfo, error) {
+	n := s.attempts.Add(1)
+	if n < 2 {
+		return pi.SessionInfo{SessionID: s.sessID}, nil
+	}
+	return pi.SessionInfo{SessionID: s.sessID, SessionFile: s.latePath}, nil
+}
+
+func latePathFactory(s *latePathStub) executor.Factory {
+	return func(_ context.Context, _ pi.Opts) (executor.PiRunner, error) {
+		return s, nil
+	}
+}
+
+// TestRun_RecordsLateArrivingSessionPath is the integration-level
+// regression guard for ask-d10920. The helper-level tests in
+// session_poll_test.go cover the loop's branches in isolation; this
+// test pins the actual goroutine-wiring at executor.go:~390 —
+//
+//   - `go pollSessionInfo(ctx, runner, e.deps.Runs, jobID, ...)`
+//     fires after a successful SendPrompt on a pi-runner agent;
+//   - the runner/sink/jobID args are connected to the live executor
+//     state and the real *runstore.Store;
+//   - a late-arriving SessionFile populates `daemon_runs.session_path`
+//     end-to-end (visible through Runs.GetRun).
+//
+// A future refactor that swaps the args, drops the `go`, or
+// regresses Node runners back to “don’t poll” (the R1 gate) and
+// inadvertently re-regresses pi runners to “don’t poll either”
+// would land green against the helper tests alone; this test trips
+// instead.
+func TestRun_RecordsLateArrivingSessionPath(t *testing.T) {
+	fx := newExecFixture(t)
+	defer fx.close()
+	ctx := context.Background()
+	taskID, jobID := fx.makeRun(t, "late session", "dev")
+
+	const latePath = "/tmp/late-integration.jsonl"
+	stub := &latePathStub{
+		stubRunner: newStub(),
+		latePath:   latePath,
+		sessID:     "sess-late-int",
+	}
+	// Emit `--to review` on the first prompt so Run() advances and
+	// returns promptly; the session poll keeps running on a separate
+	// goroutine until the budget expires or SetPISession lands.
+	stub.onPrompt = func(_ string, attempt int) {
+		if attempt == 1 {
+			if _, err := fx.deps.Signals.Emit(ctx, taskID, "review"); err != nil {
+				t.Errorf("Emit: %v", err)
+			}
+		}
+	}
+
+	// Real-ish budget: the default poll uses InitDelay=100ms, so
+	// attempt 2 (the populated one) lands at t≈100ms after the
+	// goroutine starts. 2s gives the test slack on slow CI without
+	// stranding the goroutine for the full default 30s if something
+	// regresses and the path never arrives.
+	cfg := fx.cfg
+	cfg.SessionPollBudget = 2 * time.Second
+
+	exec := executor.New(fx.deps, latePathFactory(stub), cfg)
+	if err := exec.Run(ctx, jobID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Sanity: Run() returned before the late SessionFile could land
+	// — the poll must do the actual recording.
+	run, _ := fx.deps.Runs.GetRun(ctx, jobID)
+	if run.Status != runstore.StatusDone {
+		t.Fatalf("run.Status: %s (want done)", run.Status)
+	}
+
+	// Poll the run row until SessionPath populates or the budget
+	// runs out. The poll goroutine writes asynchronously — a tight
+	// time.Sleep() here would be brittle on a slow CI worker.
+	deadline := time.Now().Add(3 * time.Second)
+	var got runstore.Run
+	for time.Now().Before(deadline) {
+		got, _ = fx.deps.Runs.GetRun(ctx, jobID)
+		if got.SessionPath != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got.SessionPath != latePath {
+		t.Fatalf("SessionPath=%q (want %q) after wait — background poll never recorded the late path; attempts=%d",
+			got.SessionPath, latePath, stub.attempts.Load())
+	}
+	if got.PISessionID != "sess-late-int" {
+		t.Errorf("PISessionID=%q (want sess-late-int)", got.PISessionID)
+	}
+	if n := stub.attempts.Load(); n < 2 {
+		t.Errorf("GetState attempts=%d (want ≥2: one empty + one populated)", n)
 	}
 }
 
