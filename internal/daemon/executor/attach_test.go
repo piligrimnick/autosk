@@ -144,8 +144,23 @@ func TestRun_AttachedDisablesIdleTimeout(t *testing.T) {
 //     drain into the buffered channel before we release the attach
 //     counter; that sleep is bounded only by SchedulerSlack and is
 //     not part of the assertion.
+//
+//   - The driver goroutine must finish before the test function
+//     returns. Otherwise, on a slow macOS CI runner where the
+//     polling deadline lapses just as test main returns, the
+//     deferred fx.close() shuts the DB and the goroutine eventually
+//     calls t.Errorf after the test has completed — which Go's
+//     testing framework escalates to
+//     `panic: Fail in goroutine after ... has completed`. We block
+//     test main on driverDone after exec.Run so any t.Errorf from
+//     the goroutine lands while the test is still live.
 func TestRun_KickbackResumesAfterDetach(t *testing.T) {
 	const SchedulerSlack = 100 * time.Millisecond
+	// Polling budget used by waitForCorrections. Generous enough to
+	// absorb the disk-flush latency of CorrectionsUsed writes on
+	// loaded macOS CI runners while still failing fast in the local
+	// dev loop.
+	const CorrectionsPollBudget = 3 * time.Second
 	fx := newExecFixture(t)
 	defer fx.close()
 	ctx := context.Background()
@@ -176,7 +191,9 @@ func TestRun_KickbackResumesAfterDetach(t *testing.T) {
 		}
 		return errors.New("timeout")
 	}
+	driverDone := make(chan struct{})
 	go func() {
+		defer close(driverDone)
 		<-driver
 		// One attached no-signal turn — must be a free skip. We give
 		// stubRunner.SendPrompt's 5ms auto-scheduler enough slack to
@@ -194,12 +211,12 @@ func TestRun_KickbackResumesAfterDetach(t *testing.T) {
 		time.Sleep(SchedulerSlack)
 		rel()
 		stub.turnEnds <- struct{}{}
-		if err := waitForCorrections(1, time.Second); err != nil {
+		if err := waitForCorrections(1, CorrectionsPollBudget); err != nil {
 			t.Errorf("waitForCorrections(1): %v", err)
 			return
 		}
 		stub.turnEnds <- struct{}{}
-		if err := waitForCorrections(2, time.Second); err != nil {
+		if err := waitForCorrections(2, CorrectionsPollBudget); err != nil {
 			t.Errorf("waitForCorrections(2): %v", err)
 			return
 		}
@@ -208,6 +225,13 @@ func TestRun_KickbackResumesAfterDetach(t *testing.T) {
 
 	exec := executor.New(fx.deps, stubFactory(stub), fx.cfg)
 	err := exec.Run(ctx, jobID)
+	// Block until the driver finishes so any failures from the
+	// goroutine (t.Errorf paths above) land while the test is still
+	// live. Without this, a goroutine that times out just as test
+	// main returns triggers a `panic: Fail in goroutine after ...
+	// has completed` once Go's testing framework sees t.Errorf on a
+	// done test.
+	<-driverDone
 	if !errors.Is(err, executor.ErrAgentDidNotEmit) {
 		t.Fatalf("want ErrAgentDidNotEmit, got %v", err)
 	}
