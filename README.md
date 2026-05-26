@@ -85,6 +85,12 @@ Here you can press `n` to create new task or `?` to see hotkeys.
    The daemon picks up the task, runs the workflow, and either closes it
    to `done` or parks it to `human` for review.
 
+   The shipped `feature-dev-generic` workflow runs each task inside its
+   own git worktree (`isolation: worktree`), so the project root must
+   be a git repo. Existing projects whose workflow row was seeded
+   before this default flip stay on `isolation=none` until you migrate
+   manually — see [docs/workflows.md → Shipped default](docs/workflows.md#shipped-default-feature-dev-generic).
+
 3. **(Optional) Use your own agent or workflow.** Install an agent
    package and enroll directly against it (autosk wraps it in a synthetic
    one-step workflow):
@@ -133,7 +139,8 @@ autosk workflow list
 
 `autosk init` seeds one workflow for you out of the box —
 `feature-dev-generic` (`dev → review → docs → validator → human`,
-every step owned by `@autogent/generic`). The canonical JSON lives at
+every step owned by `@autogent/generic`, `isolation: worktree`). The
+canonical JSON lives at
 [`internal/bootstrap/feature-dev-generic.json`](internal/bootstrap/feature-dev-generic.json)
 and is embedded into the binary; copy that file and pass it to
 `autosk workflow create --file ...` under a different name if you want

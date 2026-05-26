@@ -23,6 +23,15 @@ func TestBootstrap_FeatureDevGenericParses(t *testing.T) {
 	if def.FirstStep != "dev" {
 		t.Errorf("first_step = %q, want %q", def.FirstStep, "dev")
 	}
+	// Pins the new default at the bootstrap layer: fresh `autosk init`
+	// must seed feature-dev-generic with isolation=worktree so every
+	// step run lands inside its own per-task git worktree. Migration
+	// for existing projects is a manual `autosk workflow update`
+	// invocation — see CHANGELOG and
+	// docs/plans/20260521-Worktree-Isolation.md.
+	if def.Isolation != workflow.IsolationWorktree {
+		t.Errorf("isolation = %q, want %q", def.Isolation, workflow.IsolationWorktree)
+	}
 	// dev → review → docs → validator (four sibling steps; the fifth
 	// transition target on validator is task_status=human).
 	if len(def.Steps) != 4 {

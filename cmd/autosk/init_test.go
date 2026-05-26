@@ -3,17 +3,39 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"autosk/internal/worktree"
 )
 
 // TestInit_BootstrapsFeatureDevGeneric covers AC1-AC4: after a plain
 // `autosk init` on a clean dir the user can immediately enroll work
 // into the seeded `feature-dev-generic` workflow.
+//
+// Since feature-dev-generic now ships with `isolation: worktree` by
+// default, the AC4 `create --workflow feature-dev-generic` block
+// requires the project dir to be a real git repo (so worktree.Ensure
+// can `git worktree add`) and a hermetic $HOME (so the allocated
+// worktree lands under a sweepable temp dir instead of the
+// developer's real ~/.autosk/worktrees/...).
 func TestInit_BootstrapsFeatureDevGeneric(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed; feature-dev-generic now defaults to isolation=worktree which needs git")
+	}
 	withIsolatedPackagesPrefix(t)
+	// Hermetic $HOME for the lifetime of the subtest: worktree.PathFor
+	// derives its destination from $HOME, so without this the AC4
+	// `create --workflow feature-dev-generic` would spray
+	// ~/.autosk/worktrees/<slug>/<task-id> into the developer's real
+	// home dir.
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
+	// Promote the project root to a git repo with one commit so HEAD
+	// resolves — mirrors the fixture in internal/worktree/worktree_test.go.
+	gitInitOrFail(t, dir)
 	out, err := runRoot(t, dir, "init")
 	if err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
@@ -55,6 +77,13 @@ func TestInit_BootstrapsFeatureDevGeneric(t *testing.T) {
 	}
 	if meta["is_synthetic"] != false {
 		t.Errorf("workflow should be non-synthetic: %v", meta["is_synthetic"])
+	}
+	// AC2 (isolation): fresh init must seed the workflow with
+	// isolation=worktree (the new bootstrap default). Pinned here at
+	// the persisted-DB level; bootstrap_test.go pins it at the
+	// embedded-JSON level.
+	if got := meta["isolation"]; got != "worktree" {
+		t.Errorf("workflow isolation = %v, want \"worktree\"", got)
 	}
 	steps, _ := meta["steps"].([]any)
 	wantNames := []string{"dev", "review", "docs", "validator"}
@@ -145,6 +174,37 @@ func TestInit_BootstrapsFeatureDevGeneric(t *testing.T) {
 	if got["current_agent"] != "@autogent/generic" {
 		t.Errorf("task current_agent = %v, want @autogent/generic", got["current_agent"])
 	}
+	// AC4 (worktree allocation): with isolation=worktree the create
+	// path runs worktree.Ensure, which materialises
+	// $HOME/.autosk/worktrees/<slug>/<task-id> and the branch
+	// autosk/<task-id> on the project repo.
+	wtPath, perr := worktree.PathFor(dir, id)
+	if perr != nil {
+		t.Fatalf("worktree.PathFor: %v", perr)
+	}
+	if _, statErr := os.Stat(wtPath); statErr != nil {
+		t.Errorf("worktree dir should exist at %s: %v", wtPath, statErr)
+	}
+}
+
+// gitInitOrFail initialises `dir` as a git repo with one empty commit
+// on `main`, configuring a local user identity so subsequent
+// `git worktree add` commands have a valid HEAD to fork from. Mirrors
+// the helper in internal/worktree/worktree_test.go but kept package-local
+// here to avoid a test-only dependency cycle.
+func gitInitOrFail(t *testing.T, dir string) {
+	t.Helper()
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	run("init", "--initial-branch=main")
+	run("config", "user.email", "test@autosk.local")
+	run("config", "user.name", "autosk test")
+	run("commit", "--allow-empty", "-m", "initial")
 }
 
 // TestInit_Idempotent covers AC5 + AC9: a second init is a no-op and a

@@ -157,11 +157,32 @@ by `autosk init`. To reuse it as a template, copy that file and pass it
 to `autosk workflow create --file ...` under a different name — do not
 edit the embedded file in place if you only need a local variant.
 
+The shipped definition carries `isolation: "worktree"`, so every task
+enrolled into `feature-dev-generic` on a freshly-initialised project
+allocates its own per-task git worktree under
+`~/.autosk/worktrees/<slug>/<task-id>` on branch `autosk/<task-id>`.
+This means `autosk create … --workflow feature-dev-generic` requires
+the project root to be a git repository: a non-git root surfaces
+`ErrNotGitRepo` from the worktree allocator. See
+[Worktree isolation](#worktree-isolation) for the full mechanics.
+
 Bootstrap is idempotent: re-running `autosk init` is a no-op once the
 workflow row exists, regardless of its content (the engine does not
-diff the embedded JSON against the row). If you have edited the seeded
-workflow and want the default back, `autosk workflow delete
-feature-dev-generic` followed by `autosk init` re-creates it.
+diff the embedded JSON against the row). **Existing projects are not
+auto-migrated to the new isolation default**: a project whose
+`feature-dev-generic` row was seeded before this change keeps its
+stored `isolation=none` until you opt in explicitly with
+[`autosk workflow update`](#updating-isolation):
+
+```bash
+autosk workflow update feature-dev-generic --isolation worktree
+# add --force if the workflow has non-terminal tasks; see the safety
+# matrix in the "Updating isolation" subsection.
+```
+
+If you have edited the seeded workflow and want the default back,
+`autosk workflow delete feature-dev-generic` followed by `autosk init`
+re-creates it (with the current default, `isolation=worktree`).
 
 If you want a truly empty database, pass `--skip-bootstrap`:
 

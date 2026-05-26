@@ -2,6 +2,7 @@
   "name": "feature-dev-generic",
   "description": "Full feature-development cycle on the @autogent/generic agent: dev → review → docs → validator → hand-off to a human. All steps use the same agent.",
   "first_step": "dev",
+  "isolation": "worktree",
   "steps": {
     "dev": {
       "agent": {
