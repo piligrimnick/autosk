@@ -53,7 +53,7 @@ The workflow definition that ties them together ships at
 ```bash
 autosk workflow create --file docs/examples/workflows/workflow-example.json
 autosk create "Implement auth module" --workflow feature-dev
-autosk daemon serve --workers 1
+autoskd            # the Rust daemon drives the workflow (the Go `autosk daemon serve` is retired)
 ```
 
 The daemon picks up the task at step `dev`, runs `developer`, advances

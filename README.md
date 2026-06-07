@@ -76,14 +76,14 @@ Here you can press `n` to create new task or `?` to see hotkeys.
 
 2. **(Optional) Hand a task to the bundled developer workflow.** `autosk init`
    already installed `@autogent/generic` and seeded `feature-dev-generic`
-   (dev → review → docs → validator → human), so all that's left is to start
-   the daemon and enroll a task:
+   (dev → review → docs → validator → human), so all that's left is to
+   enroll a task:
    ```bash
-   autosk daemon serve &                                # run in the background
    id=$(autosk create "Fix the flaky test" -p 1 --workflow feature-dev-generic --json | jq -r .id)
    ```
-   The daemon picks up the task, runs the workflow, and either closes it
-   to `done` or parks it to `human` for review.
+   The daemon — now the Rust `autoskd`, auto-spawned on first use (there is
+   no manual `serve` step) — picks up the task, runs the workflow, and either
+   closes it to `done` or parks it to `human` for review.
 
    The shipped `feature-dev-generic` workflow runs each task inside its
    own git worktree (`isolation: worktree`), so the project root must
@@ -152,13 +152,13 @@ See [Make your own workflow](docs/workflows.md#make-your-own-workflow) to adapt 
 
 ### The [daemon](docs/daemon.md)
 
-`autosk daemon serve` is a long-running process that drives tasks through their workflows. **One daemon per host serves any number of projects** — it picks the project from the autosk request that the CLI/lazy executes.
+The daemon — now the Rust **`autoskd`** — is a long-running process that drives tasks through their workflows. It is auto-spawned on first use by the `autosk daemon` subcommands (the Go `autosk daemon serve` verb was retired); for a foreground daemon, run `autoskd` directly. **One daemon per host serves any number of projects** — it picks the project from the autosk request that the CLI/lazy executes.
 
 What the daemon does for each task in `work` status:
 
 1. Resolves the current step's agent package.
 2. Spawns the agent (either `pi --mode rpc` for standard packages, or a Node bootstrapper for custom runners).
-3. Streams the agent's output to a `session.jsonl` archive and over SSE to any attached viewer (`autosk lazy`).
+3. Streams the agent's output to a `session.jsonl` archive and to any attached viewer (`autosk lazy`).
 4. Waits for the agent to emit transitions calls and process the task accordingly.
 
 If the agent fails to transition cleanly, the daemon parks the task to `human` and waits for you to resume it (`autosk resume <id>`).

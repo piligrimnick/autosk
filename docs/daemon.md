@@ -1,5 +1,19 @@
 # autosk daemon — multi-project pi orchestrator
 
+> **Status — daemon cutover in progress (plan §9, ask-2e7e27).** The Go
+> `autosk daemon serve` verb described throughout this document has been
+> **retired**. The daemon is now the Rust **`autoskd`**, which the
+> `autosk daemon` subcommands auto-spawn on first use (language-server
+> style); for a foreground daemon, run `autoskd` directly. The
+> `autosk daemon status|messages|cancel|list` subcommands are now
+> JSON-RPC clients of `autoskd`. Everything below this banner still
+> documents the **retired Go daemon's** HTTP-over-UDS internals (the
+> `serve` flag table, the `/v1/...` HTTP API, `POST /v1/jobs`, SSE) and
+> is kept for historical reference until the full rewrite lands in the
+> Phase 5 cutover (autoskd / JSON-RPC / auto-spawn / network mode) — see
+> [`docs/plans/20260607-Rust-Daemon-Tauri-GUI.md`](plans/20260607-Rust-Daemon-Tauri-GUI.md)
+> §9.
+
 `autosk daemon` is an HTTP-over-UDS service that drives autosk tasks
 through their workflows. **One daemon per host** serves **any number
 of projects** from a single process. The project is selected per

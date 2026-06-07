@@ -5,13 +5,13 @@ run custom-runner agent packages.
 
 You do not import this package from your code. It is installed
 automatically by `autosk agent install` into the global agents prefix
-(`~/.autosk/packages/`), and `autosk daemon serve` shells it whenever a
+(`~/.autosk/packages/`), and the daemon (`autoskd`) shells it whenever a
 workflow step is owned by an agent whose `package.json` declares an
 `autosk.agent.runner` path.
 
 ## Wire protocol
 
-The autosk Go executor spawns this binary as:
+The autosk daemon executor (`autoskd`, Rust) spawns this binary as:
 
 ```
 node --import tsx \

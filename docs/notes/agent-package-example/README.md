@@ -32,7 +32,7 @@ cp -r .../docs/notes/agent-package-example \
 
 # 5. Use it.
 autosk create "say hi" --agent @autosk/example-custom-agent
-autosk daemon serve --workers 1 &
+autoskd &        # the Rust daemon (the Go `autosk daemon serve` is retired)
 # → the example-custom-agent runs, adds a comment, then closes the task.
 ```
 

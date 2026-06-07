@@ -886,8 +886,10 @@ id=$(autosk create "Implement auth module" --workflow feature-dev --json | jq -r
 autosk show "$id"
 # status: work, current_step: dev, current_agent: developer
 
-# 3. Run the daemon (in another shell).
-autosk daemon serve --workers 1 &
+# 3. The daemon (the Rust `autoskd`) drives the workflow. It is auto-spawned
+#    on first use by the `autosk daemon` subcommands; for a foreground daemon
+#    run it directly in another shell (the Go `autosk daemon serve` is retired):
+autoskd &
 
 # 4. The poller picks up the task; the developer agent spawns; at the
 # end of its turn it calls (via the autosk pi-extension):
@@ -1018,7 +1020,7 @@ transitions are owned by the workflow engine.
 
 ```
 ┌───────────────────────────────────────────────────────┐
-│            autosk daemon serve                        │
+│            autoskd                                    │
 │                                                       │
 │   ┌────────────┐   ┌────────────┐   ┌──────────────┐  │
 │   │  poller    │──▶│ scheduler  │──▶│ step         │  │

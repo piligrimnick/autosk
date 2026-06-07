@@ -21,14 +21,20 @@ faster front door.
 
 ```bash
 cd ~/your/project
-autosk daemon serve &     # optional, but recommended for live job streams
 autosk lazy
 ```
 
-Without the daemon the dashboard still works — tasks, jobs,
+> **Live-mode note (daemon cutover, plan §9).** The Go `autosk daemon
+> serve` was retired and lazy's live datasource is not yet rewired to the
+> Rust `autoskd` (that rewire is Phase 3). In the meantime lazy's live
+> integration stays **Offline**: the SSE stream, the input textarea, and
+> the cancel-job verb are temporarily unavailable. The dashboard itself
+> still works fully — see the next paragraph.
+
+Without a live daemon the dashboard still works — tasks, jobs,
 workflows, and agents all render from `.autosk/db`, write hotkeys
 still mutate the DB, and job transcripts render from each job's
-`session.jsonl` archive. The pieces that **need** the daemon are the
+`session.jsonl` archive. The pieces that **need** the live daemon are the
 live SSE stream into the Detail pane, the input textarea, and the
 cancel-job verb. See [Daemon dependency](#daemon-dependency).
 
@@ -502,7 +508,7 @@ fresh fds immediately.
 | Symptom | Likely cause |
 |---|---|
 | `daemon=down` but `autosk daemon list` works | Stale socket path. Pass `--sock` or set `$AUTOSK_SOCK`. |
-| No `input` textarea on a job you know is running | Daemon is down or the live datasource just flipped the job to a terminal status. Start the daemon (`autosk daemon serve`) and the textarea reappears on the next tick. |
+| No `input` textarea on a job you know is running | The live datasource flipped the job to a terminal status — or (during the daemon cutover, plan §9) lazy's live integration is Offline because it is not yet rewired to `autoskd` (Phase 3). |
 | Agents panel hotkey only flashes a message | Read-only by design — install / uninstall from the CLI. |
 | `ctrl+f` does something different than I expected | Same chord, two view-scoped meanings: page-forward in the Detail pane, `follow_up` dispatch in the input textarea. The `?` overlay filters by focused panel, so only the meaning that's currently active is listed. |
 | Detail pane shows `(loading…)` and stays there | Archive load is in flight; if it never resolves, check the daemon log or press `ctrl+r` to drop the cache and retry. `(archive load failed: …)` means the underlying fetch errored — retry with `ctrl+r`. |
