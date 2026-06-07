@@ -407,8 +407,12 @@ remains:
   DB, runs `dolt_commit`/`dolt_gc`, and the RwLock GC discipline survives
   `dolt_gc` under concurrent reads (≥10k-read stress, zero errors/corruption).
   `dolt_gc` is corruption-free on 0.11.8 (the 0.10.11 cookie bug was fixed in
-  **0.11.2**); `build.rs` reuses `scripts/fetch-doltlite.sh 0.11.8`. **Finding:**
-  the forward-compat assumption is **FALSE** — doltlite 0.11.0 broke the on-disk
+  **0.11.2**); `build.rs` reuses `scripts/fetch-doltlite.sh 0.11.8`. The
+  dual-platform build/link/test acceptance (criterion #1, linux-x64 +
+  macOS-arm64) is gated by a dedicated Rust CI workflow
+  (`.github/workflows/rust.yml`), kept separate from the Go `ci.yml` with its
+  own `doltlite-rust-0.11.8` cache key so the two doltlite pins never collide.
+  **Finding:** the forward-compat assumption is **FALSE** — doltlite 0.11.0 broke the on-disk
   format (container v11→v12), so a Go-0.10.8 DB (v11) is *not* readable under
   0.11.8 (`SQLITE_NOTADB`); the test now pins this as a characterization. A
   one-time v11→v12 migration is required at cutover — strategy decision tracked
