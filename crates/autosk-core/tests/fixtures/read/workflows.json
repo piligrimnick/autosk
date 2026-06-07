@@ -1,0 +1,43 @@
+[
+  {
+    "id": "wf-0001",
+    "name": "feature-dev",
+    "description": "Feature development",
+    "is_synthetic": false,
+    "first_step": "dev",
+    "steps": [
+      {
+        "id": "st-0001",
+        "name": "dev",
+        "agent_name": "@autogent/generic",
+        "next_steps": [
+          "review"
+        ],
+        "next_status": [],
+        "task_count": 1
+      },
+      {
+        "id": "st-0002",
+        "name": "review",
+        "agent_name": "human",
+        "next_steps": [
+          "dev"
+        ],
+        "next_status": [
+          "done"
+        ],
+        "task_count": 0
+      }
+    ],
+    "task_count": 1,
+    "isolation": "worktree",
+    "non_terminal_task_count": 1,
+    "non_terminal_tasks": [
+      {
+        "id": "ask-000001",
+        "status": "work",
+        "step_name": "dev"
+      }
+    ]
+  }
+]

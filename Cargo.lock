@@ -24,19 +24,30 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 name = "autosk-core"
 version = "0.0.0"
 dependencies = [
+ "autosk-proto",
  "rusqlite",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 
 [[package]]
 name = "autosk-proto"
 version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "autoskd"
 version = "0.0.0"
 dependencies = [
  "autosk-core",
+ "autosk-proto",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -293,6 +304,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]

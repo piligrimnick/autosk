@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -11,6 +12,7 @@ import (
 	"autosk/internal/buildinfo"
 	"autosk/internal/changelog"
 	"autosk/internal/daemon/client"
+	"autosk/internal/daemon/rpcclient"
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/lazy/tui"
 	"autosk/internal/store/doltlite"
@@ -33,6 +35,7 @@ func newLazyCmd() *cobra.Command {
 		sock        string
 		refresh     time.Duration
 		noChangelog bool
+		rpc         bool
 	)
 	cmd := &cobra.Command{
 		Use:   "lazy",
@@ -45,6 +48,15 @@ func newLazyCmd() *cobra.Command {
 			"--no-changelog to suppress the auto-popup.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
+
+			// RPC mode (plan §9 Phase 1): render entirely from autoskd over
+			// JSON-RPC instead of opening the local doltlite store. autoskd is
+			// auto-spawned on first use. Read-only for now (writes return an
+			// explicit error until the Phase 3 write surface lands).
+			if rpc || os.Getenv("AUTOSK_RPC") == "1" {
+				return runLazyRPC(ctx, sock, refresh, noChangelog)
+			}
+
 			store, closeFn, err := openStore(ctx, true)
 			if err != nil {
 				return err
@@ -93,7 +105,32 @@ func newLazyCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&refresh, "refresh", 2*time.Second, "panel refresh interval")
 	cmd.Flags().BoolVar(&noChangelog, "no-changelog", false,
 		"suppress the first-run-of-a-new-release changelog popup (read-only; does not modify ~/.autosk/state.json)")
+	cmd.Flags().BoolVar(&rpc, "rpc", false,
+		"render read-only from the autoskd Rust daemon over JSON-RPC (auto-spawned); also enabled by AUTOSK_RPC=1")
 	return cmd
+}
+
+// runLazyRPC runs the TUI against a read-only autoskd-backed datasource.
+// autoskd is auto-spawned by the connector on first request; the Go binary
+// opens no local doltlite store in this mode.
+func runLazyRPC(ctx context.Context, sock string, refresh time.Duration, noChangelog bool) error {
+	cwd, err := getCwd()
+	if err != nil {
+		return err
+	}
+	cli, err := rpcclient.New(rpcclient.Options{Sock: sock, Cwd: cwd})
+	if err != nil {
+		return fmt.Errorf("autoskd client: %w", err)
+	}
+	opts := tui.Options{
+		Datasource:  datasource.NewRPC(cli),
+		ProjectRoot: cwd,
+		Refresh:     refresh,
+	}
+	if !noChangelog {
+		opts.ChangelogModal = buildChangelogModal(buildinfo.Version)
+	}
+	return tui.Run(ctx, opts)
 }
 
 // buildChangelogModal decides whether to push the auto-popup on lazy

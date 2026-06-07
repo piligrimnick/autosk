@@ -1,0 +1,18 @@
+[
+  {
+    "id": 1,
+    "task_id": "ask-000001",
+    "author_id": "ag-0001",
+    "author_name": "human",
+    "text": "Kickoff note",
+    "created_at": "2023-11-14T22:15:50Z"
+  },
+  {
+    "id": 2,
+    "task_id": "ask-000001",
+    "author_id": "ag-0002",
+    "author_name": "@autogent/generic",
+    "text": "Working on it",
+    "created_at": "2023-11-14T22:16:00Z"
+  }
+]

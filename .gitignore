@@ -3,6 +3,9 @@
 *.test
 *.out
 .DS_Store
+# stray Go binaries from `go build ./cmd/autosk` (canonical output is bin/)
+/autosk
+/autoskd
 
 # Rust (autosk-core / autoskd / autosk-proto workspace) build output.
 # Cargo.lock IS committed (the workspace ships binaries).

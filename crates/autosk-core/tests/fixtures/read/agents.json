@@ -1,0 +1,28 @@
+[
+  {
+    "id": "ag-0002",
+    "name": "@autogent/generic",
+    "is_human": false,
+    "source": "db_only",
+    "version": "",
+    "model": "",
+    "thinking": "",
+    "extra_args": [],
+    "pi_skills": [],
+    "pi_ext": [],
+    "tasks_owned": 1
+  },
+  {
+    "id": "ag-0001",
+    "name": "human",
+    "is_human": true,
+    "source": "builtin",
+    "version": "",
+    "model": "",
+    "thinking": "",
+    "extra_args": [],
+    "pi_skills": [],
+    "pi_ext": [],
+    "tasks_owned": 2
+  }
+]

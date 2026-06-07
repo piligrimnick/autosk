@@ -15,6 +15,11 @@ links = "doltlite"
 # rusqlite with the bundled amalgamation DISABLED, so libsqlite3-sys links the
 # doltlite-provided sqlite (see build.rs) instead of compiling stock SQLite.
 rusqlite = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The single source of truth for the wire types the read core projects into.
+autosk-proto = { path = "../autosk-proto" }
 
 [dev-dependencies]
 tempfile = "3"
+serde_json = "1"

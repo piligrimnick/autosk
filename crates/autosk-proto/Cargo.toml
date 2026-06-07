@@ -6,7 +6,13 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
-# Phase 0 stub. The serde wire types + JSON-RPC method/notification
-# definitions (plan §5) land in Phase 1; for now this is an empty crate so the
-# workspace graph matches the target layout in docs/plans/20260607.
+# autosk-proto is the single source of truth for the JSON-RPC wire contract
+# (plan §5). It is pure serde types — no doltlite, no I/O — so it compiles with
+# plain `cargo build` and is shared by autoskd (server) and mirrored by the Go
+# and Tauri clients.
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+serde_json = "1"

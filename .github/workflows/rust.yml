@@ -1,8 +1,9 @@
 name: Rust CI
 
-# Exercises the autosk Rust workspace (Phase 0: autosk-core + autoskd/
-# autosk-proto stubs) on the two acceptance-criterion targets — linux-x64 and
-# macOS arm64 — so the doltlite 0.11.8 static link is actually verified on both.
+# Exercises the autosk Rust workspace (Phase 1: autosk-core read core +
+# autosk-proto wire contract + autoskd JSON-RPC server) on the two
+# acceptance-criterion targets — linux-x64 and macOS arm64 — so the doltlite
+# 0.11.8 static link is actually verified on both.
 #
 # This is separate from ci.yml (Go) on purpose: the Go side stays pinned to
 # doltlite 0.10.8 while the Rust side links 0.11.8, so the two pipelines fetch
@@ -89,7 +90,9 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # The real Phase 0 tests live in autosk-core (format_compat, gc_readable,
-      # gc_stress); autoskd/autosk-proto are stubs with nothing to test yet.
+      # Phase 0 tests (format_compat, gc_readable, gc_stress) plus the Phase 1
+      # read core / schema / wire-contract / daemon-RPC tests across the
+      # workspace. autosk-proto + autoskd build with plain serde (no doltlite),
+      # but autosk-core and the autoskd integration test link libdoltlite.
       - name: cargo test
-        run: cargo test -p autosk-core
+        run: cargo test --workspace

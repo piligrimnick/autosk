@@ -47,46 +47,14 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags};
 
+use crate::error::{Error, Result};
+use crate::read::{self, JobFilter, TaskFilter};
+use autosk_proto::wire;
+
 /// Busy timeout applied to every connection, matching the Go store
 /// (`internal/store/doltlite/store.go`): concurrent writers queue on the
 /// doltlite write lock instead of returning `SQLITE_BUSY` immediately.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Result alias for the spike store.
-pub type Result<T> = std::result::Result<T, Error>;
-
-/// Errors surfaced by the spike store.
-#[derive(Debug)]
-pub enum Error {
-    /// A SQLite/doltlite-level error.
-    Sqlite(rusqlite::Error),
-    /// An internal lock was poisoned by a panicking thread.
-    LockPoisoned(&'static str),
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::Sqlite(e) => write!(f, "doltlite: {e}"),
-            Error::LockPoisoned(what) => write!(f, "doltlite: {what} lock poisoned"),
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Error::Sqlite(e) => Some(e),
-            Error::LockPoisoned(_) => None,
-        }
-    }
-}
-
-impl From<rusqlite::Error> for Error {
-    fn from(e: rusqlite::Error) -> Self {
-        Error::Sqlite(e)
-    }
-}
 
 /// A single row from `tasks`, narrowed to the columns the Phase 0 golden
 /// snapshot pins. Ordered/compared deterministically for forward-compat tests.
@@ -134,6 +102,127 @@ impl Db {
             writer: Mutex::new(writer),
             idle_readers: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Opens `.autosk/db`, creating an empty doltlite (v12) file if it does not
+    /// exist. Used by the greenfield init path; the daemon's read path uses
+    /// [`Db::open`] against an already-resolved file.
+    pub fn open_or_create(path: impl AsRef<Path>) -> Result<Db> {
+        let path = path.as_ref().to_path_buf();
+        let writer = open_conn(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+        )?;
+        Ok(Db {
+            path,
+            gc_lock: RwLock::new(()),
+            writer: Mutex::new(writer),
+            idle_readers: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Runs all pending schema migrations on the writer connection (idempotent),
+    /// returning the resulting schema version. Mirrors the Go store's
+    /// `Migrate` step run by `projectmgr.openProject`.
+    pub fn migrate(&self) -> Result<i64> {
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| Error::LockPoisoned("writer"))?;
+        crate::migrate::migrate(&writer)
+    }
+
+    /// Returns the highest applied migration version, or 0.
+    pub fn schema_version(&self) -> Result<i64> {
+        self.with_read(crate::migrate::current_version)
+    }
+
+    /// Restart recovery: rewrite every `daemon_runs` row left in `running` to
+    /// `failed` with `error='daemon_restart'`, returning the count swept.
+    /// Mirrors `runstore.SweepRunningOnStartup`; run once on project open
+    /// before any poller/reader observes the rows.
+    pub fn sweep_running_on_startup(&self) -> Result<i64> {
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| Error::LockPoisoned("writer"))?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let n = writer.execute(
+            "UPDATE daemon_runs \
+                SET status = 'failed', \
+                    error  = COALESCE(NULLIF(error,''), 'daemon_restart'), \
+                    finished_at = COALESCE(finished_at, ?1), \
+                    pid    = NULL \
+              WHERE status = 'running'",
+            rusqlite::params![now],
+        )?;
+        Ok(n as i64)
+    }
+
+    // ---- read surface (plan §5). Each runs under the GC read guard. --------
+
+    /// `task.list` — enriched task views matching `filter`.
+    pub fn task_list(&self, filter: &TaskFilter) -> Result<Vec<wire::TaskView>> {
+        self.with_read(|conn| read::task_list(conn, filter))
+    }
+
+    /// `task.get` — one enriched task view, or [`Error::NotFound`].
+    pub fn task_get(&self, id: &str) -> Result<wire::TaskView> {
+        self.with_read(|conn| read::task_get(conn, id))
+    }
+
+    /// `task.ready` — the ready set (status='new', no open blocker).
+    pub fn task_ready(&self, limit: i64) -> Result<Vec<wire::TaskView>> {
+        self.with_read(|conn| read::task_ready(conn, limit))
+    }
+
+    /// `comment.list` — a task's comment thread, oldest first.
+    pub fn comment_list(&self, task_id: &str) -> Result<Vec<wire::Comment>> {
+        self.with_read(|conn| read::comment_list(conn, task_id))
+    }
+
+    /// `workflow.list` — workflows + steps + per-step task counts.
+    pub fn workflow_list(&self, include_synthetic: bool) -> Result<Vec<wire::Workflow>> {
+        self.with_read(|conn| read::workflow_list(conn, include_synthetic))
+    }
+
+    /// `workflow.get` — one workflow by name, or [`Error::NotFound`].
+    pub fn workflow_get(&self, name: &str) -> Result<wire::Workflow> {
+        self.with_read(|conn| read::workflow_get(conn, name))
+    }
+
+    /// `agent.list` — agents + package metadata + tasks-owned counts.
+    pub fn agent_list(&self) -> Result<Vec<wire::Agent>> {
+        self.with_read(read::agent_list)
+    }
+
+    /// `job.list` — daemon_runs decorated with workflow/step/agent labels.
+    pub fn job_list(&self, filter: &JobFilter) -> Result<Vec<wire::Job>> {
+        self.with_read(|conn| read::job_list(conn, filter))
+    }
+
+    /// `job.get` — one decorated job, or [`Error::NotFound`].
+    pub fn job_get(&self, id: &str) -> Result<wire::Job> {
+        self.with_read(|conn| read::job_get(conn, id))
+    }
+
+    /// `signal.forTask` — every step_signals row for a task, newest first.
+    pub fn signal_for_task(&self, task_id: &str) -> Result<Vec<wire::Signal>> {
+        self.with_read(|conn| read::signal_for_task(conn, task_id))
+    }
+
+    /// `signal.forJob` — step_signals rows for a single run, newest first.
+    pub fn signal_for_job(&self, job_id: &str) -> Result<Vec<wire::Signal>> {
+        self.with_read(|conn| read::signal_for_job(conn, job_id))
+    }
+
+    /// Returns the run's `session_path` (for `job.messages`), or
+    /// [`Error::NotFound`] if the run is unknown.
+    pub fn job_session_path(&self, job_id: &str) -> Result<Option<String>> {
+        self.with_read(|conn| read::job_session_path(conn, job_id))
     }
 
     /// The on-disk path this handle was opened against.
