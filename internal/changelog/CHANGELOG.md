@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **autoskd:** new Rust daemon binary serving the read-only task/job/workflow/agent/comment/signal surface over JSON-RPC on a Unix socket, with `autoskd serve` / `init` / `version` / `engine` subcommands (ask-d8f735).
+- **lazy:** `autosk lazy --rpc` (and `AUTOSK_RPC=1`) renders the read-only TUI from an auto-spawned `autoskd` daemon over JSON-RPC instead of opening the local store (ask-d8f735).
+
 ### Changed
 - **bootstrap:** `feature-dev-generic` workflow now ships with `isolation: worktree` by default.
 
