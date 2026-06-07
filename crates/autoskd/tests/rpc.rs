@@ -11,6 +11,7 @@ use std::sync::Arc;
 use autosk_core::projectmgr::Manager;
 use autosk_core::registry::Registry;
 use autosk_core::{migrate, Db};
+use autoskd::daemon::{Daemon, DaemonConfig};
 use autoskd::server::Server;
 use autoskd::uds;
 use serde_json::{json, Value};
@@ -26,7 +27,7 @@ INSERT INTO step_transitions(step_id,next_step_id,task_status,prompt_rule) VALUE
  ('st-0001','st-0002',NULL,'full'),('st-0002',NULL,'done','full');\
 INSERT INTO tasks(id,title,description,status,priority,author_id,workflow_id,current_step_id,metadata,created_at,updated_at) VALUES\
  ('ask-000001','Build read core','',\
-   'work',1,'ag-0001','wf-0001','st-0001',NULL,1700000100,1700000200),\
+   'human',1,'ag-0001','wf-0001','st-0001',NULL,1700000100,1700000200),\
  ('ask-000002','Write docs','','new',2,'ag-0001',NULL,NULL,NULL,1700000101,1700000101);\
 INSERT INTO comments(task_id,author_id,text,created_at) VALUES\
  ('ask-000001','ag-0001','Kickoff',1700000150);\
@@ -40,9 +41,17 @@ struct Harness {
     proj_dir: tempfile::TempDir,
     _reg_dir: tempfile::TempDir,
     _sock_dir: tempfile::TempDir,
+    daemon: Arc<Daemon>,
     conn: BufReader<UnixStream>,
     writer: UnixStream,
     next_id: u64,
+}
+
+impl Drop for Harness {
+    fn drop(&mut self) {
+        // Stop pollers/compactor/scheduler before the tempdirs vanish.
+        self.daemon.shutdown();
+    }
 }
 
 impl Harness {
@@ -64,11 +73,22 @@ impl Harness {
         let reg_dir = tempfile::tempdir().unwrap();
         let registry = Arc::new(Registry::open_at(reg_dir.path().join("projects.json")));
         let mgr = Arc::new(Manager::new());
+        // A long poll interval keeps the (intentionally non-driveable, human)
+        // fixture quiet; the daemon still wires the full Phase-2 mesh.
+        let daemon = Daemon::new(
+            mgr,
+            registry,
+            DaemonConfig {
+                poll_interval: std::time::Duration::from_secs(3600),
+                gc_interval: None,
+                ..DaemonConfig::default()
+            },
+        );
 
         let sock_dir = tempfile::tempdir().unwrap();
         let sock = sock_dir.path().join("d.sock");
         let listener = uds::listen(&sock).expect("bind");
-        let server = Arc::new(Server::new(mgr, registry));
+        let server = Arc::new(Server::new(Arc::clone(&daemon)));
         std::thread::spawn(move || server.serve(listener));
 
         // Connect (the socket is listenable as soon as bind returned).
@@ -78,6 +98,7 @@ impl Harness {
             proj_dir,
             _reg_dir: reg_dir,
             _sock_dir: sock_dir,
+            daemon,
             conn: BufReader::new(stream),
             writer,
             next_id: 0,
@@ -131,7 +152,7 @@ fn serves_meta_and_read_surface() {
 
     // ---- meta ----
     let version = h.result("version", Value::Null);
-    assert!(version["version"].as_str().unwrap().contains("phase1"));
+    assert!(version["version"].as_str().unwrap().contains("phase"));
 
     let health = h.result("healthz", Value::Null);
     assert_eq!(health["ok"], json!(true), "liveness probe");

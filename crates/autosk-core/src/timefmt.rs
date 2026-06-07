@@ -9,6 +9,15 @@
 //! Hinnant's `civil_from_days` algorithm — the same one `<chrono>` and Go's
 //! `time` package use internally — so the result is correct for any year.
 
+/// Current wall-clock time as whole unix seconds (the on-disk timestamp
+/// granularity). Mirrors Go's `time.Now().Unix()`.
+pub fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Formats a unix-second timestamp as an RFC3339 UTC string with whole-second
 /// precision (`YYYY-MM-DDTHH:MM:SSZ`).
 pub fn rfc3339_utc(unix: i64) -> String {

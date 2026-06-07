@@ -25,6 +25,24 @@ pub enum Error {
     /// could not be parsed. Surfaced (never silently coerced to empty) so a
     /// partial/hand-edited file is not clobbered on the next `add`.
     Registry(String),
+    /// Entering a workflow step would cross its `max_visits` cap. `visits` is
+    /// the count BEFORE the would-be increment (mirror of Go's
+    /// `workflow.MaxVisitsExceededError`).
+    MaxVisitsExceeded {
+        step_id: String,
+        step_name: String,
+        visits: i64,
+        max: i64,
+    },
+}
+
+impl Error {
+    /// True for the [`Error::MaxVisitsExceeded`] cap error (the Rust analogue
+    /// of `errors.As(err, &MaxVisitsExceededError{})`, which the executor uses
+    /// to surface the documented `step_max_visits_exceeded:` run error).
+    pub fn is_max_visits_exceeded(&self) -> bool {
+        matches!(self, Error::MaxVisitsExceeded { .. })
+    }
 }
 
 impl std::fmt::Display for Error {
@@ -38,6 +56,15 @@ impl std::fmt::Display for Error {
             Error::ProjectNotFound(s) => write!(f, "project not found: {s}"),
             Error::InvalidProject(s) => write!(f, "invalid project selector: {s}"),
             Error::Registry(s) => write!(f, "registry: {s}"),
+            Error::MaxVisitsExceeded {
+                step_name,
+                visits,
+                max,
+                ..
+            } => write!(
+                f,
+                "step_max_visits_exceeded: step {step_name:?} reached visits={visits} max={max}"
+            ),
         }
     }
 }

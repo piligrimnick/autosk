@@ -212,6 +212,29 @@ pub struct VersionInfo {
     pub commit: String,
 }
 
+/// One `job-event` server→client notification payload (plan §4.1 streaming).
+/// `kind` is `message` | `status` | `done` | `error`, mirroring the old SSE
+/// frames: `message` carries one transcript [`MessageEvent`] + a monotonic
+/// `event_id` (the replay cursor / `Last-Event-ID` analogue); `status`/`done`
+/// carry the decorated [`Job`]; `error` carries a message.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct JobEvent {
+    pub kind: String,
+    pub job_id: String,
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub event_id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<MessageEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job: Option<Job>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error: String,
+}
+
+fn is_zero_i64(n: &i64) -> bool {
+    *n == 0
+}
+
 /// `project.list` / `project.add` element. Backed by the persisted registry at
 /// `~/.autosk/projects.json` (plan §7.4).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

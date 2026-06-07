@@ -15,12 +15,13 @@ use std::sync::Arc;
 use autosk_core::projectmgr::Manager;
 use autosk_core::registry::Registry;
 
+use autoskd::daemon::{Daemon, DaemonConfig};
 use autoskd::server::Server;
 use autoskd::uds;
 
 const VERSION: &str = match option_env!("AUTOSKD_VERSION") {
     Some(v) => v,
-    None => "0.1.0-phase1",
+    None => "0.2.0-phase2",
 };
 
 fn main() {
@@ -60,11 +61,32 @@ fn print_usage() {
 
 fn cmd_serve(args: Vec<String>) -> i32 {
     let mut sock_override: Option<String> = None;
+    let mut cfg = DaemonConfig::default();
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--sock" => sock_override = it.next(),
             s if s.starts_with("--sock=") => sock_override = Some(s["--sock=".len()..].to_string()),
+            "--workers" => {
+                if let Some(v) = it.next().and_then(|s| s.parse().ok()) {
+                    cfg.workers = v;
+                }
+            }
+            s if s.starts_with("--workers=") => {
+                if let Ok(v) = s["--workers=".len()..].parse() {
+                    cfg.workers = v;
+                }
+            }
+            "--gc-interval" => cfg.gc_interval = it.next().and_then(|s| parse_gc(&s)),
+            s if s.starts_with("--gc-interval=") => {
+                cfg.gc_interval = parse_gc(&s["--gc-interval=".len()..])
+            }
+            "--pi-bin" => {
+                if let Some(v) = it.next() {
+                    cfg.pi_bin = v;
+                }
+            }
+            s if s.starts_with("--pi-bin=") => cfg.pi_bin = s["--pi-bin=".len()..].to_string(),
             other => {
                 eprintln!("autoskd serve: unexpected argument {other:?}");
                 return 2;
@@ -102,12 +124,39 @@ fn cmd_serve(args: Vec<String>) -> i32 {
         }
     };
     let mgr = Arc::new(Manager::new());
+    let daemon = Daemon::new(mgr, registry, cfg);
     eprintln!("autoskd {VERSION}: listening on {}", sock.display());
-    let server = Arc::new(Server::new(mgr, registry));
+    let server = Arc::new(Server::new(Arc::clone(&daemon)));
     server.serve(listener);
     // serve() returns only when the listener closes.
+    daemon.shutdown();
     uds::cleanup(&sock);
     0
+}
+
+/// Parses a `--gc-interval` value: `0` (and negatives) → disabled (`None`);
+/// `<n>` or `<n>s` → seconds; `<n>m` → minutes; `<n>h` → hours.
+fn parse_gc(s: &str) -> Option<std::time::Duration> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Some(std::time::Duration::from_secs(30 * 60));
+    }
+    if s.starts_with('-') || s == "0" {
+        return None;
+    }
+    let (num, mult) = if let Some(n) = s.strip_suffix('h') {
+        (n, 3600)
+    } else if let Some(n) = s.strip_suffix('m') {
+        (n, 60)
+    } else if let Some(n) = s.strip_suffix('s') {
+        (n, 1)
+    } else {
+        (s, 1)
+    };
+    num.trim()
+        .parse::<u64>()
+        .ok()
+        .map(|v| std::time::Duration::from_secs(v * mult))
 }
 
 fn cmd_init(args: &[String]) -> i32 {

@@ -334,6 +334,155 @@ impl Db {
     }
 }
 
+// ---- executor-side store surface (Phase 2) --------------------------------
+//
+// Every op below runs on the SINGLE writer connection via `with_write`, so a
+// read observes the executor's own preceding writes — the Rust analogue of
+// the Go store's `SetMaxOpenConns(1)` read-your-writes lane. (The Phase-1 RPC
+// read surface keeps using the reader pool; doltlite makes the writer's
+// autocommitted changes visible there too.)
+impl Db {
+    // tasks -----------------------------------------------------------------
+
+    /// `GetTask`.
+    pub fn task_get_row(&self, id: &str) -> Result<crate::tasks::Task> {
+        self.with_write(|conn| crate::tasks::get_task(conn, id))
+    }
+
+    /// `CreateTask` (bootstrap/enroll/tests).
+    pub fn task_create(&self, t: crate::tasks::Task) -> Result<crate::tasks::Task> {
+        self.with_write(|conn| crate::tasks::create_task(conn, t))
+    }
+
+    /// `UpdateTask`.
+    pub fn task_update(&self, id: &str, p: &crate::tasks::TaskPatch) -> Result<crate::tasks::Task> {
+        self.with_write(|conn| crate::tasks::update_task(conn, id, p))
+    }
+
+    // daemon_runs -----------------------------------------------------------
+
+    pub fn run_create(&self, nr: &crate::runstore::NewRun) -> Result<crate::runstore::Run> {
+        self.with_write(|conn| crate::runstore::create_run(conn, nr))
+    }
+    pub fn run_get(&self, job_id: &str) -> Result<crate::runstore::Run> {
+        self.with_write(|conn| crate::runstore::get_run(conn, job_id))
+    }
+    pub fn run_list(&self, f: &crate::runstore::RunFilter) -> Result<Vec<crate::runstore::Run>> {
+        self.with_write(|conn| crate::runstore::list_runs(conn, f))
+    }
+    pub fn run_mark_running(&self, job_id: &str, pid: i64) -> Result<crate::runstore::Run> {
+        self.with_write(|conn| crate::runstore::mark_running(conn, job_id, pid))
+    }
+    pub fn run_mark_done(
+        &self,
+        job_id: &str,
+        exit_code: i64,
+        transition_id: Option<i64>,
+    ) -> Result<crate::runstore::Run> {
+        self.with_write(|conn| crate::runstore::mark_done(conn, job_id, exit_code, transition_id))
+    }
+    pub fn run_mark_failed(
+        &self,
+        job_id: &str,
+        exit_code: Option<i64>,
+        err_msg: &str,
+    ) -> Result<crate::runstore::Run> {
+        self.with_write(|conn| crate::runstore::mark_failed(conn, job_id, exit_code, err_msg))
+    }
+    pub fn run_mark_cancelled(
+        &self,
+        job_id: &str,
+        exit_code: Option<i64>,
+    ) -> Result<crate::runstore::Run> {
+        self.with_write(|conn| crate::runstore::mark_cancelled(conn, job_id, exit_code))
+    }
+    pub fn run_set_pid(&self, job_id: &str, pid: i64) -> Result<()> {
+        self.with_write(|conn| crate::runstore::set_pid(conn, job_id, pid))
+    }
+    pub fn run_set_pi_session(
+        &self,
+        job_id: &str,
+        session_id: &str,
+        session_path: &str,
+    ) -> Result<()> {
+        self.with_write(|conn| {
+            crate::runstore::set_pi_session(conn, job_id, session_id, session_path)
+        })
+    }
+    pub fn run_inc_corrections(&self, job_id: &str) -> Result<i64> {
+        self.with_write(|conn| crate::runstore::inc_corrections(conn, job_id))
+    }
+
+    // step_signals ----------------------------------------------------------
+
+    /// `step.Emit` — used by the agent-side `step next` path (and the
+    /// behavioural-parity harness to simulate the agent).
+    pub fn signal_emit(
+        &self,
+        task_id: &str,
+        target: &str,
+    ) -> std::result::Result<crate::signals::Emitted, crate::signals::SignalError> {
+        // with_read/with_write require a Result<_, Error>; emit returns its own
+        // error type, so run the closure directly under the writer mutex.
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| crate::signals::SignalError::Core(Error::LockPoisoned("writer")))?;
+        crate::signals::emit(&writer, task_id, target)
+    }
+
+    /// `step.GetForRun`.
+    pub fn signal_for_run(
+        &self,
+        run_id: &str,
+    ) -> std::result::Result<crate::signals::Emitted, crate::signals::SignalError> {
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| crate::signals::SignalError::Core(Error::LockPoisoned("writer")))?;
+        crate::signals::get_for_run(&writer, run_id)
+    }
+
+    // workflow reads --------------------------------------------------------
+
+    pub fn wf_find_step_by_id(&self, step_id: &str) -> Result<crate::wfengine::Step> {
+        self.with_write(|conn| crate::wfengine::find_step_by_id(conn, step_id))
+    }
+    pub fn wf_find_step_by_name(
+        &self,
+        workflow_id: &str,
+        name: &str,
+    ) -> Result<crate::wfengine::Step> {
+        self.with_write(|conn| crate::wfengine::find_step_by_name(conn, workflow_id, name))
+    }
+    pub fn wf_get_by_id(&self, workflow_id: &str) -> Result<crate::wfengine::WorkflowMeta> {
+        self.with_write(|conn| crate::wfengine::get_workflow_by_id(conn, workflow_id))
+    }
+
+    // comments --------------------------------------------------------------
+
+    pub fn comments_render_for_prompt(&self, task_id: &str) -> Result<Vec<String>> {
+        self.with_write(|conn| crate::read::render_comments_for_prompt(conn, task_id))
+    }
+}
+
+impl crate::wfengine::TaskWriter for Db {
+    fn get_task(&self, id: &str) -> Result<crate::tasks::Task> {
+        self.task_get_row(id)
+    }
+    fn update_task(&self, id: &str, p: &crate::tasks::TaskPatch) -> Result<crate::tasks::Task> {
+        self.task_update(id, p)
+    }
+    fn update_metadata_and_patch(
+        &self,
+        id: &str,
+        f: &mut dyn FnMut(&mut serde_json::Map<String, serde_json::Value>) -> Result<()>,
+        p: &crate::tasks::TaskPatch,
+    ) -> Result<crate::tasks::Task> {
+        self.with_write(|conn| crate::tasks::update_metadata_and_patch(conn, id, |m| f(m), p))
+    }
+}
+
 /// Reads `tasks` (narrowed) ordered by id.
 fn list_tasks(conn: &Connection) -> Result<Vec<TaskRow>> {
     let mut stmt = conn.prepare("SELECT id, title, status, priority FROM tasks ORDER BY id")?;

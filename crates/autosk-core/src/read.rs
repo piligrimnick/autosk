@@ -361,6 +361,17 @@ pub fn comment_list(conn: &Connection, task_id: &str) -> Result<Vec<wire::Commen
     collect(rows)
 }
 
+/// `RenderForPrompt` — a task's comments as `[author@RFC3339]: text` lines,
+/// oldest first (mirror of `comments.RenderForPrompt`). Used by the executor
+/// to inline the comment trail into the step prompt.
+pub fn render_comments_for_prompt(conn: &Connection, task_id: &str) -> Result<Vec<String>> {
+    let comments = comment_list(conn, task_id)?;
+    Ok(comments
+        .into_iter()
+        .map(|c| format!("[{}@{}]: {}", c.author_name, c.created_at, c.text))
+        .collect())
+}
+
 // ---- agents ---------------------------------------------------------------
 
 /// `agent.list` — agents + tasks-owned counts. Human → `source="builtin"`;

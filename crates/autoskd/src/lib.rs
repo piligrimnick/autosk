@@ -2,5 +2,6 @@
 //! binding, exposed so integration tests can drive the server in-process. The
 //! binary (`main.rs`) is a thin CLI over these.
 
+pub mod daemon;
 pub mod server;
 pub mod uds;

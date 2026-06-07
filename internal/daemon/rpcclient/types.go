@@ -265,6 +265,22 @@ func (c *Client) GetJob(ctx context.Context, id string) (Job, error) {
 	return out, err
 }
 
+// CancelJob cancels a running or queued job (SIGTERM→grace→SIGKILL for a live
+// run; mark cancelled when only queued) and returns the decorated job.
+func (c *Client) CancelJob(ctx context.Context, jobID string) (Job, error) {
+	var out Job
+	err := c.call(ctx, "job.cancel", c.selector(map[string]any{"job_id": jobID}), &out)
+	return out, err
+}
+
+// HealthzAll returns the cross-project aggregate health (every loaded project),
+// independent of this client's project selector.
+func (c *Client) HealthzAll(ctx context.Context) (Health, error) {
+	var out Health
+	err := c.call(ctx, "healthz", map[string]any{"all": true}, &out)
+	return out, err
+}
+
 // Messages returns a job's archived transcript events.
 func (c *Client) Messages(ctx context.Context, jobID string, full bool, limit int) ([]api.MessageEvent, error) {
 	extra := map[string]any{"job_id": jobID, "full": full}
