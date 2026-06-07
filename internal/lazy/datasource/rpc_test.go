@@ -152,16 +152,36 @@ func TestRPC_MapsReadSurface(t *testing.T) {
 	}
 }
 
-func TestRPC_WritesAreRejected(t *testing.T) {
-	ds := fakeDaemon(t, nil)
+// TestRPC_WritesDispatch confirms the RPC datasource now ISSUES write RPCs
+// (Phase 3a) rather than rejecting them — the inverse of the old Phase-1
+// read-only assertion. The fake daemon returns canned wire shapes for the write
+// methods; the datasource must dispatch and map them without error.
+func TestRPC_WritesDispatch(t *testing.T) {
+	ds := fakeDaemon(t, map[string]any{
+		"task.create": map[string]any{
+			"id": "ask-000009", "title": "t", "status": "new", "priority": 2,
+			"blocked_by": []any{}, "blocks": []any{},
+			"created_at": "2023-11-14T22:15:00Z", "updated_at": "2023-11-14T22:15:00Z",
+		},
+		"task.setStatus": map[string]any{
+			"id": "ask-1", "title": "x", "status": "done",
+			"blocked_by": []any{}, "blocks": []any{},
+			"created_at": "2023-11-14T22:15:00Z", "updated_at": "2023-11-14T22:15:00Z",
+		},
+		"comment.add": map[string]any{
+			"id": 1, "task_id": "ask-1", "author_id": "ag-0001", "author_name": "human",
+			"text": "hi", "created_at": "2023-11-14T22:15:00Z",
+		},
+	})
 	ctx := context.Background()
-	if _, err := ds.CreateTask(ctx, "t", "", 2); err != ErrReadOnlyRPC {
-		t.Errorf("CreateTask err = %v, want ErrReadOnlyRPC", err)
+	id, err := ds.CreateTask(ctx, "t", "", 2)
+	if err != nil || id != "ask-000009" {
+		t.Errorf("CreateTask id=%q err=%v, want ask-000009/nil", id, err)
 	}
-	if err := ds.UpdateStatus(ctx, "ask-1", store.StatusDone); err != ErrReadOnlyRPC {
-		t.Errorf("UpdateStatus err = %v, want ErrReadOnlyRPC", err)
+	if err := ds.UpdateStatus(ctx, "ask-1", store.StatusDone); err != nil {
+		t.Errorf("UpdateStatus err = %v, want nil", err)
 	}
-	if err := ds.AddComment(ctx, "ask-1", "hi"); err != ErrReadOnlyRPC {
-		t.Errorf("AddComment err = %v, want ErrReadOnlyRPC", err)
+	if err := ds.AddComment(ctx, "ask-1", "hi"); err != nil {
+		t.Errorf("AddComment err = %v, want nil", err)
 	}
 }

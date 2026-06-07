@@ -2,7 +2,6 @@ package datasource
 
 import (
 	"context"
-	"errors"
 	"os"
 	"time"
 
@@ -14,23 +13,16 @@ import (
 // dialect + behaviour (plan §7.5).
 const lazySource = "lazy"
 
-// RPC is a read-only Datasource backed by the autoskd JSON-RPC client
-// (plan §9 Phase 1: "point a read-only lazy at autoskd"). Reads route to the
-// daemon over the UDS (auto-spawning it on first use); writes return
-// ErrReadOnlyRPC because the write surface lands in Phase 3.
-//
-// This is the seam that lets `autosk lazy` render entirely from autoskd before
-// the Go front-ends lose their direct doltlite access. Once the write RPCs
-// exist, RPC absorbs them and the Offline/Live/Compose split is deleted.
+// RPC is the Datasource backed by the autoskd JSON-RPC client (plan §7.5: the
+// single RPC-client Datasource impl). Reads AND writes route to the daemon over
+// the UDS (auto-spawning it on first use); every write carries the `lazy`
+// source discriminator so the daemon reproduces lazy's dolt_commit dialect +
+// behaviour. Streaming (`StreamLive`) lands with the Phase 2 job.subscribe tail.
 type RPC struct {
 	cli *rpcclient.Client
 }
 
-// ErrReadOnlyRPC is returned by every write verb while autoskd only serves the
-// Phase 1 read surface.
-var ErrReadOnlyRPC = errors.New("read-only RPC mode (Phase 1): writes land in a later phase")
-
-// NewRPC wires a read-only datasource over an autoskd client.
+// NewRPC wires a datasource over an autoskd client.
 func NewRPC(cli *rpcclient.Client) *RPC { return &RPC{cli: cli} }
 
 // Compile-time check that RPC satisfies the full TUI contract.
