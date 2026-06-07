@@ -9,10 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **autoskd:** new Rust daemon binary serving the read-only task/job/workflow/agent/comment/signal surface over JSON-RPC on a Unix socket, with `autoskd serve` / `init` / `version` / `engine` subcommands (ask-d8f735).
+- **autoskd:** now drives workflows end-to-end natively — a per-project poller, a global worker-pool scheduler, the step executor (turn loop, kickback, worktree isolation, idle-timeout), and the compactor — plus a live job surface (`job.subscribe` transcript streaming with replay+tail, `job.input` prompt/steer/follow_up, `job.abort`, `job.cancel`) (ask-2e7e27).
 - **lazy:** `autosk lazy --rpc` (and `AUTOSK_RPC=1`) renders the read-only TUI from an auto-spawned `autoskd` daemon over JSON-RPC instead of opening the local store (ask-d8f735).
 
 ### Changed
 - **bootstrap:** `feature-dev-generic` workflow now ships with `isolation: worktree` by default.
+- **daemon:** `autosk daemon status | messages | cancel | list` now route to the `autoskd` daemon over JSON-RPC instead of the retired Go daemon (ask-2e7e27).
+
+### Removed
+- **daemon:** the Go `autosk daemon serve` verb is retired — `autoskd` now drives workflows (ask-2e7e27).
 
 ### Fixed
 - **daemon:** fix empty lazy transcript and `HTTP 410 session_missing` from `daemon messages <job>`

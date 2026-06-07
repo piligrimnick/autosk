@@ -283,6 +283,78 @@ fn job_input_dispatches_per_streaming_state_with_retry() {
 }
 
 #[test]
+fn job_cancel_marks_queued_run_cancelled() {
+    let env = setup();
+    // A queued run with NO live runner (never picked up by a worker).
+    let run = env
+        .db
+        .run_create(&NewRun {
+            task_id: "ask-000001".into(),
+            step_id: "st".into(),
+            max_corrections: 3,
+        })
+        .unwrap();
+    assert_eq!(env.db.run_get(&run.job_id).unwrap().status, "queued");
+
+    let s = connect(&env.sock);
+    let mut w = s.try_clone().unwrap();
+    let mut conn = BufReader::new(s);
+    let r = call(
+        &mut conn,
+        &mut w,
+        1,
+        "job.cancel",
+        json!({"cwd": env.cwd, "job_id": run.job_id}),
+    );
+    assert!(r.get("error").is_none(), "job.cancel errored: {r}");
+    // The queued row is marked cancelled directly — regardless of scheduler
+    // active state — so a worker can't later pick it up.
+    assert_eq!(env.db.run_get(&run.job_id).unwrap().status, "cancel");
+    assert_eq!(r["result"]["status"], json!("cancel"), "{r}");
+}
+
+#[test]
+fn job_cancel_running_is_safe_and_idempotent() {
+    let env = setup();
+    let fake = FakeRunner::new();
+    let job = running_run(&env, Arc::clone(&fake));
+    assert_eq!(env.db.run_get(&job).unwrap().status, "running");
+
+    let s = connect(&env.sock);
+    let mut w = s.try_clone().unwrap();
+    let mut conn = BufReader::new(s);
+
+    // job.cancel on a running run fires the (no-op here, not scheduler-active)
+    // cancel token and must NOT force-mark a running run terminal: the executor
+    // owns that transition once its token fires.
+    let r = call(
+        &mut conn,
+        &mut w,
+        1,
+        "job.cancel",
+        json!({"cwd": env.cwd, "job_id": job}),
+    );
+    assert!(r.get("error").is_none(), "job.cancel errored: {r}");
+    assert_eq!(
+        env.db.run_get(&job).unwrap().status,
+        "running",
+        "a running run is not force-marked by the RPC"
+    );
+
+    // Once the executor has marked it terminal, job.cancel is idempotent.
+    env.db.run_mark_done(&job, 0, None).unwrap();
+    let r = call(
+        &mut conn,
+        &mut w,
+        2,
+        "job.cancel",
+        json!({"cwd": env.cwd, "job_id": job}),
+    );
+    assert!(r.get("error").is_none(), "idempotent cancel errored: {r}");
+    assert_eq!(r["result"]["status"], json!("done"), "{r}");
+}
+
+#[test]
 fn job_abort_reaches_live_runner() {
     let env = setup();
     let fake = FakeRunner::new();

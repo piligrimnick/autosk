@@ -1,7 +1,7 @@
 // SSE streaming primitives for the autosk daemon client.
 //
-// The daemon emits one of four SSE event kinds (see
-// internal/daemon/server/sse.go): message, status, done, error.
+// The daemon emits one of four SSE event kinds (now served natively by
+// autoskd — see crates/autoskd/src/server.rs): message, status, done, error.
 // This file parses the raw text/event-stream into a typed Event union
 // and exposes Stream() as the single entry point the TUI consumes.
 //
@@ -40,7 +40,8 @@ import (
 type StreamOptions struct {
 	// Attach, when true, opens the stream with ?attach=true so the
 	// daemon's attach counter is incremented for the lifetime of the
-	// connection (see server/sse.go). The TUI always passes Attach=true.
+	// connection (see crates/autoskd/src/server.rs). The TUI always passes
+	// Attach=true.
 	Attach bool
 	// Full, when true, replays the entire transcript before tailing.
 	// Mutually exclusive with Limit in semantics — when Full is set

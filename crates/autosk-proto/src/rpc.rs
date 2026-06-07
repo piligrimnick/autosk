@@ -91,4 +91,10 @@ pub mod error_codes {
     pub const INVALID_PROJECT: i64 = 1002;
     /// A requested entity (task/job/…) was not found.
     pub const NOT_FOUND: i64 = 1003;
+    /// The entity exists but is not in a state that accepts the request right
+    /// now — e.g. a job whose run is terminal, or a queued run whose live
+    /// runner has not spawned yet. The Go API surfaced this as HTTP 409
+    /// Conflict; it is RETRYABLE (the caller may try again shortly), unlike a
+    /// malformed-params [`INVALID_PARAMS`]. Mirror of the daemon's 409.
+    pub const CONFLICT: i64 = 1004;
 }

@@ -61,6 +61,17 @@ impl Subscription {
     }
 }
 
+impl Drop for Subscription {
+    /// Safety net for stream teardown: if `handle_conn` unwinds (e.g. a
+    /// poisoned-mutex panic in `write_line`/`write_note`) before the explicit
+    /// `subs.drain()`, dropping the map here still stops the stream thread and
+    /// releases its [`AttachGuard`] — so the attach count can never get pinned
+    /// `> 0` and disarm a job's idle-timeout forever. Mirrors Go's `defer rel()`.
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
 impl Server {
     pub fn new(daemon: Arc<Daemon>) -> Server {
         Server { daemon }
@@ -351,10 +362,15 @@ impl Server {
             project: proj.root.clone(),
             id: p.job_id.clone(),
         };
-        let was_active = self.daemon.scheduler.cancel(&job);
-        if !was_active && run.status == runstore::ST_QUEUED {
-            // Queued but never picked up: mark cancelled directly so a worker
-            // doesn't later pick up a cancelled run.
+        // Fire the per-job cancel token (interrupts a running executor; no-op
+        // when not active). For a queued run, mark it cancelled directly —
+        // REGARDLESS of the active result — so a worker can't later pick up a
+        // cancelled row. Doing this unconditionally for queued runs (not gated
+        // on `!was_active`) mirrors Go and closes the tiny window where the run
+        // is in the scheduler's `active` map while its DB row still reads
+        // 'queued'.
+        let _was_active = self.daemon.scheduler.cancel(&job);
+        if run.status == runstore::ST_QUEUED {
             let _ = proj.db.run_mark_cancelled(&p.job_id, None);
         }
         let mut decorated = proj.db.job_get(&p.job_id).map_err(core_err)?;
@@ -367,10 +383,11 @@ impl Server {
         let proj = self.resolve(&p.cwd, &p.db_path)?;
         let run = proj.db.run_get(&p.job_id).map_err(core_err)?;
         if runstore::is_terminal(&run.status) {
+            // Retryable-not-applicable, not a malformed request: mirror Go's 409.
             return Err(ErrorObject {
-                code: codes::INVALID_PARAMS,
+                code: codes::CONFLICT,
                 message: "run is terminal".into(),
-                details: Some(serde_json::json!({"status": run.status})),
+                details: Some(serde_json::json!({"status": run.status, "retry": false})),
             });
         }
         let handle = self
@@ -378,9 +395,9 @@ impl Server {
             .runners
             .get(&p.job_id)
             .ok_or_else(|| ErrorObject {
-                code: codes::INVALID_PARAMS,
-                message: "runner not registered for job".into(),
-                details: Some(serde_json::json!({"job_id": p.job_id})),
+                code: codes::CONFLICT,
+                message: "runner not registered for job (not ready yet)".into(),
+                details: Some(serde_json::json!({"job_id": p.job_id, "retry": true})),
             })?;
         handle
             .abort(&autosk_core::ctx::Ctx::background())
@@ -414,10 +431,11 @@ impl Server {
         }
         let run = proj.db.run_get(&p.job_id).map_err(core_err)?;
         if runstore::is_terminal(&run.status) {
+            // Retryable-not-applicable, not a malformed request: mirror Go's 409.
             return Err(ErrorObject {
-                code: codes::INVALID_PARAMS,
+                code: codes::CONFLICT,
                 message: "run is terminal".into(),
-                details: Some(serde_json::json!({"status": run.status})),
+                details: Some(serde_json::json!({"status": run.status, "retry": false})),
             });
         }
         let handle = self
@@ -425,9 +443,9 @@ impl Server {
             .runners
             .get(&p.job_id)
             .ok_or_else(|| ErrorObject {
-                code: codes::INVALID_PARAMS,
-                message: "runner not registered for job".into(),
-                details: Some(serde_json::json!({"job_id": p.job_id})),
+                code: codes::CONFLICT,
+                message: "runner not registered for job (not ready yet)".into(),
+                details: Some(serde_json::json!({"job_id": p.job_id, "retry": true})),
             })?;
         let dispatched = dispatch_input(&*handle, &p.message, &p.streaming_behavior)?;
         Ok(serde_json::json!({"job_id": p.job_id, "dispatched": dispatched}))
@@ -461,9 +479,22 @@ impl Server {
                 }
             }
         };
-        // Validate the job exists up-front (so a typo gets an error, not silence).
-        if proj.db.run_get(&p.job_id).is_err() {
-            return Response::err(req.id, codes::NOT_FOUND, "job not found");
+        // Validate the job exists up-front (so a typo gets an error, not
+        // silence). Discriminate a genuine not-found from a transient DB error
+        // so a read failure isn't mis-reported to the client as a missing job
+        // (mirror of Go's 404-vs-500 split).
+        match proj.db.run_get(&p.job_id) {
+            Ok(_) => {}
+            Err(CoreError::NotFound) => {
+                return Response::err(req.id, codes::NOT_FOUND, "job not found")
+            }
+            Err(e) => {
+                return Response {
+                    id: req.id,
+                    result: None,
+                    error: Some(core_err(e)),
+                }
+            }
         }
         // Replace any existing subscription for the same job on this connection.
         if let Some(mut old) = subs.remove(&p.job_id) {

@@ -243,7 +243,7 @@ impl Executor {
         let mut cwd = self.cfg.project_root.clone();
         let mut run_env: Vec<(String, String)> = Vec::new();
         if wf.isolation == "worktree" {
-            self.prepare_worktree(job_id, &tk, &mut cwd, &mut run_env)?;
+            self.prepare_worktree(ctx, job_id, &tk, &mut cwd, &mut run_env)?;
         }
 
         let (runner, initial_msg): (Arc<dyn PiRunner>, String) = if !agent_cfg.runner.is_empty() {
@@ -361,7 +361,7 @@ impl Executor {
 
         // Reap the per-task worktree on terminal transitions for isolated wfs.
         if wf.isolation == "worktree" && is_terminal_status(&signaled.task_status) {
-            self.cleanup_worktree_best_effort(&run.task_id, &signaled.task_status);
+            self.cleanup_worktree_best_effort(ctx, &run.task_id, &signaled.task_status);
         }
         Ok(())
     }
@@ -451,6 +451,7 @@ impl Executor {
     /// already-persisted terminal result.
     fn prepare_worktree(
         &self,
+        ctx: &Ctx,
         job_id: &str,
         tk: &Task,
         cwd: &mut String,
@@ -460,14 +461,18 @@ impl Executor {
             Ok(p) => p,
             Err(e) => return Err(self.fail_terminal(job_id, None, &format!("worktree path: {e}"))),
         };
-        match self.deps.worktree.verify(&self.cfg.project_root, &tk.id) {
+        match self
+            .deps
+            .worktree
+            .verify(ctx, &self.cfg.project_root, &tk.id)
+        {
             Ok(()) => {}
             Err(WorktreeError::WorktreeMissing(_)) => {
                 // Auto-recovery: re-allocate the dir on the existing branch.
                 match self
                     .deps
                     .worktree
-                    .ensure(&self.cfg.project_root, &tk.id, "")
+                    .ensure(ctx, &self.cfg.project_root, &tk.id, "")
                 {
                     Ok(res) => {
                         eprintln!(
@@ -657,15 +662,17 @@ impl Executor {
         let _ = self.deps.tasks.update_task(&run.task_id, &patch);
     }
 
-    fn cleanup_worktree_best_effort(&self, task_id: &str, _status: &str) {
+    fn cleanup_worktree_best_effort(&self, ctx: &Ctx, task_id: &str, _status: &str) {
         // Bounded by a hard timeout via a watchdog thread so a hung
-        // `git worktree remove` can't pin the worker slot.
+        // `git worktree remove` can't pin the worker slot; the cloned ctx also
+        // lets a shutdown SIGKILL the in-flight git before the watchdog fires.
         let wt = Arc::clone(&self.deps.worktree);
         let root = self.cfg.project_root.clone();
         let tid = task_id.to_string();
+        let ctx = ctx.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let res = wt.on_terminal(&root, &tid);
+            let res = wt.on_terminal(&ctx, &root, &tid);
             let _ = tx.send(res);
         });
         match rx.recv_timeout(WORKTREE_CLEANUP_TIMEOUT) {

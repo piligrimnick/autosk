@@ -14,9 +14,13 @@
 //! owns the per-`(canonRoot, taskID)` lock that serialises racing callers.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use crate::ctx::Ctx;
 
 /// Errors callers test against (mirror of the Go sentinels). Implementations
 /// may attach extra context to the message.
@@ -60,10 +64,20 @@ pub struct WtOutcome {
 /// The mutating worktree verbs the executor drives. The daemon shares one
 /// [`Manager`] across per-project executors so racing calls on the same task
 /// serialise. Tests substitute a fake (mirror of the Go `Manager` interface).
+///
+/// Every verb threads a [`Ctx`] so the underlying `git` invocations can be
+/// interrupted on daemon shutdown / task cancellation (mirror of Go's
+/// `exec.CommandContext`).
 pub trait WorktreeManager: Send + Sync {
-    fn ensure(&self, project_root: &str, task_id: &str, base_ref: &str) -> WtResult<WtOutcome>;
-    fn on_terminal(&self, project_root: &str, task_id: &str) -> WtResult<WtOutcome>;
-    fn verify(&self, project_root: &str, task_id: &str) -> WtResult<()>;
+    fn ensure(
+        &self,
+        ctx: &Ctx,
+        project_root: &str,
+        task_id: &str,
+        base_ref: &str,
+    ) -> WtResult<WtOutcome>;
+    fn on_terminal(&self, ctx: &Ctx, project_root: &str, task_id: &str) -> WtResult<WtOutcome>;
+    fn verify(&self, ctx: &Ctx, project_root: &str, task_id: &str) -> WtResult<()>;
 }
 
 /// `BranchFor` — canonical branch name `autosk/<taskID>`.
@@ -117,13 +131,19 @@ impl Manager {
 }
 
 impl WorktreeManager for Manager {
-    fn ensure(&self, project_root: &str, task_id: &str, base_ref: &str) -> WtResult<WtOutcome> {
+    fn ensure(
+        &self,
+        ctx: &Ctx,
+        project_root: &str,
+        task_id: &str,
+        base_ref: &str,
+    ) -> WtResult<WtOutcome> {
         let canon = canon_root(project_root)?;
         let lk = self.lock(&canon, task_id);
         let _g = lk.lock().unwrap();
 
         verify_git_available()?;
-        verify_git_repo(&canon)?;
+        verify_git_repo(ctx, &canon)?;
         let path = path_for(&canon, task_id)?;
         let branch = branch_for(task_id);
         let mut res = WtOutcome {
@@ -132,7 +152,7 @@ impl WorktreeManager for Manager {
             ..Default::default()
         };
 
-        if worktree_registered_at(&canon, &path)? {
+        if worktree_registered_at(ctx, &canon, &path)? {
             res.existing = true;
             if !base_ref.trim().is_empty() {
                 res.base_ref_ignored = true;
@@ -140,7 +160,9 @@ impl WorktreeManager for Manager {
             return Ok(res);
         }
 
-        match std::fs::symlink_metadata(&path) {
+        // `metadata` follows symlinks (matches Go's os.Stat): a dangling
+        // symlink at `path` is treated as absent, not as PathOccupied.
+        match std::fs::metadata(&path) {
             Ok(_) => return Err(WorktreeError::PathOccupied(path)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(WorktreeError::Other(format!("stat {path}: {e}"))),
@@ -150,11 +172,11 @@ impl WorktreeManager for Manager {
                 .map_err(|e| WorktreeError::Other(format!("mkdir {}: {e}", parent.display())))?;
         }
 
-        if branch_exists(&canon, &branch)? {
+        if branch_exists(ctx, &canon, &branch)? {
             if !base_ref.trim().is_empty() {
                 res.base_ref_ignored = true;
             }
-            run_git(&canon, &["worktree", "add", &path, &branch]).map_err(|e| {
+            run_git(ctx, &canon, &["worktree", "add", &path, &branch]).map_err(|e| {
                 WorktreeError::Other(format!("worktree add (existing branch): {e}"))
             })?;
         } else {
@@ -170,13 +192,13 @@ impl WorktreeManager for Manager {
                 args.push(base.to_string());
             }
             let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-            run_git(&canon, &argv)
+            run_git(ctx, &canon, &argv)
                 .map_err(|e| WorktreeError::Other(format!("worktree add (new branch): {e}")))?;
         }
         Ok(res)
     }
 
-    fn on_terminal(&self, project_root: &str, task_id: &str) -> WtResult<WtOutcome> {
+    fn on_terminal(&self, ctx: &Ctx, project_root: &str, task_id: &str) -> WtResult<WtOutcome> {
         let canon = canon_root(project_root)?;
         let lk = self.lock(&canon, task_id);
         let _g = lk.lock().unwrap();
@@ -190,8 +212,8 @@ impl WorktreeManager for Manager {
         verify_git_available()?;
 
         // If git itself is broken, still try to reap the on-disk dir.
-        if verify_git_repo(&canon).is_err() {
-            match std::fs::symlink_metadata(&path) {
+        if verify_git_repo(ctx, &canon).is_err() {
+            match std::fs::metadata(&path) {
                 Ok(_) => {
                     std::fs::remove_dir_all(&path).map_err(|e| {
                         WorktreeError::Other(format!("remove {path} after git failure: {e}"))
@@ -208,14 +230,14 @@ impl WorktreeManager for Manager {
             return Ok(res);
         }
 
-        if worktree_registered_at(&canon, &path)? {
-            run_git(&canon, &["worktree", "remove", "--force", &path])
+        if worktree_registered_at(ctx, &canon, &path)? {
+            run_git(ctx, &canon, &["worktree", "remove", "--force", &path])
                 .map_err(|e| WorktreeError::Other(format!("worktree remove: {e}")))?;
             res.existed = true;
             return Ok(res);
         }
 
-        match std::fs::symlink_metadata(&path) {
+        match std::fs::metadata(&path) {
             Ok(_) => {
                 std::fs::remove_dir_all(&path)
                     .map_err(|e| WorktreeError::Other(format!("remove orphan {path}: {e}")))?;
@@ -224,23 +246,23 @@ impl WorktreeManager for Manager {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(WorktreeError::Other(format!("stat {path}: {e}"))),
         }
-        let _ = run_git(&canon, &["worktree", "prune"]);
+        let _ = run_git(ctx, &canon, &["worktree", "prune"]);
         Ok(res)
     }
 
-    fn verify(&self, project_root: &str, task_id: &str) -> WtResult<()> {
+    fn verify(&self, ctx: &Ctx, project_root: &str, task_id: &str) -> WtResult<()> {
         let canon = canon_root(project_root)?;
         let path = path_for(&canon, task_id)?;
-        match std::fs::symlink_metadata(&path) {
+        match std::fs::metadata(&path) {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Err(WorktreeError::WorktreeMissing(path))
             }
             Err(e) => return Err(WorktreeError::WorktreeStranded(format!("stat {path}: {e}"))),
         }
-        let wt_gitdir = git_common_dir_from(&path)
+        let wt_gitdir = git_common_dir_from(ctx, &path)
             .map_err(|e| WorktreeError::WorktreeStranded(format!("{path}: {e}")))?;
-        let proj_gitdir = git_common_dir_from(&canon)
+        let proj_gitdir = git_common_dir_from(ctx, &canon)
             .map_err(|e| WorktreeError::NotGitRepo(format!("{canon}: {e}")))?;
         if !same_dir(&wt_gitdir, &proj_gitdir) {
             return Err(WorktreeError::WorktreeStranded(format!(
@@ -303,14 +325,20 @@ fn which_git() -> Option<PathBuf> {
     None
 }
 
-fn verify_git_repo(canon: &str) -> WtResult<()> {
-    run_git(canon, &["rev-parse", "--git-dir"])
+fn verify_git_repo(ctx: &Ctx, canon: &str) -> WtResult<()> {
+    run_git(ctx, canon, &["rev-parse", "--git-dir"])
         .map(|_| ())
         .map_err(|e| WorktreeError::NotGitRepo(format!("{canon}: {e}")))
 }
 
-fn branch_exists(canon: &str, branch: &str) -> WtResult<bool> {
+fn branch_exists(ctx: &Ctx, canon: &str, branch: &str) -> WtResult<bool> {
     let refspec = format!("refs/heads/{branch}");
+    // show-ref --quiet emits no output, so the cancellable `run_git` (which
+    // captures output) is overkill; an early ctx guard + a plain status is
+    // enough for this fast local lookup.
+    if ctx.is_cancelled() {
+        return Err(WorktreeError::Other("show-ref: cancelled".into()));
+    }
     let status = Command::new("git")
         .args(["-C", canon, "show-ref", "--verify", "--quiet", &refspec])
         .status()
@@ -326,8 +354,8 @@ fn branch_exists(canon: &str, branch: &str) -> WtResult<bool> {
     }
 }
 
-fn worktree_registered_at(canon: &str, target: &str) -> WtResult<bool> {
-    let out = run_git(canon, &["worktree", "list", "--porcelain"])
+fn worktree_registered_at(ctx: &Ctx, canon: &str, target: &str) -> WtResult<bool> {
+    let out = run_git(ctx, canon, &["worktree", "list", "--porcelain"])
         .map_err(|e| WorktreeError::Other(format!("worktree list: {e}")))?;
     let canon_target = std::fs::canonicalize(target)
         .map(|p| p.to_string_lossy().to_string())
@@ -344,8 +372,8 @@ fn worktree_registered_at(canon: &str, target: &str) -> WtResult<bool> {
     Ok(false)
 }
 
-fn git_common_dir_from(cwd: &str) -> std::result::Result<String, String> {
-    let raw = run_git(cwd, &["rev-parse", "--git-common-dir"])
+fn git_common_dir_from(ctx: &Ctx, cwd: &str) -> std::result::Result<String, String> {
+    let raw = run_git(ctx, cwd, &["rev-parse", "--git-common-dir"])
         .map_err(|e| format!("rev-parse --git-common-dir at {cwd}: {e}"))?;
     let raw = raw.trim();
     if raw.is_empty() {
@@ -368,19 +396,61 @@ fn same_dir(a: &str, b: &str) -> bool {
 
 /// Runs `git -C <cwd> <args>`, returning combined stdout+stderr on success
 /// and an error carrying the captured output otherwise.
-fn run_git(cwd: &str, args: &[&str]) -> std::result::Result<String, String> {
+///
+/// The child is spawned (not `output()`'d) and polled so a cancelled `ctx`
+/// (daemon shutdown / task cancel) SIGKILLs the in-flight git — the analogue
+/// of Go's `exec.CommandContext`. stdout/stderr are drained on dedicated
+/// threads so a chatty command can't deadlock on a full pipe.
+fn run_git(ctx: &Ctx, cwd: &str, args: &[&str]) -> std::result::Result<String, String> {
     let mut argv: Vec<&str> = vec!["-C", cwd];
     argv.extend_from_slice(args);
-    let out = Command::new("git")
+    let mut child = Command::new("git")
         .args(&argv)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| e.to_string())?;
-    let mut combined = String::from_utf8_lossy(&out.stdout).to_string();
-    combined.push_str(&String::from_utf8_lossy(&out.stderr));
-    if out.status.success() {
-        Ok(combined)
-    } else {
-        Err(combined.trim().to_string())
+    let mut out_pipe = child.stdout.take();
+    let mut err_pipe = child.stderr.take();
+    let out_h = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        if let Some(p) = out_pipe.as_mut() {
+            let _ = p.read_to_end(&mut b);
+        }
+        b
+    });
+    let err_h = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        if let Some(p) = err_pipe.as_mut() {
+            let _ = p.read_to_end(&mut b);
+        }
+        b
+    });
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = out_h.join().unwrap_or_default();
+                let stderr = err_h.join().unwrap_or_default();
+                let mut combined = String::from_utf8_lossy(&stdout).to_string();
+                combined.push_str(&String::from_utf8_lossy(&stderr));
+                if status.success() {
+                    return Ok(combined);
+                }
+                return Err(combined.trim().to_string());
+            }
+            Ok(None) => {
+                if ctx.is_cancelled() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = out_h.join();
+                    let _ = err_h.join();
+                    return Err(format!("git {}: cancelled", args.join(" ")));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(e) => return Err(e.to_string()),
+        }
     }
 }
 

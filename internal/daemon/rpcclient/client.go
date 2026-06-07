@@ -102,6 +102,10 @@ const (
 	CodeProjectNotFound = 1001
 	CodeInvalidProject  = 1002
 	CodeNotFound        = 1003
+	// CodeConflict marks a retryable "exists but not ready / not applicable"
+	// condition (terminal run, or a queued run whose live runner has not
+	// spawned yet). Mirrors the daemon's former HTTP 409.
+	CodeConflict = 1004
 )
 
 // call dials the daemon (auto-spawning if needed), sends one request, and

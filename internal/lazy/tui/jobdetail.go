@@ -40,7 +40,7 @@ func isJobRunning(j datasource.Job) bool {
 // can author input — i.e. whenever the daemon would accept a
 // SendInput call. Drives the visibility of winJobInput.
 //
-// The daemon's buildInputCommand (internal/daemon/server/attach.go)
+// The daemon's input dispatch (crates/autoskd/src/server.rs)
 // dispatches as `prompt` when pi is idle between turns and as
 // `steer` / `follow_up` when pi is actively streaming, so input
 // is accepted in ANY non-terminal status. Mirroring that here

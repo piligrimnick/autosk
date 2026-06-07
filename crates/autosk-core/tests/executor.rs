@@ -21,14 +21,17 @@ use std::time::Duration;
 use std::time::Instant;
 
 use autosk_core::ctx::Ctx;
-use autosk_core::executor::{Config, Deps, Executor};
+use autosk_core::executor::{Config, Deps, Executor, NodeFactory};
 use autosk_core::pi::{Command, Response, SessionInfo};
-use autosk_core::pirunners::Attachments;
+use autosk_core::pirunners::{Attachments, Registry as RunnerRegistry};
 use autosk_core::runner::{PiRunner, RunnerError};
 use autosk_core::runstore::NewRun;
 use autosk_core::store::Db;
-use autosk_core::tasks::{self, Task};
+use autosk_core::tasks::{self, Task, TaskPatch};
+use autosk_core::wfengine::TaskWriter;
 use autosk_core::worktree::{WorktreeError, WorktreeManager, WtOutcome};
+use autosk_core::Error as CoreError;
+use serde_json::{Map, Value};
 
 // ---- fixture --------------------------------------------------------------
 
@@ -75,6 +78,33 @@ impl Fixture {
             serde_json::json!({"model":"sonnet","thinking":"high","first_message":format!("You are the {name} agent.")}),
         )
         .unwrap();
+    }
+
+    /// Installs a custom-runner package: a `runner` file inside the package +
+    /// a `runner` field in the agent block so `resolve()` populates
+    /// `cfg.runner` (the custom branch). The runner file must exist for resolve
+    /// to accept it.
+    fn install_custom_pkg(&self, name: &str) {
+        autosk_core::pkg::install_stub(
+            &self.prefix,
+            name,
+            "0.0.1",
+            serde_json::json!({"runner": "runner.js"}),
+        )
+        .unwrap();
+        let rel: std::path::PathBuf = name.split('/').collect();
+        let dir = self.prefix.join("node_modules").join(rel);
+        std::fs::write(dir.join("runner.js"), "// stub runner\n").unwrap();
+        // The custom branch reads the bootstrapper path; lay down a stub so any
+        // existence check passes (the injected node factory ignores it anyway).
+        let boot = self
+            .prefix
+            .join("node_modules")
+            .join("@autosk")
+            .join("agent-runtime")
+            .join("dist");
+        std::fs::create_dir_all(&boot).unwrap();
+        std::fs::write(boot.join("bootstrap.js"), "// stub bootstrap\n").unwrap();
     }
 
     fn uninstall_pkg(&self, name: &str) {
@@ -389,15 +419,15 @@ struct FakeWt {
     on_terminal_called: AtomicBool,
 }
 impl WorktreeManager for FakeWt {
-    fn ensure(&self, _r: &str, _t: &str, _b: &str) -> Result<WtOutcome, WorktreeError> {
+    fn ensure(&self, _c: &Ctx, _r: &str, _t: &str, _b: &str) -> Result<WtOutcome, WorktreeError> {
         self.ensure_called.store(true, Ordering::SeqCst);
         Ok(WtOutcome::default())
     }
-    fn on_terminal(&self, _r: &str, _t: &str) -> Result<WtOutcome, WorktreeError> {
+    fn on_terminal(&self, _c: &Ctx, _r: &str, _t: &str) -> Result<WtOutcome, WorktreeError> {
         self.on_terminal_called.store(true, Ordering::SeqCst);
         Ok(WtOutcome::default())
     }
-    fn verify(&self, _r: &str, _t: &str) -> Result<(), WorktreeError> {
+    fn verify(&self, _c: &Ctx, _r: &str, _t: &str) -> Result<(), WorktreeError> {
         match self.verify_result.lock().unwrap().clone() {
             Some(e) => Err(e),
             None => Ok(()),
@@ -934,5 +964,306 @@ fn worktree_stranded_parks() {
     assert!(
         !wt.ensure_called.load(Ordering::SeqCst),
         "stranded is NOT auto-recovered"
+    );
+}
+
+// ---- custom Node runner branch (plan §2) ----------------------------------
+
+/// A stub for the custom Node runner: records the stdin payload (the JSON
+/// `RunContextSeed`) and the live-registry size observed during `send_prompt`,
+/// reports `supports_attach()=false`, and "exits" (`wait_for_agent_end` → Ok)
+/// without ever recording a signal.
+struct NodeStub {
+    payload: Mutex<Option<String>>,
+    registry: Arc<RunnerRegistry>,
+    observed_reg_len: std::sync::atomic::AtomicUsize,
+    prompts: std::sync::atomic::AtomicUsize,
+}
+impl PiRunner for NodeStub {
+    fn pid(&self) -> i32 {
+        0
+    }
+    fn get_state(&self, _c: &Ctx) -> Result<SessionInfo, RunnerError> {
+        Ok(SessionInfo::default())
+    }
+    fn send_prompt(&self, _c: &Ctx, m: &str) -> Result<(), RunnerError> {
+        self.prompts.fetch_add(1, Ordering::SeqCst);
+        *self.payload.lock().unwrap() = Some(m.to_string());
+        // Registration happens BEFORE the seed is sent; for a non-attach runner
+        // the live registry must still be empty here.
+        self.observed_reg_len
+            .store(self.registry.len(), Ordering::SeqCst);
+        Ok(())
+    }
+    fn wait_for_agent_end(&self, _c: &Ctx) -> Result<(), RunnerError> {
+        Ok(()) // process exited cleanly, emitting no step signal
+    }
+    fn abort(&self, _c: &Ctx) -> Result<(), RunnerError> {
+        Ok(())
+    }
+    fn close_stdin(&self) -> Result<(), RunnerError> {
+        Ok(())
+    }
+    fn terminate(&self) -> Result<(), RunnerError> {
+        Ok(())
+    }
+    fn kill(&self) -> Result<(), RunnerError> {
+        Ok(())
+    }
+    fn wait(&self, _c: &Ctx, _g: Duration) -> (i32, Result<(), RunnerError>) {
+        (0, Ok(()))
+    }
+    fn send_command(&self, _c: Command) -> Result<Receiver<Response>, RunnerError> {
+        Err(RunnerError::Io(
+            "node runner does not support commands".into(),
+        ))
+    }
+    fn is_streaming(&self) -> bool {
+        false
+    }
+    fn supports_attach(&self) -> bool {
+        false
+    }
+}
+
+#[test]
+fn custom_node_runner_seeds_stdin_and_forces_no_corrections() {
+    let fx = new_fixture();
+    fx.seed_agent("ag-cust", "@team/custom");
+    fx.install_custom_pkg("@team/custom");
+    let (wf, dev) = ("wf-cn", "st-only");
+    fx.seed_workflow(wf, "custom-dev", "none", dev);
+    fx.seed_step(dev, wf, "dev", "ag-cust", 0, 0);
+    fx.seed_transition_status(dev, "done");
+    let task = fx.create_task(wf, dev, serde_json::json!({}));
+    // max_corrections=5 in the row, but the custom branch must force it to 0.
+    let job = fx.create_run(&task, dev, 5);
+
+    let registry = Arc::new(RunnerRegistry::new());
+    let stub = Arc::new(NodeStub {
+        payload: Mutex::new(None),
+        registry: Arc::clone(&registry),
+        observed_reg_len: std::sync::atomic::AtomicUsize::new(usize::MAX),
+        prompts: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let stub_c = Arc::clone(&stub);
+    let nf: NodeFactory = Arc::new(move |_ctx, _opts| Ok(Arc::clone(&stub_c) as Arc<dyn PiRunner>));
+
+    let mut deps = fx.deps(noop_wt());
+    deps.runners = Some(Arc::clone(&registry));
+    // The pi factory must never be invoked on the custom branch.
+    let pi_factory: autosk_core::executor::PiFactory = Arc::new(|_c, _o| {
+        Err(RunnerError::Io(
+            "pi factory must not run for custom runners".into(),
+        ))
+    });
+    let exec = Executor::new(deps, pi_factory, fx.cfg()).with_node_factory(nf);
+
+    let err = exec.run(&Ctx::background(), &job).unwrap_err();
+    // max_corrections forced to 0 ⇒ a missing signal fails immediately.
+    assert!(
+        err.is_agent_did_not_emit(),
+        "custom runner with no signal must fail immediately, got {err}"
+    );
+
+    // (a) The stdin payload is the JSON seed (schema_version=1 + trailing \n).
+    let payload = stub.payload.lock().unwrap().clone().expect("seed sent");
+    assert!(payload.ends_with('\n'), "seed must end with a newline");
+    let v: serde_json::Value = serde_json::from_str(payload.trim_end()).expect("seed is JSON");
+    assert_eq!(v["schema_version"], serde_json::json!(1));
+    assert_eq!(v["task"]["id"], serde_json::json!(task));
+    assert_eq!(v["step"]["name"], serde_json::json!("dev"));
+    assert_eq!(v["workflow"]["name"], serde_json::json!("custom-dev"));
+    assert_eq!(v["job_id"], serde_json::json!(job));
+    assert_eq!(v["agent_name"], serde_json::json!("@team/custom"));
+    assert_eq!(
+        v["transitions"][0]["kind"],
+        serde_json::json!("task_status")
+    );
+    assert_eq!(v["transitions"][0]["target"], serde_json::json!("done"));
+
+    // (b) Single-shot: max_corrections is forced to 0 in the turn loop, so the
+    // missed signal fails on the FIRST turn — only the seed was written, with
+    // no corrective kickback prompts (which is how a 0-correction run behaves).
+    assert_eq!(
+        stub.prompts.load(Ordering::SeqCst),
+        1,
+        "custom branch must not kick back: only the seed is sent"
+    );
+    let run = fx.db.run_get(&job).unwrap();
+    assert_eq!(run.status, "failed");
+    assert_eq!(run.error, "agent_did_not_emit_transition");
+
+    // (c) NOT registered on the attach surface (supports_attach=false).
+    assert_eq!(
+        stub.observed_reg_len.load(Ordering::SeqCst),
+        0,
+        "custom node runner must not be registered for attach"
+    );
+
+    // The task parks (still recoverable on the source step).
+    let tk = fx.db.task_get_row(&task).unwrap();
+    assert_eq!(tk.status, "human");
+    assert_eq!(tk.current_step_id, dev);
+}
+
+// ---- cancellation path (plan §6, acceptance #3) ---------------------------
+
+/// A stub that blocks in `wait_for_agent_end` until the ctx is cancelled (it
+/// never sends a turn token from `send_prompt`).
+struct BlockUntilCancelStub;
+impl PiRunner for BlockUntilCancelStub {
+    fn pid(&self) -> i32 {
+        555
+    }
+    fn get_state(&self, _c: &Ctx) -> Result<SessionInfo, RunnerError> {
+        Ok(SessionInfo::default())
+    }
+    fn send_prompt(&self, _c: &Ctx, _m: &str) -> Result<(), RunnerError> {
+        Ok(())
+    }
+    fn wait_for_agent_end(&self, ctx: &Ctx) -> Result<(), RunnerError> {
+        loop {
+            match ctx.done() {
+                Some(autosk_core::ctx::Done::Cancelled) => return Err(RunnerError::Cancelled),
+                Some(autosk_core::ctx::Done::DeadlineExceeded) => {
+                    return Err(RunnerError::DeadlineExceeded)
+                }
+                None => std::thread::sleep(Duration::from_millis(2)),
+            }
+        }
+    }
+    fn abort(&self, _c: &Ctx) -> Result<(), RunnerError> {
+        Ok(())
+    }
+    fn close_stdin(&self) -> Result<(), RunnerError> {
+        Ok(())
+    }
+    fn terminate(&self) -> Result<(), RunnerError> {
+        Ok(())
+    }
+    fn kill(&self) -> Result<(), RunnerError> {
+        Ok(())
+    }
+    fn wait(&self, _c: &Ctx, _g: Duration) -> (i32, Result<(), RunnerError>) {
+        (0, Ok(()))
+    }
+    fn send_command(&self, _c: Command) -> Result<Receiver<Response>, RunnerError> {
+        Err(RunnerError::Io("stub".into()))
+    }
+    fn is_streaming(&self) -> bool {
+        false
+    }
+}
+
+#[test]
+fn cancel_marks_run_cancelled_without_parking() {
+    let fx = new_fixture();
+    let (wf, dev, _rev, _val) = seed_basic_wf(&fx, "none");
+    let task = fx.create_task(&wf, &dev, serde_json::json!({}));
+    let job = fx.create_run(&task, &dev, 2);
+
+    let stub = Arc::new(BlockUntilCancelStub);
+    let exec = Executor::new(
+        fx.deps(noop_wt()),
+        Arc::new(move |_c, _o| Ok(Arc::clone(&stub) as Arc<dyn PiRunner>)),
+        fx.cfg(),
+    );
+
+    let (ctx, cancel) = Ctx::new_cancellable();
+    // Cancel shortly after the run begins (the stub is blocked in wait).
+    let killer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(30));
+        cancel.cancel();
+    });
+    let err = exec.run(&ctx, &job).unwrap_err();
+    killer.join().unwrap();
+    assert!(
+        err.to_string().contains("canceled"),
+        "cancel path surfaces a cancellation error, got {err}"
+    );
+
+    // The run is marked cancelled (NOT failed)...
+    let run = fx.db.run_get(&job).unwrap();
+    assert_eq!(run.status, "cancel", "cancellation marks the run cancelled");
+    // ...and the task is left untouched — cancellation never parks it.
+    let tk = fx.db.task_get_row(&task).unwrap();
+    assert_eq!(tk.status, "work", "cancel must NOT park the task");
+    assert_eq!(tk.current_step_id, dev, "step pointer unchanged on cancel");
+}
+
+// ---- generic (non-cap) advance error (plan §8.1) --------------------------
+
+/// Wraps a real [`TaskWriter`] but forces `update_metadata_and_patch`
+/// (the write `enter_step` performs) to fail with a NON-`max_visits` error, so
+/// the executor takes the generic advance-error branch rather than the cap-fire
+/// one. Mirror of Go's `failingTaskStore`.
+struct FailEnterStep {
+    inner: Arc<dyn TaskWriter>,
+}
+impl TaskWriter for FailEnterStep {
+    fn get_task(&self, id: &str) -> autosk_core::Result<Task> {
+        self.inner.get_task(id)
+    }
+    fn update_task(&self, id: &str, p: &TaskPatch) -> autosk_core::Result<Task> {
+        self.inner.update_task(id, p)
+    }
+    fn update_metadata_and_patch(
+        &self,
+        _id: &str,
+        _f: &mut dyn FnMut(&mut Map<String, Value>) -> autosk_core::Result<()>,
+        _p: &TaskPatch,
+    ) -> autosk_core::Result<Task> {
+        Err(CoreError::Migration("injected advance failure".into()))
+    }
+}
+
+#[test]
+fn generic_advance_error_parks_on_target_step() {
+    let fx = new_fixture();
+    let (wf, dev, rev, _val) = seed_basic_wf(&fx, "none");
+    let task = fx.create_task(&wf, &dev, serde_json::json!({}));
+    let job = fx.create_run(&task, &dev, 2);
+
+    let stub = StubRunner::new();
+    {
+        let db = Arc::clone(&fx.db);
+        let t = task.clone();
+        *stub.on_prompt.lock().unwrap() = Some(Box::new(move |_m, a| {
+            if a == 1 {
+                db.signal_emit(&t, "review").unwrap();
+            }
+        }));
+    }
+    // Wrap the task-writer so enter_step (the step-advance write) fails with a
+    // generic error — not a max_visits cap.
+    let mut deps = fx.deps(noop_wt());
+    deps.tasks = Arc::new(FailEnterStep {
+        inner: Arc::clone(&fx.db) as Arc<dyn TaskWriter>,
+    });
+    let exec = Executor::new(deps, stub_factory(Arc::clone(&stub)), fx.cfg());
+
+    let err = exec.run(&Ctx::background(), &job).unwrap_err();
+    assert!(
+        !err.is_max_visits(),
+        "must NOT be the cap-fire branch: {err}"
+    );
+    assert!(
+        err.to_string().contains("advance task:"),
+        "want a generic advance-task error, got {err}"
+    );
+
+    let run = fx.db.run_get(&job).unwrap();
+    assert_eq!(run.status, "failed");
+    assert!(
+        run.error.contains("advance task:"),
+        "run.error={}",
+        run.error
+    );
+    let tk = fx.db.task_get_row(&task).unwrap();
+    assert_eq!(tk.status, "human", "task parked");
+    assert_eq!(
+        tk.current_step_id, rev,
+        "parked on the TARGET step (review), not the source"
     );
 }

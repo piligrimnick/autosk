@@ -17,7 +17,7 @@
 // All exported methods take a context.Context. Cancelling the
 // context cleanly closes the underlying HTTP connection, which for a
 // streaming call is also the daemon's signal to release the attach
-// counter (see internal/daemon/server/sse.go).
+// counter (now served natively by autoskd — see crates/autoskd/src/server.rs).
 package client
 
 import (

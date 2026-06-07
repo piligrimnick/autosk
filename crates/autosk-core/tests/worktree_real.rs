@@ -7,7 +7,17 @@
 use std::path::Path;
 use std::process::Command;
 
-use autosk_core::worktree::{branch_for, path_for, Manager, WorktreeManager};
+use autosk_core::ctx::Ctx;
+use autosk_core::worktree::{branch_for, path_for, Manager, WorktreeError, WorktreeManager};
+
+/// Serialises the tests in this binary: each mutates the process-global `$HOME`
+/// (which `path_for` reads), so they must not run concurrently. `into_inner`
+/// keeps a panic in one test from poisoning the lock for the rest.
+static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn lock_home() -> std::sync::MutexGuard<'static, ()> {
+    HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 fn git(args: &[&str], cwd: &Path) {
     let st = Command::new("git")
@@ -67,10 +77,10 @@ fn ensure_then_terminal_preserves_branch_and_path_matches_go() {
         eprintln!("skip: git not available");
         return;
     }
+    let _home_lock = lock_home();
     let home = tempfile::tempdir().unwrap();
     // Hermetic HOME so the worktree lands under the temp tree (path_for reads
-    // $HOME). This test file is its own binary, so the set is not racing other
-    // tests' HOME reads.
+    // $HOME). The HOME_LOCK serialises the HOME-mutating tests in this binary.
     std::env::set_var("HOME", home.path());
 
     let proj = tempfile::tempdir().unwrap();
@@ -112,7 +122,9 @@ fn ensure_then_terminal_preserves_branch_and_path_matches_go() {
 
     // ---- Ensure allocates dir + branch ----
     let mgr = Manager::new();
-    let res = mgr.ensure(&root_s, task, "").expect("ensure");
+    let res = mgr
+        .ensure(&Ctx::background(), &root_s, task, "")
+        .expect("ensure");
     assert_eq!(res.path, derived);
     assert!(Path::new(&derived).is_dir(), "worktree dir created");
     assert!(
@@ -128,8 +140,14 @@ fn ensure_then_terminal_preserves_branch_and_path_matches_go() {
         "branch created"
     );
 
+    // ---- verify() classifies a healthy worktree as Ok ----
+    mgr.verify(&Ctx::background(), &root_s, task)
+        .expect("verify Ok on a freshly-ensured worktree");
+
     // ---- OnTerminal removes dir, PRESERVES branch ----
-    let out = mgr.on_terminal(&root_s, task).expect("on_terminal");
+    let out = mgr
+        .on_terminal(&Ctx::background(), &root_s, task)
+        .expect("on_terminal");
     assert!(out.existed);
     assert!(
         !Path::new(&derived).exists(),
@@ -147,4 +165,88 @@ fn ensure_then_terminal_preserves_branch_and_path_matches_go() {
         ),
         "branch PRESERVED after terminal cleanup"
     );
+}
+
+/// `verify()` error-classification — the executor's auto-recovery-vs-park
+/// decision hinges on it: a vanished dir is WorktreeMissing (auto-recoverable),
+/// a dir whose gitdir no longer matches the project is WorktreeStranded (park),
+/// and a non-repo project root is NotGitRepo.
+#[test]
+fn verify_classifies_missing_and_stranded() {
+    if Command::new("git").arg("--version").output().is_err() {
+        eprintln!("skip: git not available");
+        return;
+    }
+    let _home_lock = lock_home();
+    let home = tempfile::tempdir().unwrap();
+    std::env::set_var("HOME", home.path());
+    let proj = tempfile::tempdir().unwrap();
+    let root = proj.path();
+    git(&["init", "-q"], root);
+    std::fs::write(root.join("README"), "x").unwrap();
+    git(&["add", "."], root);
+    git(&["commit", "-q", "-m", "init"], root);
+    let root_s = root.to_string_lossy().to_string();
+    let mgr = Manager::new();
+    let ctx = Ctx::background();
+
+    // (a) Never-allocated → the dir is absent → WorktreeMissing.
+    let task = "ask-aaa111";
+    match mgr.verify(&ctx, &root_s, task) {
+        Err(WorktreeError::WorktreeMissing(_)) => {}
+        other => panic!("want WorktreeMissing for an absent dir, got {other:?}"),
+    }
+
+    // Allocate, then `rm -rf` the dir out from under git (orphaned registration)
+    // → still WorktreeMissing (the path itself is gone).
+    let res = mgr.ensure(&ctx, &root_s, task, "").expect("ensure");
+    std::fs::remove_dir_all(&res.path).unwrap();
+    match mgr.verify(&ctx, &root_s, task) {
+        Err(WorktreeError::WorktreeMissing(_)) => {}
+        other => panic!("want WorktreeMissing after rm -rf, got {other:?}"),
+    }
+
+    // (b) A dir present at the path but NOT a checkout of this repo → Stranded.
+    let task2 = "ask-bbb222";
+    let path2 = path_for(&root_s, task2).unwrap();
+    std::fs::create_dir_all(&path2).unwrap();
+    // Make it its own unrelated git repo so git_common_dir resolves but differs.
+    let p2 = Path::new(&path2);
+    git(&["init", "-q"], p2);
+    match mgr.verify(&ctx, &root_s, task2) {
+        Err(WorktreeError::WorktreeStranded(_)) => {}
+        other => panic!("want WorktreeStranded for a foreign repo at the path, got {other:?}"),
+    }
+}
+
+/// `ensure()` refuses to clobber an occupied path: a plain (non-worktree)
+/// directory already sitting at the target path yields PathOccupied.
+#[test]
+fn ensure_path_occupied() {
+    if Command::new("git").arg("--version").output().is_err() {
+        eprintln!("skip: git not available");
+        return;
+    }
+    let _home_lock = lock_home();
+    let home = tempfile::tempdir().unwrap();
+    std::env::set_var("HOME", home.path());
+    let proj = tempfile::tempdir().unwrap();
+    let root = proj.path();
+    git(&["init", "-q"], root);
+    std::fs::write(root.join("README"), "x").unwrap();
+    git(&["add", "."], root);
+    git(&["commit", "-q", "-m", "init"], root);
+    let root_s = root.to_string_lossy().to_string();
+
+    let task = "ask-ccc333";
+    let path = path_for(&root_s, task).unwrap();
+    // Pre-create a plain directory (not a registered worktree) at the path.
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::write(Path::new(&path).join("stray"), "x").unwrap();
+
+    let mgr = Manager::new();
+    match mgr.ensure(&Ctx::background(), &root_s, task, "") {
+        Err(WorktreeError::PathOccupied(_)) => {}
+        other => panic!("want PathOccupied for a pre-occupied path, got {other:?}"),
+    }
 }
