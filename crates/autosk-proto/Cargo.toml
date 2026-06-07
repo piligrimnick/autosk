@@ -1,0 +1,12 @@
+[package]
+name = "autosk-proto"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Phase 0 stub. The serde wire types + JSON-RPC method/notification
+# definitions (plan §5) land in Phase 1; for now this is an empty crate so the
+# workspace graph matches the target layout in docs/plans/20260607.
+[dependencies]

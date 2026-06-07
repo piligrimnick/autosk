@@ -4,6 +4,10 @@
 *.out
 .DS_Store
 
+# Rust (autosk-core / autoskd / autosk-proto workspace) build output.
+# Cargo.lock IS committed (the workspace ships binaries).
+/target/
+
 # auto-fetched libdoltlite cache (see scripts/fetch-doltlite.sh)
 /.doltlite/
 

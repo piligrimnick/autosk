@@ -1,0 +1,95 @@
+name: Rust CI
+
+# Exercises the autosk Rust workspace (Phase 0: autosk-core + autoskd/
+# autosk-proto stubs) on the two acceptance-criterion targets — linux-x64 and
+# macOS arm64 — so the doltlite 0.11.8 static link is actually verified on both.
+#
+# This is separate from ci.yml (Go) on purpose: the Go side stays pinned to
+# doltlite 0.10.8 while the Rust side links 0.11.8, so the two pipelines fetch
+# different libdoltlite assets and must keep independent caches (see the cache
+# step below — distinct key prefix + version so they never collide).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-26 is Apple Silicon (osx-arm64). ubuntu-latest is linux-x64.
+        # These are exactly the two targets Phase 0 acceptance criterion #1
+        # requires `cargo build` + `cargo test -p autosk-core` to pass on.
+        os: [ubuntu-latest, macos-26]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # Pinned to its Node.js 24 major (see ci.yml for the deprecation context).
+      - uses: actions/checkout@v5
+
+      # rustup ships preinstalled on GitHub-hosted runners; ensure a stable
+      # toolchain with the components the checks below need (no third-party
+      # action, mirroring the repo's preference for first-party/pinned tooling).
+      - name: Set up Rust toolchain (stable + rustfmt + clippy)
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustup component add rustfmt clippy
+          rustc --version
+          cargo --version
+
+      # The canonical Rust doltlite pin lives in build.rs
+      # (DEFAULT_DOLTLITE_VERSION). Read it so the cache key tracks the pin
+      # exactly and can never silently serve a stale version after a bump.
+      - name: Resolve doltlite version
+        id: doltlite
+        run: |
+          ver=$(grep -oE 'DEFAULT_DOLTLITE_VERSION: &str = "[0-9.]+"' \
+            crates/autosk-core/build.rs | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          test -n "$ver" || { echo "could not parse DEFAULT_DOLTLITE_VERSION" >&2; exit 1; }
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "doltlite (Rust pin) = $ver"
+
+      # Cache the auto-fetched libdoltlite so build.rs doesn't hit GitHub
+      # releases on every run. The `doltlite-rust-<version>` key prefix keeps
+      # this distinct from ci.yml's Go cache (`doltlite-<os>-<arch>-<hash>`,
+      # pinned to 0.10.8) so the two never collide.
+      - name: Cache doltlite (Rust ${{ steps.doltlite.outputs.version }})
+        uses: actions/cache@v5
+        with:
+          path: .doltlite
+          key: doltlite-rust-${{ steps.doltlite.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+
+      # Cache the crate registry/git so dependency downloads don't repeat. The
+      # compiled `target/` is intentionally NOT cached — the workspace is tiny
+      # and a clean compile is the most reliable signal for a de-risking gate.
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      # First `cargo build` triggers build.rs, which shells
+      # `scripts/fetch-doltlite.sh 0.11.8 <dest>` on a cold checkout and links
+      # libdoltlite.a statically (the linux-x64 link order — -ldoltlite then
+      # -lz -lpthread -lm — is what this job exists to verify under GNU ld).
+      - name: cargo build
+        run: cargo build --workspace
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # The real Phase 0 tests live in autosk-core (format_compat, gc_readable,
+      # gc_stress); autoskd/autosk-proto are stubs with nothing to test yet.
+      - name: cargo test
+        run: cargo test -p autosk-core

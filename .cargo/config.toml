@@ -1,0 +1,26 @@
+# Cargo configuration for the autosk Rust workspace (Phase 0).
+#
+# These env vars steer rusqlite/libsqlite3-sys (built with `bundled` disabled) so
+# it does NOT compile or link a stock/system sqlite. The real sqlite symbols
+# come from doltlite 0.11.8, which crates/autosk-core/build.rs downloads into
+# `.doltlite/<ver>-<plat>/` and links via `cargo:rustc-link-lib=static=doltlite`.
+#
+# libsqlite3-sys bundles a `libsqlite3.a` into its own rlib at its own compile
+# time — before autosk-core's build script can fetch doltlite — so we point it at
+# an empty committed shim archive (crates/autosk-core/doltlite-shim). The shim
+# contributes no symbols; doltlite supplies them at the final link. See that
+# directory's README for the full rationale.
+[env]
+# Link sqlite3 statically (bundle the shim), not as a shared library.
+SQLITE3_STATIC = "1"
+# Where libsqlite3-sys finds the (empty) `libsqlite3.a` shim. `relative = true`
+# resolves against this config's parent (the workspace root).
+SQLITE3_LIB_DIR = { value = "crates/autosk-core/doltlite-shim", relative = true }
+SQLITE3_INCLUDE_DIR = { value = "crates/autosk-core/doltlite-shim", relative = true }
+# Neutralise the host's pkg-config search path so a system `sqlite3.pc`
+# (e.g. from libsqlite3-dev / Homebrew) cannot hijack the link with a stock
+# libsqlite3 that lacks doltlite's prolly engine. libsqlite3-sys probes
+# pkg-config when SQLITE3_LIB_DIR is set; pointing PKG_CONFIG_LIBDIR at a
+# nonexistent dir guarantees that probe fails and it falls back to the static
+# `-lsqlite3` (i.e. bundling our empty shim).
+PKG_CONFIG_LIBDIR = { value = "crates/autosk-core/doltlite-shim/no-pkgconfig", relative = true }

@@ -1,0 +1,20 @@
+[package]
+name = "autosk-core"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+build = "build.rs"
+# `links` declares that this crate links the native doltlite archive. Cargo
+# enforces at most one such crate per target, which is exactly the "sole owner
+# of doltlite" property the daemon depends on.
+links = "doltlite"
+
+[dependencies]
+# rusqlite with the bundled amalgamation DISABLED, so libsqlite3-sys links the
+# doltlite-provided sqlite (see build.rs) instead of compiling stock SQLite.
+rusqlite = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
