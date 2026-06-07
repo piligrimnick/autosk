@@ -74,12 +74,21 @@ Researched from the Go tree; quoted so the Rust port has an exact target.
 - The **Rust** side targets the current latest, **doltlite 0.11.8**. The GC
   regressions that forced the Go 0.10.8 pin were fixed in the 0.11.x line (e.g.
   PR #858 `fix/gc-rename-and-overflow`, `fix(gc): keep cs->pFile valid across
-  rewrite`), so no multi-version investigation is needed; and Rust's 1:1
-  threads make the 0.10.9 Go-specific deadlock irrelevant anyway. Phase 0 still
-  verifies that 0.11.8's `dolt_gc` is corruption-free under the RwLock
-  discipline and that a Go-0.10.8-created DB opens forward-compatibly under
-  0.11.8 (the transition window has Go on 0.10.8 and Rust on 0.11.8 against the
-  same on-disk format).
+  rewrite`; the 0.10.11 schema-cookie corruption was fixed specifically in
+  **0.11.2**), so no multi-version investigation is needed; and Rust's 1:1
+  threads make the 0.10.9 Go-specific deadlock irrelevant anyway. Phase 0
+  confirmed 0.11.8's `dolt_gc` is corruption-free under the RwLock discipline
+  (criterion met). **It also DISPROVED the forward-compat assumption**
+  (ask-834e16): doltlite **0.11.0 is a breaking on-disk format change** (the
+  refs format moves v6→v7), and the break is mutual — a Go-0.10.8 DB is an
+  on-disk **container format v11** (`CTLD` `0x0b`) that 0.11.8 (which writes
+  **v12**, `0x0c`) refuses to open (`SQLITE_NOTADB`). **There is therefore no
+  shared on-disk format across the transition**: any existing project DB needs a
+  one-time v11→v12 migration before a 0.11.x reader can touch it. The migration
+  strategy is owned by the follow-up planning task **ask-8037b4**;
+  `crates/autosk-core/tests/format_compat.rs` pins the v11/v12 split as a
+  characterization test so a future doltlite bump that restores compat surfaces
+  loudly.
 - Versioning is exposed as SQL functions: `SELECT dolt_commit(...)`,
   `SELECT dolt_gc()` (`internal/store/doltlite/commit.go`, `maint.go`).
 - Schema/migrations: `internal/migrations/001_init.sql` + `migrations.go`.
@@ -381,7 +390,10 @@ remains:
    diverge from the server.
 3. **Migration/schema golden.** Assert the Rust migrator produces the exact
    schema (`schema_version`, table DDL, CHECK) the Go `001_init.sql` produced —
-   a one-time port-correctness gate, since old DBs must keep opening.
+   a one-time port-correctness gate. Note (Phase 0 finding): a pre-0.11
+   *container* (v11) can no longer be opened directly under 0.11.8 — it is first
+   migrated v11→v12 per ask-8037b4; this schema/DDL gate applies once the DB is
+   openable under the new container format.
 4. **Phase-1 dual-run safety net (temporary).** During the port, a read-only
    diff harness can point both the Go reader and `autosk-core` at the same
    fixture DB to catch porting bugs — retired once the Go store is deleted.
@@ -390,12 +402,17 @@ remains:
 
 ## 9. Phasing
 
-- **Phase 0 — de-risk doltlite-from-Rust (spike).** `autosk-core::store` opens
-  an existing `.autosk/db`, reads `tasks`, runs `dolt_commit`/`dolt_gc`, proves
-  the RwLock discipline survives a GC under concurrent reads. Pin doltlite at
-  **0.11.8** and verify its `dolt_gc` is corruption-free (the 0.10.11 cookie
-  bug is fixed in 0.11.x) and that a Go-0.10.8 DB reads forward-compatibly under
-  0.11.8. *Highest unknown — first.*
+- **Phase 0 — de-risk doltlite-from-Rust (spike).** ✅ **Done** (`crates/autosk-core`,
+  ask-834e16). `autosk-core::store` links doltlite **0.11.8**, opens/creates a
+  DB, runs `dolt_commit`/`dolt_gc`, and the RwLock GC discipline survives
+  `dolt_gc` under concurrent reads (≥10k-read stress, zero errors/corruption).
+  `dolt_gc` is corruption-free on 0.11.8 (the 0.10.11 cookie bug was fixed in
+  **0.11.2**); `build.rs` reuses `scripts/fetch-doltlite.sh 0.11.8`. **Finding:**
+  the forward-compat assumption is **FALSE** — doltlite 0.11.0 broke the on-disk
+  format (container v11→v12), so a Go-0.10.8 DB (v11) is *not* readable under
+  0.11.8 (`SQLITE_NOTADB`); the test now pins this as a characterization. A
+  one-time v11→v12 migration is required at cutover — strategy decision tracked
+  in **ask-8037b4**. *Highest unknown — first.*
 - **Phase 1 — read core + JSON-RPC reads.** Port store reads + migrations +
   projectmgr + registry; stand up the JSON-RPC server with the read methods +
   `job.subscribe` stub. Build the Go JSON-RPC client + auto-spawn connector;
@@ -421,10 +438,19 @@ remains:
 
 ## 10. Open questions (decide during Phase 0–3)
 
-- **doltlite format compat across the transition** — Go stays on 0.10.8 while
-  Rust uses 0.11.8; Phase 0 verifies a 0.10.8-created DB reads cleanly under
-  0.11.8. Bumping the Go side to 0.11.x is avoided (it may reintroduce the
-  Go-thread-migration deadlock) since the Go binary loses doltlite in Phase 3.
+- **doltlite format compat across the transition** — **RESOLVED by Phase 0
+  (ask-834e16): the formats are incompatible.** doltlite 0.11.0 is a breaking
+  on-disk format change (container v11→v12); a Go-0.10.8 DB (v11) cannot be read
+  by Rust-0.11.8 (v12, `SQLITE_NOTADB`). There is **no shared-format transition
+  window**, so any existing project DB needs a one-time v11→v12 migration. The
+  migration strategy is owned by **ask-8037b4** — candidate options recorded
+  there: (1) logical export/import at cutover (Go dumps rows, autoskd replays
+  into a fresh v12 DB; loses dolt history, which `autosk history` is only a v0.2
+  stub for); (2) bump **both** Go and Rust to 0.11.8 (one format everywhere) —
+  but this still needs the v11→v12 migration for existing DBs *and* a re-check
+  that the 0.10.9 Go-thread-migration deadlock did not return in 0.11.x; (3)
+  keep Rust on a v11-compatible 0.10.x — **rejected**, it forfeits the 0.11.2 GC
+  fix this effort exists to capture.
 - **Idle-shutdown tuning** — the "no clients AND no work AND no running jobs"
   window; whether the GUI sidecar should keep the daemon alive while open.
 - **Remote filesystem semantics** — daemon host ≠ client host: worktree paths,
