@@ -4,8 +4,9 @@
 //! (Phase 3); this only reads an already-installed package's config.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// npm package name of the Node bootstrapper (mirror of `RuntimePackageName`).
 pub const RUNTIME_PACKAGE_NAME: &str = "@autosk/agent-runtime";
@@ -53,16 +54,96 @@ pub struct PackageConfig {
     pub pi_skills: Vec<String>,
 }
 
+/// The side-effect boundary between the registry and npm (mirror of
+/// `pkgregistry.NpmRunner`). Tests inject a fake that writes the same on-disk
+/// shape directly instead of shelling out.
+pub trait NpmRunner: Send + Sync {
+    /// `npm --prefix <prefix> install <spec>`.
+    fn install(&self, prefix: &Path, spec: &str) -> std::io::Result<()>;
+    /// `npm --prefix <prefix> uninstall <name>`.
+    fn uninstall(&self, prefix: &Path, name: &str) -> std::io::Result<()>;
+}
+
+/// Shells out to a `npm` binary on PATH (mirror of `ExecNpm`). Stdout/stderr
+/// are inherited so install progress is visible.
+pub struct ExecNpm {
+    pub bin: String,
+}
+
+impl Default for ExecNpm {
+    fn default() -> Self {
+        ExecNpm {
+            bin: "npm".to_string(),
+        }
+    }
+}
+
+impl NpmRunner for ExecNpm {
+    fn install(&self, prefix: &Path, spec: &str) -> std::io::Result<()> {
+        run_npm(&self.bin, prefix, "install", spec)
+    }
+    fn uninstall(&self, prefix: &Path, name: &str) -> std::io::Result<()> {
+        run_npm(&self.bin, prefix, "uninstall", name)
+    }
+}
+
+fn run_npm(bin: &str, prefix: &Path, verb: &str, arg: &str) -> std::io::Result<()> {
+    let status = std::process::Command::new(bin)
+        .arg("--prefix")
+        .arg(prefix)
+        .arg(verb)
+        .arg("--save")
+        .arg("--no-audit")
+        .arg("--no-fund")
+        .arg(arg)
+        .status()?;
+    if !status.success() {
+        return Err(std::io::Error::other(format!(
+            "{bin} {verb} {arg}: exit {status}"
+        )));
+    }
+    Ok(())
+}
+
+/// One `registry.json` row (mirror of `pkgregistry.Entry`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Entry {
+    #[serde(skip)]
+    pub name: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub installed_at: String,
+}
+
 /// A handle on a packages prefix (`~/.autosk/packages` by default).
 pub struct Registry {
     prefix: PathBuf,
+    npm: Arc<dyn NpmRunner>,
+    /// Serializes package mutations (npm call + `registry.json` read-modify-
+    /// write) so two concurrent `agent.install`/`uninstall` RPCs in the daemon
+    /// can't interleave and lose an update (the Go model had one process per
+    /// install; the daemon multiplexes connections across threads). npm itself
+    /// also can't run concurrently against one `--prefix`.
+    mutate: Mutex<()>,
 }
 
 impl Registry {
-    /// Opens a registry rooted at `prefix`.
+    /// Opens a registry rooted at `prefix`, shelling to a real `npm`.
     pub fn open(prefix: impl Into<PathBuf>) -> Registry {
         Registry {
             prefix: prefix.into(),
+            npm: Arc::new(ExecNpm::default()),
+            mutate: Mutex::new(()),
+        }
+    }
+
+    /// Opens a registry with a custom [`NpmRunner`] (tests).
+    pub fn open_with_npm(prefix: impl Into<PathBuf>, npm: Arc<dyn NpmRunner>) -> Registry {
+        Registry {
+            prefix: prefix.into(),
+            npm,
+            mutate: Mutex::new(()),
         }
     }
 
@@ -107,6 +188,178 @@ impl Registry {
         self.prefix.join("registry.json")
     }
 
+    // ---- write surface (Phase 3) -----------------------------------------
+
+    /// Creates the prefix dir + skeleton `package.json` + empty `registry.json`
+    /// if absent (mirror of `EnsurePrefix`). Idempotent.
+    pub fn ensure_prefix(&self) -> std::io::Result<()> {
+        std::fs::create_dir_all(&self.prefix)?;
+        let pj = self.prefix.join("package.json");
+        if !pj.exists() {
+            std::fs::write(
+                &pj,
+                b"{\n  \"name\": \"autosk-packages\",\n  \"version\": \"0.0.0\",\n  \"private\": true,\n  \"description\": \"Autosk-managed agent packages prefix. Do not edit by hand.\"\n}\n" as &[u8],
+            )?;
+        }
+        if !self.registry_path().exists() {
+            self.write_registry(&RegistryFile {
+                schema_version: SCHEMA_VERSION,
+                agents: std::collections::BTreeMap::new(),
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Reports whether `name` is registered (mirror of `Has`).
+    pub fn has(&self, name: &str) -> bool {
+        self.read_registry()
+            .map(|f| f.agents.contains_key(name))
+            .unwrap_or(false)
+    }
+
+    /// Lists registered packages, sorted by name (mirror of `List`).
+    pub fn list(&self) -> std::io::Result<Vec<Entry>> {
+        let f = self.read_registry()?;
+        let mut out: Vec<Entry> = f
+            .agents
+            .into_iter()
+            .map(|(name, mut e)| {
+                e.name = name;
+                e
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
+    /// `Install` — registers a package by npm-registry name (mirror of
+    /// `Install`/`InstallSpec`). `version` empty → latest.
+    pub fn install(&self, name: &str, version: &str) -> std::result::Result<Entry, String> {
+        let spec = if version.is_empty() {
+            name.to_string()
+        } else {
+            format!("{name}@{version}")
+        };
+        self.install_spec(name, &spec)
+    }
+
+    /// Lower-level install entry point (mirror of `InstallSpec`).
+    pub fn install_spec(&self, name: &str, spec: &str) -> std::result::Result<Entry, String> {
+        let _guard = self.mutate.lock().unwrap_or_else(|p| p.into_inner());
+        validate_pkg_name(name)?;
+        let spec = if spec.is_empty() { name } else { spec };
+        self.ensure_prefix()
+            .map_err(|e| format!("ensure prefix: {e}"))?;
+        self.npm
+            .install(&self.prefix, spec)
+            .map_err(|e| format!("npm install {spec}: {e}"))?;
+        let installed = read_installed_version(&self.package_install_dir(name))
+            .map_err(|e| format!("{e} (did {spec:?} install under a different name?)"))?;
+        let entry = Entry {
+            name: name.to_string(),
+            version: installed,
+            installed_at: crate::timefmt::rfc3339_utc(crate::timefmt::now_unix()),
+        };
+        let mut f = self
+            .read_registry()
+            .map_err(|e| format!("read registry: {e}"))?;
+        let prev = f.agents.get(name).cloned();
+        f.agents.insert(name.to_string(), entry.clone());
+        self.write_registry(&f)
+            .map_err(|e| format!("write registry: {e}"))?;
+        if let Err(rerr) = self.resolve(name) {
+            // Roll back the registry change (but not the npm install).
+            match prev {
+                Some(p) => {
+                    f.agents.insert(name.to_string(), p);
+                }
+                None => {
+                    f.agents.remove(name);
+                }
+            }
+            let _ = self.write_registry(&f);
+            return Err(format!("installed {name} but it failed validation: {rerr}"));
+        }
+        Ok(entry)
+    }
+
+    /// `Uninstall` — removes a package from the registry + npm. Idempotent
+    /// (absent → Ok). Mirror of `Uninstall`.
+    pub fn uninstall(&self, name: &str) -> std::result::Result<(), String> {
+        let _guard = self.mutate.lock().unwrap_or_else(|p| p.into_inner());
+        if name.is_empty() {
+            return Err("pkgregistry.Uninstall: empty name".into());
+        }
+        self.ensure_prefix()
+            .map_err(|e| format!("ensure prefix: {e}"))?;
+        let mut f = self
+            .read_registry()
+            .map_err(|e| format!("read registry: {e}"))?;
+        if !f.agents.contains_key(name) {
+            return Ok(());
+        }
+        self.npm
+            .uninstall(&self.prefix, name)
+            .map_err(|e| format!("npm uninstall {name}: {e}"))?;
+        f.agents.remove(name);
+        self.write_registry(&f)
+            .map_err(|e| format!("write registry: {e}"))
+    }
+
+    /// `EnsureRuntime` — installs `@autosk/agent-runtime` if absent (mirror).
+    pub fn ensure_runtime(&self, version: &str) -> std::result::Result<(), String> {
+        let _guard = self.mutate.lock().unwrap_or_else(|p| p.into_inner());
+        self.ensure_prefix()
+            .map_err(|e| format!("ensure prefix: {e}"))?;
+        let dir = self.package_install_dir(RUNTIME_PACKAGE_NAME);
+        if dir.join("package.json").exists() {
+            return Ok(());
+        }
+        let spec = if version.is_empty() {
+            RUNTIME_PACKAGE_NAME.to_string()
+        } else {
+            format!("{RUNTIME_PACKAGE_NAME}@{version}")
+        };
+        self.npm
+            .install(&self.prefix, &spec)
+            .map_err(|e| format!("npm install {spec}: {e}"))
+    }
+
+    fn read_registry(&self) -> std::io::Result<RegistryFile> {
+        match std::fs::read(self.registry_path()) {
+            Ok(b) => {
+                let mut f: RegistryFile = serde_json::from_slice(&b)
+                    .map_err(|e| std::io::Error::other(format!("parse registry.json: {e}")))?;
+                if f.schema_version == 0 {
+                    f.schema_version = SCHEMA_VERSION;
+                }
+                if f.schema_version != SCHEMA_VERSION {
+                    return Err(std::io::Error::other(format!(
+                        "registry.json schema_version={} (this binary expects {SCHEMA_VERSION})",
+                        f.schema_version
+                    )));
+                }
+                Ok(f)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(RegistryFile {
+                schema_version: SCHEMA_VERSION,
+                agents: std::collections::BTreeMap::new(),
+            }),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn write_registry(&self, f: &RegistryFile) -> std::io::Result<()> {
+        std::fs::create_dir_all(&self.prefix)?;
+        let path = self.registry_path();
+        let tmp = path.with_extension("json.tmp");
+        let mut buf = serde_json::to_vec_pretty(f)
+            .map_err(|e| std::io::Error::other(format!("marshal registry.json: {e}")))?;
+        buf.push(b'\n');
+        std::fs::write(&tmp, &buf)?;
+        std::fs::rename(&tmp, &path)
+    }
+
     /// Returns the registered version for `name`, or [`PkgError::NotInstalled`].
     fn get_version(&self, name: &str) -> PkgResult<String> {
         let path = self.registry_path();
@@ -127,7 +380,7 @@ impl Registry {
         }
         f.agents
             .get(name)
-            .map(|e| e.version.clone())
+            .map(|e: &Entry| e.version.clone())
             .ok_or_else(|| PkgError::NotInstalled(name.to_string()))
     }
 
@@ -240,18 +493,47 @@ impl Registry {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct RegistryFile {
     #[serde(default)]
     schema_version: i64,
     #[serde(default)]
-    agents: std::collections::HashMap<String, RegistryEntry>,
+    agents: std::collections::BTreeMap<String, Entry>,
 }
 
-#[derive(Deserialize)]
-struct RegistryEntry {
-    #[serde(default)]
-    version: String,
+/// Minimal pre-npm name sanity (mirror of `validatePkgName`).
+fn validate_pkg_name(name: &str) -> std::result::Result<(), String> {
+    if name.is_empty() {
+        return Err("empty package name".into());
+    }
+    if name == HUMAN_AGENT_NAME {
+        return Err(format!(
+            "{HUMAN_AGENT_NAME:?} is a reserved agent name (the human is not a package)"
+        ));
+    }
+    if name.contains([' ', '\t', '\n', '\r']) {
+        return Err(format!(
+            "invalid package name (contains whitespace): {name:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// Reads the resolved `version` from an installed package's `package.json`.
+fn read_installed_version(install_dir: &Path) -> std::result::Result<String, String> {
+    #[derive(Deserialize)]
+    struct V {
+        #[serde(default)]
+        version: String,
+    }
+    let b = std::fs::read(install_dir.join("package.json"))
+        .map_err(|e| format!("read installed package.json: {e}"))?;
+    let v: V =
+        serde_json::from_slice(&b).map_err(|e| format!("parse installed package.json: {e}"))?;
+    if v.version.is_empty() {
+        return Err("installed package.json missing version field".into());
+    }
+    Ok(v.version)
 }
 
 #[derive(Deserialize)]

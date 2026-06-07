@@ -3,11 +3,16 @@ package datasource
 import (
 	"context"
 	"errors"
+	"os"
 	"time"
 
 	"autosk/internal/daemon/rpcclient"
 	"autosk/internal/store"
 )
+
+// lazySource tags every write so the daemon reproduces lazy's dolt_commit
+// dialect + behaviour (plan §7.5).
+const lazySource = "lazy"
 
 // RPC is a read-only Datasource backed by the autoskd JSON-RPC client
 // (plan §9 Phase 1: "point a read-only lazy at autoskd"). Reads route to the
@@ -175,37 +180,126 @@ func (r *RPC) StreamLive(ctx context.Context, jobID string) (*LiveHandle, error)
 // ---- writes (Phase 3) -----------------------------------------------------
 
 func (r *RPC) CreateTask(ctx context.Context, title, description string, priority int) (string, error) {
-	return "", ErrReadOnlyRPC
+	p := priority
+	t, err := r.cli.CreateTask(ctx, rpcclient.TaskCreateParams{
+		Source: lazySource, Title: title, Description: description, Priority: &p,
+	})
+	if err != nil {
+		return "", err
+	}
+	return t.ID, nil
 }
+
 func (r *RPC) UpdateStatus(ctx context.Context, id string, status store.Status) error {
-	return ErrReadOnlyRPC
+	_, err := r.cli.SetStatus(ctx, id, string(status))
+	return err
 }
-func (r *RPC) UpdatePriority(ctx context.Context, id string, p int) error { return ErrReadOnlyRPC }
+
+func (r *RPC) UpdatePriority(ctx context.Context, id string, p int) error {
+	_, err := r.cli.SetPriority(ctx, id, p)
+	return err
+}
+
 func (r *RPC) UpdateTitleDescription(ctx context.Context, id, title, description string) error {
-	return ErrReadOnlyRPC
+	_, err := r.cli.SetTitleDescription(ctx, id, title, description)
+	return err
 }
-func (r *RPC) Enroll(ctx context.Context, id, workflow, stepName string) error { return ErrReadOnlyRPC }
-func (r *RPC) Resume(ctx context.Context, id, toStep string) error             { return ErrReadOnlyRPC }
-func (r *RPC) Block(ctx context.Context, id, blocker string) error             { return ErrReadOnlyRPC }
-func (r *RPC) Unblock(ctx context.Context, id, blocker string) error           { return ErrReadOnlyRPC }
-func (r *RPC) AddComment(ctx context.Context, taskID, text string) error       { return ErrReadOnlyRPC }
+
+func (r *RPC) Enroll(ctx context.Context, id, workflow, stepName string) error {
+	_, err := r.cli.Enroll(ctx, lazySource, id, workflow, "", stepName, "")
+	return err
+}
+
+func (r *RPC) Resume(ctx context.Context, id, toStep string) error {
+	_, err := r.cli.Resume(ctx, lazySource, id, toStep)
+	return err
+}
+
+func (r *RPC) Block(ctx context.Context, id, blocker string) error {
+	return r.cli.Block(ctx, lazySource, id, []string{blocker})
+}
+
+func (r *RPC) Unblock(ctx context.Context, id, blocker string) error {
+	return r.cli.Unblock(ctx, lazySource, id, []string{blocker})
+}
+
+func (r *RPC) AddComment(ctx context.Context, taskID, text string) error {
+	_, err := r.cli.AddComment(ctx, lazySource, taskID, os.Getenv("AUTOSK_AGENT"), text)
+	return err
+}
+
 func (r *RPC) SetMetadata(ctx context.Context, id string, m map[string]any) error {
-	return ErrReadOnlyRPC
+	var v any = m
+	if m == nil {
+		v = map[string]any{}
+	}
+	_, err := r.cli.MetadataSet(ctx, lazySource, id, "", v, true)
+	return err
 }
+
 func (r *RPC) CreateWorkflow(ctx context.Context, jsonOrPath string) (string, error) {
-	return "", ErrReadOnlyRPC
+	// Lazy passes a file path (mirrors Offline.CreateWorkflow → ParseFile).
+	// noInstall=true: Go-lazy's Offline.CreateWorkflow calls ws.Create(.., false)
+	// directly and never auto-installs missing scoped agents, so a workflow
+	// referencing an uninstalled agent must fail validation (no surprise npm
+	// side effects from the TUI). The CLI path keeps its own --no-install gate.
+	return r.cli.WorkflowCreate(ctx, lazySource, jsonOrPath, "", true)
 }
-func (r *RPC) DeleteWorkflow(ctx context.Context, name string) error { return ErrReadOnlyRPC }
+
+func (r *RPC) DeleteWorkflow(ctx context.Context, name string) error {
+	return r.cli.WorkflowDelete(ctx, lazySource, name)
+}
+
 func (r *RPC) UpdateWorkflowIsolation(ctx context.Context, name, mode string, force bool) (UpdateIsolationReport, error) {
-	return UpdateIsolationReport{}, ErrReadOnlyRPC
+	// Thread lazySource so the daemon commits the `lazy: workflow update …`
+	// dialect; surface the partial report even on error (Go-lazy returns
+	// `(out, err)` so the TUI can render the rollback/leftover diagnostics).
+	rep, err := r.cli.WorkflowUpdateIsolation(ctx, lazySource, name, mode, force, false)
+	return mapIsolationReport(rep), err
 }
-func (r *RPC) InstallAgent(ctx context.Context, name, version string) error { return ErrReadOnlyRPC }
-func (r *RPC) UninstallAgent(ctx context.Context, name string) error        { return ErrReadOnlyRPC }
-func (r *RPC) CancelJob(ctx context.Context, jobID string) error            { return ErrReadOnlyRPC }
+
+func (r *RPC) InstallAgent(ctx context.Context, name, version string) error {
+	_, err := r.cli.AgentInstall(ctx, name, version)
+	return err
+}
+
+func (r *RPC) UninstallAgent(ctx context.Context, name string) error {
+	return r.cli.AgentUninstall(ctx, name, false)
+}
+
+func (r *RPC) CancelJob(ctx context.Context, jobID string) error {
+	_, err := r.cli.CancelJob(ctx, jobID)
+	return err
+}
+
 func (r *RPC) SendInput(ctx context.Context, jobID, message, behavior string) (string, error) {
-	return "", ErrReadOnlyRPC
+	return r.cli.SendInput(ctx, jobID, message, behavior)
 }
-func (r *RPC) AbortJob(ctx context.Context, jobID string) error { return ErrReadOnlyRPC }
+
+func (r *RPC) AbortJob(ctx context.Context, jobID string) error {
+	return r.cli.AbortJob(ctx, jobID)
+}
+
+func mapIsolationReport(rep rpcclient.UpdateIsolationReport) UpdateIsolationReport {
+	out := UpdateIsolationReport{
+		Workflow:         rep.Workflow,
+		From:             rep.From,
+		To:               rep.To,
+		Noop:             rep.Noop,
+		NonTerminalTasks: rep.NonTerminalTasks,
+		FailedTask:       rep.FailedTask,
+	}
+	for _, e := range rep.EnsuredTasks {
+		out.EnsuredTasks = append(out.EnsuredTasks, EnsureRecord{TaskID: e.TaskID, Path: e.Path, Branch: e.Branch, Existing: e.Existing})
+	}
+	for _, l := range rep.LeftoverWorktrees {
+		out.LeftoverWorktrees = append(out.LeftoverWorktrees, LeftoverWorktree{TaskID: l.TaskID, Path: l.Path})
+	}
+	for _, e := range rep.RolledBackEnsures {
+		out.RolledBackEnsures = append(out.RolledBackEnsures, EnsureRecord{TaskID: e.TaskID, Path: e.Path, Branch: e.Branch, Existing: e.Existing})
+	}
+	return out
+}
 
 // ---- mapping helpers ------------------------------------------------------
 

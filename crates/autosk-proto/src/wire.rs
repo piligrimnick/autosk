@@ -235,6 +235,45 @@ fn is_zero_i64(n: &i64) -> bool {
     *n == 0
 }
 
+/// `workflow.updateIsolation` result (mirror of `workflow.UpdateIsolationReport`).
+/// Populated up to the point of failure so callers can render partial rollbacks
+/// even on the error path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct UpdateIsolationReport {
+    pub workflow: String,
+    pub from: String,
+    pub to: String,
+    pub noop: bool,
+    pub dry_run: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub non_terminal_tasks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ensured_tasks: Vec<EnsureRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub leftover_worktrees: Vec<LeftoverWorktree>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rolled_back_ensures: Vec<EnsureRecord>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub failed_task: String,
+}
+
+/// One worktree allocation produced by a `none → worktree --force` flip.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EnsureRecord {
+    pub task_id: String,
+    pub path: String,
+    pub branch: String,
+    pub existing: bool,
+}
+
+/// One `(task, path)` pair surfaced by a `worktree → none --force` flip (the
+/// directory is never removed by the daemon).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LeftoverWorktree {
+    pub task_id: String,
+    pub path: String,
+}
+
 /// `project.list` / `project.add` element. Backed by the persisted registry at
 /// `~/.autosk/projects.json` (plan §7.4).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

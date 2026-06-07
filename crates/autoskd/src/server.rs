@@ -9,8 +9,9 @@
 //! still served on the same connection.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
+use std::os::unix::net::UnixListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
@@ -21,16 +22,20 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
 
+use autosk_core::ctx::Ctx;
 use autosk_core::pi::{Command, Response as PiResponse};
 use autosk_core::pirunners::AttachGuard;
 use autosk_core::projectmgr::Project;
 use autosk_core::read::{JobFilter, TaskFilter};
 use autosk_core::runstore;
+use autosk_core::verbs::{self, CreateParams, Source};
+use autosk_core::worktree::WorktreeManager;
 use autosk_core::{transcript, Error as CoreError};
 use autosk_proto::rpc::{error_codes as codes, ErrorObject, Notification, Request, Response};
 use autosk_proto::wire;
 
 use crate::daemon::Daemon;
+use crate::notify::SharedWriter;
 
 const VERSION: &str = match option_env!("AUTOSKD_VERSION") {
     Some(v) => v,
@@ -44,6 +49,9 @@ const COMMIT: &str = match option_env!("AUTOSKD_COMMIT") {
 /// The daemon's RPC server over the runtime [`Daemon`].
 pub struct Server {
     daemon: Arc<Daemon>,
+    /// Expected TCP auth token (`Some` enables the TCP `auth` handshake; UDS is
+    /// always exempt). `None` rejects every TCP connection.
+    token: Option<String>,
 }
 
 /// A live subscription owned by one connection.
@@ -74,31 +82,75 @@ impl Drop for Subscription {
 
 impl Server {
     pub fn new(daemon: Arc<Daemon>) -> Server {
-        Server { daemon }
+        Server {
+            daemon,
+            token: None,
+        }
     }
 
-    /// Accept loop: one detached thread per connection.
+    /// Sets the TCP auth token (enables the TCP `auth` handshake).
+    pub fn with_token(mut self, token: Option<String>) -> Server {
+        self.token = token;
+        self
+    }
+
+    /// Accept loop over the UDS (auth-exempt). One detached thread per conn.
     pub fn serve(self: Arc<Self>, listener: UnixListener) {
         for incoming in listener.incoming() {
             match incoming {
                 Ok(stream) => {
                     let me = Arc::clone(&self);
-                    std::thread::spawn(move || me.handle_conn(stream));
+                    std::thread::spawn(move || {
+                        let w = match stream.try_clone() {
+                            Ok(w) => w,
+                            Err(e) => {
+                                eprintln!("autoskd: clone stream: {e}");
+                                return;
+                            }
+                        };
+                        me.handle_conn(BufReader::new(stream), Box::new(w), false);
+                    });
                 }
                 Err(e) => eprintln!("autoskd: accept: {e}"),
             }
         }
     }
 
-    fn handle_conn(&self, stream: UnixStream) {
-        let writer = match stream.try_clone() {
-            Ok(w) => Arc::new(Mutex::new(w)),
-            Err(e) => {
-                eprintln!("autoskd: clone stream: {e}");
-                return;
+    /// Accept loop over TCP (every connection must `auth{token}` first).
+    pub fn serve_tcp(self: Arc<Self>, listener: TcpListener) {
+        for incoming in listener.incoming() {
+            match incoming {
+                Ok(stream) => {
+                    let me = Arc::clone(&self);
+                    std::thread::spawn(move || {
+                        let w = match stream.try_clone() {
+                            Ok(w) => w,
+                            Err(e) => {
+                                eprintln!("autoskd: clone tcp stream: {e}");
+                                return;
+                            }
+                        };
+                        me.handle_conn(BufReader::new(stream), Box::new(w), true);
+                    });
+                }
+                Err(e) => eprintln!("autoskd: tcp accept: {e}"),
             }
-        };
-        let reader = BufReader::new(stream);
+        }
+    }
+
+    fn handle_conn<R: Read>(
+        &self,
+        reader: BufReader<R>,
+        write_half: Box<dyn Write + Send>,
+        require_auth: bool,
+    ) {
+        let writer: SharedWriter = Arc::new(Mutex::new(write_half));
+        // Notifications (`task-changed`/`project-changed`) are OPT-IN: a
+        // connection only receives them after `task.subscribe`/`project.subscribe`
+        // (plan §5). Plain request/response clients (the CLI) never see
+        // unsolicited frames on their connection.
+        let mut note_sub: Option<u64> = None;
+        let mut authed = !require_auth;
         let mut subs: HashMap<String, Subscription> = HashMap::new();
         for line in reader.lines() {
             let line = match line {
@@ -122,7 +174,43 @@ impl Server {
                     continue;
                 }
             };
+            // TCP auth handshake: until authenticated, only `auth` is served.
+            if !authed {
+                if req.method == "auth" {
+                    let resp = self.check_auth(&req);
+                    if resp.error.is_none() {
+                        authed = true;
+                    }
+                    write_line(&writer, &resp);
+                } else {
+                    write_line(
+                        &writer,
+                        &Response::err(req.id, codes::INVALID_REQUEST, "auth required"),
+                    );
+                }
+                continue;
+            }
             match req.method.as_str() {
+                "auth" => {
+                    // Already authenticated (or UDS): treat as a no-op success.
+                    write_line(
+                        &writer,
+                        &Response::ok(req.id, serde_json::json!({"ok": true})),
+                    );
+                }
+                "shutdown" => {
+                    write_line(
+                        &writer,
+                        &Response::ok(req.id, serde_json::json!({"ok": true})),
+                    );
+                    // Flush, then tear down and exit the process so the UDS is
+                    // released and clients fall back to spawning a fresh daemon.
+                    self.daemon.shutdown();
+                    std::thread::spawn(|| {
+                        std::thread::sleep(Duration::from_millis(50));
+                        std::process::exit(0);
+                    });
+                }
                 "job.subscribe" => {
                     let resp = self.start_subscription(&req, &writer, &mut subs);
                     write_line(&writer, &resp);
@@ -130,6 +218,24 @@ impl Server {
                 "job.unsubscribe" => {
                     let resp = self.stop_subscription(&req, &mut subs);
                     write_line(&writer, &resp);
+                }
+                "task.subscribe" | "project.subscribe" => {
+                    if note_sub.is_none() {
+                        note_sub = Some(self.daemon.hub.register(Arc::clone(&writer)));
+                    }
+                    write_line(
+                        &writer,
+                        &Response::ok(req.id, serde_json::json!({"subscribed": true})),
+                    );
+                }
+                "task.unsubscribe" | "project.unsubscribe" => {
+                    if let Some(id) = note_sub.take() {
+                        self.daemon.hub.unregister(id);
+                    }
+                    write_line(
+                        &writer,
+                        &Response::ok(req.id, serde_json::json!({"unsubscribed": true})),
+                    );
                 }
                 _ => {
                     let resp = match self.dispatch(&req) {
@@ -140,13 +246,56 @@ impl Server {
                             error: Some(error),
                         },
                     };
+                    let ok = resp.error.is_none();
                     write_line(&writer, &resp);
+                    // Eager `task-changed` after a successful task-mutating write
+                    // (race-free); the change poller additionally covers the
+                    // daemon's own executor-driven advances.
+                    if ok && is_task_write(&req.method) {
+                        self.broadcast_task_changed(req.params.as_ref());
+                    }
                 }
             }
         }
-        // Disconnect: tear down every live stream (releases attach guards).
+        // Disconnect: tear down every live stream (releases attach guards) and
+        // drop the hub registration so notifications stop targeting this conn.
         for (_, mut s) in subs.drain() {
             s.cancel();
+        }
+        if let Some(id) = note_sub {
+            self.daemon.hub.unregister(id);
+        }
+    }
+
+    /// Broadcasts `task-changed` for the project named by a write request's
+    /// selector (best-effort; resolves the canonical root/db for the payload).
+    fn broadcast_task_changed(&self, params: Option<&Value>) {
+        let cwd = params
+            .and_then(|p| p.get("cwd"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let db = params
+            .and_then(|p| p.get("db_path"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if let Ok(proj) = self.daemon.resolve(cwd, db) {
+            self.daemon.hub.task_changed(&proj.root, &proj.db_path);
+        }
+    }
+
+    /// Validates an `auth{token}` request against the configured token.
+    fn check_auth(&self, req: &Request) -> Response {
+        let supplied = req
+            .params
+            .as_ref()
+            .and_then(|p| p.get("token"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        match &self.token {
+            Some(expected) if !expected.is_empty() && supplied == expected => {
+                Response::ok(req.id, serde_json::json!({"ok": true}))
+            }
+            _ => Response::err(req.id, codes::INVALID_REQUEST, "invalid or missing token"),
         }
     }
 
@@ -250,6 +399,33 @@ impl Server {
                 json(&proj.db.signal_for_job(&p.job_id).map_err(core_err)?)
             }
 
+            // ---- writes (Phase 3) -------------------------------------
+            "task.create" => self.task_create(&params),
+            "task.update" => self.task_update(&params),
+            "task.done" => self.task_terminal(&params, "done"),
+            "task.cancel" => self.task_terminal(&params, "cancel"),
+            "task.reopen" => self.task_reopen(&params),
+            "task.setStatus" => self.task_set_status(&params),
+            "task.setTitleDescription" => self.task_set_title_desc(&params),
+            "task.setPriority" => self.task_set_priority(&params),
+            "task.enroll" => self.task_enroll(&params),
+            "task.resume" => self.task_resume(&params),
+            "task.block" => self.task_block(&params),
+            "task.unblock" => self.task_unblock(&params),
+            "task.unblockAll" => self.task_unblock_all(&params),
+            "task.metadata.set" => self.task_metadata_set(&params),
+            "task.metadata.unset" => self.task_metadata_unset(&params),
+            "task.metadata.resetVisits" => self.task_metadata_reset_visits(&params),
+            "comment.add" => self.comment_add(&params),
+            "workflow.create" => self.workflow_create(&params),
+            "workflow.delete" => self.workflow_delete(&params),
+            "workflow.updateIsolation" => self.workflow_update_isolation(&params),
+            "agent.install" => self.agent_install(&params),
+            "agent.uninstall" => self.agent_uninstall(&params),
+            "sql.query" => self.sql_query(&params),
+            "sql.exec" => self.sql_exec(&params),
+            "project.init" => self.project_init(&params),
+
             other => Err(ErrorObject {
                 code: codes::METHOD_NOT_FOUND,
                 message: format!("unknown method: {other}"),
@@ -326,13 +502,13 @@ impl Server {
     fn project_add(&self, params: &Value) -> Result<Value, ErrorObject> {
         let p: Selector = parse(params)?;
         let proj = self.resolve(&p.cwd, &p.db_path)?;
-        json(
-            &self
-                .daemon
-                .registry
-                .add(&proj.root, &proj.db_path)
-                .map_err(core_err)?,
-        )
+        let info = self
+            .daemon
+            .registry
+            .add(&proj.root, &proj.db_path)
+            .map_err(core_err)?;
+        self.daemon.hub.project_changed();
+        json(&info)
     }
 
     fn project_remove(&self, params: &Value) -> Result<Value, ErrorObject> {
@@ -343,6 +519,9 @@ impl Server {
             self.resolve(&p.cwd, &p.db_path)?.root.clone()
         };
         let removed = self.daemon.registry.remove(&root).map_err(core_err)?;
+        if removed {
+            self.daemon.hub.project_changed();
+        }
         Ok(serde_json::json!({ "removed": removed }))
     }
 
@@ -456,7 +635,7 @@ impl Server {
     fn start_subscription(
         &self,
         req: &Request,
-        writer: &Arc<Mutex<UnixStream>>,
+        writer: &SharedWriter,
         subs: &mut HashMap<String, Subscription>,
     ) -> Response {
         let p: SubscribeParams = match parse(&req.params.clone().unwrap_or(Value::Null)) {
@@ -562,6 +741,299 @@ impl Server {
     }
 }
 
+// ---- write handlers (Phase 3) ---------------------------------------------
+
+impl Server {
+    fn worktrees(&self) -> &dyn WorktreeManager {
+        self.daemon.worktree.as_ref()
+    }
+
+    fn task_create(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: TaskCreateParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let view = verbs::create(
+            &proj,
+            &self.daemon.packages,
+            self.worktrees(),
+            &Ctx::background(),
+            Source::parse(&p.source),
+            CreateParams {
+                title: p.title,
+                description: p.description,
+                priority: p.priority.unwrap_or(2),
+                blocks: p.blocks,
+                blocked_by: p.blocked_by,
+                workflow: p.workflow,
+                agent: p.agent,
+                step: p.step,
+                base_ref: p.base_ref,
+                caller: p.caller,
+            },
+        )
+        .map_err(core_err)?;
+        json(&view)
+    }
+
+    fn task_update(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: TaskUpdateParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let view = verbs::update(
+            &proj,
+            self.worktrees(),
+            &Ctx::background(),
+            &p.id,
+            p.title,
+            p.description,
+            p.priority,
+            p.status,
+        )
+        .map_err(core_err)?;
+        json(&view)
+    }
+
+    fn task_terminal(&self, params: &Value, which: &str) -> Result<Value, ErrorObject> {
+        let p: IdParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let view = if which == "done" {
+            verbs::done(&proj, self.worktrees(), &Ctx::background(), &p.id)
+        } else {
+            verbs::cancel(&proj, self.worktrees(), &Ctx::background(), &p.id)
+        }
+        .map_err(core_err)?;
+        json(&view)
+    }
+
+    fn task_reopen(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: IdParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        json(&verbs::reopen(&proj, &p.id).map_err(core_err)?)
+    }
+
+    fn task_set_status(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: SetStatusParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let view = verbs::lazy_update_status(
+            &proj,
+            self.worktrees(),
+            &Ctx::background(),
+            &p.id,
+            &p.status,
+        )
+        .map_err(core_err)?;
+        json(&view)
+    }
+
+    fn task_set_title_desc(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: TitleDescParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        json(
+            &verbs::lazy_update_title_description(&proj, &p.id, &p.title, &p.description)
+                .map_err(core_err)?,
+        )
+    }
+
+    fn task_set_priority(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: PriorityParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        json(&verbs::lazy_update_priority(&proj, &p.id, p.priority).map_err(core_err)?)
+    }
+
+    fn task_enroll(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: EnrollParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let view = verbs::enroll(
+            &proj,
+            &self.daemon.packages,
+            self.worktrees(),
+            &Ctx::background(),
+            Source::parse(&p.source),
+            &p.id,
+            &p.workflow,
+            &p.agent,
+            &p.step,
+            &p.base_ref,
+        )
+        .map_err(core_err)?;
+        json(&view)
+    }
+
+    fn task_resume(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: ResumeParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        json(&verbs::resume(&proj, Source::parse(&p.source), &p.id, &p.to_step).map_err(core_err)?)
+    }
+
+    fn task_block(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: BlockParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        verbs::block(&proj, Source::parse(&p.source), &p.id, &p.blockers).map_err(core_err)?;
+        Ok(serde_json::json!({"ok": true}))
+    }
+
+    fn task_unblock(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: BlockParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        verbs::unblock(&proj, Source::parse(&p.source), &p.id, &p.blockers).map_err(core_err)?;
+        Ok(serde_json::json!({"ok": true}))
+    }
+
+    fn task_unblock_all(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: IdParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let n = verbs::unblock_all(&proj, &p.id).map_err(core_err)?;
+        Ok(serde_json::json!({"removed": n}))
+    }
+
+    fn task_metadata_set(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: MetadataSetParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let r = verbs::metadata_set(
+            &proj,
+            Source::parse(&p.source),
+            &p.id,
+            &p.key,
+            p.value,
+            p.replace_all,
+        )
+        .map_err(core_err)?;
+        Ok(serde_json::json!({"task": r.task, "changed": r.changed}))
+    }
+
+    fn task_metadata_unset(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: MetadataKeyParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let r = verbs::metadata_unset(&proj, &p.id, &p.key).map_err(core_err)?;
+        Ok(serde_json::json!({"task": r.task, "changed": r.changed}))
+    }
+
+    fn task_metadata_reset_visits(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: ResetVisitsParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let r =
+            verbs::metadata_reset_visits(&proj, &p.id, &p.step, &p.step_id).map_err(core_err)?;
+        Ok(serde_json::json!({"task": r.task, "changed": r.changed}))
+    }
+
+    fn comment_add(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: CommentAddParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let c = verbs::comment_add(
+            &proj,
+            Source::parse(&p.source),
+            &p.task_id,
+            &p.author,
+            &p.text,
+        )
+        .map_err(core_err)?;
+        json(&c)
+    }
+
+    fn workflow_create(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: WorkflowCreateParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let name = verbs::workflow_create(
+            &proj,
+            &self.daemon.packages,
+            Source::parse(&p.source),
+            &p.file,
+            &p.json,
+            p.no_install,
+        )
+        .map_err(core_err)?;
+        Ok(serde_json::json!({"name": name}))
+    }
+
+    fn workflow_delete(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: WorkflowDeleteParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        verbs::workflow_delete(&proj, Source::parse(&p.source), &p.name).map_err(core_err)?;
+        Ok(serde_json::json!({"ok": true}))
+    }
+
+    fn workflow_update_isolation(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: WorkflowIsolationParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let (report, res) = verbs::workflow_update_isolation(
+            &proj,
+            self.worktrees(),
+            &Ctx::background(),
+            Source::parse(&p.source),
+            &p.name,
+            &p.mode,
+            p.force,
+            p.dry_run,
+        );
+        match res {
+            Ok(()) => json(&report),
+            Err(e) => {
+                // Surface the (partial) force-safety report on the error path so
+                // `workflow update --json` and the lazy TUI can render the
+                // rollback/leftover diagnostics, not just a bare message
+                // (parity with Go's `(out, err)`).
+                let mut err = core_err(e);
+                let report_val = serde_json::to_value(&report).unwrap_or(Value::Null);
+                err.details = Some(serde_json::json!({ "report": report_val }));
+                Err(err)
+            }
+        }
+    }
+
+    fn agent_install(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: AgentInstallParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let a = verbs::agent_install(&proj, &self.daemon.packages, &p.name, &p.version)
+            .map_err(core_err)?;
+        json(&a)
+    }
+
+    fn agent_uninstall(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: AgentUninstallParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        verbs::agent_uninstall(&proj, &self.daemon.packages, &p.name, p.force).map_err(core_err)?;
+        Ok(serde_json::json!({"ok": true}))
+    }
+
+    fn sql_query(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: SqlParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let r = verbs::sql_query(&proj, &p.query).map_err(core_err)?;
+        Ok(serde_json::json!({"columns": r.columns, "rows": r.rows}))
+    }
+
+    fn sql_exec(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: SqlParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let n = verbs::sql_exec(&proj, &p.query).map_err(core_err)?;
+        Ok(serde_json::json!({"rows_affected": n}))
+    }
+
+    fn project_init(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: ProjectInitParams = parse(params)?;
+        // project.init may target a fresh dir without an existing .autosk/db, so
+        // resolve via Manager::init when the selector does not yet resolve.
+        let proj = match self.daemon.resolve(&p.cwd, &p.db_path) {
+            Ok(pr) => pr,
+            Err(CoreError::ProjectNotFound(_)) => {
+                let dir = if !p.cwd.is_empty() {
+                    p.cwd.clone()
+                } else {
+                    ".".to_string()
+                };
+                autosk_core::projectmgr::Manager::init(&dir).map_err(core_err)?;
+                self.daemon.resolve(&p.cwd, &p.db_path).map_err(core_err)?
+            }
+            Err(e) => return Err(core_err(e)),
+        };
+        let _ = self.daemon.registry.add(&proj.root, &proj.db_path);
+        let bootstrapped = verbs::project_init(&proj, &self.daemon.packages, p.skip_bootstrap)
+            .map_err(core_err)?;
+        self.daemon.hub.project_changed();
+        Ok(
+            serde_json::json!({"root": proj.root, "db_path": proj.db_path, "bootstrapped": bootstrapped}),
+        )
+    }
+}
+
 /// The per-subscription replay-then-tail loop. Emits `job-event` notifications:
 /// message (with `event_id`), status, done, error — mirroring the Go SSE frames.
 fn stream_job(
@@ -569,7 +1041,7 @@ fn stream_job(
     proj: &Arc<Project>,
     job_id: &str,
     p: &SubscribeParams,
-    writer: &Arc<Mutex<UnixStream>>,
+    writer: &SharedWriter,
     stop: &Arc<AtomicBool>,
 ) {
     let run = match proj.db.run_get(job_id) {
@@ -639,7 +1111,7 @@ fn replay_initial(
     job_id: &str,
     session_path: &str,
     p: &SubscribeParams,
-    writer: &Arc<Mutex<UnixStream>>,
+    writer: &SharedWriter,
 ) -> usize {
     if session_path.is_empty() {
         return 0;
@@ -673,7 +1145,7 @@ fn pump_transcript(
     job_id: &str,
     session_path: &str,
     cursor: usize,
-    writer: &Arc<Mutex<UnixStream>>,
+    writer: &SharedWriter,
 ) -> usize {
     let all = match transcript::read_messages(session_path, true, 0) {
         Ok(a) => a,
@@ -688,12 +1160,7 @@ fn pump_transcript(
     all.len()
 }
 
-fn emit_message(
-    job_id: &str,
-    event_id: i64,
-    ev: &wire::MessageEvent,
-    writer: &Arc<Mutex<UnixStream>>,
-) {
+fn emit_message(job_id: &str, event_id: i64, ev: &wire::MessageEvent, writer: &SharedWriter) {
     let note = Notification {
         method: "job-event".into(),
         params: serde_json::to_value(wire::JobEvent {
@@ -709,20 +1176,10 @@ fn emit_message(
     write_note(writer, &note);
 }
 
-fn emit_status(
-    daemon: &Arc<Daemon>,
-    proj: &Arc<Project>,
-    job_id: &str,
-    writer: &Arc<Mutex<UnixStream>>,
-) {
+fn emit_status(daemon: &Arc<Daemon>, proj: &Arc<Project>, job_id: &str, writer: &SharedWriter) {
     emit_job_frame(daemon, proj, job_id, "status", writer);
 }
-fn emit_done(
-    daemon: &Arc<Daemon>,
-    proj: &Arc<Project>,
-    job_id: &str,
-    writer: &Arc<Mutex<UnixStream>>,
-) {
+fn emit_done(daemon: &Arc<Daemon>, proj: &Arc<Project>, job_id: &str, writer: &SharedWriter) {
     emit_job_frame(daemon, proj, job_id, "done", writer);
 }
 
@@ -731,7 +1188,7 @@ fn emit_job_frame(
     proj: &Arc<Project>,
     job_id: &str,
     kind: &str,
-    writer: &Arc<Mutex<UnixStream>>,
+    writer: &SharedWriter,
 ) {
     let Ok(mut job) = proj.db.job_get(job_id) else {
         return;
@@ -894,7 +1351,7 @@ fn count_runs(p: &Project) -> Result<(i64, i64), ErrorObject> {
     .map_err(core_err)
 }
 
-fn write_line(writer: &Arc<Mutex<UnixStream>>, resp: &Response) {
+fn write_line(writer: &SharedWriter, resp: &Response) {
     let Ok(mut buf) = serde_json::to_vec(resp) else {
         return;
     };
@@ -903,7 +1360,7 @@ fn write_line(writer: &Arc<Mutex<UnixStream>>, resp: &Response) {
     let _ = w.write_all(&buf).and_then(|()| w.flush());
 }
 
-fn write_note(writer: &Arc<Mutex<UnixStream>>, note: &Notification) {
+fn write_note(writer: &SharedWriter, note: &Notification) {
     let Ok(mut buf) = serde_json::to_vec(note) else {
         return;
     };
@@ -931,6 +1388,37 @@ fn json<T: serde::Serialize>(value: &T) -> Result<Value, ErrorObject> {
     })
 }
 
+/// True for the task-mutating write methods that should push a `task-changed`
+/// notification on success.
+fn is_task_write(method: &str) -> bool {
+    matches!(
+        method,
+        "task.create"
+            | "task.update"
+            | "task.done"
+            | "task.cancel"
+            | "task.reopen"
+            | "task.setStatus"
+            | "task.setTitleDescription"
+            | "task.setPriority"
+            | "task.enroll"
+            | "task.resume"
+            | "task.block"
+            | "task.unblock"
+            | "task.unblockAll"
+            | "task.metadata.set"
+            | "task.metadata.unset"
+            | "task.metadata.resetVisits"
+            | "comment.add"
+            | "workflow.create"
+            | "workflow.delete"
+            | "workflow.updateIsolation"
+            | "agent.install"
+            | "agent.uninstall"
+            | "sql.exec"
+    )
+}
+
 fn core_err(e: CoreError) -> ErrorObject {
     let (code, message) = match &e {
         CoreError::ProjectNotFound(s) => {
@@ -938,6 +1426,9 @@ fn core_err(e: CoreError) -> ErrorObject {
         }
         CoreError::InvalidProject(s) => (codes::INVALID_PROJECT, format!("invalid project: {s}")),
         CoreError::NotFound => (codes::NOT_FOUND, "not found".to_string()),
+        CoreError::Invalid(m) => (codes::INVALID_PARAMS, m.clone()),
+        CoreError::Conflict(m) => (codes::CONFLICT, m.clone()),
+        CoreError::MaxVisitsExceeded { .. } => (codes::CONFLICT, e.to_string()),
         other => (codes::INTERNAL_ERROR, other.to_string()),
     };
     ErrorObject {
@@ -1071,6 +1562,292 @@ struct RemoveParams {
     db_path: String,
     #[serde(default)]
     root: String,
+}
+
+// ---- write param structs --------------------------------------------------
+
+#[derive(Debug, Default, Deserialize)]
+struct TaskCreateParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    priority: Option<i64>,
+    #[serde(default)]
+    blocks: Vec<String>,
+    #[serde(default)]
+    blocked_by: Vec<String>,
+    #[serde(default)]
+    workflow: String,
+    #[serde(default)]
+    agent: String,
+    #[serde(default)]
+    step: String,
+    #[serde(default)]
+    base_ref: String,
+    #[serde(default)]
+    caller: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TaskUpdateParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    priority: Option<i64>,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SetStatusParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    status: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TitleDescParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PriorityParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    priority: i64,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct EnrollParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    workflow: String,
+    #[serde(default)]
+    agent: String,
+    #[serde(default)]
+    step: String,
+    #[serde(default)]
+    base_ref: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ResumeParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    to_step: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct BlockParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    blockers: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MetadataSetParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    key: String,
+    #[serde(default)]
+    value: Value,
+    #[serde(default)]
+    replace_all: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MetadataKeyParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    key: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ResetVisitsParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    step: String,
+    #[serde(default)]
+    step_id: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct CommentAddParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    task_id: String,
+    #[serde(default)]
+    author: String,
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct WorkflowCreateParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    file: String,
+    #[serde(default)]
+    json: String,
+    #[serde(default)]
+    no_install: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct WorkflowDeleteParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    name: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct WorkflowIsolationParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    mode: String,
+    #[serde(default)]
+    force: bool,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AgentInstallParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    version: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AgentUninstallParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    force: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SqlParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    query: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ProjectInitParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    skip_bootstrap: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]

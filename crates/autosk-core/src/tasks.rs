@@ -37,7 +37,7 @@ fn status_valid(s: &str) -> bool {
 /// In-memory view of a `tasks` row, narrowed to the engine's needs
 /// (mirror of `store.Task`). `metadata` is an empty map when the column is
 /// SQL NULL.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Task {
     pub id: String,
     pub title: String,
@@ -169,6 +169,16 @@ pub fn create_task(conn: &Connection, mut t: Task) -> Result<Task> {
         ],
     )?;
     Ok(t)
+}
+
+/// `DeleteTask` — removes a task row by id; [`Error::NotFound`] when no row
+/// matched (FK CASCADE reaps deps/comments/runs/signals). Mirror of `DeleteTask`.
+pub fn delete_task(conn: &Connection, id: &str) -> Result<()> {
+    let n = conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])?;
+    if n == 0 {
+        return Err(Error::NotFound);
+    }
+    Ok(())
 }
 
 /// `UpdateTask` — applies a sparse patch + bumps `updated_at`; returns the

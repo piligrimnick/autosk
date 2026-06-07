@@ -19,6 +19,8 @@ use autosk_core::scheduler::{Config as SchedConfig, Job, SchedExecutor, Schedule
 use autosk_core::worktree::Manager as WorktreeManager;
 use autosk_core::Result;
 
+use crate::notify::{ChangePoller, Hub};
+
 /// Daemon-wide tuning (the `serve` flags).
 #[derive(Clone)]
 pub struct DaemonConfig {
@@ -53,6 +55,14 @@ pub struct Daemon {
     pub scheduler: Arc<Scheduler>,
     pub runners: Arc<RunnerRegistry>,
     pub attachments: Arc<Attachments>,
+    /// Agent-package registry (shared with the executor) — used by the write
+    /// verbs (`agent.install`/`workflow.create`/`project.init`).
+    pub packages: Arc<PkgRegistry>,
+    /// Worktree manager (shared with the executor) — used by isolated-workflow
+    /// write verbs (`create`/`enroll`/`done`/`cancel`/`workflow.updateIsolation`).
+    pub worktree: Arc<WorktreeManager>,
+    /// Broadcast hub for `task-changed`/`project-changed` notifications.
+    pub hub: Arc<Hub>,
     cfg: DaemonConfig,
     started: Mutex<HashMap<String, ProjectRuntime>>,
 }
@@ -60,6 +70,7 @@ pub struct Daemon {
 struct ProjectRuntime {
     poller: Arc<Poller>,
     compactor: Arc<Compactor>,
+    change: ChangePoller,
 }
 
 impl Daemon {
@@ -76,8 +87,8 @@ impl Daemon {
 
         let exec = Arc::new(DaemonExecutor {
             mgr: Arc::clone(&mgr),
-            packages,
-            worktree,
+            packages: Arc::clone(&packages),
+            worktree: Arc::clone(&worktree),
             runners: Arc::clone(&runners),
             attachments: Arc::clone(&attachments),
             cfg: cfg.clone(),
@@ -97,6 +108,9 @@ impl Daemon {
             scheduler,
             runners,
             attachments,
+            packages,
+            worktree,
+            hub: Arc::new(Hub::new()),
             cfg,
             started: Mutex::new(HashMap::new()),
         })
@@ -130,21 +144,37 @@ impl Daemon {
         };
         let compactor = Compactor::new(Arc::clone(&proj.db), proj.root.clone(), interval, disabled);
         compactor.start();
-        started.insert(proj.root.clone(), ProjectRuntime { poller, compactor });
+        // task-changed change poller (poll-backed notifications, plan §5).
+        let change = ChangePoller::start(
+            Arc::clone(&self.hub),
+            Arc::clone(&proj.db),
+            proj.root.clone(),
+            proj.db_path.clone(),
+            self.cfg.poll_interval,
+        );
+        started.insert(
+            proj.root.clone(),
+            ProjectRuntime {
+                poller,
+                compactor,
+                change,
+            },
+        );
     }
 
     /// Stops every project's poller/compactor and the scheduler. Best-effort.
     pub fn shutdown(&self) {
-        let runtimes: Vec<ProjectRuntime> = self
+        let mut runtimes: Vec<ProjectRuntime> = self
             .started
             .lock()
             .unwrap()
             .drain()
             .map(|(_, v)| v)
             .collect();
-        for rt in &runtimes {
+        for rt in runtimes.iter_mut() {
             rt.poller.stop();
             rt.compactor.stop();
+            rt.change.stop();
         }
         self.scheduler.stop();
     }
@@ -152,6 +182,34 @@ impl Daemon {
     /// Number of started (poller-running) projects (observability/tests).
     pub fn started_len(&self) -> usize {
         self.started.lock().unwrap().len()
+    }
+
+    /// True when the daemon is actively driving work: any queued/running job OR
+    /// any `status='work'` task across loaded projects. Part of the idle-
+    /// shutdown policy (plan §4.2: shut down only when no clients AND no running
+    /// jobs AND no non-terminal work tasks).
+    pub fn has_pending_work(&self) -> bool {
+        for p in self.mgr.loaded() {
+            let pending =
+                p.db.with_read(|conn| {
+                    let jobs: i64 = conn.query_row(
+                        "SELECT COUNT(*) FROM daemon_runs WHERE status IN ('queued','running')",
+                        [],
+                        |r| r.get(0),
+                    )?;
+                    let work: i64 = conn.query_row(
+                        "SELECT COUNT(*) FROM tasks WHERE status = 'work'",
+                        [],
+                        |r| r.get(0),
+                    )?;
+                    Ok(jobs + work)
+                })
+                .unwrap_or(1);
+            if pending > 0 {
+                return true;
+            }
+        }
+        false
     }
 }
 

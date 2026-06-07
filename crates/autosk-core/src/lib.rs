@@ -22,11 +22,17 @@
 //! discipline documented in [`store`].
 
 pub mod agentnode;
+pub mod agents_write;
+pub mod bootstrap;
+pub mod comments_write;
 pub mod compactor;
 pub mod ctx;
+pub mod deps;
 pub mod error;
 pub mod executor;
+pub mod ids;
 pub mod meta;
+pub mod metaverbs;
 pub mod migrate;
 pub mod pi;
 pub mod pirunners;
@@ -41,8 +47,11 @@ pub mod scheduler;
 pub mod signals;
 pub mod store;
 pub mod tasks;
+pub mod tasksvc;
 pub mod timefmt;
 pub mod transcript;
+pub mod verbs;
+pub mod wfcrud;
 pub mod wfengine;
 pub mod worktree;
 

@@ -61,11 +61,14 @@ fn print_usage() {
 
 fn cmd_serve(args: Vec<String>) -> i32 {
     let mut sock_override: Option<String> = None;
+    let mut tcp_addr: Option<String> = None;
     let mut cfg = DaemonConfig::default();
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--sock" => sock_override = it.next(),
+            "--tcp" => tcp_addr = it.next(),
+            s if s.starts_with("--tcp=") => tcp_addr = Some(s["--tcp=".len()..].to_string()),
             s if s.starts_with("--sock=") => sock_override = Some(s["--sock=".len()..].to_string()),
             "--workers" => {
                 if let Some(v) = it.next().and_then(|s| s.parse().ok()) {
@@ -126,12 +129,78 @@ fn cmd_serve(args: Vec<String>) -> i32 {
     let mgr = Arc::new(Manager::new());
     let daemon = Daemon::new(mgr, registry, cfg);
     eprintln!("autoskd {VERSION}: listening on {}", sock.display());
-    let server = Arc::new(Server::new(Arc::clone(&daemon)));
+
+    // TCP transport (remote, token auth) is opt-in via --tcp HOST:PORT.
+    let token = match autoskd::token::ensure_token() {
+        Ok(t) => Some(t),
+        Err(e) => {
+            eprintln!("autoskd: token: {e}");
+            None
+        }
+    };
+    let server = Arc::new(Server::new(Arc::clone(&daemon)).with_token(token));
+
+    // Idle-shutdown watchdog (plan §4.2): exit once no clients AND no running
+    // jobs AND no `status='work'` tasks persist past the idle window. Disabled
+    // for the TCP-service mode (a remote daemon is a long-lived service).
+    if tcp_addr.is_none() {
+        start_idle_watchdog(Arc::clone(&daemon), idle_window());
+    }
+    if let Some(addr) = tcp_addr {
+        match std::net::TcpListener::bind(&addr) {
+            Ok(tl) => {
+                eprintln!("autoskd: TCP listening on {addr} (token auth)");
+                let srv = Arc::clone(&server);
+                std::thread::spawn(move || srv.serve_tcp(tl));
+            }
+            Err(e) => eprintln!("autoskd: bind tcp {addr}: {e}"),
+        }
+    }
     server.serve(listener);
     // serve() returns only when the listener closes.
     daemon.shutdown();
     uds::cleanup(&sock);
     0
+}
+
+/// The idle-shutdown window. Default 30 min; override via `AUTOSK_IDLE_SECS`
+/// (`0` disables). Mirrors the poller-grace style of the Go daemon.
+fn idle_window() -> Option<std::time::Duration> {
+    match std::env::var("AUTOSK_IDLE_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        Some(0) => None,
+        Some(n) => Some(std::time::Duration::from_secs(n)),
+        None => Some(std::time::Duration::from_secs(30 * 60)),
+    }
+}
+
+/// Spawns the idle-shutdown watchdog thread. When the daemon has no connected
+/// clients and no pending work for a full `window`, it shuts down and exits so
+/// the next client transparently respawns it.
+fn start_idle_watchdog(daemon: Arc<Daemon>, window: Option<std::time::Duration>) {
+    let Some(window) = window else { return };
+    std::thread::spawn(move || {
+        let mut idle_since: Option<std::time::Instant> = None;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            let busy = daemon.hub.client_count() > 0 || daemon.has_pending_work();
+            if busy {
+                idle_since = None;
+                continue;
+            }
+            match idle_since {
+                None => idle_since = Some(std::time::Instant::now()),
+                Some(t) if t.elapsed() >= window => {
+                    eprintln!("autoskd: idle for {:?}; shutting down", window);
+                    daemon.shutdown();
+                    std::process::exit(0);
+                }
+                Some(_) => {}
+            }
+        }
+    });
 }
 
 /// Parses a `--gc-interval` value: `0` (and negatives) → disabled (`None`);

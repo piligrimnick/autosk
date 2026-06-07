@@ -15,6 +15,14 @@ pub enum Error {
     NotFound,
     /// A schema-migration step failed.
     Migration(String),
+    /// A user-facing validation / rule violation whose message is surfaced
+    /// verbatim (no prefix) so CLI-parity verb errors stay byte-identical to
+    /// the Go strings. Mapped to `INVALID_PARAMS` at the RPC layer.
+    Invalid(String),
+    /// A user-facing conflict (entity exists but is not in a state that
+    /// accepts the request, or a uniqueness/in-use guard fired). Message is
+    /// surfaced verbatim; mapped to `CONFLICT` at the RPC layer.
+    Conflict(String),
     /// A filesystem error (registry, project resolution, transcript read).
     Io(std::io::Error),
     /// No `.autosk/db` could be resolved from the given selector.
@@ -52,6 +60,8 @@ impl std::fmt::Display for Error {
             Error::LockPoisoned(what) => write!(f, "doltlite: {what} lock poisoned"),
             Error::NotFound => write!(f, "not found"),
             Error::Migration(m) => write!(f, "migration: {m}"),
+            Error::Invalid(m) => write!(f, "{m}"),
+            Error::Conflict(m) => write!(f, "{m}"),
             Error::Io(e) => write!(f, "io: {e}"),
             Error::ProjectNotFound(s) => write!(f, "project not found: {s}"),
             Error::InvalidProject(s) => write!(f, "invalid project selector: {s}"),

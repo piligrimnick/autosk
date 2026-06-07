@@ -297,6 +297,17 @@ impl Db {
         f(&writer)
     }
 
+    /// Like [`Db::with_write`] but `f` returns a plain value (not a `Result`).
+    /// Used by verbs (e.g. `workflow.updateIsolation`) whose helper returns a
+    /// report tuple even on error. Only a poisoned writer lock fails.
+    pub fn with_writer<T>(&self, f: impl FnOnce(&Connection) -> T) -> Result<T> {
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| Error::LockPoisoned("writer"))?;
+        Ok(f(&writer))
+    }
+
     /// Runs `f` against a reader connection while holding a shared read guard,
     /// so the statement can never overlap a GC. The connection is checked out
     /// from the pool (or freshly opened) and returned to the pool on success.
