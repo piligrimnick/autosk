@@ -83,12 +83,14 @@ Researched from the Go tree; quoted so the Rust port has an exact target.
   refs format moves v6→v7), and the break is mutual — a Go-0.10.8 DB is an
   on-disk **container format v11** (`CTLD` `0x0b`) that 0.11.8 (which writes
   **v12**, `0x0c`) refuses to open (`SQLITE_NOTADB`). **There is therefore no
-  shared on-disk format across the transition**: any existing project DB needs a
-  one-time v11→v12 migration before a 0.11.x reader can touch it. The migration
-  strategy is owned by the follow-up planning task **ask-8037b4**;
-  `crates/autosk-core/tests/format_compat.rs` pins the v11/v12 split as a
-  characterization test so a future doltlite bump that restores compat surfaces
-  loudly.
+  shared on-disk format across the transition.** Per the planning decision,
+  **autoskd is greenfield: it owns only its own v12 format, there is no Go↔Rust
+  coexistence on a shared DB, and v11→v12 data migration is out of scope for the
+  entire initiative** — the cutover to autoskd starts from a fresh v12 DB and the
+  old Go/v11 stack is simply retired, not bridged (the migration-strategy task
+  ask-8037b4 was cancelled — see §10). `crates/autosk-core/tests/format_compat.rs`
+  pins the v11/v12 split as a characterization test so a future doltlite bump that
+  restores compat surfaces loudly.
 - Versioning is exposed as SQL functions: `SELECT dolt_commit(...)`,
   `SELECT dolt_gc()` (`internal/store/doltlite/commit.go`, `maint.go`).
 - Schema/migrations: `internal/migrations/001_init.sql` + `migrations.go`.
@@ -390,13 +392,17 @@ remains:
    diverge from the server.
 3. **Migration/schema golden.** Assert the Rust migrator produces the exact
    schema (`schema_version`, table DDL, CHECK) the Go `001_init.sql` produced —
-   a one-time port-correctness gate. Note (Phase 0 finding): a pre-0.11
-   *container* (v11) can no longer be opened directly under 0.11.8 — it is first
-   migrated v11→v12 per ask-8037b4; this schema/DDL gate applies once the DB is
-   openable under the new container format.
-4. **Phase-1 dual-run safety net (temporary).** During the port, a read-only
-   diff harness can point both the Go reader and `autosk-core` at the same
-   fixture DB to catch porting bugs — retired once the Go store is deleted.
+   a one-time port-correctness gate, run on a **fresh Rust-created v12 DB**. Note
+   (Phase 0 finding): a pre-0.11 *container* (v11) cannot be opened under 0.11.8
+   at all; since autoskd is greenfield (no v11→v12 data migration — see
+   §2.1/§10), this gate only ever applies to v12 DBs autoskd creates itself.
+4. **Phase-1 read-port safety net.** The v11/v12 format break (Phase 0) makes a
+   same-DB cross-reader diff impossible — the Go reader handles only v11 and
+   Rust-0.11.8 only v12, so they can never point at one on-disk DB. Since autoskd
+   is greenfield (no v11→v12 migration), port correctness is verified by seeding a
+   fixture via the Rust migrator + known INSERTs and comparing `autosk-core`'s
+   reads (serialised via `autosk-proto`) to checked-in golden JSON (per §8.2).
+   There is no shared-DB dual-run window.
 
 ---
 
@@ -414,13 +420,16 @@ remains:
   own `doltlite-rust-0.11.8` cache key so the two doltlite pins never collide.
   **Finding:** the forward-compat assumption is **FALSE** — doltlite 0.11.0 broke the on-disk
   format (container v11→v12), so a Go-0.10.8 DB (v11) is *not* readable under
-  0.11.8 (`SQLITE_NOTADB`); the test now pins this as a characterization. A
-  one-time v11→v12 migration is required at cutover — strategy decision tracked
-  in **ask-8037b4**. *Highest unknown — first.*
+  0.11.8 (`SQLITE_NOTADB`); the test now pins this as a characterization.
+  **There is no v11→v12 data migration: autoskd is greenfield and owns only v12;
+  the old Go/v11 stack is retired, not bridged (the migration-strategy task
+  ask-8037b4 was cancelled — see §2.1/§10).** *Highest unknown — first.*
 - **Phase 1 — read core + JSON-RPC reads.** Port store reads + migrations +
   projectmgr + registry; stand up the JSON-RPC server with the read methods +
   `job.subscribe` stub. Build the Go JSON-RPC client + auto-spawn connector;
-  point a read-only lazy at `autoskd`.
+  point a read-only lazy at `autoskd`. autoskd is greenfield (v12 only) — no
+  v11→v12 data migration (§2.1/§10); read-port correctness is validated against
+  Rust-seeded v12 fixtures (§8.4).
 - **Phase 2 — executor port.** pi JSON-Lines wire, transcript + `job-event`
   notifications, poller/scheduler/compactor, kickback, attach/input/steer/abort,
   worktree isolation. Executor behavioural-parity gate (§8.1). After this,
@@ -442,19 +451,16 @@ remains:
 
 ## 10. Open questions (decide during Phase 0–3)
 
-- **doltlite format compat across the transition** — **RESOLVED by Phase 0
-  (ask-834e16): the formats are incompatible.** doltlite 0.11.0 is a breaking
+- **doltlite format compat across the transition** — **RESOLVED: the formats are
+  incompatible AND no migration is attempted.** doltlite 0.11.0 is a breaking
   on-disk format change (container v11→v12); a Go-0.10.8 DB (v11) cannot be read
-  by Rust-0.11.8 (v12, `SQLITE_NOTADB`). There is **no shared-format transition
-  window**, so any existing project DB needs a one-time v11→v12 migration. The
-  migration strategy is owned by **ask-8037b4** — candidate options recorded
-  there: (1) logical export/import at cutover (Go dumps rows, autoskd replays
-  into a fresh v12 DB; loses dolt history, which `autosk history` is only a v0.2
-  stub for); (2) bump **both** Go and Rust to 0.11.8 (one format everywhere) —
-  but this still needs the v11→v12 migration for existing DBs *and* a re-check
-  that the 0.10.9 Go-thread-migration deadlock did not return in 0.11.x; (3)
-  keep Rust on a v11-compatible 0.10.x — **rejected**, it forfeits the 0.11.2 GC
-  fix this effort exists to capture.
+  by Rust-0.11.8 (v12, `SQLITE_NOTADB`) — confirmed by Phase 0 (ask-834e16).
+  **Per the planning decision there is no Go↔Rust coexistence and no v11→v12 data
+  migration anywhere in this initiative: autoskd is greenfield and owns only its
+  own v12 format; the cutover starts from a fresh v12 DB and the old Go/v11 stack
+  is simply retired.** (The migration-strategy task ask-8037b4 was cancelled;
+  keeping Rust on a v11-compatible 0.10.x was rejected — it forfeits the 0.11.2
+  GC fix this effort exists to capture.)
 - **Idle-shutdown tuning** — the "no clients AND no work AND no running jobs"
   window; whether the GUI sidecar should keep the daemon alive while open.
 - **Remote filesystem semantics** — daemon host ≠ client host: worktree paths,
