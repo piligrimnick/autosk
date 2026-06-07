@@ -2,6 +2,7 @@ package datasource
 
 import (
 	"context"
+	"errors"
 	"os"
 	"time"
 
@@ -164,9 +165,50 @@ func (r *RPC) Healthz(ctx context.Context) (Health, error) {
 // daemon's concern.
 func (r *RPC) Reconnect(ctx context.Context) error { return nil }
 
-// StreamLive requires the Phase 2 live job.subscribe tail.
+// StreamLive opens a job.subscribe tail over the daemon's persistent
+// connection and adapts the job-event frames to the TUI's LiveEvent shape
+// (mirrors the old SSE Live.StreamLive: attach=true, full replay). The caller
+// must Close the returned handle.
 func (r *RPC) StreamLive(ctx context.Context, jobID string) (*LiveHandle, error) {
-	return nil, ErrDaemonRequired
+	stream, err := r.cli.JobSubscribe(ctx, jobID, rpcclient.SubscribeOptions{Attach: true, Full: true})
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan LiveEvent, 32)
+	go func() {
+		defer close(ch)
+		for ev := range stream.Events() {
+			out := LiveEvent{EventID: int(ev.EventID)}
+			switch ev.Kind {
+			case "message":
+				out.Kind = "message"
+				if ev.Event != nil {
+					out.Message = *ev.Event
+				}
+			case "status":
+				out.Kind = "status"
+				if ev.Job != nil {
+					out.Status = *ev.Job
+				}
+			case "done":
+				out.Kind = "done"
+				if ev.Job != nil {
+					out.Status = *ev.Job
+				}
+			case "error":
+				out.Kind = "error"
+				out.Err = errors.New(ev.Error)
+			default:
+				continue
+			}
+			select {
+			case ch <- out:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return NewLiveHandle(ch, func() error { return stream.Close() }), nil
 }
 
 // ---- writes (Phase 3) -----------------------------------------------------

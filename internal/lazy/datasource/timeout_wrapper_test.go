@@ -1,12 +1,10 @@
-package datasource_test
+package datasource
 
 import (
 	"context"
 	"errors"
 	"testing"
 	"time"
-
-	"autosk/internal/lazy/datasource"
 )
 
 // TestDatasourceVerbsTimeout (risk #7 from the impl plan) wraps an
@@ -17,20 +15,23 @@ import (
 // gocui main thread. This wrapper, when used in CI smoke tests,
 // surfaces the regression at test time instead of in production.
 //
-// We exercise it against the Offline impl (deterministic timing).
-// The test doubles as a usage example for future maintainers.
+// We exercise it against the single RPC datasource impl backed by the
+// in-process fakeDaemon (deterministic timing). The test doubles as a usage
+// example for future maintainers.
 func TestDatasourceVerbsTimeout(t *testing.T) {
 	ctx := context.Background()
-	ds, _, closeFn := newOfflineFx(t)
-	defer closeFn()
+	ds := fakeDaemon(t, map[string]any{
+		"healthz": map[string]any{"ok": true, "workers": 0, "queued": 0, "running": 0,
+			"db_path": "/repo/.autosk/db", "project_root": "/repo", "projects": []any{}},
+	})
 
 	w := &timeoutWrapper{ds: ds, limit: 100 * time.Millisecond, t: t}
 	// Drive every read verb in a row; the wrapper fails the test on
 	// any individual call that exceeds the limit.
-	if _, err := w.Tasks(ctx, datasource.DefaultTaskFilter()); err != nil {
+	if _, err := w.Tasks(ctx, DefaultTaskFilter()); err != nil {
 		t.Fatalf("Tasks: %v", err)
 	}
-	if _, err := w.Jobs(ctx, datasource.JobFilter{}); err != nil {
+	if _, err := w.Jobs(ctx, JobFilter{}); err != nil {
 		t.Fatalf("Jobs: %v", err)
 	}
 	if _, err := w.Workflows(ctx, true); err != nil {
@@ -49,7 +50,7 @@ func TestDatasourceVerbsTimeout(t *testing.T) {
 // that want to assert UI-thread responsiveness invariants. (Not
 // exposed in the production type to keep production code clean.)
 type timeoutWrapper struct {
-	ds    datasource.Datasource
+	ds    Datasource
 	limit time.Duration
 	t     *testing.T
 }
@@ -70,8 +71,8 @@ func (w *timeoutWrapper) check(name string, fn func() error) error {
 	}
 }
 
-func (w *timeoutWrapper) Tasks(ctx context.Context, f datasource.TaskFilter) ([]datasource.Task, error) {
-	var out []datasource.Task
+func (w *timeoutWrapper) Tasks(ctx context.Context, f TaskFilter) ([]Task, error) {
+	var out []Task
 	err := w.check("Tasks", func() error {
 		var e error
 		out, e = w.ds.Tasks(ctx, f)
@@ -79,8 +80,8 @@ func (w *timeoutWrapper) Tasks(ctx context.Context, f datasource.TaskFilter) ([]
 	})
 	return out, err
 }
-func (w *timeoutWrapper) Jobs(ctx context.Context, f datasource.JobFilter) ([]datasource.Job, error) {
-	var out []datasource.Job
+func (w *timeoutWrapper) Jobs(ctx context.Context, f JobFilter) ([]Job, error) {
+	var out []Job
 	err := w.check("Jobs", func() error {
 		var e error
 		out, e = w.ds.Jobs(ctx, f)
@@ -88,8 +89,8 @@ func (w *timeoutWrapper) Jobs(ctx context.Context, f datasource.JobFilter) ([]da
 	})
 	return out, err
 }
-func (w *timeoutWrapper) Workflows(ctx context.Context, syn bool) ([]datasource.Workflow, error) {
-	var out []datasource.Workflow
+func (w *timeoutWrapper) Workflows(ctx context.Context, syn bool) ([]Workflow, error) {
+	var out []Workflow
 	err := w.check("Workflows", func() error {
 		var e error
 		out, e = w.ds.Workflows(ctx, syn)
@@ -97,8 +98,8 @@ func (w *timeoutWrapper) Workflows(ctx context.Context, syn bool) ([]datasource.
 	})
 	return out, err
 }
-func (w *timeoutWrapper) Agents(ctx context.Context) ([]datasource.Agent, error) {
-	var out []datasource.Agent
+func (w *timeoutWrapper) Agents(ctx context.Context) ([]Agent, error) {
+	var out []Agent
 	err := w.check("Agents", func() error {
 		var e error
 		out, e = w.ds.Agents(ctx)
@@ -106,8 +107,8 @@ func (w *timeoutWrapper) Agents(ctx context.Context) ([]datasource.Agent, error)
 	})
 	return out, err
 }
-func (w *timeoutWrapper) Healthz(ctx context.Context) (datasource.Health, error) {
-	var out datasource.Health
+func (w *timeoutWrapper) Healthz(ctx context.Context) (Health, error) {
+	var out Health
 	err := w.check("Healthz", func() error {
 		var e error
 		out, e = w.ds.Healthz(ctx)

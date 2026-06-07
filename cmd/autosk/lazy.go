@@ -3,19 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"autosk/internal/agent/pkgregistry"
 	"autosk/internal/buildinfo"
 	"autosk/internal/changelog"
-	"autosk/internal/daemon/client"
 	"autosk/internal/daemon/rpcclient"
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/lazy/tui"
-	"autosk/internal/store/doltlite"
 	"autosk/internal/userstate"
 )
 
@@ -23,19 +19,17 @@ import (
 //
 // Behaviour:
 //
-//   - Opens the project DB read-write (lazy auto-inits when missing,
-//     same as the other write-capable verbs).
-//   - Constructs a datasource.Compose that probes the daemon every
-//     --refresh interval; when the daemon is reachable, Jobs come
-//     from the live HTTP API (with Streaming/AttachCount), otherwise
-//     they come from .autosk/db (and the live SSE subscription is
-//     disabled).
+//   - Renders entirely from autoskd over JSON-RPC (plan §7.5: the single
+//     RPC-client Datasource). autoskd owns .autosk/db; the Go binary opens no
+//     local doltlite store. autoskd is auto-spawned by the connector on first
+//     request (and runs migrations/bootstrap via project.init on a fresh dir).
+//   - Reads, writes, and the live job transcript tail all route to the daemon
+//     over the UDS; the TUI refreshes at --refresh.
 func newLazyCmd() *cobra.Command {
 	var (
 		sock        string
 		refresh     time.Duration
 		noChangelog bool
-		rpc         bool
 	)
 	cmd := &cobra.Command{
 		Use:   "lazy",
@@ -47,72 +41,19 @@ func newLazyCmd() *cobra.Command {
 			"embedded CHANGELOG.md; press ctrl+w to re-open it manually, or pass\n" +
 			"--no-changelog to suppress the auto-popup.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-
-			// RPC mode (plan §9 Phase 1): render entirely from autoskd over
-			// JSON-RPC instead of opening the local doltlite store. autoskd is
-			// auto-spawned on first use. Read-only for now (writes return an
-			// explicit error until the Phase 3 write surface lands).
-			if rpc || os.Getenv("AUTOSK_RPC") == "1" {
-				return runLazyRPC(ctx, sock, refresh, noChangelog)
-			}
-
-			store, closeFn, err := openStore(ctx, true)
-			if err != nil {
-				return err
-			}
-			defer closeFn()
-
-			// Tie the doltlite connection-rotation cadence to the
-			// dashboard refresh interval. Lazy is the canonical
-			// long-lived reader; without rotation it would silently
-			// serve a stale snapshot after a cross-process dolt_gc()
-			// atomic-rewrote .autosk/db out from under our fd. See
-			// docs/lazy.md "cross-process freshness" and
-			// doltlite.DefaultConnLifetime.
-			if dl, ok := store.(*doltlite.Store); ok {
-				dl.SetConnMaxLifetime(refresh)
-			}
-
-			reg, _ := pkgregistry.Default()
-			cwd, err := getCwd()
-			if err != nil {
-				return err
-			}
-			off, err := datasource.NewOffline(store, cwd, reg)
-			if err != nil {
-				return fmt.Errorf("datasource: %w", err)
-			}
-			cli, err := client.New(client.Options{Sock: sock, Cwd: cwd})
-			if err != nil {
-				return fmt.Errorf("daemon client: %w", err)
-			}
-			comp := datasource.NewCompose(off, cli, refresh)
-			defer comp.Close()
-
-			opts := tui.Options{
-				Datasource:  comp,
-				ProjectRoot: cwd,
-				Refresh:     refresh,
-			}
-			if !noChangelog {
-				opts.ChangelogModal = buildChangelogModal(buildinfo.Version)
-			}
-			return tui.Run(ctx, opts)
+			return runLazyRPC(cmd.Context(), sock, refresh, noChangelog)
 		},
 	}
 	cmd.Flags().StringVar(&sock, "sock", "", "daemon socket path (default $AUTOSK_SOCK or ~/.autosk/daemon.sock)")
 	cmd.Flags().DurationVar(&refresh, "refresh", 2*time.Second, "panel refresh interval")
 	cmd.Flags().BoolVar(&noChangelog, "no-changelog", false,
 		"suppress the first-run-of-a-new-release changelog popup (read-only; does not modify ~/.autosk/state.json)")
-	cmd.Flags().BoolVar(&rpc, "rpc", false,
-		"render read-only from the autoskd Rust daemon over JSON-RPC (auto-spawned); also enabled by AUTOSK_RPC=1")
 	return cmd
 }
 
-// runLazyRPC runs the TUI against a read-only autoskd-backed datasource.
-// autoskd is auto-spawned by the connector on first request; the Go binary
-// opens no local doltlite store in this mode.
+// runLazyRPC runs the TUI against the autoskd-backed datasource (reads +
+// writes + the live transcript tail). autoskd is auto-spawned by the connector
+// on first request; the Go binary opens no local doltlite store.
 func runLazyRPC(ctx context.Context, sock string, refresh time.Duration, noChangelog bool) error {
 	cwd, err := getCwd()
 	if err != nil {

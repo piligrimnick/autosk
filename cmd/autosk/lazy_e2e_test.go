@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,23 +9,81 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/jesseduffield/gocui"
 
-	"autosk/internal/agent"
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/lazy/tui"
 	"autosk/internal/store"
-	"autosk/internal/store/doltlite"
 )
 
-// fakeDS is a tiny in-memory Datasource the smoke tests drive
-// directly so we don't need a daemon. It wraps an Offline for reads
-// the TUI does against the project DB.
+// fakeDS is a self-contained in-memory Datasource the smoke test drives
+// directly so we don't need a daemon (or a doltlite store). It serves a fixed
+// task set for reads and treats every other verb as an inert success — enough
+// to exercise tui.Run's layout + Tasks-panel render path end-to-end.
 type fakeDS struct {
-	*datasource.Offline
+	tasks []datasource.Task
 }
 
-func (f *fakeDS) Healthz(_ context.Context) (datasource.Health, error) {
+func (f *fakeDS) Tasks(context.Context, datasource.TaskFilter) ([]datasource.Task, error) {
+	return f.tasks, nil
+}
+func (f *fakeDS) GetTask(_ context.Context, id string) (datasource.Task, error) {
+	for _, t := range f.tasks {
+		if t.ID == id {
+			return t, nil
+		}
+	}
+	return datasource.Task{}, nil
+}
+func (f *fakeDS) Jobs(context.Context, datasource.JobFilter) ([]datasource.Job, error) {
+	return nil, nil
+}
+func (f *fakeDS) GetJob(context.Context, string) (datasource.Job, error) {
+	return datasource.Job{}, nil
+}
+func (f *fakeDS) Workflows(context.Context, bool) ([]datasource.Workflow, error) { return nil, nil }
+func (f *fakeDS) Agents(context.Context) ([]datasource.Agent, error)             { return nil, nil }
+func (f *fakeDS) Comments(context.Context, string) ([]datasource.Comment, error) {
+	return nil, nil
+}
+func (f *fakeDS) Signals(context.Context, string) ([]datasource.Signal, error) { return nil, nil }
+func (f *fakeDS) SignalsForTask(context.Context, string) ([]datasource.Signal, error) {
+	return nil, nil
+}
+func (f *fakeDS) Messages(context.Context, string, bool, int) ([]datasource.MessageEvent, error) {
+	return nil, nil
+}
+func (f *fakeDS) Healthz(context.Context) (datasource.Health, error) {
 	return datasource.Health{Daemon: "down"}, nil
 }
+func (f *fakeDS) CreateTask(context.Context, string, string, int) (string, error) { return "", nil }
+func (f *fakeDS) UpdateStatus(context.Context, string, store.Status) error        { return nil }
+func (f *fakeDS) UpdatePriority(context.Context, string, int) error               { return nil }
+func (f *fakeDS) UpdateTitleDescription(context.Context, string, string, string) error {
+	return nil
+}
+func (f *fakeDS) Enroll(context.Context, string, string, string) error      { return nil }
+func (f *fakeDS) Resume(context.Context, string, string) error              { return nil }
+func (f *fakeDS) Block(context.Context, string, string) error               { return nil }
+func (f *fakeDS) Unblock(context.Context, string, string) error             { return nil }
+func (f *fakeDS) AddComment(context.Context, string, string) error          { return nil }
+func (f *fakeDS) SetMetadata(context.Context, string, map[string]any) error { return nil }
+func (f *fakeDS) CreateWorkflow(context.Context, string) (string, error)    { return "", nil }
+func (f *fakeDS) DeleteWorkflow(context.Context, string) error              { return nil }
+func (f *fakeDS) UpdateWorkflowIsolation(context.Context, string, string, bool) (datasource.UpdateIsolationReport, error) {
+	return datasource.UpdateIsolationReport{}, nil
+}
+func (f *fakeDS) InstallAgent(context.Context, string, string) error { return nil }
+func (f *fakeDS) UninstallAgent(context.Context, string) error       { return nil }
+func (f *fakeDS) CancelJob(context.Context, string) error            { return nil }
+func (f *fakeDS) SendInput(context.Context, string, string, string) (string, error) {
+	return "", nil
+}
+func (f *fakeDS) AbortJob(context.Context, string) error { return nil }
+func (f *fakeDS) Reconnect(context.Context) error        { return nil }
+func (f *fakeDS) StreamLive(context.Context, string) (*datasource.LiveHandle, error) {
+	return nil, datasource.ErrDaemonRequired
+}
+
+var _ datasource.Datasource = (*fakeDS)(nil)
 
 // TestLazy_SmokeDashboardLaunch verifies the TUI starts, the layout
 // fires, and the seeded task appears in the Tasks panel.
@@ -43,28 +100,13 @@ func TestLazy_SmokeDashboardLaunch(t *testing.T) {
 	defer cancel()
 	dir := t.TempDir()
 
-	dl := doltlite.New()
-	if err := dl.Open(ctx, filepath.Join(dir, "test.db")); err != nil {
-		t.Fatalf("open: %v", err)
+	task := datasource.Task{
+		ID:       "ask-a1b2c3",
+		Title:    "Refactor auth",
+		Status:   store.StatusNew,
+		Priority: 1,
 	}
-	defer dl.Close()
-	if err := dl.Migrate(ctx); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	task, err := dl.CreateTask(ctx, store.Task{Title: "Refactor auth", Status: store.StatusNew, Priority: 1})
-	if err != nil {
-		t.Fatalf("seed task: %v", err)
-	}
-	// Seed a synthetic workflow + step so we can attach a daemon_run.
-	ag := agent.New(dl.DB())
-	humanAgent, _ := ag.GetByName(ctx, "human")
-	_ = humanAgent
-
-	ds, err := datasource.NewOffline(dl, dir, nil)
-	if err != nil {
-		t.Fatalf("offline: %v", err)
-	}
-	fake := &fakeDS{Offline: ds}
+	fake := &fakeDS{tasks: []datasource.Task{task}}
 	tui.SetDebugLogger(t.Logf)
 	defer tui.SetDebugLogger(nil)
 
@@ -86,18 +128,6 @@ func TestLazy_SmokeDashboardLaunch(t *testing.T) {
 	// for up to 3s; each pass nudges the event loop by injecting an
 	// innocuous resize so flush() fires and the simulation screen
 	// gets painted.
-	// Sanity: confirm the offline datasource can read tasks with a
-	// fresh context (i.e. the cancellation we see in refreshAll is not
-	// because the underlying store query is broken).
-	tasks, err := ds.Tasks(context.Background(), datasource.DefaultTaskFilter())
-	if err != nil {
-		t.Fatalf("ds.Tasks (sanity): %v", err)
-	}
-	if len(tasks) == 0 {
-		t.Fatalf("ds.Tasks (sanity): no tasks returned — seed did not stick?")
-	}
-	t.Logf("sanity Tasks: got %d (first=%s/%s)", len(tasks), tasks[0].ID, tasks[0].Title)
-
 	if !waitFor(3*time.Second, func() bool {
 		injectResize(120, 40)
 		return findInScreen(task.ID)

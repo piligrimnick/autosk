@@ -1,27 +1,17 @@
 // Package datasource is the only seam between the lazy TUI and the
 // rest of autosk. Contexts, controllers, and helpers never reach into
-// internal/store, internal/daemon/client, or internal/workflow
+// internal/store, internal/daemon/rpcclient, or internal/workflow
 // directly — they go through a Datasource.
 //
-// Three implementations live alongside:
-//
-//   - offline: reads .autosk/db directly via internal/store +
-//     internal/agent + internal/workflow + internal/comments +
-//     internal/daemon/runstore + internal/daemon/transcript. Writes
-//     mutate the DB in-process (the same code paths the CLI commands
-//     in cmd/autosk/*.go use). Live (SSE input/abort) verbs are no-ops
-//     that return ErrDaemonRequired.
-//
-//   - live: same read surface, but Jobs and the transcript stream come
-//     from the daemon's HTTP/UDS API (internal/daemon/client). Used
-//     when the daemon is reachable so the TUI sees the in-flight pi
-//     state (Streaming / AttachCount) rather than the stale DB row.
-//
-//   - compose: 2s health probe over the UDS that flips between live
-//     and offline. Exposes a Health channel the status-bar reads.
+// There is a single implementation, RPC (rpc.go): every read, write, and the
+// live transcript tail route to autoskd (the Rust daemon that solely owns
+// .autosk/db) over the JSON-RPC client (internal/daemon/rpcclient), which
+// auto-spawns the daemon on first use. The Go binary opens no doltlite store.
+// (Plan §7.5: the former Offline/Live/Compose split collapsed into this one
+// RPC-client Datasource once autoskd became the sole reader+writer.)
 //
 // All verbs are context-cancellable and MUST return within a few
-// hundred milliseconds. Long-running streams (the Live tab's SSE) are
+// hundred milliseconds. The live transcript stream (job.subscribe) is
 // expressed as a dedicated StreamLive() method that returns a handle
 // the caller can close.
 package datasource
@@ -35,9 +25,10 @@ import (
 	"autosk/internal/store"
 )
 
-// ErrDaemonRequired is returned by offline-mode verbs that can't be
-// answered without a live daemon (Live tab SSE, /input, /abort,
-// CancelJob).
+// ErrDaemonRequired is the sentinel for verbs that cannot be answered without a
+// reachable daemon. With the single RPC datasource every verb requires the
+// daemon, so this is no longer returned in production; it survives as the error
+// the TUI's fake datasources use as a stand-in in tests.
 var ErrDaemonRequired = errors.New("daemon required")
 
 // TaskRef is a lightweight reference to a related task carrying just
@@ -235,8 +226,8 @@ func (h *LiveHandle) Close() error {
 	return h.close()
 }
 
-// NewLiveHandle is the constructor live.go uses; exported for the
-// composer.
+// NewLiveHandle constructs a LiveHandle; used by StreamLive (rpc.go) and the
+// TUI's live-pump tests.
 func NewLiveHandle(ch <-chan LiveEvent, closeFn func() error) *LiveHandle {
 	return &LiveHandle{Events: ch, close: closeFn}
 }
@@ -349,8 +340,8 @@ type Datasource interface {
 	// store; daemon-only datasources may treat this as a no-op.
 	Reconnect(ctx context.Context) error
 
-	// StreamLive opens an SSE subscription to a job. Caller must call
-	// LiveHandle.Close. Offline datasources return ErrDaemonRequired.
+	// StreamLive opens a job.subscribe transcript tail. Caller must call
+	// LiveHandle.Close. Backed by the daemon's persistent connection.
 	StreamLive(ctx context.Context, jobID string) (*LiveHandle, error)
 }
 
