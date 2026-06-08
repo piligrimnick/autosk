@@ -24,18 +24,14 @@ cd ~/your/project
 autosk lazy
 ```
 
-> **Live-mode note (daemon cutover, plan §9).** As of Phase 3.2
-> (ask-913906) `autosk lazy` is a pure JSON-RPC client of the Rust
-> **`autoskd`**, which it **auto-spawns** on first use (the Go
-> `autosk daemon serve` verb is retired). Reads, every write hotkey,
-> live job streaming into the Detail pane, the input textarea
-> (`ctrl+d` / `ctrl+f` / `ctrl+a`), and the cancel-job verb all run over
-> RPC against `autoskd`; lazy itself never opens `.autosk/db`. There is
-> no longer a degraded "Offline" mode. The offline-fallback prose further
-> down (the [Daemon dependency](#daemon-dependency) table and the
-> remaining `/v1/...` HTTP-API references) still describes the **retired
-> Go daemon** and is kept only until the Phase 5 consolidated doc rewrite
-> — see [`docs/plans/20260607-Rust-Daemon-Tauri-GUI.md`](plans/20260607-Rust-Daemon-Tauri-GUI.md).
+> **Architecture note.** `autosk lazy` is a pure JSON-RPC client of the
+> Rust **`autoskd`** daemon, which it **auto-spawns** on first use (the
+> Go `autosk daemon serve` verb is retired). Reads, every write hotkey,
+> live job streaming into the Detail pane (`job.subscribe`), the input
+> textarea (`ctrl+d` / `ctrl+f` / `ctrl+a`), and the cancel-job verb all
+> run over RPC against `autoskd`; lazy never opens `.autosk/db` and has
+> no offline or degraded mode. See [`docs/daemon.md`](daemon.md) for the
+> daemon itself.
 
 ---
 
@@ -93,11 +89,11 @@ The Detail pane always reflects the focused side panel:
   `installed`, or `db_only` when a referenced package isn't
   installed locally), and config summary.
 
-The transcript merges two sources: the archive
-(`session.jsonl` on disk, or the daemon's `/v1/jobs/{id}/messages`
-when reachable) plus a live SSE tail for running jobs. Events are
-deduplicated and ordered by timestamp. Re-visiting a job is
-instant — every job's rendered boxes are cached in memory.
+The transcript merges two sources: the archive (the daemon's
+`job.messages` RPC, served from the on-disk `session.jsonl`) plus a
+live `job.subscribe` tail for running jobs. Events are deduplicated
+and ordered by timestamp. Re-visiting a job is instant — every job's
+rendered boxes are cached in memory.
 
 Each event box is labelled `<smart-datetime> <kind> [<name>]`.
 Assistant events (`assistant_text`, `assistant_thinking`, and any
@@ -206,9 +202,9 @@ flow, use `autosk enroll <id> --agent NAME` on the CLI.
 | `enter` | Running job → caret jumps into the `input` textarea below the Detail pane. Terminal job → logical focus moves to the Detail pane (`j` / `k` scroll the transcript). |
 | `K` | Cancel job (confirms). |
 
-Cursor moves on a running job open a live SSE subscription after a
-short debounce so back-to-back `j` / `k` keystrokes don't churn the
-stream.
+Cursor moves on a running job open a live `job.subscribe` subscription
+after a short debounce so back-to-back `j` / `k` keystrokes don't churn
+the stream.
 
 ### Workflows `[3]`
 
@@ -346,8 +342,9 @@ expanded.
 
 The compose popups (`n`, `c`, `m`, `M`) are raw editors — markdown
 is rendered only when reading, never while typing. Wire formats
-(CLI `--json`, daemon HTTP API, transcript JSON on disk) stay on
-raw plain text; only the TUI display layer interprets markdown.
+(CLI `--json`, the daemon's JSON-RPC payloads, transcript JSON on
+disk) stay on raw plain text; only the TUI display layer interprets
+markdown.
 
 If the renderer fails on pathological input (deeply nested
 blockquotes, very large bodies, …), the Detail pane falls back to
@@ -369,8 +366,8 @@ The popup is entirely client-side to `autosk lazy`: the changelog
 body is baked into the binary at build time via `go:embed`, and the
 "have I seen this version yet?" bit lives in a per-user file at
 `~/.autosk/state.json`. There is no network call, no daemon
-interaction, no project DB read — the popup works on a fresh
-clone, in offline CI, and inside `--no-daemon` smoke tests alike.
+interaction, no project DB read — the popup works on a fresh clone
+and in offline CI, before any daemon is spawned.
 
 ### When the popup fires
 
@@ -462,19 +459,16 @@ changelog — the popup is a UX nicety, not a release gate.
 
 ## Daemon dependency
 
-`autosk lazy` adapts to the daemon's state — the status bar shows
-which mode you're in:
+`autosk lazy` is a pure JSON-RPC client of `autoskd` (which it
+auto-spawns on first use) and never opens `.autosk/db` itself — there
+is no offline or degraded mode. The status bar's `daemon=` chip
+reports the daemon's reachability:
 
-| State | Status bar | Effect |
+| State | Status bar | Meaning |
 |---|---|---|
-| **daemon ok** | `daemon=ok workers=N q=N r=N` | Jobs panel reads from the daemon's HTTP API (live `Streaming` / `AttachCount` columns). Live SSE attaches when the cursor settles on a running job. Cancel-job and the `input` textarea both work. |
-| **daemon stale** | `daemon=stale` | Socket reachable but `/v1/healthz` returns an error. Treated the same as `down`. |
-| **daemon down** | `daemon=down` | Jobs panel reads `daemon_runs` directly from `.autosk/db`. Live SSE is disabled. The Detail pane still renders the archive transcript from `session.jsonl`. The `input` textarea is hidden — there's no dispatch surface. Cancel-job returns an error. |
-
-When the live datasource errors transiently (timeout, 5xx,
-malformed body) the read falls back to the offline base for that
-one call. If the fallback fired since the last tick, a `flaky+N`
-chip appears in the bottom bar so a flaky daemon stays visible.
+| **ok** | `daemon=ok workers=N q=N r=N` | The daemon is reachable and `healthz` is green. Reads, writes, live `job.subscribe` streaming, cancel-job, and the `input` textarea all work. |
+| **stale** | `daemon=stale` | The socket is reachable but `healthz` returned an error. Panels keep their last-read contents until it recovers. |
+| **down** | `daemon=down` | The daemon is unreachable (it could not be spawned, or `--sock` / `$AUTOSK_SOCK` points at the wrong path). Panels can't refresh; see [Troubleshooting](#troubleshooting). |
 
 Panels update on the daemon's `task-changed` / `project-changed`
 push, so external writes (from the CLI, another `lazy`, or the

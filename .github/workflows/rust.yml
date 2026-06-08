@@ -1,14 +1,16 @@
 name: Rust CI
 
-# Exercises the autosk Rust workspace (Phase 1: autosk-core read core +
-# autosk-proto wire contract + autoskd JSON-RPC server) on the two
-# acceptance-criterion targets — linux-x64 and macOS arm64 — so the doltlite
-# 0.11.8 static link is actually verified on both.
+# Exercises the autosk Rust workspace (autosk-core domain/store + autosk-proto
+# wire contract + autoskd JSON-RPC server) on the two acceptance-criterion
+# targets — linux-x64 and macOS arm64 — so the doltlite 0.11.8 static link is
+# actually verified on both. This job also enforces the three §8 conformance
+# gates as named, required (release-blocking) checks (see the gate steps below).
 #
-# This is separate from ci.yml (Go) on purpose: the Go side stays pinned to
-# doltlite 0.10.8 while the Rust side links 0.11.8, so the two pipelines fetch
-# different libdoltlite assets and must keep independent caches (see the cache
-# step below — distinct key prefix + version so they never collide).
+# This is separate from ci.yml (Go) on purpose. The Go binary is CGO-free and
+# links no doltlite of its own; doltlite only enters ci.yml when `make test`
+# builds autoskd (the Rust daemon, the sole doltlite consumer). Both pipelines
+# therefore fetch the same 0.11.8 asset but keep independent caches (distinct
+# key prefixes) so a bump can never silently serve a stale archive to one side.
 
 on:
   push:
@@ -55,8 +57,9 @@ jobs:
 
       # Cache the auto-fetched libdoltlite so build.rs doesn't hit GitHub
       # releases on every run. The `doltlite-rust-<version>` key prefix keeps
-      # this distinct from ci.yml's Go cache (`doltlite-<os>-<arch>-<hash>`,
-      # pinned to 0.10.8) so the two never collide.
+      # this distinct from ci.yml's doltlite cache
+      # (`doltlite-<os>-<arch>-<hash(build.rs)>`, the same 0.11.8 pin, fetched
+      # there only to build autoskd in `make test`) so the two never collide.
       - name: Cache doltlite (Rust ${{ steps.doltlite.outputs.version }})
         uses: actions/cache@v5
         with:
@@ -90,9 +93,26 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # Phase 0 tests (format_compat, gc_readable, gc_stress) plus the Phase 1
-      # read core / schema / wire-contract / daemon-RPC tests across the
-      # workspace. autosk-proto + autoskd build with plain serde (no doltlite),
-      # but autosk-core and the autoskd integration test link libdoltlite.
+      # Full workspace test pass: the doltlite spike tests (format_compat,
+      # gc_readable, gc_stress), the read/write core, the executor, and the
+      # wire-contract + daemon-RPC tests. autosk-proto + autoskd build with
+      # plain serde (no doltlite); autosk-core and the autoskd integration
+      # tests link libdoltlite.
       - name: cargo test
         run: cargo test --workspace
+
+      # ---- §8 conformance gates (anti-drift; release blockers) --------------
+      # These three suites are the cross-implementation anti-drift contract
+      # from the plan (§8). `cargo test --workspace` above already runs them,
+      # but they are surfaced here as NAMED, individually-failing steps so a
+      # regression in any one is an obvious, required release blocker rather
+      # than an anonymous subtest. Re-running the specific targets is cheap
+      # (the crates are already compiled by the workspace pass).
+      - name: "Gate §8.1 — executor behavioural parity"
+        run: cargo test -p autosk-core --test executor
+
+      - name: "Gate §8.2 — protocol golden round-trips"
+        run: cargo test -p autosk-proto --test golden
+
+      - name: "Gate §8.3 — migration/schema golden"
+        run: cargo test -p autosk-core --test schema_golden

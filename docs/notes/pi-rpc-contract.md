@@ -68,7 +68,8 @@ command was accepted.
 
 `queue_update`, `compaction_start|end`, `session_info_changed`,
 `thinking_level_changed`, `auto_retry_start|end`. Daemon projects these
-to `kind:"other"` and only relays them on the SSE stream.
+to `kind:"other"` and only relays them on the `job-event` notification
+stream (`job.subscribe`).
 
 ### Responses and requests
 
@@ -148,17 +149,18 @@ with exponential backoff (100 ms → 5 s cap, ~30 s total budget) until
 once. The poll is gated on the runner type: it only runs for pi-based
 agents, since custom Node runners have no pi session.
 
-`session_path` is the file we tail for `GET /v1/jobs/{id}/messages` —
-the daemon does NOT mirror events into its own table.
+`session_path` is the file we tail for the `job.messages` RPC — the
+daemon does NOT mirror events into its own table.
 
 ---
 
 ## Known unknowns (deferred past v0)
 
-- Image inputs in `prompt` — not in the v0 HTTP API.
+- Image inputs in `prompt` — not in the v0 API.
 - `compact` lifecycle and how it interleaves with `agent_end` — we treat
   `compaction_start|end` as informational and don't re-check closure.
-- `auto_retry_*` events — surfaced via SSE; the daemon does not intervene.
+- `auto_retry_*` events — surfaced via the `job-event` stream; the daemon
+  does not intervene.
 - Pi version skew — if `dist/modes/rpc/rpc-types.d.ts` changes, only the
-  projection layer in `internal/daemon/pi/events.go` and the wire types
-  in `internal/daemon/pi/wire.go` need updating.
+  projection layer + wire types in `crates/autosk-core/src/pi.rs` need
+  updating.
