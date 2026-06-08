@@ -177,6 +177,63 @@ fn task_subscribe_receives_change_notification() {
     assert!(v["params"]["root"].as_str().unwrap().contains("proj"));
 }
 
+/// A workflow/agent write pushes `project-changed`, NOT `task-changed` (review
+/// 4/5): it mutates no task row, so a subscriber should be steered to re-fetch
+/// the project's workflow/agent lists rather than its task list. The change
+/// poller (which only tracks task+run state) must not masquerade a workflow
+/// write as a task change.
+#[test]
+fn project_subscribe_receives_project_changed_on_workflow_write() {
+    let (h, _addr, _daemon) = spawn_daemon();
+    // Warm the project so the change poller has taken its baseline task
+    // signature before we subscribe (any initial task-changed lands on no one).
+    h.call("task.list", json!({}));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let mut sub = UnixStream::connect(&h.sock).unwrap();
+    {
+        let req = json!({"id": 1, "method": "project.subscribe", "params": {"cwd": h.cwd}});
+        let mut line = serde_json::to_vec(&req).unwrap();
+        line.push(b'\n');
+        sub.write_all(&line).unwrap();
+        sub.flush().unwrap();
+    }
+    let mut reader = BufReader::new(sub.try_clone().unwrap());
+    let mut ack = String::new();
+    reader.read_line(&mut ack).unwrap();
+    assert!(ack.contains("subscribed"), "subscribe ack: {ack}");
+
+    // A workflow write on a separate connection.
+    let r = h.call(
+        "workflow.create",
+        json!({"source": "cli", "json": WF_JSON, "no_install": true}),
+    );
+    assert!(r.get("error").is_none(), "workflow.create error: {r}");
+
+    // The subscriber sees project-changed; a workflow write must never emit a
+    // task-changed (the poller tracks task+run state only, so it stays quiet).
+    sub.set_read_timeout(Some(std::time::Duration::from_secs(3)))
+        .unwrap();
+    let mut saw_project = false;
+    for _ in 0..4 {
+        let mut note = String::new();
+        match reader.read_line(&mut note) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let v: Value = serde_json::from_str(&note).unwrap();
+        match v["method"].as_str() {
+            Some("project-changed") => {
+                saw_project = true;
+                break;
+            }
+            Some("task-changed") => panic!("workflow write emitted task-changed: {note}"),
+            _ => {}
+        }
+    }
+    assert!(saw_project, "expected a project-changed notification");
+}
+
 const WF_JSON: &str = r#"{
   "name": "wf1",
   "first_step": "do",

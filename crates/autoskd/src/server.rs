@@ -254,9 +254,14 @@ impl Server {
                     write_line(&writer, &resp);
                     // Eager `task-changed` after a successful task-mutating write
                     // (race-free); the change poller additionally covers the
-                    // daemon's own executor-driven advances.
-                    if ok && is_task_write(&req.method) {
-                        self.broadcast_task_changed(req.params.as_ref());
+                    // daemon's own executor-driven advances. Workflow/agent edits
+                    // push `project-changed` instead (they mutate no task row).
+                    if ok {
+                        if is_task_write(&req.method) {
+                            self.broadcast_task_changed(req.params.as_ref());
+                        } else if is_project_write(&req.method) {
+                            self.daemon.hub.project_changed();
+                        }
                     }
                 }
             }
@@ -1425,7 +1430,8 @@ fn json<T: serde::Serialize>(value: &T) -> Result<Value, ErrorObject> {
 }
 
 /// True for the task-mutating write methods that should push a `task-changed`
-/// notification on success.
+/// notification on success. `sql.exec` stays here: it is an opaque raw write
+/// that most often touches task rows, so `task-changed` is the safe signal.
 fn is_task_write(method: &str) -> bool {
     matches!(
         method,
@@ -1446,13 +1452,22 @@ fn is_task_write(method: &str) -> bool {
             | "task.metadata.unset"
             | "task.metadata.resetVisits"
             | "comment.add"
-            | "workflow.create"
+            | "sql.exec"
+            | "step.next"
+    )
+}
+
+/// True for the write methods that mutate workflows/agents rather than a task
+/// row — these push `project-changed` (a subscriber re-fetches the affected
+/// project's workflow/agent lists) instead of a spurious `task-changed`.
+fn is_project_write(method: &str) -> bool {
+    matches!(
+        method,
+        "workflow.create"
             | "workflow.delete"
             | "workflow.updateIsolation"
             | "agent.install"
             | "agent.uninstall"
-            | "sql.exec"
-            | "step.next"
     )
 }
 

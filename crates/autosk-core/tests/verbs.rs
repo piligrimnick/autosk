@@ -510,6 +510,187 @@ fn lazy_dialects_status_edit_priority_metadata() {
     assert_eq!(last_commit_msg(&e.proj.db), format!("lazy: comment {a}"));
 }
 
+/// tasksvc human-status invariants (review 1/5). `internal/tasksvc` enforces
+/// these rejection branches (Reopen only from done|cancel; SetStatus refuses
+/// `work` as BOTH source and target; done/cancel/reopen on a missing id) and
+/// the Go `tasksvc_test.go` unit-tests each one; here we drive them through the
+/// RPC-reachable verbs, which previously covered only the happy paths.
+#[test]
+fn status_invariants_reopen_work_and_not_found() {
+    let e = env();
+    verbs::workflow_create(&e.proj, &e.packages, Source::Cli, "", WF_JSON, true).unwrap();
+
+    // (a) reopen only accepts done|cancel — reject new / work / human, each with
+    //     the status echoed via Go's %q (Rust `{:?}`).
+    let n = mk(&e, "new-task");
+    assert_eq!(
+        verbs::reopen(&e.proj, &n).unwrap_err().to_string(),
+        "cannot reopen task in status \"new\" (only done|cancel)"
+    );
+
+    let w = mk(&e, "work-task");
+    verbs::enroll(
+        &e.proj,
+        &e.packages,
+        &e.wt,
+        &ctx(),
+        Source::Cli,
+        &w,
+        "wf1",
+        "",
+        "",
+        "",
+    )
+    .unwrap();
+    assert_eq!(
+        verbs::reopen(&e.proj, &w).unwrap_err().to_string(),
+        "cannot reopen task in status \"work\" (only done|cancel)"
+    );
+
+    let h = mk(&e, "human-task");
+    park_human(&e, &h);
+    assert_eq!(
+        verbs::reopen(&e.proj, &h).unwrap_err().to_string(),
+        "cannot reopen task in status \"human\" (only done|cancel)"
+    );
+
+    // (b) set_status rejects `work` as TARGET — via both the CLI `update` verb
+    //     and lazy setStatus.
+    let t = mk(&e, "target");
+    let err = verbs::update(
+        &e.proj,
+        &e.wt,
+        &ctx(),
+        &t,
+        None,
+        None,
+        None,
+        Some("work".into()),
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("refusing to set status='work' directly"),
+        "{err}"
+    );
+    let err = verbs::lazy_update_status(&e.proj, &e.wt, &ctx(), &t, "work").unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("refusing to set status='work' directly"),
+        "{err}"
+    );
+
+    // ... and rejects a status='work' task as SOURCE (the engine owns it).
+    let err = verbs::update(
+        &e.proj,
+        &e.wt,
+        &ctx(),
+        &w,
+        None,
+        None,
+        None,
+        Some("human".into()),
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("refusing to change status on a work task"),
+        "{err}"
+    );
+
+    // (c) done / cancel / reopen on a missing id → `task not found: <id>`.
+    let missing = "ask-zzzzzz";
+    let errs = [
+        verbs::done(&e.proj, &e.wt, &ctx(), missing).err(),
+        verbs::cancel(&e.proj, &e.wt, &ctx(), missing).err(),
+        verbs::reopen(&e.proj, missing).err(),
+    ];
+    for r in errs {
+        assert_eq!(
+            r.expect("expected a not-found error").to_string(),
+            format!("task not found: {missing}")
+        );
+    }
+}
+
+/// enroll / resume --to into a step ALREADY at its `max_visits` cap must surface
+/// the mapped `cannot enter step ...` parking message (review 2/5). Both verbs
+/// route `enter_step` failures through `verbs::map_enter_step_error`; the
+/// executor's advance-side cap test (tests/executor.rs) exercises a DIFFERENT
+/// error-surfacing path, so the verb boundary needs its own coverage.
+#[test]
+fn enroll_resume_into_capped_step_maps_error() {
+    let e = env();
+    verbs::workflow_create(&e.proj, &e.packages, Source::Cli, "", WF_CAP, true).unwrap();
+    let cap_id = step_id(&e, "wfcap", "cap");
+
+    // enroll directly into the capped step with its counter already at the cap.
+    let t1 = mk(&e, "enroll-cap");
+    verbs::metadata_set(
+        &e.proj,
+        Source::Cli,
+        &t1,
+        &format!("step_visits.{cap_id}"),
+        serde_json::json!(1),
+        false,
+    )
+    .unwrap();
+    let err = verbs::enroll(
+        &e.proj,
+        &e.packages,
+        &e.wt,
+        &ctx(),
+        Source::Cli,
+        &t1,
+        "wfcap",
+        "",
+        "cap",
+        "",
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "cannot enter step \"cap\": already at max_visits=1; reset with `autosk metadata reset-visits {t1} --step cap` or resume to a different step"
+        )
+    );
+    // The failed enroll left the task in 'new' (the bump rolled back).
+    assert_eq!(e.proj.db.task_get_row(&t1).unwrap().status, "new");
+
+    // resume --to the capped step from 'human' takes the same mapped path.
+    let t2 = mk(&e, "resume-cap");
+    verbs::enroll(
+        &e.proj,
+        &e.packages,
+        &e.wt,
+        &ctx(),
+        Source::Cli,
+        &t2,
+        "wfcap",
+        "",
+        "",
+        "",
+    )
+    .unwrap();
+    park_human(&e, &t2);
+    verbs::metadata_set(
+        &e.proj,
+        Source::Cli,
+        &t2,
+        &format!("step_visits.{cap_id}"),
+        serde_json::json!(1),
+        false,
+    )
+    .unwrap();
+    let err = verbs::resume(&e.proj, Source::Cli, &t2, "cap").unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "cannot enter step \"cap\": already at max_visits=1; reset with `autosk metadata reset-visits {t2} --step cap` or resume to a different step"
+        )
+    );
+}
+
 #[test]
 fn sql_query_and_exec() {
     let e = env();
@@ -552,6 +733,51 @@ const WF_JSON: &str = r#"{
     }
   }
 }"#;
+
+/// A two-step human-agent workflow whose `cap` step is capped at one visit.
+/// `start` is the entry; `cap` is reachable both via `enroll --step cap` and
+/// `resume --to cap`, so a single fixture drives both verb-boundary cap paths.
+const WF_CAP: &str = r#"{
+  "name": "wfcap",
+  "first_step": "start",
+  "isolation": "none",
+  "steps": {
+    "start": {
+      "agent": { "name": "human" },
+      "next_steps": [ { "step": "cap", "prompt_rule": "go" } ]
+    },
+    "cap": {
+      "agent": { "name": "human" },
+      "max_visits": 1,
+      "next_steps": [ { "task_status": "done", "prompt_rule": "done" } ]
+    }
+  }
+}"#;
+
+/// Parks `id` to status='human' (committed). `current_step_id` is left as-is
+/// (work→human is rejected by set_status, so flip the row directly — mirrors the
+/// existing resume-dialect test).
+fn park_human(e: &Env, id: &str) {
+    verbs::sql_exec(
+        &e.proj,
+        &format!("UPDATE tasks SET status='human' WHERE id='{id}'"),
+    )
+    .unwrap();
+    e.proj.db.commit("park").unwrap();
+}
+
+/// Resolves a step id by `(workflow name, step name)` via the read path.
+fn step_id(e: &Env, wf: &str, step: &str) -> String {
+    let rows = verbs::sql_query(
+        &e.proj,
+        &format!(
+            "SELECT s.id FROM steps s JOIN workflows w ON s.workflow_id = w.id \
+             WHERE w.name = '{wf}' AND s.name = '{step}'"
+        ),
+    )
+    .unwrap();
+    rows.rows[0][0].as_str().unwrap().to_string()
+}
 
 #[test]
 fn compact_succeeds_and_returns_stats() {
