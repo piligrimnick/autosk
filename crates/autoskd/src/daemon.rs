@@ -32,6 +32,12 @@ pub struct DaemonConfig {
     pub idle_timeout: Duration,
     pub grace: Duration,
     pub session_poll_budget: Duration,
+    /// When true, projects start WITHOUT the job poller, so the daemon serves
+    /// reads+writes but never auto-dispatches workflow steps. A test affordance
+    /// (set via `AUTOSK_NO_EXEC=1`) that keeps the Go CLI/lazy verb tests
+    /// deterministic + agent-free, matching the pre-daemon in-process behaviour.
+    /// Never set in production serve.
+    pub no_exec: bool,
 }
 
 impl Default for DaemonConfig {
@@ -44,6 +50,7 @@ impl Default for DaemonConfig {
             idle_timeout: Duration::from_secs(30 * 60),
             grace: Duration::from_secs(10),
             session_poll_budget: Duration::ZERO,
+            no_exec: false,
         }
     }
 }
@@ -137,7 +144,12 @@ impl Daemon {
             proj.root.clone(),
             self.cfg.poll_interval,
         );
-        poller.start();
+        // `AUTOSK_NO_EXEC` (test harness): serve reads+writes but never
+        // auto-dispatch workflow steps. The poller is still constructed (so
+        // shutdown() can join it harmlessly) but never started.
+        if !self.cfg.no_exec {
+            poller.start();
+        }
         let (interval, disabled) = match self.cfg.gc_interval {
             Some(d) => (d, false),
             None => (Duration::ZERO, true),

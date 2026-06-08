@@ -11,6 +11,7 @@
     "workflow_name": "",
     "current_step_id": "",
     "step_name": "",
+    "agent_id": "",
     "agent_name": "",
     "blocked": true,
     "blocked_by": [
@@ -41,6 +42,7 @@
     "workflow_name": "feature-dev",
     "current_step_id": "st-0001",
     "step_name": "dev",
+    "agent_id": "ag-0002",
     "agent_name": "@autogent/generic",
     "blocked": false,
     "blocked_by": [],
@@ -71,6 +73,7 @@
     "workflow_name": "",
     "current_step_id": "",
     "step_name": "",
+    "agent_id": "",
     "agent_name": "",
     "blocked": false,
     "blocked_by": [],

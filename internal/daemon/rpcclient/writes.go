@@ -259,11 +259,15 @@ func (c *Client) SQLExec(ctx context.Context, query string) (int64, error) {
 	return out.RowsAffected, err
 }
 
-// ProjectInitResult is the project.init outcome.
+// ProjectInitResult is the project.init outcome. Bootstrapped is the
+// workflow name when feature-dev-generic was freshly seeded (nil when
+// skipped or already present); SchemaVersion is the post-migrate version
+// so the CLI `init` verb can render its `schema_version=N` line.
 type ProjectInitResult struct {
-	Root         string  `json:"root"`
-	DBPath       string  `json:"db_path"`
-	Bootstrapped *string `json:"bootstrapped"`
+	Root          string  `json:"root"`
+	DBPath        string  `json:"db_path"`
+	SchemaVersion int     `json:"schema_version"`
+	Bootstrapped  *string `json:"bootstrapped"`
 }
 
 // ProjectInit migrates + bootstraps a project (creating the DB if needed).

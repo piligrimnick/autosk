@@ -1025,12 +1025,16 @@ impl Server {
             Err(e) => return Err(core_err(e)),
         };
         let _ = self.daemon.registry.add(&proj.root, &proj.db_path);
-        let bootstrapped = verbs::project_init(&proj, &self.daemon.packages, p.skip_bootstrap)
-            .map_err(core_err)?;
+        let (schema_version, bootstrapped) =
+            verbs::project_init(&proj, &self.daemon.packages, p.skip_bootstrap)
+                .map_err(core_err)?;
         self.daemon.hub.project_changed();
-        Ok(
-            serde_json::json!({"root": proj.root, "db_path": proj.db_path, "bootstrapped": bootstrapped}),
-        )
+        Ok(serde_json::json!({
+            "root": proj.root,
+            "db_path": proj.db_path,
+            "schema_version": schema_version,
+            "bootstrapped": bootstrapped,
+        }))
     }
 }
 

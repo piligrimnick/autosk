@@ -14,7 +14,8 @@
           "review"
         ],
         "next_status": [],
-        "task_count": 1
+        "task_count": 1,
+        "max_visits": 0
       },
       {
         "id": "st-0002",
@@ -26,7 +27,8 @@
         "next_status": [
           "done"
         ],
-        "task_count": 0
+        "task_count": 0,
+        "max_visits": 0
       }
     ],
     "task_count": 1,

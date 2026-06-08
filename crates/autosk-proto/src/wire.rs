@@ -29,6 +29,9 @@ pub struct TaskView {
     pub workflow_name: String,
     pub current_step_id: String,
     pub step_name: String,
+    /// The current step's agent id + name. `agent_id` mirrors `author_id`
+    /// (the human renderer formats `current_agent: [id]: name`).
+    pub agent_id: String,
     pub agent_name: String,
     pub blocked: bool,
     pub blocked_by: Vec<TaskRef>,
@@ -107,6 +110,9 @@ pub struct WorkflowStep {
     pub next_steps: Vec<String>,
     pub next_status: Vec<String>,
     pub task_count: i64,
+    /// Per-step visit cap (`steps.max_visits`); `0` = uncapped. The CLI human
+    /// renderer uses it for the `visits: dev 1/2` step-counter summary.
+    pub max_visits: i64,
 }
 
 /// One non-terminal task referencing a workflow (`datasource.NonTerminalTaskRef`).

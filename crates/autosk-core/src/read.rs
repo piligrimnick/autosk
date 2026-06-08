@@ -245,8 +245,8 @@ fn project_task(conn: &Connection, r: RawTask) -> Result<wire::TaskView> {
         )?
         .unwrap_or_default()
     };
-    let (step_name, agent_name) = if r.current_step_id.is_empty() {
-        (String::new(), String::new())
+    let (step_name, agent_id, agent_name) = if r.current_step_id.is_empty() {
+        (String::new(), String::new(), String::new())
     } else {
         step_label(conn, &r.current_step_id)?.unwrap_or_default()
     };
@@ -271,6 +271,7 @@ fn project_task(conn: &Connection, r: RawTask) -> Result<wire::TaskView> {
         workflow_name,
         current_step_id: r.current_step_id,
         step_name,
+        agent_id,
         agent_name,
         blocked,
         blocked_by,
@@ -328,12 +329,18 @@ fn resolve_task_refs(conn: &Connection, ids: &[String]) -> Result<Vec<wire::Task
 
 /// Resolves a step id to `(step_name, agent_name)` (mirrors `FindStepByID` for
 /// the two fields `projectTask` needs).
-fn step_label(conn: &Connection, step_id: &str) -> Result<Option<(String, String)>> {
+fn step_label(conn: &Connection, step_id: &str) -> Result<Option<(String, String, String)>> {
     let r = conn
         .query_row(
-            "SELECT s.name, a.name FROM steps s JOIN agents a ON s.agent_id = a.id WHERE s.id = ?1",
+            "SELECT s.name, a.id, a.name FROM steps s JOIN agents a ON s.agent_id = a.id WHERE s.id = ?1",
             params![step_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
         )
         .optional()?;
     Ok(r)
@@ -492,7 +499,7 @@ fn normalize_isolation(iso: Option<String>) -> String {
 fn project_workflow(conn: &Connection, h: WorkflowHead) -> Result<wire::Workflow> {
     // Steps ordered by seq, joined to agent name.
     let mut stmt = conn.prepare(
-        "SELECT s.id, s.name, a.name FROM steps s JOIN agents a ON s.agent_id = a.id \
+        "SELECT s.id, s.name, a.name, s.max_visits FROM steps s JOIN agents a ON s.agent_id = a.id \
           WHERE s.workflow_id = ?1 ORDER BY s.seq ASC",
     )?;
     let step_rows = stmt.query_map(params![h.id], |row| {
@@ -500,9 +507,10 @@ fn project_workflow(conn: &Connection, h: WorkflowHead) -> Result<wire::Workflow
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
         ))
     })?;
-    let mut raw_steps: Vec<(String, String, String)> = Vec::new();
+    let mut raw_steps: Vec<(String, String, String, i64)> = Vec::new();
     for r in step_rows {
         raw_steps.push(r?);
     }
@@ -510,7 +518,7 @@ fn project_workflow(conn: &Connection, h: WorkflowHead) -> Result<wire::Workflow
     let mut step_names: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut first_step = String::new();
-    for (sid, sname, _) in &raw_steps {
+    for (sid, sname, _, _) in &raw_steps {
         step_names.insert(sid.clone(), sname.clone());
         if *sid == h.first_step_id {
             first_step = sname.clone();
@@ -519,7 +527,7 @@ fn project_workflow(conn: &Connection, h: WorkflowHead) -> Result<wire::Workflow
 
     let mut steps = Vec::with_capacity(raw_steps.len());
     let mut total_task_count: i64 = 0;
-    for (sid, sname, agent_name) in &raw_steps {
+    for (sid, sname, agent_name, max_visits) in &raw_steps {
         let (next_steps, next_status) = step_transitions(conn, sid)?;
         let task_count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM tasks WHERE current_step_id = ?1",
@@ -534,6 +542,7 @@ fn project_workflow(conn: &Connection, h: WorkflowHead) -> Result<wire::Workflow
             next_steps,
             next_status,
             task_count,
+            max_visits: *max_visits,
         });
     }
 

@@ -984,11 +984,13 @@ pub fn project_init(
     proj: &Project,
     packages: &Registry,
     skip_bootstrap: bool,
-) -> Result<Option<String>> {
-    proj.db.migrate()?;
+) -> Result<(i64, Option<String>)> {
+    // migrate() returns the resulting schema version so the CLI `init` verb
+    // can render `initialized <db> (schema_version=N)` without a second RPC.
+    let version = proj.db.migrate()?;
     let _ = packages.ensure_prefix();
     if skip_bootstrap {
-        return Ok(None);
+        return Ok((version, None));
     }
     let created = proj
         .db
@@ -999,11 +1001,14 @@ pub fn project_init(
                 "init: bootstrap {} workflow",
                 bootstrap::FEATURE_DEV_GENERIC_NAME
             ))?;
-            Ok(Some(bootstrap::FEATURE_DEV_GENERIC_NAME.to_string()))
+            Ok((
+                version,
+                Some(bootstrap::FEATURE_DEV_GENERIC_NAME.to_string()),
+            ))
         }
-        Ok(false) => Ok(None),
+        Ok(false) => Ok((version, None)),
         // Bootstrap is best-effort: surface the reason but don't fail init.
-        Err(e) => Ok(Some(format!("bootstrap skipped: {e}"))),
+        Err(e) => Ok((version, Some(format!("bootstrap skipped: {e}")))),
     }
 }
 

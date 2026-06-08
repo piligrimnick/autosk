@@ -90,6 +90,7 @@ fn cmd_serve(args: Vec<String>) -> i32 {
                 }
             }
             s if s.starts_with("--pi-bin=") => cfg.pi_bin = s["--pi-bin=".len()..].to_string(),
+            "--no-exec" => cfg.no_exec = true,
             other => {
                 eprintln!("autoskd serve: unexpected argument {other:?}");
                 return 2;
@@ -126,6 +127,15 @@ fn cmd_serve(args: Vec<String>) -> i32 {
             return 1;
         }
     };
+    // `AUTOSK_NO_EXEC=1` is the env equivalent of `--no-exec` (test harness):
+    // serve reads+writes but never auto-dispatch workflow steps. Auto-spawned
+    // daemons inherit it via the client's os.Environ().
+    if matches!(
+        std::env::var("AUTOSK_NO_EXEC").ok().as_deref(),
+        Some("1") | Some("true")
+    ) {
+        cfg.no_exec = true;
+    }
     let mgr = Arc::new(Manager::new());
     let daemon = Daemon::new(mgr, registry, cfg);
     eprintln!("autoskd {VERSION}: listening on {}", sock.display());

@@ -10,6 +10,7 @@
   "workflow_name": "feature-dev",
   "current_step_id": "st-0001",
   "step_name": "dev",
+  "agent_id": "ag-0002",
   "agent_name": "@autogent/generic",
   "blocked": false,
   "blocked_by": [],

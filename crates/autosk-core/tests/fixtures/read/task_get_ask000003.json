@@ -10,6 +10,7 @@
   "workflow_name": "",
   "current_step_id": "",
   "step_name": "",
+  "agent_id": "",
   "agent_name": "",
   "blocked": true,
   "blocked_by": [

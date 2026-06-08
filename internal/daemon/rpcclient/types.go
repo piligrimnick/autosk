@@ -24,6 +24,7 @@ type Task struct {
 	WorkflowName  string         `json:"workflow_name"`
 	CurrentStepID string         `json:"current_step_id"`
 	StepName      string         `json:"step_name"`
+	AgentID       string         `json:"agent_id"`
 	AgentName     string         `json:"agent_name"`
 	Blocked       bool           `json:"blocked"`
 	BlockedBy     []TaskRef      `json:"blocked_by"`
@@ -70,6 +71,7 @@ type WorkflowStep struct {
 	NextSteps  []string `json:"next_steps"`
 	NextStatus []string `json:"next_status"`
 	TaskCount  int      `json:"task_count"`
+	MaxVisits  int      `json:"max_visits"`
 }
 
 // NonTerminalTaskRef mirrors autosk-proto::wire::NonTerminalTaskRef.
