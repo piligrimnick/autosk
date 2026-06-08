@@ -41,6 +41,8 @@ Backend check runs from `gui/src-tauri/`:
 
 - `cargo check` — typecheck the Tauri backend (independent of the daemon's doltlite fetch since the crate links none)
 
+App icons: sources live in `gui/src-tauri/icons/src/` (`autosk.icon` + `autosk.png`) and all binary icon artifacts under `icons/` are stored in Git LFS (run `git lfs install` after cloning). Regenerate the Liquid Glass `Assets.car` + flat `.icns`/`.ico`/PNG fallback with `scripts/update-gui-icons.sh` (no args = repo sources; pass `<App.icon> <icon-1024.png>` to adopt a new icon); full usage is in the script header.
+
 ## Repo layout
 
 - `cmd/autosk/` — Cobra CLI entrypoint
