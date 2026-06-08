@@ -12,9 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"autosk/internal/agent"
-	"autosk/internal/comments"
-	"autosk/internal/store/doltlite"
+	"autosk/internal/daemon/rpcclient"
 	"autosk/internal/timeformat"
 )
 
@@ -60,29 +58,22 @@ func newCommentAddCmd() *cobra.Command {
 				return errors.New("comment text is empty")
 			}
 
-			s, closeFn, err := openStore(cmd.Context(), true)
-			if err != nil {
-				return err
-			}
-			defer closeFn()
-			dl := s.(*doltlite.Store)
-			ag := agent.New(dl.DB())
-			cs := comments.New(dl.DB())
-
-			// Resolve author: --author NAME overrides $AUTOSK_AGENT.
+			// Resolve author client-side: --author NAME overrides
+			// $AUTOSK_AGENT (the daemon never reads the client env). The
+			// daemon EnsureByName's the resolved name + commits.
 			authorName := strings.TrimSpace(author)
 			if authorName == "" {
 				authorName = callerAgentName()
 			}
-			aRow, err := ag.EnsureByName(cmd.Context(), authorName)
-			if err != nil {
-				return fmt.Errorf("ensure author %q: %w", authorName, err)
-			}
-			c, err := cs.Add(cmd.Context(), taskID, aRow.ID, text)
+
+			cl, err := writeClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			_ = dl.DoltCommit(cmd.Context(), "comment add "+taskID)
+			c, err := cl.AddComment(cmd.Context(), cliSource, taskID, authorName, text)
+			if err != nil {
+				return err
+			}
 			return emitComment(c)
 		},
 	}
@@ -96,14 +87,11 @@ func newCommentListCmd() *cobra.Command {
 		Short: "List comments on a task (oldest first)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, closeFn, err := openStore(cmd.Context(), false)
+			cl, err := readClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer closeFn()
-			dl := s.(*doltlite.Store)
-			cs := comments.New(dl.DB())
-			list, err := cs.ListByTask(cmd.Context(), args[0])
+			list, err := cl.Comments(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
@@ -124,7 +112,7 @@ type commentJSON struct {
 	CreatedAt  string `json:"created_at"`
 }
 
-func toCommentJSON(c comments.Comment) commentJSON {
+func toCommentJSON(c rpcclient.Comment) commentJSON {
 	return commentJSON{
 		ID:         c.ID,
 		TaskID:     c.TaskID,
@@ -135,7 +123,7 @@ func toCommentJSON(c comments.Comment) commentJSON {
 	}
 }
 
-func emitComment(c comments.Comment) error {
+func emitComment(c rpcclient.Comment) error {
 	if flagQuiet {
 		return nil
 	}
@@ -150,7 +138,7 @@ func emitComment(c comments.Comment) error {
 	return nil
 }
 
-func emitComments(cs []comments.Comment) error {
+func emitComments(cs []rpcclient.Comment) error {
 	if flagJSON {
 		out := make([]commentJSON, len(cs))
 		for i, c := range cs {

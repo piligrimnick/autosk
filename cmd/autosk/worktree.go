@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -12,10 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"autosk/internal/agent"
-	"autosk/internal/store"
-	"autosk/internal/store/doltlite"
-	"autosk/internal/workflow"
+	"autosk/internal/daemon/rpcclient"
 	"autosk/internal/worktree"
 )
 
@@ -115,19 +111,18 @@ func newWorktreeRmCmd() *cobra.Command {
 			"no manual `rm` needed.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, closeFn, err := openStore(cmd.Context(), true)
+			cl, err := readClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer closeFn()
-			t, err := s.GetTask(cmd.Context(), args[0])
+			t, err := cl.GetTask(cmd.Context(), args[0])
 			if err != nil {
-				if errors.Is(err, store.ErrNotFound) {
+				if apiErr, ok := rpcclient.IsAPIError(err); ok && apiErr.Code == rpcclient.CodeNotFound {
 					return fmt.Errorf("task not found: %s", args[0])
 				}
-				return err
+				return cleanRPCError(err)
 			}
-			if t.Status == store.StatusWork {
+			if t.Status == "work" {
 				return fmt.Errorf("refusing to rm worktree of work task %s; the daemon may be executing inside it. Cancel or wait for the workflow to close / park it first",
 					t.ID)
 			}
@@ -167,19 +162,12 @@ func newWorktreeRmCmd() *cobra.Command {
 }
 
 // collectWorktreeRows enumerates tasks under isolated workflows in the
-// current project. Only opens the store once.
+// current project via the daemon.
 func collectWorktreeRows(ctx context.Context) ([]worktreeRow, error) {
-	s, closeFn, err := openStore(ctx, false)
+	cl, err := readClient(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer closeFn()
-	dl, ok := s.(*doltlite.Store)
-	if !ok {
-		return nil, errors.New("worktree list: doltlite store required")
-	}
-	ag := agent.New(dl.DB())
-	wfs := workflow.New(dl.DB(), ag)
 
 	root, err := projectRootFromCwd()
 	if err != nil {
@@ -191,13 +179,13 @@ func collectWorktreeRows(ctx context.Context) ([]worktreeRow, error) {
 	// (single:<agent>) are pinned to isolation=none at construction
 	// time, so we don't include them — saves an unbounded number of
 	// rows on projects with many ad-hoc --agent runs.
-	allWFs, err := wfs.List(ctx, false /*includeSynthetic*/)
+	allWFs, err := cl.Workflows(ctx, false /*includeSynthetic*/)
 	if err != nil {
-		return nil, fmt.Errorf("list workflows: %w", err)
+		return nil, fmt.Errorf("list workflows: %w", cleanRPCError(err))
 	}
 	isolated := make(map[string]string, len(allWFs))
 	for _, w := range allWFs {
-		if w.Isolation == workflow.IsolationWorktree {
+		if w.Isolation == "worktree" {
 			isolated[w.ID] = w.Name
 		}
 	}
@@ -206,10 +194,11 @@ func collectWorktreeRows(ctx context.Context) ([]worktreeRow, error) {
 	}
 
 	// Enumerate ALL tasks (every status) so closed tasks with surviving
-	// directories still appear in the list.
-	tasks, err := s.ListTasks(ctx, store.ListFilter{Statuses: []store.Status{}})
+	// directories still appear in the list. A non-nil empty Statuses slice
+	// asks the daemon for all statuses (nil would default to open-only).
+	tasks, err := cl.Tasks(ctx, rpcclient.TaskListFilter{Statuses: []string{}})
 	if err != nil {
-		return nil, fmt.Errorf("list tasks: %w", err)
+		return nil, fmt.Errorf("list tasks: %w", cleanRPCError(err))
 	}
 
 	var rows []worktreeRow
@@ -228,7 +217,7 @@ func collectWorktreeRows(ctx context.Context) ([]worktreeRow, error) {
 		}
 		rows = append(rows, worktreeRow{
 			TaskID:     t.ID,
-			Status:     string(t.Status),
+			Status:     t.Status,
 			Workflow:   wfName,
 			Path:       path,
 			Branch:     worktree.BranchFor(t.ID),

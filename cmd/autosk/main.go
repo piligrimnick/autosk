@@ -66,7 +66,7 @@ func main() {
 		if errors.Is(err, errSilentExit1) {
 			os.Exit(1)
 		}
-		fmt.Fprintln(os.Stderr, "autosk: "+err.Error())
+		fmt.Fprintln(os.Stderr, "autosk: "+cleanRPCError(err).Error())
 		os.Exit(1)
 	}
 }

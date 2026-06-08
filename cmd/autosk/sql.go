@@ -40,51 +40,31 @@ func newSQLCmd() *cobra.Command {
 				return errors.New("statement appears to write; pass --write to allow")
 			}
 
-			s, closeFn, err := openStore(cmd.Context(), isWrite)
-			if err != nil {
-				return err
-			}
-			defer closeFn()
-
 			if isWrite {
-				res, err := s.ExecRaw(cmd.Context(), query)
+				cl, err := writeClient(cmd.Context())
 				if err != nil {
 					return err
 				}
-				n, _ := res.RowsAffected()
+				n, err := cl.SQLExec(cmd.Context(), query)
+				if err != nil {
+					return err
+				}
 				if !flagQuiet {
 					fmt.Printf("rows affected: %d\n", n)
 				}
 				return nil
 			}
 
-			rows, err := s.QueryRaw(cmd.Context(), query)
+			cl, err := readClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer rows.Close()
-
-			cols, err := rows.Columns()
+			res, err := cl.SQLQuery(cmd.Context(), query)
 			if err != nil {
 				return err
 			}
-
-			// Materialize rows. autosk's expected query sizes are small (debug).
-			var data [][]any
-			for rows.Next() {
-				dest := make([]any, len(cols))
-				ptrs := make([]any, len(cols))
-				for i := range dest {
-					ptrs[i] = &dest[i]
-				}
-				if err := rows.Scan(ptrs...); err != nil {
-					return err
-				}
-				data = append(data, dest)
-			}
-			if err := rows.Err(); err != nil {
-				return err
-			}
+			cols := res.Columns
+			data := res.Rows
 
 			switch {
 			case flagJSON:

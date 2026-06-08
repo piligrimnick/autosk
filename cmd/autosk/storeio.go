@@ -95,13 +95,12 @@ func openStore(ctx context.Context, writeOK bool) (store.Store, func(), error) {
 		if !flagQuiet {
 			fmt.Fprintf(os.Stderr, "autosk: created %s\n", dbPath)
 		}
-		// Mirror `autosk init`'s post-migrate work so the auto-init
-		// path leaves the same state as an explicit init:
-		//   1. Ensure the global packages prefix exists (best-effort).
-		//   2. Seed the bootstrap workflow (best-effort).
-		// Both steps are skipped when the operator opted out via
-		// AUTOSK_AUTOINIT_SKIP_BOOTSTRAP; that env covers the test
-		// helpers and any pipeline that wants a strictly minimal DB.
+		// NOTE: the legacy in-process auto-init only migrates now.
+		// Workflow bootstrap (feature-dev-generic + @autogent/generic)
+		// is owned by the daemon's project.init, reached through the
+		// write-verb preamble (ensureProject -> ProjectInit). This
+		// openStore path survives only for the not-yet-rewired
+		// agent/workflow verbs and is slated for removal in 3b-C.
 		if os.Getenv(EnvAutoInitSkipBootstrap) == "" {
 			if reg, perr := openPackagesRegistry(); perr == nil {
 				if err := reg.EnsurePrefix(); err != nil && !flagQuiet {
@@ -109,11 +108,6 @@ func openStore(ctx context.Context, writeOK bool) (store.Store, func(), error) {
 						"warning: could not create packages prefix at %s: %v\n",
 						reg.Prefix(), err)
 				}
-			}
-			if berr := bootstrapDefaultWorkflow(ctx, s); berr != nil {
-				fmt.Fprintf(os.Stderr,
-					"warning: could not bootstrap default workflow: %v (set %s=1 to suppress this step)\n",
-					berr, EnvAutoInitSkipBootstrap)
 			}
 		}
 	}

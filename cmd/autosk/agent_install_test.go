@@ -121,6 +121,7 @@ func withIsolatedPackagesPrefix(t *testing.T) string {
 // bootstrap tests stay unaffected.
 func runRoot(t *testing.T, dir string, argv ...string) (string, error) {
 	t.Helper()
+	ensureTestDaemon(t)
 	t.Setenv("AUTOSK_DB", "")
 	t.Setenv("AUTOSK_NO_AUTOINIT", "")
 	if _, set := os.LookupEnv("AUTOSK_AUTOINIT_SKIP_BOOTSTRAP"); !set {

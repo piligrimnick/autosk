@@ -8,8 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"autosk/internal/step"
-	"autosk/internal/store/doltlite"
+	"autosk/internal/daemon/rpcclient"
 )
 
 // newStepCmd is the parent for agent-facing step verbs. The only
@@ -43,27 +42,14 @@ func newStepNextCmd() *cobra.Command {
 			if to == "" {
 				return errors.New("--to NAME is required (sibling step name, or done|cancel|human)")
 			}
-			s, closeFn, err := openStore(cmd.Context(), true)
+			cl, err := writeClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer closeFn()
-			dl := s.(*doltlite.Store)
-			ss := step.New(dl.DB())
-			emitted, err := ss.Emit(cmd.Context(), args[0], to)
+			emitted, err := cl.StepNext(cmd.Context(), args[0], to)
 			if err != nil {
-				if errors.Is(err, step.ErrNoActiveRun) {
-					return fmt.Errorf("no active run for task %s (is the daemon running it?)", args[0])
-				}
-				if errors.Is(err, step.ErrUnknownTarget) {
-					return err
-				}
-				if errors.Is(err, step.ErrAlreadyEmitted) {
-					return fmt.Errorf("%w (you can only call `step next` once per run)", err)
-				}
-				return err
+				return cleanRPCError(err)
 			}
-			_ = dl.DoltCommit(cmd.Context(), "step next "+args[0]+" --to "+to)
 			return emitStepSignal(emitted)
 		},
 	}
@@ -83,7 +69,7 @@ type stepSignalJSON struct {
 	CreatedAt    string `json:"created_at"`
 }
 
-func emitStepSignal(e step.Emitted) error {
+func emitStepSignal(e rpcclient.StepSignal) error {
 	if flagQuiet {
 		return nil
 	}
@@ -95,7 +81,7 @@ func emitStepSignal(e step.Emitted) error {
 			NextStep:     e.NextStepName,
 			TaskStatus:   e.TaskStatus,
 			PromptRule:   e.PromptRule,
-			CreatedAt:    e.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			CreatedAt:    e.CreatedAt,
 		})
 	}
 	fmt.Printf("recorded transition for run %s\n", e.RunID)
