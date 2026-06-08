@@ -424,6 +424,8 @@ impl Server {
             "agent.uninstall" => self.agent_uninstall(&params),
             "sql.query" => self.sql_query(&params),
             "sql.exec" => self.sql_exec(&params),
+            "step.next" => self.step_next(&params),
+            "maint.compact" => self.maint_compact(&params),
             "project.init" => self.project_init(&params),
 
             other => Err(ErrorObject {
@@ -1007,6 +1009,32 @@ impl Server {
         Ok(serde_json::json!({"rows_affected": n}))
     }
 
+    fn step_next(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: StepNextParams = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let e = verbs::step_next(&proj, &p.id, &p.to).map_err(core_err)?;
+        Ok(serde_json::json!({
+            "run_id": e.run_id,
+            "task_id": e.task_id,
+            "transition_id": e.transition_id,
+            "next_step_name": e.next_step_name,
+            "task_status": e.task_status,
+            "prompt_rule": e.prompt_rule,
+            "created_at": autosk_core::timefmt::rfc3339_utc(e.created_at),
+        }))
+    }
+
+    fn maint_compact(&self, params: &Value) -> Result<Value, ErrorObject> {
+        let p: Selector = parse(params)?;
+        let proj = self.resolve(&p.cwd, &p.db_path)?;
+        let g = verbs::compact(&proj).map_err(core_err)?;
+        Ok(serde_json::json!({
+            "chunks_removed": g.chunks_removed,
+            "chunks_kept": g.chunks_kept,
+            "raw": g.raw,
+        }))
+    }
+
     fn project_init(&self, params: &Value) -> Result<Value, ErrorObject> {
         let p: ProjectInitParams = parse(params)?;
         // project.init may target a fresh dir without an existing .autosk/db, so
@@ -1420,6 +1448,7 @@ fn is_task_write(method: &str) -> bool {
             | "agent.install"
             | "agent.uninstall"
             | "sql.exec"
+            | "step.next"
     )
 }
 
@@ -1460,6 +1489,18 @@ struct IdParams {
     db_path: String,
     #[serde(default)]
     id: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StepNextParams {
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    db_path: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    to: String,
 }
 
 #[derive(Debug, Default, Deserialize)]

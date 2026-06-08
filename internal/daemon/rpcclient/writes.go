@@ -277,6 +277,42 @@ func (c *Client) ProjectInit(ctx context.Context, skipBootstrap bool) (ProjectIn
 	return out, err
 }
 
+// StepSignal mirrors the daemon's step.next response (the recorded
+// transition). CreatedAt is RFC3339 UTC.
+type StepSignal struct {
+	RunID        string `json:"run_id"`
+	TaskID       string `json:"task_id"`
+	TransitionID int64  `json:"transition_id"`
+	NextStepName string `json:"next_step_name"`
+	TaskStatus   string `json:"task_status"`
+	PromptRule   string `json:"prompt_rule"`
+	CreatedAt    string `json:"created_at"`
+}
+
+// StepNext records the agent's chosen transition for a task's active run
+// (`step next <id> --to <to>`). Agent-facing; CLI dialect only.
+func (c *Client) StepNext(ctx context.Context, id, to string) (StepSignal, error) {
+	var out StepSignal
+	err := c.call(ctx, "step.next", c.selector(map[string]any{"id": id, "to": to}), &out)
+	return out, err
+}
+
+// CompactResult mirrors the daemon's maint.compact response. Duration is
+// measured client-side around the RPC (the daemon does not time the call).
+type CompactResult struct {
+	ChunksRemoved int64  `json:"chunks_removed"`
+	ChunksKept    int64  `json:"chunks_kept"`
+	Raw           string `json:"raw"`
+}
+
+// Compact runs doltlite chunk-store compaction (`SELECT dolt_gc()`) on the
+// project DB.
+func (c *Client) Compact(ctx context.Context) (CompactResult, error) {
+	var out CompactResult
+	err := c.call(ctx, "maint.compact", c.selector(nil), &out)
+	return out, err
+}
+
 // SendInput dispatches steer/follow_up/prompt to a running job.
 func (c *Client) SendInput(ctx context.Context, jobID, message, behavior string) (string, error) {
 	extra := map[string]any{"job_id": jobID, "message": message}

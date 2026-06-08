@@ -19,7 +19,8 @@ use crate::projectmgr::Project;
 use crate::tasks::{self, Task, TaskPatch};
 use crate::worktree::WorktreeManager;
 use crate::{
-    agents_write, bootstrap, comments_write, deps, ids, meta, metaverbs, tasksvc, wfcrud, wfengine,
+    agents_write, bootstrap, comments_write, deps, ids, meta, metaverbs, signals, tasksvc, wfcrud,
+    wfengine,
 };
 use autosk_proto::wire;
 
@@ -961,6 +962,57 @@ pub fn sql_query(proj: &Project, query: &str) -> Result<SqlRows> {
 pub fn sql_exec(proj: &Project, query: &str) -> Result<i64> {
     proj.db
         .with_write(|conn| Ok(conn.execute(query, [])? as i64))
+}
+
+// ---- step.next (agent-facing) --------------------------------------------
+
+/// `step next <id> --to <to>` — record the agent's chosen workflow transition
+/// for the task's active run (port of `cmd/autosk/step.go` + `internal/step`).
+/// Resolves the active `daemon_runs` row, validates `to` against the current
+/// step's outgoing transitions, inserts the `step_signals` row, and commits
+/// `step next <id> --to <to>` (best-effort, mirroring the CLI's ignored
+/// DoltCommit error). Agent-facing — CLI dialect only.
+pub fn step_next(proj: &Project, id: &str, to: &str) -> Result<signals::Emitted> {
+    let res = proj.db.with_writer(|conn| signals::emit(conn, id, to))?;
+    let emitted = match res {
+        Ok(e) => e,
+        Err(se) => return Err(map_signal_error(se, id, to)),
+    };
+    let _ = proj.db.commit(&format!("step next {id} --to {to}"));
+    Ok(emitted)
+}
+
+/// Maps a [`signals::SignalError`] onto the byte-identical CLI-final message
+/// the pre-daemon `cmd/autosk/step.go` produced (the daemon is now the sole
+/// writer, so its error text is what the CLI surfaces after stripping the
+/// transport prefix).
+fn map_signal_error(e: signals::SignalError, id: &str, to: &str) -> Error {
+    use signals::SignalError as SE;
+    match e {
+        // CLI re-wraps ErrNoActiveRun with the task id + daemon hint.
+        SE::NoActiveRun => Error::Invalid(format!(
+            "no active run for task {id} (is the daemon running it?)"
+        )),
+        // CLI surfaces ErrUnknownTarget verbatim: `... : "<to>" (valid: <set>)`.
+        SE::UnknownTarget(valid) => Error::Invalid(format!(
+            "target not in current step's transitions: {to:?} (valid: {valid})"
+        )),
+        // CLI appends the once-per-run hint to ErrAlreadyEmitted.
+        SE::AlreadyEmitted => Error::Conflict(
+            "step_next_already_emitted (you can only call `step next` once per run)".to_string(),
+        ),
+        SE::Ambiguous(t) => Error::Invalid(format!("ambiguous target {t:?}")),
+        SE::Core(err) => err,
+    }
+}
+
+// ---- maint.compact (operator-facing gc) ----------------------------------
+
+/// `gc` — run doltlite chunk-store compaction (`SELECT dolt_gc()`) on the
+/// project DB and return the parsed stats (port of `cmd/autosk/gc.go`). The
+/// client measures the wall-clock duration around the RPC.
+pub fn compact(proj: &Project) -> Result<crate::store::GcStats> {
+    proj.db.gc()
 }
 
 fn sqlite_value_to_json(v: rusqlite::types::ValueRef<'_>) -> Value {

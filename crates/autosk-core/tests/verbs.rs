@@ -554,6 +554,44 @@ const WF_JSON: &str = r#"{
 }"#;
 
 #[test]
+fn compact_succeeds_and_returns_stats() {
+    // `gc` / maint.compact must succeed and return parseable stats with a
+    // verbatim dolt_gc() reply (chunk counts are non-negative).
+    let e = env();
+    let g = verbs::compact(&e.proj).expect("compact");
+    assert!(g.chunks_removed >= 0 && g.chunks_kept >= 0);
+    assert!(!g.raw.is_empty(), "dolt_gc() returns a non-empty reply");
+}
+
+#[test]
+fn step_next_without_active_run_maps_cli_error() {
+    // No daemon_runs row exists → emit returns NoActiveRun, which the verb maps
+    // to the byte-identical CLI-final message (task id + daemon hint).
+    let e = env();
+    let view = verbs::create(
+        &e.proj,
+        &e.packages,
+        &e.wt,
+        &ctx(),
+        Source::Cli,
+        CreateParams {
+            title: "t".into(),
+            priority: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let err = verbs::step_next(&e.proj, &view.id, "done").unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "no active run for task {} (is the daemon running it?)",
+            view.id
+        )
+    );
+}
+
+#[test]
 fn marshal_agent_params_omits_empty() {
     // Defensive check that empty arrays collapse away (byte-parity with Go's
     // omitempty) — see wfcrud::marshal_agent_params.
