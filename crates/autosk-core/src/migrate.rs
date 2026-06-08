@@ -22,9 +22,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::Result;
 
-/// The v0.1 consolidated schema, embedded from the Go tree so there is exactly
-/// one copy of the DDL in the repository.
-const INIT_SQL: &str = include_str!("../../../internal/migrations/001_init.sql");
+/// The v0.1 consolidated schema, embedded from this crate (the sole consumer)
+/// so there is exactly one copy of the DDL in the repository.
+const INIT_SQL: &str = include_str!("001_init.sql");
 
 /// The highest schema version this migrator knows how to produce.
 pub const LATEST_VERSION: i64 = 1;

@@ -93,16 +93,6 @@ func Default(opts ...Option) (*Registry, error) {
 	return Open(filepath.Join(home, ".autosk", "packages"), opts...)
 }
 
-// Prefix returns the absolute prefix directory.
-func (r *Registry) Prefix() string { return r.prefix }
-
-// RuntimeBootstrapPath returns the absolute path of the bootstrapper
-// script (dist/bootstrap.js inside the runtime package). Whether the
-// file actually exists is the caller's problem; use EnsureRuntime first.
-func (r *Registry) RuntimeBootstrapPath() string {
-	return filepath.Join(r.prefix, "node_modules", RuntimePackageName, "dist", "bootstrap.js")
-}
-
 // EnsurePrefix creates the prefix dir + initial package.json + initial
 // empty registry.json if they don't exist. Idempotent.
 func (r *Registry) EnsurePrefix() error {

@@ -1526,14 +1526,6 @@ func truncate(s string, n int) string {
 	return string(rs[:n-1]) + "…"
 }
 
-// humanAge returns "3m", "1h", "2d" etc. since t.
-func humanAge(t time.Time) string {
-	if t.IsZero() {
-		return "—"
-	}
-	return humanDuration(time.Since(t))
-}
-
 // humanDuration is the elapsed-time formatter shared by humanAge
 // (Tasks panel) and jobWorkTime (Jobs panel). Same four buckets —
 // seconds, minutes, hours, days — so the two columns visually rhyme.

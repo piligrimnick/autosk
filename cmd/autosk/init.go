@@ -15,7 +15,7 @@ import (
 // newInitCmd: explicit `autosk init`. A client of the daemon's
 // project.init, which is idempotent — runs migrations on an existing DB
 // and seeds the default `feature-dev-generic` workflow on first run
-// (canonical definition: internal/bootstrap/feature-dev-generic.json,
+// (canonical definition: crates/autosk-core/src/feature-dev-generic.json,
 // embedded in autoskd) + auto-installs the `@autogent/generic` agent it
 // references.
 func newInitCmd() *cobra.Command {
@@ -32,7 +32,7 @@ Idempotent: running on an existing project re-applies any pending migrations.
 
 After the schema is current, init seeds the default workflow
 ` + "`feature-dev-generic`" + ` (canonical definition:
-internal/bootstrap/feature-dev-generic.json) and auto-installs the
+crates/autosk-core/src/feature-dev-generic.json) and auto-installs the
 ` + "`@autogent/generic`" + ` agent it references. The bootstrap step is
 idempotent (re-running init is a no-op once the workflow row exists) and
 failures are non-fatal — a warning is printed to stderr and the DB is

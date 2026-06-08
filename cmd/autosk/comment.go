@@ -131,8 +131,8 @@ func emitComment(c rpcclient.Comment) error {
 		return json.NewEncoder(os.Stdout).Encode(toCommentJSON(c))
 	}
 	// Human text output: local TZ + 'YYYY-MM-DD HH:MM:SS'. The JSON
-	// form (toCommentJSON) and the LLM-facing comments.RenderForPrompt
-	// stay on RFC3339 UTC — see internal/comments/store.go.
+	// form (toCommentJSON) and the LLM-facing comment render stay on
+	// RFC3339 UTC (owned by autoskd / autosk-core).
 	fmt.Printf("[%s@%s] (id=%d):\n%s\n",
 		c.AuthorName, timeformat.FormatDateTime(c.CreatedAt), c.ID, c.Text)
 	return nil

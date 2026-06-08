@@ -16,19 +16,6 @@ import (
 	"autosk/internal/timeformat"
 )
 
-// defaultSockPath returns the default ~/.autosk/daemon.sock for the
-// current user. Falls back to ./.autosk/daemon.sock if HOME is unset.
-func defaultSockPath() string {
-	if env := os.Getenv("AUTOSK_SOCK"); env != "" {
-		return env
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ".autosk/daemon.sock"
-	}
-	return filepath.Join(home, ".autosk", "daemon.sock")
-}
-
 // newDaemonCmd builds the `autosk daemon` parent. The daemon itself is now the
 // Rust `autoskd` (the Go `daemon serve` was retired in the Phase-2 cutover);
 // these subcommands are pure JSON-RPC clients of autoskd, auto-spawning it on

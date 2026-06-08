@@ -16,8 +16,8 @@ import (
 // scheduled compactor is disabled (--gc-interval<0) or when a long
 // daemon-less burst of writes has bloated `.autosk/db` and made
 // `autosk lazy` sluggish. The underlying SQL call is identical
-// (`SELECT dolt_gc()`); see internal/store/doltlite/maint.go for the
-// rationale.
+// (`SELECT dolt_gc()`); the compaction itself runs inside autoskd
+// (autosk-core), which owns the doltlite store.
 //
 // Output (default): "removed=<N> kept=<M> duration=<d>". --json
 // dumps the full CompactResult including the verbatim doltlite

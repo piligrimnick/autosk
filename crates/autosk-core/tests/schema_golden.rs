@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use autosk_core::{migrate, Db};
 
 /// The schema source, embedded the same way the migrator embeds it.
-const INIT_SQL: &str = include_str!("../../../internal/migrations/001_init.sql");
+const INIT_SQL: &str = include_str!("../src/001_init.sql");
 
 fn fresh_migrated_db() -> (tempfile::TempDir, Db) {
     let dir = tempfile::tempdir().expect("tempdir");

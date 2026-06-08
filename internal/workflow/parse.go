@@ -146,10 +146,6 @@ type TransitionDef struct {
 	PromptRule string
 }
 
-// IsTaskStatus reports whether this transition terminates the workflow
-// (or routes to human) rather than advancing to a sibling step.
-func (t TransitionDef) IsTaskStatus() bool { return t.TaskStatus != "" }
-
 // rawDoc mirrors the on-disk shape one-to-one for json.Unmarshal.
 type rawDoc struct {
 	Name        string             `json:"name"`

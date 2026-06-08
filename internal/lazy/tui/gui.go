@@ -9,7 +9,7 @@
 //
 // The only seam between the TUI and the rest of autosk is
 // internal/lazy/datasource. Nothing in this package imports
-// internal/store, internal/daemon/client, or internal/workflow
+// internal/store, internal/daemon/rpcclient, or internal/workflow
 // directly.
 package tui
 
@@ -1282,16 +1282,4 @@ func (gu *Gui) writeViewSticky(name, title, body string) {
 		target = 0
 	}
 	v.SetOrigin(ox, target)
-}
-
-// truncateLines crops a string to at most n lines (helps small views).
-func truncateLines(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	parts := strings.SplitN(s, "\n", n+1)
-	if len(parts) <= n {
-		return s
-	}
-	return strings.Join(parts[:n], "\n")
 }

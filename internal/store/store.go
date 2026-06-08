@@ -1,6 +1,7 @@
-// Package store defines the storage abstraction autosk's commands sit on top
-// of. Two implementations live alongside: doltlite (default, MVP) and
-// doltserver (build-tagged stub).
+// Package store defines the shared task/workflow/agent view types and the
+// storage interface autosk's commands render against. The concrete store
+// implementation lives in the Rust daemon (autosk-core); the Go CLI + lazy
+// TUI consume these types over JSON-RPC and never open the DB themselves.
 package store
 
 import (
@@ -101,13 +102,6 @@ type TaskPatch struct {
 	WorkflowID    *string
 	CurrentStepID *string
 	Metadata      *map[string]any
-}
-
-// IsEmpty reports whether the patch would change nothing.
-func (p TaskPatch) IsEmpty() bool {
-	return p.Title == nil && p.Description == nil && p.Status == nil &&
-		p.Priority == nil && p.WorkflowID == nil && p.CurrentStepID == nil &&
-		p.Metadata == nil
 }
 
 // ListFilter narrows ListTasks results.

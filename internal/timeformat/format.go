@@ -7,8 +7,7 @@
 // Machine wire formats (JSON API responses, daemon HTTP API,
 // RunContextSeed for agents, comment RenderForPrompt for LLM agents,
 // TS extension types) stay on RFC3339 UTC and do NOT route through
-// this package — see internal/comments/store.go and
-// internal/daemon/api/types.go.
+// this package — see internal/daemon/api/types.go.
 //
 // Layouts:
 //

@@ -2,8 +2,9 @@
 //! `internal/bootstrap` + `cmd/autosk/init.go`'s `bootstrapDefaultWorkflow` +
 //! `autoInstallMissingAgents`.
 //!
-//! The workflow JSON is embedded straight from the Go tree so there is exactly
-//! one source of truth (mirroring how [`crate::migrate`] embeds the schema).
+//! The workflow JSON is embedded from this crate (the sole consumer) so there
+//! is exactly one source of truth (mirroring how [`crate::migrate`] embeds the
+//! schema).
 
 use std::collections::BTreeSet;
 
@@ -17,8 +18,7 @@ use crate::wfcrud::{self, Definition};
 /// Name of the canonical workflow (mirror of `bootstrap.FeatureDevGenericName`).
 pub const FEATURE_DEV_GENERIC_NAME: &str = "feature-dev-generic";
 
-const FEATURE_DEV_GENERIC_JSON: &str =
-    include_str!("../../../internal/bootstrap/feature-dev-generic.json");
+const FEATURE_DEV_GENERIC_JSON: &str = include_str!("feature-dev-generic.json");
 
 /// Parses the embedded `feature-dev-generic` definition.
 pub fn feature_dev_generic_def() -> Result<Definition> {

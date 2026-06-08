@@ -27,12 +27,6 @@ type Connector struct {
 	spawned bool
 }
 
-// NewConnector builds a connector for a socket path. bin is optional (empty →
-// resolve via $AUTOSKD_BIN, alongside the calling binary, then PATH).
-func NewConnector(sock, bin string) *Connector {
-	return &Connector{sock: sock, bin: bin}
-}
-
 // spawnWait bounds how long we wait for a freshly-spawned (or peer-spawned)
 // daemon to start accepting connections.
 const (

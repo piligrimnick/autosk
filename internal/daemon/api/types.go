@@ -12,8 +12,6 @@ package api
 
 import (
 	"time"
-
-	"autosk/internal/daemon/runstore"
 )
 
 // JobResponse is the canonical Job shape returned by the API.
@@ -130,28 +128,4 @@ type ErrorResponse struct {
 // ListResponse is GET /v1/jobs.
 type ListResponse struct {
 	Jobs []JobResponse `json:"jobs"`
-}
-
-// FromRun projects a runstore.Run to its API shape. AttachCount and
-// Streaming are zero-valued; callers (the server) populate them from
-// the live pirunners.Attachments / pirunners.Registry before sending.
-func FromRun(r runstore.Run) JobResponse {
-	return JobResponse{
-		JobID:           r.JobID,
-		TaskID:          r.TaskID,
-		StepID:          r.StepID,
-		Status:          string(r.Status),
-		TransitionID:    r.TransitionID,
-		PISessionID:     r.PISessionID,
-		SessionPath:     r.SessionPath,
-		PID:             r.PID,
-		ExitCode:        r.ExitCode,
-		Error:           r.Error,
-		CorrectionsUsed: r.CorrectionsUsed,
-		MaxCorrections:  r.MaxCorrections,
-		CreatedAt:       r.CreatedAt,
-		StartedAt:       r.StartedAt,
-		FinishedAt:      r.FinishedAt,
-		DurationMS:      r.Duration().Milliseconds(),
-	}
 }

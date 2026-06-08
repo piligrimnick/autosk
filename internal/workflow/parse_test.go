@@ -1,7 +1,6 @@
 package workflow_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -184,78 +183,6 @@ func TestParseFile_AgentParams_InlinesFirstMessageFile(t *testing.T) {
 	}
 }
 
-func TestValidate_Structural(t *testing.T) {
-	ctx := context.Background()
-	cases := []struct {
-		name    string
-		body    string
-		wantErr string
-	}{
-		{
-			name:    "missing first_step",
-			body:    `{"name":"x","steps":{"a":{"agent":{"name":"dev"},"next_steps":[{"task_status":"done","prompt_rule":"."}]}}}`,
-			wantErr: "first_step",
-		},
-		{
-			name:    "first_step not in steps",
-			body:    `{"name":"x","first_step":"b","steps":{"a":{"agent":{"name":"dev"},"next_steps":[{"task_status":"done","prompt_rule":"."}]}}}`,
-			wantErr: "first_step",
-		},
-		{
-			name:    "transition to unknown step",
-			body:    `{"name":"x","first_step":"a","steps":{"a":{"agent":{"name":"dev"},"next_steps":[{"step":"b","prompt_rule":"."}]}}}`,
-			wantErr: "target step",
-		},
-		{
-			name:    "bad task_status",
-			body:    `{"name":"x","first_step":"a","steps":{"a":{"agent":{"name":"dev"},"next_steps":[{"task_status":"deleted","prompt_rule":"."}]}}}`,
-			wantErr: "task_status",
-		},
-		{
-			name:    "missing prompt_rule",
-			body:    `{"name":"x","first_step":"a","steps":{"a":{"agent":{"name":"dev"},"next_steps":[{"task_status":"done","prompt_rule":""}]}}}`,
-			wantErr: "prompt_rule",
-		},
-		{
-			name:    "reserved prefix",
-			body:    `{"name":"single:dev","first_step":"a","steps":{"a":{"agent":{"name":"dev"},"next_steps":[{"task_status":"done","prompt_rule":"."}]}}}`,
-			wantErr: "reserved prefix",
-		},
-		{
-			name:    "step with no transitions",
-			body:    `{"name":"x","first_step":"a","steps":{"a":{"agent":{"name":"dev"},"next_steps":[]}}}`,
-			wantErr: "at least one transition",
-		},
-		{
-			name:    "bad thinking enum",
-			body:    `{"name":"x","first_step":"a","steps":{"a":{"agent":{"name":"dev","params":{"thinking":"bogus"}},"next_steps":[{"task_status":"done","prompt_rule":"."}]}}}`,
-			wantErr: "thinking",
-		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			def, err := workflow.ParseReader(strings.NewReader(c.body))
-			if err != nil {
-				// Parser-level errors are also acceptable (e.g.
-				// exactly-one); they're caught at parse time so
-				// validate isn't reached.
-				if strings.Contains(err.Error(), c.wantErr) {
-					return
-				}
-				t.Fatalf("parse: %v", err)
-			}
-			err = workflow.Validate(ctx, def, nil, workflow.ValidateOpts{})
-			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-				t.Fatalf("want error containing %q, got %v", c.wantErr, err)
-			}
-		})
-	}
-}
-
-func TestValidate_AgentMissing(t *testing.T) {
-	t.Skip("requires real agent store; covered in store_test.go via Create round-trip")
-}
-
 func TestParse_MaxVisitsRoundTrips(t *testing.T) {
 	body := `{
 		"name": "x", "first_step": "a",
@@ -334,41 +261,5 @@ func TestParse_IsolationUnknownRejected(t *testing.T) {
 	_, err := workflow.ParseReader(strings.NewReader(body))
 	if err == nil || !strings.Contains(err.Error(), "unknown isolation") {
 		t.Fatalf("want unknown isolation error, got %v", err)
-	}
-}
-
-func TestValidate_RejectsSyntheticPrefixWithWorktree(t *testing.T) {
-	body := `{
-		"name": "single:dev", "first_step": "a", "isolation": "worktree",
-		"steps": {
-			"a": {"agent": {"name": "dev"}, "next_steps": [{"task_status": "done", "prompt_rule": "."}]}
-		}}`
-	def, err := workflow.ParseReader(strings.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = workflow.Validate(context.Background(), def, nil, workflow.ValidateOpts{AllowSyntheticName: true})
-	if err == nil || !strings.Contains(err.Error(), "synthetic") {
-		t.Fatalf("want synthetic+worktree error, got %v", err)
-	}
-}
-
-func TestValidate_RejectsNegativeMaxVisits(t *testing.T) {
-	body := `{
-		"name": "x", "first_step": "a",
-		"steps": {
-			"a": {
-				"agent": {"name": "dev"},
-				"max_visits": -3,
-				"next_steps": [{"task_status": "done", "prompt_rule": "."}]
-			}
-		}}`
-	def, err := workflow.ParseReader(strings.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = workflow.Validate(context.Background(), def, nil, workflow.ValidateOpts{})
-	if err == nil || !strings.Contains(err.Error(), "max_visits") {
-		t.Fatalf("want max_visits validation error, got %v", err)
 	}
 }

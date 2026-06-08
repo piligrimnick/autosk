@@ -17,16 +17,15 @@ The Go binary (CLI + lazy TUI) is a pure JSON-RPC client of `autoskd` and **no l
 
 No Go target depends on a `doctor` / doltlite fetch anymore. The `cmd/autosk` verb tests are RPC clients and need a live `autoskd` on disk, which they auto-spawn after locating it via `$AUTOSKD_BIN` (set by `make test`/`make test-short`, which build it first). A direct `go test ./...` works without the `libsqlite3` tag, but the verb tests `t.Skip` unless `autoskd` has been built (`make build-autoskd`) and `$AUTOSKD_BIN` is set.
 
-`autoskd` fetches its own pinned doltlite via `crates/autosk-core/build.rs` (`scripts/fetch-doltlite.sh`) when you `cargo build` it — independent of the Go Makefile. (The legacy `internal/store/doltlite` package and its tests are gated behind `//go:build libsqlite3` and are slated for deletion in Phase 5.)
+`autoskd` fetches its own pinned doltlite via `crates/autosk-core/build.rs` (`scripts/fetch-doltlite.sh`) when you `cargo build` it — independent of the Go Makefile. The Go tree no longer contains any doltlite/SQL store: the storage engine, migrations, and workflow/run engine all live in `autoskd` (`autosk-core`); the Go packages keep only the view types the front ends render over RPC.
 
 ## Repo layout
 
 - `cmd/autosk/` — Cobra CLI entrypoint
 - `internal/lazy/` — lazygit-style TUI (`autosk lazy`), built on `jesseduffield/gocui`
-- `internal/daemon/` — Unix-domain-socket daemon + job executor
-- `internal/workflow/` — workflow step graph, transitions, executor
-- `internal/bootstrap/` — canonical workflow JSON shipped with the binary; embedded via `go:embed` and applied by `autosk init`. Single source of truth for `feature-dev-generic` — do not duplicate it under `docs/` or anywhere else.
-- `internal/projectdb/`, `internal/store/`, `internal/migrations/` — doltlite-backed task/workflow/agent store
+- `internal/daemon/` — JSON-RPC client of `autoskd` (`rpcclient`, auto-spawn) plus shared wire/view types (`api`, `runstore`)
+- `internal/workflow/` — workflow-JSON parser + materialised view types (the step-graph engine lives in `autoskd`/`autosk-core`)
+- `internal/projectdb/`, `internal/store/` — `.autosk/db` path resolution + the shared task/workflow/agent view types the front ends render (no DB is opened in Go)
 - `extension/` — TypeScript SDK + agent runtime (`pi --mode rpc`)
 - `agents/` — reference agent implementations (TS/JS)
 
