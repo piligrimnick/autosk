@@ -5,21 +5,32 @@
     "description": "Feature development",
     "is_synthetic": false,
     "first_step": "dev",
+    "first_step_id": "st-0001",
     "steps": [
       {
         "id": "st-0001",
         "name": "dev",
+        "agent_id": "ag-0002",
         "agent_name": "@autogent/generic",
         "next_steps": [
           "review"
         ],
         "next_status": [],
         "task_count": 1,
-        "max_visits": 0
+        "max_visits": 0,
+        "transitions": [
+          {
+            "id": 1,
+            "next_step_id": "st-0002",
+            "next_step_name": "review",
+            "prompt_rule": "full"
+          }
+        ]
       },
       {
         "id": "st-0002",
         "name": "review",
+        "agent_id": "ag-0001",
         "agent_name": "human",
         "next_steps": [
           "dev"
@@ -28,7 +39,20 @@
           "done"
         ],
         "task_count": 0,
-        "max_visits": 0
+        "max_visits": 0,
+        "transitions": [
+          {
+            "id": 2,
+            "task_status": "done",
+            "prompt_rule": "full"
+          },
+          {
+            "id": 3,
+            "next_step_id": "st-0001",
+            "next_step_name": "dev",
+            "prompt_rule": "full"
+          }
+        ]
       }
     ],
     "task_count": 1,
@@ -40,6 +64,7 @@
         "status": "work",
         "step_name": "dev"
       }
-    ]
+    ],
+    "created_at": "2023-11-14T22:13:30Z"
   }
 ]

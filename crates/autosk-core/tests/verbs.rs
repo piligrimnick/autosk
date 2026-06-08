@@ -224,7 +224,7 @@ fn workflow_create_delete_enroll_resume_status() {
 
     let a = mk(&e, "t");
     // enroll → status work + commit dialect
-    let view = verbs::enroll(
+    let (view, _) = verbs::enroll(
         &e.proj,
         &e.packages,
         &e.wt,

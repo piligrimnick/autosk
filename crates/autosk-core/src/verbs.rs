@@ -206,7 +206,9 @@ pub fn create(
 
 // ---- enroll ---------------------------------------------------------------
 
-/// `enroll` — (re-)attach a task to a workflow's entry step.
+/// `enroll` — (re-)attach a task to a workflow's entry step. Returns the
+/// enriched task view plus a `base_ref_ignored` flag the front end renders as a
+/// `--base-ref ignored` warning (the worktree branch already existed).
 #[allow(clippy::too_many_arguments)]
 pub fn enroll(
     proj: &Project,
@@ -219,7 +221,7 @@ pub fn enroll(
     agent: &str,
     step: &str,
     base_ref: &str,
-) -> Result<wire::TaskView> {
+) -> Result<(wire::TaskView, bool)> {
     if !workflow.is_empty() && !agent.is_empty() {
         return Err(Error::Invalid(
             "--workflow and --agent are mutually exclusive".into(),
@@ -264,13 +266,15 @@ pub fn enroll(
 
     // Worktree (CLI only; lazy never allocates one — documented limitation).
     let mut wt_allocated = false;
+    let mut base_ref_ignored = false;
     if source == Source::Cli {
         if entry.isolation == "worktree" {
             match worktrees.ensure(ctx, &proj.root, task_id, base_ref) {
                 Ok(res) => {
-                    if res.base_ref_ignored {
-                        eprintln!("warning: --base-ref ignored (worktree already exists)");
-                    }
+                    // The `--base-ref ignored` warning is returned to the front
+                    // end (the daemon's stderr is not the client's), which
+                    // renders it for the operator.
+                    base_ref_ignored = res.base_ref_ignored;
                     wt_allocated = !res.existing;
                 }
                 Err(e) => {
@@ -315,7 +319,8 @@ pub fn enroll(
         }
     };
     proj.db.commit(&msg)?;
-    enrich(proj, task_id)
+    let view = enrich(proj, task_id)?;
+    Ok((view, base_ref_ignored))
 }
 
 // ---- resume ---------------------------------------------------------------
@@ -882,11 +887,21 @@ pub fn agent_install(
     packages: &Registry,
     name: &str,
     version: &str,
+    spec: &str,
 ) -> Result<wire::Agent> {
     packages
         .ensure_prefix()
         .map_err(|e| Error::Invalid(format!("ensure packages prefix: {e}")))?;
-    let entry = packages.install(name, version).map_err(Error::Invalid)?;
+    // `spec` (when non-empty) is the explicit npm spec the front end resolved —
+    // notably a local-path install (`agent install ./path`), where `name` is the
+    // package.json name and `spec` is the absolute directory. Otherwise install
+    // by registry name@version.
+    let entry = if spec.is_empty() {
+        packages.install(name, version)
+    } else {
+        packages.install_spec(name, spec)
+    }
+    .map_err(Error::Invalid)?;
     // Best-effort runtime install for custom-runner agents handled by Resolve;
     // we skip it here (the executor calls ensure_runtime lazily).
     let has = |n: &str| packages.has(n);

@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 )
@@ -87,9 +89,12 @@ Examples:
 			if err != nil {
 				return err
 			}
-			t, err := cl.Enroll(cmd.Context(), cliSource, taskID, workflowArg, agentArg, stepArg, baseRefArg)
+			t, baseRefIgnored, err := cl.Enroll(cmd.Context(), cliSource, taskID, workflowArg, agentArg, stepArg, baseRefArg)
 			if err != nil {
 				return err
+			}
+			if baseRefIgnored && !flagQuiet {
+				fmt.Fprintln(os.Stderr, "warning: --base-ref ignored (worktree already exists)")
 			}
 			// Plan acceptance §5: `--json` shape must match `show --json`,
 			// including derived `blocked` / `blocked_by` / `blocks`.

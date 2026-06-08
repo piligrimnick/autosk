@@ -83,9 +83,15 @@ func (fakeNpmInProcess) Uninstall(_ context.Context, prefix, name string) error 
 }
 
 // withIsolatedPackagesPrefix creates a fresh prefix and points
-// pkgregistry.Default() at it via $AUTOSK_PACKAGES. The fake npm runner
-// is wired into the file-level pkgregistryNpmFactory hook (see below).
-// Returns the prefix path.
+// pkgregistry.Default() at it via $AUTOSK_PACKAGES, shared by the CLI client
+// (read-only: list/show/resolve) and the auto-spawned daemon (which performs
+// the npm install/uninstall + agents-row commit). Returns the prefix path.
+//
+// The daemon's npm fake ($AUTOSK_NPM_BIN) is wired by ensureTestDaemon so it is
+// in place before the daemon spawns regardless of when this helper runs; here
+// we only set the shared prefix + the client-side pkgregistry hook (kept for
+// `agent runtime install`, which still shells npm client-side). Call this
+// BEFORE the first runRoot so the daemon spawns with the prefix in scope.
 func withIsolatedPackagesPrefix(t *testing.T) string {
 	t.Helper()
 	prefix := filepath.Join(t.TempDir(), "packages")

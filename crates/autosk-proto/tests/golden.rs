@@ -295,13 +295,15 @@ fn agent_shape() {
         pi_skills: vec![],
         pi_ext: vec![],
         tasks_owned: 4,
+        created_at: "2023-11-14T22:16:10Z".into(),
     };
     assert_json(
         &a,
         json!({
             "id":"ag-gen","name":"@autogent/generic","is_human":false,
             "source":"npm","version":"1.2.3","model":"sonnet","thinking":"high",
-            "extra_args":["--foo"],"pi_skills":[],"pi_ext":[],"tasks_owned":4
+            "extra_args":["--foo"],"pi_skills":[],"pi_ext":[],"tasks_owned":4,
+            "created_at":"2023-11-14T22:16:10Z"
         }),
     );
     roundtrip(&a);

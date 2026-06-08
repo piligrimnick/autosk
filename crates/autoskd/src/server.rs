@@ -852,7 +852,7 @@ impl Server {
     fn task_enroll(&self, params: &Value) -> Result<Value, ErrorObject> {
         let p: EnrollParams = parse(params)?;
         let proj = self.resolve(&p.cwd, &p.db_path)?;
-        let view = verbs::enroll(
+        let (view, base_ref_ignored) = verbs::enroll(
             &proj,
             &self.daemon.packages,
             self.worktrees(),
@@ -865,7 +865,18 @@ impl Server {
             &p.base_ref,
         )
         .map_err(core_err)?;
-        json(&view)
+        // Flatten the worktree warning alongside the TaskView fields so the
+        // front end can render `--base-ref ignored` (the daemon's stderr is not
+        // the client's). Clients that only want the task ignore the extra key.
+        let mut obj = serde_json::to_value(&view).map_err(|e| ErrorObject {
+            code: codes::INTERNAL_ERROR,
+            message: format!("serialize task: {e}"),
+            details: None,
+        })?;
+        if let Some(map) = obj.as_object_mut() {
+            map.insert("base_ref_ignored".into(), Value::Bool(base_ref_ignored));
+        }
+        Ok(obj)
     }
 
     fn task_resume(&self, params: &Value) -> Result<Value, ErrorObject> {
@@ -992,7 +1003,7 @@ impl Server {
     fn agent_install(&self, params: &Value) -> Result<Value, ErrorObject> {
         let p: AgentInstallParams = parse(params)?;
         let proj = self.resolve(&p.cwd, &p.db_path)?;
-        let a = verbs::agent_install(&proj, &self.daemon.packages, &p.name, &p.version)
+        let a = verbs::agent_install(&proj, &self.daemon.packages, &p.name, &p.version, &p.spec)
             .map_err(core_err)?;
         json(&a)
     }
@@ -1880,6 +1891,9 @@ struct AgentInstallParams {
     name: String,
     #[serde(default)]
     version: String,
+    /// Explicit npm spec (local-path install); empty → install by name@version.
+    #[serde(default)]
+    spec: String,
 }
 
 #[derive(Debug, Default, Deserialize)]

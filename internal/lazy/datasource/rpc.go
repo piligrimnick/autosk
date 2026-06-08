@@ -259,7 +259,7 @@ func (r *RPC) UpdateTitleDescription(ctx context.Context, id, title, description
 }
 
 func (r *RPC) Enroll(ctx context.Context, id, workflow, stepName string) error {
-	_, err := r.cli.Enroll(ctx, lazySource, id, workflow, "", stepName, "")
+	_, _, err := r.cli.Enroll(ctx, lazySource, id, workflow, "", stepName, "")
 	return err
 }
 
@@ -312,7 +312,7 @@ func (r *RPC) UpdateWorkflowIsolation(ctx context.Context, name, mode string, fo
 }
 
 func (r *RPC) InstallAgent(ctx context.Context, name, version string) error {
-	_, err := r.cli.AgentInstall(ctx, name, version)
+	_, err := r.cli.AgentInstall(ctx, name, version, "")
 	return err
 }
 

@@ -64,31 +64,7 @@ CI and offline machines).`,
 			if skipBootstrap {
 				return nil
 			}
-			// Bootstrap outcome (mirrors the pre-daemon init lines):
-			//   - Bootstrapped == "<workflow>"      → freshly seeded.
-			//   - Bootstrapped == "bootstrap skipped: …" → non-fatal warning.
-			//   - Bootstrapped == nil                → already present.
-			switch {
-			case res.Bootstrapped == nil:
-				if !flagQuiet {
-					fmt.Printf("bootstrap: workflow %q already present, skipping\n", "feature-dev-generic")
-				}
-			case strings.HasPrefix(*res.Bootstrapped, "bootstrap skipped:"):
-				reason := strings.TrimSpace(strings.TrimPrefix(*res.Bootstrapped, "bootstrap skipped:"))
-				fmt.Fprintf(os.Stderr,
-					"warning: could not bootstrap default workflow: %s (re-run with --skip-bootstrap to opt out of the seed)\n",
-					reason)
-			default:
-				if !flagQuiet {
-					name := *res.Bootstrapped
-					suffix := bootstrapAgentSuffix(cmd.Context(), cl, name)
-					if suffix != "" {
-						fmt.Printf("bootstrapped workflow %s %s\n", name, suffix)
-					} else {
-						fmt.Printf("bootstrapped workflow %s\n", name)
-					}
-				}
-			}
+			reportBootstrap(cmd.Context(), cl, res)
 			return nil
 		},
 	}
@@ -96,6 +72,39 @@ CI and offline machines).`,
 	cmd.Flags().BoolVar(&skipBootstrap, "skip-bootstrap", false,
 		"do not seed the default feature-dev-generic workflow")
 	return cmd
+}
+
+// reportBootstrap prints the bootstrap outcome of a project.init (mirrors the
+// pre-daemon init lines), shared by the explicit `init` verb and the write-verb
+// auto-init preamble so a fresh-dir `autosk create` reports the seed exactly
+// like `autosk init`:
+//   - Bootstrapped == "<workflow>"            → freshly seeded.
+//   - Bootstrapped == "bootstrap skipped: …"  → non-fatal warning.
+//   - Bootstrapped == nil                     → already present.
+//
+// Only call this when bootstrap was actually requested (skip_bootstrap=false).
+func reportBootstrap(ctx context.Context, cl *rpcclient.Client, res rpcclient.ProjectInitResult) {
+	switch {
+	case res.Bootstrapped == nil:
+		if !flagQuiet {
+			fmt.Printf("bootstrap: workflow %q already present, skipping\n", "feature-dev-generic")
+		}
+	case strings.HasPrefix(*res.Bootstrapped, "bootstrap skipped:"):
+		reason := strings.TrimSpace(strings.TrimPrefix(*res.Bootstrapped, "bootstrap skipped:"))
+		fmt.Fprintf(os.Stderr,
+			"warning: could not bootstrap default workflow: %s (re-run with --skip-bootstrap to opt out of the seed)\n",
+			reason)
+	default:
+		if !flagQuiet {
+			name := *res.Bootstrapped
+			suffix := bootstrapAgentSuffix(ctx, cl, name)
+			if suffix != "" {
+				fmt.Printf("bootstrapped workflow %s %s\n", name, suffix)
+			} else {
+				fmt.Printf("bootstrapped workflow %s\n", name)
+			}
+		}
+	}
 }
 
 // bootstrapAgentSuffix renders the parenthesised `(agent NAME@VER

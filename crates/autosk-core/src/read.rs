@@ -388,21 +388,23 @@ pub fn render_comments_for_prompt(conn: &Connection, task_id: &str) -> Result<Ve
 /// lazy` passes a real registry, so installed agents differ under `--rpc` — a
 /// known Phase-1 limitation documented at the module level (review R3).
 pub fn agent_list(conn: &Connection) -> Result<Vec<wire::Agent>> {
-    let mut stmt = conn.prepare("SELECT id, name, is_human FROM agents ORDER BY name ASC")?;
+    let mut stmt =
+        conn.prepare("SELECT id, name, is_human, created_at FROM agents ORDER BY name ASC")?;
     let base = stmt.query_map([], |row| {
         let is_human: i64 = row.get(2)?;
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             is_human != 0,
+            row.get::<_, i64>(3)?,
         ))
     })?;
-    let mut agents: Vec<(String, String, bool)> = Vec::new();
+    let mut agents: Vec<(String, String, bool, i64)> = Vec::new();
     for r in base {
         agents.push(r?);
     }
     let mut out = Vec::with_capacity(agents.len());
-    for (id, name, is_human) in agents {
+    for (id, name, is_human, created_at) in agents {
         let tasks_owned: i64 = conn.query_row(
             "SELECT COUNT(*) FROM tasks t \
                LEFT JOIN steps s ON s.id = t.current_step_id \
@@ -422,6 +424,7 @@ pub fn agent_list(conn: &Connection) -> Result<Vec<wire::Agent>> {
             pi_skills: Vec::new(),
             pi_ext: Vec::new(),
             tasks_owned,
+            created_at: rfc3339_utc(created_at),
         });
     }
     Ok(out)
@@ -432,7 +435,8 @@ pub fn agent_list(conn: &Connection) -> Result<Vec<wire::Agent>> {
 /// `workflow.list` — mirrors `Offline.Workflows`.
 pub fn workflow_list(conn: &Connection, include_synthetic: bool) -> Result<Vec<wire::Workflow>> {
     let mut q = String::from(
-        "SELECT id, name, description, first_step_id, is_synthetic, isolation FROM workflows",
+        "SELECT id, name, description, first_step_id, is_synthetic, isolation, created_at \
+           FROM workflows",
     );
     if !include_synthetic {
         q.push_str(" WHERE is_synthetic = 0");
@@ -456,7 +460,7 @@ pub fn workflow_list(conn: &Connection, include_synthetic: bool) -> Result<Vec<w
 pub fn workflow_get(conn: &Connection, name: &str) -> Result<wire::Workflow> {
     let head = conn
         .query_row(
-            "SELECT id, name, description, first_step_id, is_synthetic, isolation \
+            "SELECT id, name, description, first_step_id, is_synthetic, isolation, created_at \
                FROM workflows WHERE name = ?1",
             params![name],
             scan_workflow_head,
@@ -473,6 +477,7 @@ struct WorkflowHead {
     first_step_id: String,
     is_synthetic: bool,
     isolation: String,
+    created_at: i64,
 }
 
 fn scan_workflow_head(row: &Row) -> rusqlite::Result<WorkflowHead> {
@@ -485,6 +490,7 @@ fn scan_workflow_head(row: &Row) -> rusqlite::Result<WorkflowHead> {
         first_step_id: row.get(3)?,
         is_synthetic: synth != 0,
         isolation: normalize_isolation(iso),
+        created_at: row.get(6)?,
     })
 }
 
@@ -497,9 +503,11 @@ fn normalize_isolation(iso: Option<String>) -> String {
 }
 
 fn project_workflow(conn: &Connection, h: WorkflowHead) -> Result<wire::Workflow> {
-    // Steps ordered by seq, joined to agent name.
+    // Steps ordered by seq, joined to agent name. agent_params is the raw JSON
+    // column (or NULL) so the CLI renderer can re-marshal the override block.
     let mut stmt = conn.prepare(
-        "SELECT s.id, s.name, a.name, s.max_visits FROM steps s JOIN agents a ON s.agent_id = a.id \
+        "SELECT s.id, s.name, s.agent_id, a.name, s.max_visits, s.agent_params \
+           FROM steps s JOIN agents a ON s.agent_id = a.id \
           WHERE s.workflow_id = ?1 ORDER BY s.seq ASC",
     )?;
     let step_rows = stmt.query_map(params![h.id], |row| {
@@ -507,10 +515,12 @@ fn project_workflow(conn: &Connection, h: WorkflowHead) -> Result<wire::Workflow
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
-            row.get::<_, i64>(3)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, Option<String>>(5)?,
         ))
     })?;
-    let mut raw_steps: Vec<(String, String, String, i64)> = Vec::new();
+    let mut raw_steps: Vec<(String, String, String, String, i64, Option<String>)> = Vec::new();
     for r in step_rows {
         raw_steps.push(r?);
     }
@@ -518,7 +528,7 @@ fn project_workflow(conn: &Connection, h: WorkflowHead) -> Result<wire::Workflow
     let mut step_names: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut first_step = String::new();
-    for (sid, sname, _, _) in &raw_steps {
+    for (sid, sname, _, _, _, _) in &raw_steps {
         step_names.insert(sid.clone(), sname.clone());
         if *sid == h.first_step_id {
             first_step = sname.clone();
@@ -527,8 +537,19 @@ fn project_workflow(conn: &Connection, h: WorkflowHead) -> Result<wire::Workflow
 
     let mut steps = Vec::with_capacity(raw_steps.len());
     let mut total_task_count: i64 = 0;
-    for (sid, sname, agent_name, max_visits) in &raw_steps {
-        let (next_steps, next_status) = step_transitions(conn, sid)?;
+    for (sid, sname, agent_id, agent_name, max_visits, agent_params) in &raw_steps {
+        let transitions = step_transitions(conn, sid)?;
+        // The lazy datasource view splits transitions into sibling-step names
+        // and terminal statuses; derive both from the full list (ordered by id).
+        let mut next_steps = Vec::new();
+        let mut next_status = Vec::new();
+        for t in &transitions {
+            if !t.task_status.is_empty() {
+                next_status.push(t.task_status.clone());
+            } else if !t.next_step_name.is_empty() {
+                next_steps.push(t.next_step_name.clone());
+            }
+        }
         let task_count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM tasks WHERE current_step_id = ?1",
             params![sid],
@@ -538,11 +559,16 @@ fn project_workflow(conn: &Connection, h: WorkflowHead) -> Result<wire::Workflow
         steps.push(wire::WorkflowStep {
             id: sid.clone(),
             name: sname.clone(),
+            agent_id: agent_id.clone(),
             agent_name: agent_name.clone(),
             next_steps,
             next_status,
             task_count,
             max_visits: *max_visits,
+            agent_params: agent_params
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
+            transitions,
         });
     }
 
@@ -554,38 +580,40 @@ fn project_workflow(conn: &Connection, h: WorkflowHead) -> Result<wire::Workflow
         description: h.description,
         is_synthetic: h.is_synthetic,
         first_step,
+        first_step_id: h.first_step_id,
         steps,
         task_count: total_task_count,
         isolation: h.isolation,
         non_terminal_task_count: non_terminal_count,
         non_terminal_tasks,
+        created_at: rfc3339_utc(h.created_at),
     })
 }
 
-/// Returns `(next_steps, next_status)` for a step, transitions ordered by id
-/// (mirrors `loadTransitions` + the datasource split).
-fn step_transitions(conn: &Connection, step_id: &str) -> Result<(Vec<String>, Vec<String>)> {
+/// Returns the full outgoing transitions for a step, ordered by id (mirrors
+/// `loadTransitions`). The lazy datasource derives its `next_steps`/
+/// `next_status` split from this; the CLI `workflow show` renders it verbatim.
+fn step_transitions(conn: &Connection, step_id: &str) -> Result<Vec<wire::WorkflowTransition>> {
     let mut stmt = conn.prepare(
-        "SELECT t.task_status, (SELECT name FROM steps WHERE id = t.next_step_id) AS next_name \
+        "SELECT t.id, COALESCE(t.next_step_id, ''), \
+                COALESCE((SELECT name FROM steps WHERE id = t.next_step_id), ''), \
+                COALESCE(t.task_status, ''), t.prompt_rule \
            FROM step_transitions t WHERE t.step_id = ?1 ORDER BY t.id ASC",
     )?;
     let rows = stmt.query_map(params![step_id], |row| {
-        Ok((
-            row.get::<_, Option<String>>(0)?.unwrap_or_default(),
-            row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-        ))
+        Ok(wire::WorkflowTransition {
+            id: row.get(0)?,
+            next_step_id: row.get(1)?,
+            next_step_name: row.get(2)?,
+            task_status: row.get(3)?,
+            prompt_rule: row.get(4)?,
+        })
     })?;
-    let mut next_steps = Vec::new();
-    let mut next_status = Vec::new();
+    let mut out = Vec::new();
     for r in rows {
-        let (status, next_name) = r?;
-        if !status.is_empty() {
-            next_status.push(status);
-        } else if !next_name.is_empty() {
-            next_steps.push(next_name);
-        }
+        out.push(r?);
     }
-    Ok((next_steps, next_status))
+    Ok(out)
 }
 
 /// Mirrors `loadNonTerminalSample`: total count + first

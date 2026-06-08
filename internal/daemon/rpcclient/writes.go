@@ -106,16 +106,22 @@ func (c *Client) SetPriority(ctx context.Context, id string, p int) (Task, error
 	return out, err
 }
 
-// Enroll (re-)attaches a task to a workflow's entry step.
-func (c *Client) Enroll(ctx context.Context, source, id, workflow, agent, step, baseRef string) (Task, error) {
+// Enroll (re-)attaches a task to a workflow's entry step. The bool return is
+// the daemon's base_ref_ignored flag (the worktree branch already existed, so
+// --base-ref was ignored); the CLI renders it as a warning since the daemon's
+// stderr is not the client's.
+func (c *Client) Enroll(ctx context.Context, source, id, workflow, agent, step, baseRef string) (Task, bool, error) {
 	extra := map[string]any{"source": source, "id": id}
 	putStr(extra, "workflow", workflow)
 	putStr(extra, "agent", agent)
 	putStr(extra, "step", step)
 	putStr(extra, "base_ref", baseRef)
-	var out Task
+	var out struct {
+		Task
+		BaseRefIgnored bool `json:"base_ref_ignored"`
+	}
 	err := c.call(ctx, "task.enroll", c.selector(extra), &out)
-	return out, err
+	return out.Task, out.BaseRefIgnored, err
 }
 
 // Resume flips human→work, optionally relocating the current step.
@@ -223,10 +229,14 @@ func (c *Client) WorkflowUpdateIsolation(ctx context.Context, source, name, mode
 	return out, err
 }
 
-// AgentInstall installs an agent package + ensures its DB row.
-func (c *Client) AgentInstall(ctx context.Context, name, version string) (Agent, error) {
+// AgentInstall installs an agent package + ensures its DB row. spec, when
+// non-empty, is the explicit npm spec the CLI resolved (a local-path install
+// where name is the package.json name and spec the absolute directory);
+// otherwise the daemon installs by name@version.
+func (c *Client) AgentInstall(ctx context.Context, name, version, spec string) (Agent, error) {
 	extra := map[string]any{"name": name}
 	putStr(extra, "version", version)
+	putStr(extra, "spec", spec)
 	var out Agent
 	err := c.call(ctx, "agent.install", c.selector(extra), &out)
 	return out, err

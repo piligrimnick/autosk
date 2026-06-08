@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **bootstrap:** `feature-dev-generic` workflow now ships with `isolation: worktree` by default.
 - **daemon:** `autosk daemon status | messages | cancel | list` now route to the `autoskd` daemon over JSON-RPC instead of the retired Go daemon (ask-2e7e27).
+- **cli:** every `autosk` write verb — `create` / `enroll` / `resume` / `done` / `cancel` / `reopen` / `comment` / `metadata` / `block` / `unblock`, `workflow create|delete|update`, `agent install|uninstall`, `sql`, `init` — now routes through an auto-spawned `autoskd` over JSON-RPC instead of opening the local doltlite store. A fresh-dir `autosk create` still prompts (or honours `AUTOSK_NO_AUTOINIT` / `AUTOSK_AUTOINIT_*`) and then auto-inits via the daemon's `project.init` (which runs migrations + the `feature-dev-generic` bootstrap); no Go process ever opens `.autosk/db` (ask-913906).
+- **build:** the Go `autosk` binary (CLI + lazy TUI) is now **CGO-free** — it no longer links `libdoltlite.a`, the `libsqlite3` build tag is gone, and `make build` / `install` / `vet` / `test` no longer depend on `make doctor` / the doltlite fetch. `autoskd` (Rust) is the sole doltlite consumer; the front ends build with plain `go build` (ask-913906).
+- **cli:** `autosk version` now reads the project schema version from an already-running `autoskd` (best-effort; `version` never auto-spawns the daemon, so the schema line falls back to `-` when no daemon is up) (ask-913906).
 
 ### Removed
 - **daemon:** the Go `autosk daemon serve` verb is retired — `autoskd` now drives workflows (ask-2e7e27).

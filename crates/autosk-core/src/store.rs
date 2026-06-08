@@ -257,10 +257,25 @@ impl Db {
             .writer
             .lock()
             .map_err(|_| Error::LockPoisoned("writer"))?;
-        let hash = writer.query_row("SELECT dolt_commit('-A', '-m', ?1)", [msg], |row| {
+        match writer.query_row("SELECT dolt_commit('-A', '-m', ?1)", [msg], |row| {
             row.get::<_, String>(0)
-        })?;
-        Ok(hash)
+        }) {
+            Ok(hash) => Ok(hash),
+            Err(e) => {
+                // doltlite reports a clean working tree as an error. The Go
+                // front ends issued commits best-effort (`_ = dl.DoltCommit(..)`,
+                // ignoring the error), so a no-op commit must not fail the verb
+                // — e.g. a `resume` after an uncommitted `sql --write` whose net
+                // change relative to HEAD is empty. Swallow only this benign
+                // case; real commit failures still surface.
+                let s = e.to_string();
+                if s.contains("nothing to commit") || s.contains("working tree clean") {
+                    Ok(String::new())
+                } else {
+                    Err(e.into())
+                }
+            }
+        }
     }
 
     /// Runs `SELECT dolt_gc()` under the exclusive GC write guard, then drops

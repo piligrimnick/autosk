@@ -65,12 +65,18 @@ func ensureProject(ctx context.Context, cl *rpcclient.Client, writeOK bool) erro
 		}
 	}
 
-	res, err := cl.ProjectInit(ctx, os.Getenv(EnvAutoInitSkipBootstrap) != "")
+	skipBootstrap := os.Getenv(EnvAutoInitSkipBootstrap) != ""
+	res, err := cl.ProjectInit(ctx, skipBootstrap)
 	if err != nil {
 		return err
 	}
 	if !flagQuiet {
 		fmt.Fprintf(os.Stderr, "autosk: created %s\n", res.DBPath)
+	}
+	// Mirror `autosk init`: report the workflow seed on the auto-init path too
+	// (the bootstrap itself runs in the daemon's project.init).
+	if !skipBootstrap {
+		reportBootstrap(ctx, cl, res)
 	}
 	return nil
 }

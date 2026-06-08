@@ -1,9 +1,7 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -15,8 +13,7 @@ import (
 
 	"autosk/internal/agent"
 	"autosk/internal/agent/pkgregistry"
-	"autosk/internal/render"
-	"autosk/internal/store/doltlite"
+	"autosk/internal/daemon/rpcclient"
 	"autosk/internal/timeformat"
 )
 
@@ -25,7 +22,8 @@ import (
 const envAgentName = "AUTOSK_AGENT"
 
 // callerAgentName returns the name of the agent the CLI is running as.
-// "human" is the default.
+// "human" is the default. Used to fill the write verbs' `caller` /
+// comment-author fields (the daemon ensures the agents row).
 func callerAgentName() string {
 	name := strings.TrimSpace(os.Getenv(envAgentName))
 	if name == "" {
@@ -34,55 +32,16 @@ func callerAgentName() string {
 	return name
 }
 
-// resolveCallerAgent ensures the caller's agent row exists in the DB and
-// returns it. Used by future write commands to fill author_id columns.
-// Lazy semantics:
-//   - If $AUTOSK_AGENT names an existing agent, return it.
-//   - If it names a new one, insert (is_human=true only for "human").
-//   - When unset, return the seeded `human` row.
-func resolveCallerAgent(ctx context.Context, ag *agent.Store) (agent.Agent, error) {
-	return ag.EnsureByName(ctx, callerAgentName())
-}
-
-// agentStoreFromCmd opens the project DB and returns an agent.Store +
-// the doltlite handle (so commits can be issued) + a close func.
-//
-// The returned Store has the global package resolver attached, so any
-// EnsureByName / Create call for a non-human name will be rejected
-// unless the matching npm package has been installed via `autosk agent
-// install`.
-func agentStoreFromCmd(ctx context.Context, writeOK bool) (*agent.Store, *doltlite.Store, func(), error) {
-	s, closeFn, err := openStore(ctx, writeOK)
-	if err != nil {
-		return nil, nil, nil, err
+// agentFromWire projects a daemon agent.list view onto the storage-shaped
+// agent.Agent the CLI renderers consume (DB columns only; package metadata is
+// layered on client-side from the local registry).
+func agentFromWire(w rpcclient.Agent) agent.Agent {
+	return agent.Agent{
+		ID:        w.ID,
+		Name:      w.Name,
+		IsHuman:   w.IsHuman,
+		CreatedAt: w.CreatedAt,
 	}
-	dl, ok := s.(*doltlite.Store)
-	if !ok {
-		closeFn()
-		return nil, nil, nil, errors.New("agent CLI: doltlite store required")
-	}
-	reg, err := openPackagesRegistry()
-	if err != nil {
-		closeFn()
-		return nil, nil, nil, fmt.Errorf("pkgregistry: %w", err)
-	}
-	return agent.New(dl.DB()).WithResolver(reg), dl, closeFn, nil
-}
-
-// agentStoreNoResolver returns an agent.Store without a resolver. Used
-// for read-only verbs that just dump the agents table (list / show)
-// where blocking on the global packages prefix would be heavy-handed.
-func agentStoreNoResolver(ctx context.Context, writeOK bool) (*agent.Store, *doltlite.Store, func(), error) {
-	s, closeFn, err := openStore(ctx, writeOK)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	dl, ok := s.(*doltlite.Store)
-	if !ok {
-		closeFn()
-		return nil, nil, nil, errors.New("agent CLI: doltlite store required")
-	}
-	return agent.New(dl.DB()), dl, closeFn, nil
 }
 
 // ---- root command --------------------------------------------------------
@@ -109,9 +68,10 @@ func newAgentCmd() *cobra.Command {
 
 // newAgentInstallCmd: `autosk agent install <pkg-or-path> [--version SPEC]`.
 //
-// Installs the package into the global prefix (~/.autosk/packages by
-// default), validates its `autosk.agent` block, and lazily inserts an
-// agents row in this project's DB so workflows can reference it.
+// The daemon owns the DB and performs the npm install + agents-row commit
+// (agent.install RPC). In local mode it installs into the same packages prefix
+// the CLI reads, so the rich output (kind / install dir / version) is layered
+// on client-side from the shared registry.
 //
 // `<pkg-or-path>` is either an npm registry name (e.g. `@autosk/dev`)
 // or a local file path starting with `./`, `../`, `/` or `~/` (e.g.
@@ -131,68 +91,67 @@ func newAgentInstallCmd() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			arg := strings.TrimSpace(args[0])
-			reg, err := openPackagesRegistry()
-			if err != nil {
-				return err
-			}
 			ctx := cmd.Context()
-			if err := reg.EnsurePrefix(); err != nil {
-				return err
-			}
 
 			name, spec, err := resolveInstallSpec(arg, version)
 			if err != nil {
 				return err
 			}
-			entry, err := reg.InstallSpec(ctx, name, spec)
+
+			cl, err := writeClient(ctx)
 			if err != nil {
 				return err
 			}
 
-			// Auto-install the Node bootstrapper iff the just-installed
-			// agent actually needs it (custom runner). Standard agents
-			// never spawn Node, so no reason to pay the round trip.
-			cfg, _ := reg.Resolve(entry.Name)
-			runtimeStatus := ""
+			// Registry install → pass name@version; local-path install →
+			// pass the resolved absolute directory as the explicit spec.
+			installVersion, installSpec := "", ""
+			if isLocalPath(arg) {
+				installSpec = spec
+			} else {
+				installVersion = version
+			}
+			created, err := cl.AgentInstall(ctx, name, installVersion, installSpec)
+			if err != nil {
+				return err
+			}
+
+			// Layer package metadata for the rich output from the (shared)
+			// local registry the daemon just installed into.
+			reg, regErr := openPackagesRegistry()
+			var (
+				entry pkgregistry.Entry
+				cfg   pkgregistry.PackageConfig
+			)
+			if regErr == nil {
+				entry, _ = reg.Get(name)
+				cfg, _ = reg.Resolve(name)
+			}
+
+			if flagQuiet {
+				return nil
+			}
+			kind := "standard (pi-spawn)"
 			if cfg.Runner != "" {
-				if rerr := reg.EnsureRuntime(ctx, ""); rerr != nil {
-					runtimeStatus = fmt.Sprintf("\nwarning: %s is a custom-runner agent but %s could not be installed: %v\nrun `autosk agent runtime install` once it is available.", entry.Name, pkgregistry.RuntimePackageName, rerr)
-				}
+				kind = "custom runner: " + cfg.Runner
 			}
-			// Mirror into the project's agents table so workflows can FK
-			// onto it.
-			ag, dl, closeFn, err := agentStoreFromCmd(ctx, true)
-			if err != nil {
-				return err
+			if flagJSON {
+				out := map[string]any{
+					"agent":   toJSON(agentFromWire(created)),
+					"package": entryToJSON(entry),
+					"kind":    kind,
+				}
+				return json.NewEncoder(os.Stdout).Encode(out)
 			}
-			defer closeFn()
-			created, err := ag.EnsureByName(ctx, entry.Name)
-			if err != nil {
-				return fmt.Errorf("ensure DB row for %s: %w", entry.Name, err)
+			ver := entry.Version
+			if ver == "" {
+				ver = created.Version
 			}
-			_ = dl.DoltCommit(ctx, "agent install "+entry.Name+"@"+entry.Version)
-
-			if !flagQuiet {
-				cfg, _ := reg.Resolve(entry.Name)
-				kind := "standard (pi-spawn)"
-				if cfg.Runner != "" {
-					kind = "custom runner: " + cfg.Runner
-				}
-				if flagJSON {
-					out := map[string]any{
-						"agent":   toJSON(created),
-						"package": entryToJSON(entry),
-						"kind":    kind,
-					}
-					return json.NewEncoder(os.Stdout).Encode(out)
-				}
-				fmt.Printf("installed %s@%s\n", entry.Name, entry.Version)
-				fmt.Printf("kind:       %s\n", kind)
-				fmt.Printf("agent_id:   %s\n", created.ID)
-				fmt.Printf("install:    %s\n", reg.PackageInstallDir(entry.Name))
-				if runtimeStatus != "" {
-					fmt.Println(runtimeStatus)
-				}
+			fmt.Printf("installed %s@%s\n", name, ver)
+			fmt.Printf("kind:       %s\n", kind)
+			fmt.Printf("agent_id:   %s\n", created.ID)
+			if regErr == nil {
+				fmt.Printf("install:    %s\n", reg.PackageInstallDir(name))
 			}
 			return nil
 		},
@@ -203,10 +162,10 @@ func newAgentInstallCmd() *cobra.Command {
 
 // newAgentUninstallCmd: `autosk agent uninstall <pkg>`.
 //
-// Removes the registry entry and shells `npm uninstall`. Refuses if any
-// workflow step references the agent unless --force is given. Does NOT
-// delete the agents row (workflows already reference it); users wanting
-// a hard remove can `autosk sql --write` directly.
+// Delegates to the daemon's agent.uninstall, which refuses if any workflow step
+// references the agent (unless --force) and shells `npm uninstall`. Does NOT
+// delete the agents row (workflows already reference it); users wanting a hard
+// remove can `autosk sql --write` directly.
 func newAgentUninstallCmd() *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
@@ -215,29 +174,12 @@ func newAgentUninstallCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := strings.TrimSpace(args[0])
-			reg, err := openPackagesRegistry()
+			ctx := cmd.Context()
+			cl, err := readClient(ctx)
 			if err != nil {
 				return err
 			}
-			ctx := cmd.Context()
-
-			// Refuse if a step in any workflow still references this
-			// agent (unless --force).
-			if !force {
-				_, dl, closeFn, err := agentStoreNoResolver(ctx, false)
-				if err == nil {
-					defer closeFn()
-					ag := agent.New(dl.DB())
-					row, gerr := ag.GetByName(ctx, name)
-					if gerr == nil {
-						refs, refErr := countStepRefsByAgentID(ctx, dl, row.ID)
-						if refErr == nil && refs > 0 {
-							return fmt.Errorf("agent %s is referenced by %d workflow step(s); pass --force to uninstall anyway", name, refs)
-						}
-					}
-				}
-			}
-			if err := reg.Uninstall(ctx, name); err != nil {
+			if err := cl.AgentUninstall(ctx, name, force); err != nil {
 				return err
 			}
 			if !flagQuiet {
@@ -250,28 +192,24 @@ func newAgentUninstallCmd() *cobra.Command {
 	return cmd
 }
 
-// countStepRefsByAgentID returns the number of workflow steps that
-// point at the given agent_id. Used to gate uninstall.
-func countStepRefsByAgentID(ctx context.Context, dl *doltlite.Store, agentID string) (int, error) {
-	var n int
-	err := dl.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM steps WHERE agent_id = ?`, agentID).Scan(&n)
-	return n, err
-}
-
 func newAgentListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List installed agents (union of DB rows + installed packages)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ag, _, closeFn, err := agentStoreNoResolver(cmd.Context(), false)
+			ctx := cmd.Context()
+			cl, err := readClient(ctx)
 			if err != nil {
 				return err
 			}
-			defer closeFn()
-			dbRows, err := ag.List(cmd.Context())
+			wireAgents, err := cl.Agents(ctx)
 			if err != nil {
 				return err
+			}
+			dbRows := make([]agent.Agent, len(wireAgents))
+			for i, a := range wireAgents {
+				dbRows[i] = agentFromWire(a)
 			}
 			reg, err := openPackagesRegistry()
 			if err != nil {
@@ -294,12 +232,26 @@ func newAgentShowCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			ag, _, closeFn, err := agentStoreNoResolver(cmd.Context(), false)
+			ctx := cmd.Context()
+			cl, err := readClient(ctx)
 			if err != nil {
 				return err
 			}
-			defer closeFn()
-			a, dbErr := ag.GetByName(cmd.Context(), name)
+			wireAgents, err := cl.Agents(ctx)
+			if err != nil {
+				return err
+			}
+			var (
+				a    agent.Agent
+				inDB bool
+			)
+			for _, w := range wireAgents {
+				if w.Name == name {
+					a = agentFromWire(w)
+					inDB = true
+					break
+				}
+			}
 			reg, regErr := openPackagesRegistry()
 			var (
 				entry  pkgregistry.Entry
@@ -315,13 +267,10 @@ func newAgentShowCmd() *cobra.Command {
 					}
 				}
 			}
-			if dbErr != nil && !gotPkg {
-				if errors.Is(dbErr, agent.ErrNotFound) {
-					return fmt.Errorf("agent not found: %s", name)
-				}
-				return dbErr
+			if !inDB && !gotPkg {
+				return fmt.Errorf("agent not found: %s", name)
 			}
-			return emitAgentDetailed(name, a, dbErr == nil, entry, cfg, gotPkg)
+			return emitAgentDetailed(name, a, inDB, entry, cfg, gotPkg)
 		},
 	}
 	return cmd
@@ -362,7 +311,7 @@ func newAgentRuntimeCmd() *cobra.Command {
 
 // ---- render --------------------------------------------------------------
 
-// agentJSON is the JSON wire shape for `agent show/create` and as one
+// agentJSON is the JSON wire shape for `agent install` and as one
 // element of the array returned by `agent list --json`.
 type agentJSON struct {
 	ID        string `json:"id"`
@@ -392,20 +341,6 @@ func entryToJSON(e pkgregistry.Entry) entryJSON {
 		Version:     e.Version,
 		InstalledAt: e.InstalledAt.Format(time.RFC3339),
 	}
-}
-
-func emitAgent(a agent.Agent) error {
-	if flagQuiet {
-		return nil
-	}
-	if flagJSON {
-		return json.NewEncoder(os.Stdout).Encode(toJSON(a))
-	}
-	fmt.Printf("%s\n", render.BracketedRef(a.ID, a.Name))
-	fmt.Printf("is_human:   %t\n", a.IsHuman)
-	// Text output uses operator's local TZ; toJSON keeps RFC3339 UTC.
-	fmt.Printf("created_at: %s\n", timeformat.FormatDateTime(a.CreatedAt))
-	return nil
 }
 
 // emitAgentUnion prints the merged view of DB rows + installed packages.

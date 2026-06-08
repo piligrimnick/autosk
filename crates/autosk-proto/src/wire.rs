@@ -87,18 +87,29 @@ pub struct Job {
 }
 
 /// `workflow.list` / `workflow.get` element (`datasource.Workflow`).
+///
+/// Superset view: the lazy datasource consumes `first_step` (the entry step's
+/// *name*), `steps[].next_steps`/`next_status` and the `*_task_count` joins;
+/// the CLI `workflow show`/`create` renderers additionally consume
+/// `first_step_id`, `created_at` and the per-step `agent_id`/`agent_params`/
+/// `transitions` graph. Both faces are served by one method (plan §5).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Workflow {
     pub id: String,
     pub name: String,
     pub description: String,
     pub is_synthetic: bool,
+    /// Entry-step *name* (datasource view).
     pub first_step: String,
+    /// Entry-step *id* (`workflows.first_step_id`); CLI `workflow show`.
+    pub first_step_id: String,
     pub steps: Vec<WorkflowStep>,
     pub task_count: i64,
     pub isolation: String,
     pub non_terminal_task_count: i64,
     pub non_terminal_tasks: Vec<NonTerminalTaskRef>,
+    /// RFC3339 UTC (`workflows.created_at`); CLI `workflow show`.
+    pub created_at: String,
 }
 
 /// One row of a workflow's step graph (`datasource.WorkflowStep`).
@@ -106,6 +117,8 @@ pub struct Workflow {
 pub struct WorkflowStep {
     pub id: String,
     pub name: String,
+    /// Step agent id (`steps.agent_id`); CLI `workflow show`.
+    pub agent_id: String,
     pub agent_name: String,
     pub next_steps: Vec<String>,
     pub next_status: Vec<String>,
@@ -113,6 +126,31 @@ pub struct WorkflowStep {
     /// Per-step visit cap (`steps.max_visits`); `0` = uncapped. The CLI human
     /// renderer uses it for the `visits: dev 1/2` step-counter summary.
     pub max_visits: i64,
+    /// Per-step `agent.params` override block (`steps.agent_params`), as the
+    /// raw JSON object stored in the column; `null` when unset. CLI
+    /// `workflow show` re-marshals it into the `AgentParams` projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_params: Option<Value>,
+    /// Full outgoing transitions (id + prompt_rule + target), ordered by id;
+    /// CLI `workflow show`. The lazy view uses `next_steps`/`next_status`
+    /// instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transitions: Vec<WorkflowTransition>,
+}
+
+/// One outgoing `step_transitions` row (`workflow.Transition`); CLI
+/// `workflow show`. Exactly one of `next_step_id` (sibling step) or
+/// `task_status` (terminal/park) is non-empty.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkflowTransition {
+    pub id: i64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub next_step_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub next_step_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub task_status: String,
+    pub prompt_rule: String,
 }
 
 /// One non-terminal task referencing a workflow (`datasource.NonTerminalTaskRef`).
@@ -137,6 +175,8 @@ pub struct Agent {
     pub pi_skills: Vec<String>,
     pub pi_ext: Vec<String>,
     pub tasks_owned: i64,
+    /// RFC3339 UTC (`agents.created_at`); CLI `agent show`/`install`.
+    pub created_at: String,
 }
 
 /// `comment.list` element (`datasource.Comment`).

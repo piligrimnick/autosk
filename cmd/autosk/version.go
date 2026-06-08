@@ -3,16 +3,16 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"autosk/internal/buildinfo"
+	"autosk/internal/daemon/rpcclient"
 	"autosk/internal/projectdb"
-	"autosk/internal/store/doltlite"
 )
 
 func newVersionCmd() *cobra.Command {
@@ -61,9 +61,15 @@ type versionInfo struct {
 	Arch          string `json:"arch"`
 }
 
-// tryReadSchemaVersion attempts to resolve and open the project DB read-only-ish.
-// Returns (schemaVersion, dbPath, ok). ok=false on any failure (including
-// "no DB found" — not an error for `version`).
+// tryReadSchemaVersion best-effort resolves the project DB and reports its
+// schema version. Returns (schemaVersion, dbPath, ok); ok=false on any failure
+// (including "no DB in scope" — not an error for `version`).
+//
+// Under the single-writer model the Go binary cannot open the DB itself (it is
+// CGO-free), so the schema version is read over RPC from an *already-running*
+// autoskd. `autosk version` never auto-spawns a daemon — it must work with zero
+// side effects — so when no daemon is up the schema line falls back to the
+// "no .autosk/db in scope" rendering even though a project exists.
 func tryReadSchemaVersion(ctx context.Context) (int, string, bool) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -74,19 +80,27 @@ func tryReadSchemaVersion(ctx context.Context) (int, string, bool) {
 	}
 	path, err := projectdb.Resolve(cwd, flagDB)
 	if err != nil {
-		if errors.Is(err, projectdb.ErrNotFound) {
-			return 0, "", false
-		}
 		return 0, "", false
 	}
-	s := doltlite.New()
-	if err := s.Open(ctx, path); err != nil {
-		return 0, path, false
-	}
-	defer s.Close()
-	v, err := s.SchemaVersion(ctx)
+	cl, err := rpcclient.New(rpcclient.Options{DBOverride: dbOverride(), NoAutoSpawn: true})
 	if err != nil {
 		return 0, path, false
 	}
-	return v, path, true
+	cctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	rows, err := cl.SQLQuery(cctx, "SELECT MAX(version) FROM schema_migrations")
+	if err != nil {
+		return 0, path, false
+	}
+	if len(rows.Rows) != 1 || len(rows.Rows[0]) != 1 {
+		return 0, path, false
+	}
+	switch v := rows.Rows[0][0].(type) {
+	case float64:
+		return int(v), path, true
+	case int64:
+		return int(v), path, true
+	default:
+		return 0, path, false
+	}
 }

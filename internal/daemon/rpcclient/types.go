@@ -2,6 +2,7 @@ package rpcclient
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"autosk/internal/daemon/api"
@@ -49,29 +50,46 @@ type Job struct {
 	AgentName    string `json:"agent_name"`
 }
 
-// Workflow mirrors autosk-proto::wire::Workflow.
+// Workflow mirrors autosk-proto::wire::Workflow. The superset view serves both
+// the lazy datasource (first_step name + next_steps/next_status splits) and the
+// CLI `workflow show`/`create` renderers (first_step_id, created_at, per-step
+// agent_id/agent_params/transitions).
 type Workflow struct {
 	ID                   string               `json:"id"`
 	Name                 string               `json:"name"`
 	Description          string               `json:"description"`
 	IsSynthetic          bool                 `json:"is_synthetic"`
 	FirstStep            string               `json:"first_step"`
+	FirstStepID          string               `json:"first_step_id"`
 	Steps                []WorkflowStep       `json:"steps"`
 	TaskCount            int                  `json:"task_count"`
 	Isolation            string               `json:"isolation"`
 	NonTerminalTaskCount int                  `json:"non_terminal_task_count"`
 	NonTerminalTasks     []NonTerminalTaskRef `json:"non_terminal_tasks"`
+	CreatedAt            time.Time            `json:"created_at"`
 }
 
 // WorkflowStep mirrors autosk-proto::wire::WorkflowStep.
 type WorkflowStep struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	AgentName  string   `json:"agent_name"`
-	NextSteps  []string `json:"next_steps"`
-	NextStatus []string `json:"next_status"`
-	TaskCount  int      `json:"task_count"`
-	MaxVisits  int      `json:"max_visits"`
+	ID          string               `json:"id"`
+	Name        string               `json:"name"`
+	AgentID     string               `json:"agent_id"`
+	AgentName   string               `json:"agent_name"`
+	NextSteps   []string             `json:"next_steps"`
+	NextStatus  []string             `json:"next_status"`
+	TaskCount   int                  `json:"task_count"`
+	MaxVisits   int                  `json:"max_visits"`
+	AgentParams json.RawMessage      `json:"agent_params,omitempty"`
+	Transitions []WorkflowTransition `json:"transitions,omitempty"`
+}
+
+// WorkflowTransition mirrors autosk-proto::wire::WorkflowTransition.
+type WorkflowTransition struct {
+	ID           int64  `json:"id"`
+	NextStepID   string `json:"next_step_id"`
+	NextStepName string `json:"next_step_name"`
+	TaskStatus   string `json:"task_status"`
+	PromptRule   string `json:"prompt_rule"`
 }
 
 // NonTerminalTaskRef mirrors autosk-proto::wire::NonTerminalTaskRef.
@@ -83,17 +101,18 @@ type NonTerminalTaskRef struct {
 
 // Agent mirrors autosk-proto::wire::Agent.
 type Agent struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	IsHuman    bool     `json:"is_human"`
-	Source     string   `json:"source"`
-	Version    string   `json:"version"`
-	Model      string   `json:"model"`
-	Thinking   string   `json:"thinking"`
-	ExtraArgs  []string `json:"extra_args"`
-	PiSkills   []string `json:"pi_skills"`
-	PiExt      []string `json:"pi_ext"`
-	TasksOwned int      `json:"tasks_owned"`
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	IsHuman    bool      `json:"is_human"`
+	Source     string    `json:"source"`
+	Version    string    `json:"version"`
+	Model      string    `json:"model"`
+	Thinking   string    `json:"thinking"`
+	ExtraArgs  []string  `json:"extra_args"`
+	PiSkills   []string  `json:"pi_skills"`
+	PiExt      []string  `json:"pi_ext"`
+	TasksOwned int       `json:"tasks_owned"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // Comment mirrors autosk-proto::wire::Comment.

@@ -55,6 +55,13 @@ func ensureTestDaemon(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("AUTOSK_SOCK", sock)
 	t.Setenv("AUTOSK_NO_EXEC", "1")
+	// Point the daemon's npm at a hermetic fake BEFORE it spawns so agent
+	// install / workflow auto-install / init bootstrap stay offline regardless
+	// of when a test sets its packages prefix (the daemon's npm binary is fixed
+	// at spawn time). Tests may still override AUTOSK_NPM_BIN before runRoot.
+	if os.Getenv("AUTOSK_NPM_BIN") == "" {
+		t.Setenv("AUTOSK_NPM_BIN", writeFakeNpmBinary(t))
+	}
 
 	harnessDaemons.Store(t, struct{}{})
 	t.Cleanup(func() {
@@ -97,3 +104,64 @@ func siblingAutoskd() string {
 	}
 	return filepath.Join(filepath.Dir(exe), "autoskd")
 }
+
+// writeFakeNpmBinary writes a hermetic fake-npm shell script and returns its
+// path. It mirrors fakeNpmInProcess's on-disk shapes so the daemon's ExecNpm
+// (`<bin> --prefix P install --save --no-audit --no-fund SPEC`, and the
+// matching uninstall) stays offline + deterministic.
+func writeFakeNpmBinary(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "fake-npm.sh")
+	if err := os.WriteFile(path, []byte(fakeNpmScript), 0o755); err != nil {
+		t.Fatalf("write fake npm: %v", err)
+	}
+	return path
+}
+
+// fakeNpmScript is the daemon-side fake npm. It parses the ExecNpm argv, strips
+// a trailing @version (preserving a leading scope @), and writes the fixture
+// package.json for the known names; unknown names exit non-zero (loud drift).
+const fakeNpmScript = `#!/usr/bin/env bash
+set -euo pipefail
+prefix=""
+verb=""
+arg=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --prefix) prefix="$2"; shift 2 ;;
+    install) verb="install"; shift ;;
+    uninstall) verb="uninstall"; shift ;;
+    --save|--no-audit|--no-fund) shift ;;
+    *) arg="$1"; shift ;;
+  esac
+done
+[ -n "$prefix" ] || { echo "fake-npm: no --prefix" >&2; exit 2; }
+name="$arg"
+case "$arg" in
+  @*@*) name="${arg%@*}" ;;
+  @*)   name="$arg" ;;
+  *@*)  name="${arg%@*}" ;;
+  *)    name="$arg" ;;
+esac
+dir="$prefix/node_modules/$name"
+if [ "$verb" = "uninstall" ]; then
+  rm -rf "$dir"
+  exit 0
+fi
+mkdir -p "$dir"
+case "$name" in
+  @autosk/agent-runtime)
+    printf '%s' '{"name":"@autosk/agent-runtime","version":"0.1.0"}' > "$dir/package.json" ;;
+  @autosk/dev-fixture)
+    printf '%s' '{"name":"@autosk/dev-fixture","version":"0.2.5","autosk":{"agent":{"first_message":"You are the dev fixture.","model":"sonnet:high","thinking":"high"}}}' > "$dir/package.json" ;;
+  @autogent/generic)
+    printf '%s' '{"name":"@autogent/generic","version":"0.1.0","autosk":{"agent":{}}}' > "$dir/package.json" ;;
+  @autosk/custom-fixture)
+    printf '%s' '{"name":"@autosk/custom-fixture","version":"1.0.0","autosk":{"agent":{"runner":"./agent.ts"}}}' > "$dir/package.json"
+    printf 'export default async () => {};\n' > "$dir/agent.ts" ;;
+  *)
+    echo "fake-npm: unknown package $name" >&2
+    exit 1 ;;
+esac
+exit 0
+`

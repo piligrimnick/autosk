@@ -1,3 +1,5 @@
+//go:build libsqlite3
+
 package doltlite_test
 
 import (
