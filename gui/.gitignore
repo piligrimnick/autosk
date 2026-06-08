@@ -1,0 +1,14 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+dist-ssr/
+
+# Tauri backend build output + generated schemas
+src-tauri/target/
+src-tauri/gen/
+
+# logs / local
+*.log
+.DS_Store

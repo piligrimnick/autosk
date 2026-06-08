@@ -1,0 +1,138 @@
+.sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  background: var(--bg-1);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  z-index: 2;
+}
+.sidebar-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-mute);
+}
+.sidebar-actions {
+  display: flex;
+  gap: 2px;
+}
+.sidebar-empty {
+  padding: 14px 12px;
+  color: var(--fg-mute);
+  font-size: 12px;
+}
+
+.project-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.project-row:hover {
+  background: var(--bg-2);
+}
+.project-caret {
+  color: var(--fg-mute);
+  font-size: 10px;
+  width: 12px;
+}
+.project-name {
+  flex: 1;
+  font-weight: 600;
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-remove {
+  opacity: 0;
+}
+.project-row:hover .project-remove {
+  opacity: 1;
+}
+.project-open > .project-row {
+  background: var(--bg-2);
+}
+
+.task-groups {
+  padding: 2px 0 8px;
+}
+.task-groups-top {
+  padding: 4px 12px 8px;
+}
+.new-task-btn {
+  width: 100%;
+}
+.task-group {
+  margin-bottom: 6px;
+}
+.task-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+}
+.task-group-count {
+  color: var(--fg-mute);
+  font-size: 11px;
+}
+.task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.task-item {
+  padding: 6px 12px 6px 18px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.task-item:hover {
+  background: var(--bg-2);
+}
+.task-selected {
+  background: var(--bg-2);
+  border-left-color: var(--accent);
+}
+.task-item-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.task-id {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg-mute);
+}
+.blocked-flag {
+  font-size: 10px;
+}
+.task-item-title {
+  font-size: 12.5px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-item-step {
+  font-size: 10.5px;
+  color: var(--fg-mute);
+  margin-top: 1px;
+}

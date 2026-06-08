@@ -1,0 +1,100 @@
+.app-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 44px;
+  padding: 0 14px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.topbar-brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+}
+.topbar-nav {
+  display: flex;
+  gap: 2px;
+}
+.tab {
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+.tab:hover {
+  background: var(--bg-3);
+  color: var(--fg);
+}
+.tab-active {
+  background: var(--bg-3);
+  color: var(--fg);
+}
+.topbar-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+}
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.conn-ok { background: var(--ok); }
+.conn-down { background: var(--danger); }
+
+.notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.notice-error {
+  background: rgba(239, 83, 80, 0.14);
+  color: #ff9a9a;
+  border-bottom: 1px solid #5a3030;
+}
+.notice-info {
+  background: rgba(76, 141, 255, 0.12);
+  color: #a9c7ff;
+  border-bottom: 1px solid #2f4570;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+}
+.task-pane {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+.task-center {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}

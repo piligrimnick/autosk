@@ -1,0 +1,70 @@
+.composer {
+  border-top: 1px solid var(--border);
+  background: var(--bg-1);
+  padding: 12px 20px;
+  flex-shrink: 0;
+}
+.composer-state {
+  font-size: 11.5px;
+  color: var(--fg-dim);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.composer-input {
+  width: 100%;
+  min-height: 64px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--fg);
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+.composer-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.composer-wrap {
+  flex-wrap: wrap;
+}
+.composer-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+}
+.composer-inline .select {
+  width: auto;
+}
+
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.seg-btn {
+  background: var(--bg);
+  border: none;
+  color: var(--fg-dim);
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.seg-btn:hover {
+  background: var(--bg-3);
+}
+.seg-active {
+  background: var(--accent);
+  color: #fff;
+}
