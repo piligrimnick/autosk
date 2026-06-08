@@ -24,19 +24,18 @@ cd ~/your/project
 autosk lazy
 ```
 
-> **Live-mode note (daemon cutover, plan §9).** The Go `autosk daemon
-> serve` was retired and lazy's live datasource is not yet rewired to the
-> Rust `autoskd` (that rewire is Phase 3). In the meantime lazy's live
-> integration stays **Offline**: the SSE stream, the input textarea, and
-> the cancel-job verb are temporarily unavailable. The dashboard itself
-> still works fully — see the next paragraph.
-
-Without a live daemon the dashboard still works — tasks, jobs,
-workflows, and agents all render from `.autosk/db`, write hotkeys
-still mutate the DB, and job transcripts render from each job's
-`session.jsonl` archive. The pieces that **need** the live daemon are the
-live SSE stream into the Detail pane, the input textarea, and the
-cancel-job verb. See [Daemon dependency](#daemon-dependency).
+> **Live-mode note (daemon cutover, plan §9).** As of Phase 3.2
+> (ask-913906) `autosk lazy` is a pure JSON-RPC client of the Rust
+> **`autoskd`**, which it **auto-spawns** on first use (the Go
+> `autosk daemon serve` verb is retired). Reads, every write hotkey,
+> live job streaming into the Detail pane, the input textarea
+> (`ctrl+d` / `ctrl+f` / `ctrl+a`), and the cancel-job verb all run over
+> RPC against `autoskd`; lazy itself never opens `.autosk/db`. There is
+> no longer a degraded "Offline" mode. The offline-fallback prose further
+> down (the [Daemon dependency](#daemon-dependency) table and the
+> remaining `/v1/...` HTTP-API references) still describes the **retired
+> Go daemon** and is kept only until the Phase 5 consolidated doc rewrite
+> — see [`docs/plans/20260607-Rust-Daemon-Tauri-GUI.md`](plans/20260607-Rust-Daemon-Tauri-GUI.md).
 
 ---
 
@@ -508,7 +507,7 @@ fresh fds immediately.
 | Symptom | Likely cause |
 |---|---|
 | `daemon=down` but `autosk daemon list` works | Stale socket path. Pass `--sock` or set `$AUTOSK_SOCK`. |
-| No `input` textarea on a job you know is running | The live datasource flipped the job to a terminal status — or (during the daemon cutover, plan §9) lazy's live integration is Offline because it is not yet rewired to `autoskd` (Phase 3). |
+| No `input` textarea on a job you know is running | The live datasource flipped the job to a terminal status — the textarea only renders for `running` jobs. |
 | Agents panel hotkey only flashes a message | Read-only by design — install / uninstall from the CLI. |
 | `ctrl+f` does something different than I expected | Same chord, two view-scoped meanings: page-forward in the Detail pane, `follow_up` dispatch in the input textarea. The `?` overlay filters by focused panel, so only the meaning that's currently active is listed. |
 | Detail pane shows `(loading…)` and stays there | Archive load is in flight; if it never resolves, check the daemon log or press `ctrl+r` to drop the cache and retry. `(archive load failed: …)` means the underlying fetch errored — retry with `ctrl+r`. |

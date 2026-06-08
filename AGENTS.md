@@ -5,19 +5,19 @@ This file provides guidance when working with code in this repository.
 
 ## Build, test, lint
 
-Use the `Makefile` targets — they set the required CGO flags and the `libsqlite3` build tag. Plain `go build`/`go test` won't link correctly.
+The Go binary (CLI + lazy TUI) is a pure JSON-RPC client of `autoskd` and **no longer links doltlite**: it builds CGO-free with plain `go build` / `go test` — no `-tags libsqlite3`, no `libdoltlite.a`. `autoskd` (the Rust daemon) is the sole doltlite consumer.
 
-- `make build` — compiles `bin/autosk` (entrypoint: `cmd/autosk`)
-- `make test` — runs `go test -tags libsqlite3 ./...`
+- `make build` — compiles `bin/autosk` (entrypoint: `cmd/autosk`), CGO-free
+- `make build-autoskd` — compiles the Rust daemon (`cargo build -p autoskd`) into `target/debug/autoskd`
+- `make test` — builds `autoskd`, then runs `go test ./...` with `AUTOSKD_BIN` pointed at it
 - `make test-short` — same with `-short`
-- `make vet` — `go vet` with the build tag
+- `make vet` — `go vet ./...`
 - `make fmt` — `gofmt`
-- `make lint` — `golangci-lint run --build-tags libsqlite3` (requires `golangci-lint` installed)
-- `make doctor` — verifies the doltlite library is present at `$DOLTLITE_DIR` (default `$HOME/me/dev/doltlite/build`)
+- `make lint` — `golangci-lint run ./...` (requires `golangci-lint` installed)
 
-Every build/test target depends on `doctor`. If it fails, doltlite hasn't been built — surface the doctor message to the user; don't try to build doltlite yourself.
+No Go target depends on a `doctor` / doltlite fetch anymore. The `cmd/autosk` verb tests are RPC clients and need a live `autoskd` on disk, which they auto-spawn after locating it via `$AUTOSKD_BIN` (set by `make test`/`make test-short`, which build it first). A direct `go test ./...` works without the `libsqlite3` tag, but the verb tests `t.Skip` unless `autoskd` has been built (`make build-autoskd`) and `$AUTOSKD_BIN` is set.
 
-The `libsqlite3` build tag is mandatory: it routes `mattn/go-sqlite3` through the doltlite-provided libsqlite3 instead of the embedded amalgamation. Any direct `go` invocation Claude runs must pass `-tags libsqlite3`.
+`autoskd` fetches its own pinned doltlite via `crates/autosk-core/build.rs` (`scripts/fetch-doltlite.sh`) when you `cargo build` it — independent of the Go Makefile. (The legacy `internal/store/doltlite` package and its tests are gated behind `//go:build libsqlite3` and are slated for deletion in Phase 5.)
 
 ## Repo layout
 
