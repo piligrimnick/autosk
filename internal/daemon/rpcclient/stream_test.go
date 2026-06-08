@@ -21,6 +21,13 @@ type streamServer struct {
 	sock string
 	mu   sync.Mutex
 	reqs []map[string]any
+
+	// gone closes the first time a served connection's read loop exits (the
+	// client closed its end). It is the self-reap observable: the daemon keeps
+	// the tail connection open, so the server only sees EOF when the client
+	// itself releases the connection via JobStream.Close.
+	goneOnce sync.Once
+	gone     chan struct{}
 }
 
 // newStreamServer starts the server. onSubscribe is invoked once per accepted
@@ -42,7 +49,7 @@ func newStreamServer(t *testing.T, onSubscribe func(enc *json.Encoder, subID uin
 		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	s := &streamServer{sock: sock}
+	s := &streamServer{sock: sock, gone: make(chan struct{})}
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -57,6 +64,8 @@ func newStreamServer(t *testing.T, onSubscribe func(enc *json.Encoder, subID uin
 
 func (s *streamServer) serve(conn net.Conn, onSubscribe func(enc *json.Encoder, subID uint64)) {
 	defer conn.Close()
+	// Any return from serve means the client closed its end of the connection.
+	defer s.goneOnce.Do(func() { close(s.gone) })
 	r := bufio.NewReader(conn)
 	enc := json.NewEncoder(conn)
 	line, err := r.ReadBytes('\n')
@@ -187,15 +196,23 @@ func TestJobSubscribe_DemuxOrder(t *testing.T) {
 }
 
 // TestJobSubscribe_SubscribeError asserts an error response to the subscribe
-// surfaces as a synthetic Kind=="error" frame and then the channel closes
-// (self-reap via readLoop's deferred Close).
+// surfaces as a synthetic Kind=="error" frame, the channel then closes, AND the
+// stream self-reaps the underlying connection (readLoop's deferred Close) so the
+// server observes the client dropping its end.
+//
+// The context is long-lived (WithCancel, never expires during the assertions).
+// A WithTimeout ctx would MASK the leak: on expiry the ctx-watcher goroutine
+// reaps the connection regardless of the self-reap, so the server would see EOF
+// even without the fix. With a non-expiring ctx the ONLY path that releases the
+// connection is readLoop's deferred Close — exactly the code under test. The
+// deferred cancel() reaps anything still parked if an assertion fails.
 func TestJobSubscribe_SubscribeError(t *testing.T) {
 	srv := newStreamServer(t, func(enc *json.Encoder, subID uint64) {
 		_ = enc.Encode(map[string]any{"id": subID, "error": map[string]any{
 			"code": CodeNotFound, "message": "no such job"}})
 	})
 	cli := mustClient(t, srv.sock)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	stream, err := cli.JobSubscribe(ctx, "ghost", SubscribeOptions{})
@@ -216,14 +233,23 @@ func TestJobSubscribe_SubscribeError(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for the synthetic error frame")
 	}
-	// The stream must self-reap: the channel closes without an external Close.
+	// The channel closes without an external Close.
 	select {
 	case _, ok := <-stream.Events():
 		if ok {
 			t.Fatal("expected channel to close after the error frame")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("stream did not self-reap after a subscribe error")
+		t.Fatal("stream did not close the channel after a subscribe error")
+	}
+	// The real self-reap guard: readLoop's deferred Close releases the
+	// connection (and the ctx-watcher via s.closed), so the server sees the
+	// client drop its end. Without the self-reap this never happens under a
+	// long-lived ctx — the connection + goroutines leak until an external Close.
+	select {
+	case <-srv.gone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("client did not self-reap the connection after a subscribe error (leak)")
 	}
 }
 
