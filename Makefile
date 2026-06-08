@@ -90,6 +90,12 @@ BIN_NAME := autosk
 BIN      := $(BIN_DIR)/$(BIN_NAME)
 PKG      := ./cmd/autosk
 
+# autoskd — the Rust daemon that owns .autosk/db. The CLI/lazy front ends are
+# pure RPC clients, so the cmd/autosk verb tests need a live daemon; they
+# locate it via $AUTOSKD_BIN (the connector's first lookup). Built with cargo.
+CARGO       ?= cargo
+AUTOSKD_BIN := $(CURDIR)/target/debug/autoskd
+
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS  := -X 'autosk/internal/buildinfo.Version=$(VERSION)' \
@@ -104,8 +110,8 @@ ifeq ($(strip $(GOBIN_DIR)),)
 GOBIN_DIR := $(firstword $(subst :, ,$(shell $(GO) env GOPATH)))/bin
 endif
 
-.PHONY: all build install uninstall test test-short lint doctor fetch-doltlite \
-        clean distclean tidy fmt vet help
+.PHONY: all build build-autoskd install uninstall test test-short lint doctor \
+        fetch-doltlite clean distclean tidy fmt vet help
 
 all: build
 
@@ -128,13 +134,17 @@ uninstall:
 		echo "not installed: $(GOBIN_DIR)/$(BIN_NAME)"; \
 	fi
 
+## build-autoskd: compile the Rust daemon (needed by the cmd/autosk verb tests)
+build-autoskd:
+	$(CARGO) build -p autoskd
+
 ## test: run all tests
-test: doctor
-	$(GO) test -tags $(GO_TAGS) ./...
+test: doctor build-autoskd
+	AUTOSKD_BIN=$(AUTOSKD_BIN) $(GO) test -tags $(GO_TAGS) ./...
 
 ## test-short: skip long tests
-test-short: doctor
-	$(GO) test -tags $(GO_TAGS) -short ./...
+test-short: doctor build-autoskd
+	AUTOSKD_BIN=$(AUTOSKD_BIN) $(GO) test -tags $(GO_TAGS) -short ./...
 
 ## lint: run golangci-lint (must be installed)
 lint:
