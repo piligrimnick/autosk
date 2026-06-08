@@ -124,7 +124,7 @@ every other kind (`user_text`, `tool_call`, `tool_result`,
 | `/` | Filter the focused panel — see [Filter syntax](#filter-syntax). |
 | `*` | Clear all scope chips. |
 | `R` | Force-refresh now (skip the periodic tick). |
-| `ctrl+r` | Hard refresh: drop the pooled DB connection, clear job-transcript cache, tear down live SSE. Use when external writes (CLI, daemon, another `lazy`) still don't appear after pressing `R`. |
+| `ctrl+r` | Hard refresh: clear the job-transcript cache and tear down the live job stream, then re-read from `autoskd`. External writes normally arrive automatically via the daemon push — reach for this when a job's transcript looks stale or rows still don't update after pressing `R`. |
 | `@` | Toggle the command-log viewport. |
 | `q` / `ctrl+c` | Quit. |
 
@@ -476,18 +476,24 @@ malformed body) the read falls back to the offline base for that
 one call. If the fallback fired since the last tick, a `flaky+N`
 chip appears in the bottom bar so a flaky daemon stays visible.
 
-The dashboard polls every 2s by default (`--refresh` to change).
-Cursor moves re-fetch the focused detail immediately rather than
-waiting for the next tick.
+Panels update on the daemon's `task-changed` / `project-changed`
+push, so external writes (from the CLI, another `lazy`, or the
+daemon's own job activity) appear within milliseconds — there is no
+client-side poll. `--refresh` only sets a long safety re-sync
+interval (floored to 30s while the push is active) that re-reads
+everything as a backstop in case a notification is dropped across a
+daemon reconnect. Cursor moves still re-fetch the focused detail
+immediately.
 
 ### Cross-process freshness
 
-`.autosk/db` is shared between every `autosk` process (CLI,
-daemon, lazy). External writes appear on the next refresh tick.
-Press `R` to force-refresh sooner, or `ctrl+r` to drop the pooled
-DB connection entirely and re-read — useful if a long-running
-compactor (`autosk gc` / daemon GC) rewrote the file and you want
-fresh fds immediately.
+`.autosk/db` is owned by `autoskd`; the Go front ends (CLI, lazy)
+never open it directly. External writes — from the CLI, another
+`lazy`, or the daemon's own job activity — reach lazy through the
+daemon's `task-changed` / `project-changed` push, normally within
+milliseconds. Press `R` to force a refresh sooner, or `ctrl+r` to
+tear down the live job stream + transcript cache and re-read from
+scratch when a job's transcript still looks stale.
 
 ---
 
@@ -496,7 +502,7 @@ fresh fds immediately.
 | Flag | Default | Effect |
 |---|---|---|
 | `--sock <path>` | `$AUTOSK_SOCK` or `~/.autosk/daemon.sock` | Daemon UDS path. |
-| `--refresh <dur>` | `2s` | Panel refresh cadence. |
+| `--refresh <dur>` | `2s` | Safety re-sync interval. Panels update on the daemon's `task-changed` / `project-changed` push; this value is only a backstop re-sync and is floored to 30s while the push is active. |
 | `--db <path>` | DB discovery rules | Override `.autosk/db` discovery. Equivalent to setting `$AUTOSK_DB`. |
 | `--no-changelog` | `false` | Suppress the [changelog modal](#changelog-modal) auto-popup on lazy start. Read-only — `~/.autosk/state.json` is NOT modified, so re-launching without the flag picks up where you left off. Needed for golden tests and headless CI runs. |
 
@@ -512,4 +518,4 @@ fresh fds immediately.
 | `ctrl+f` does something different than I expected | Same chord, two view-scoped meanings: page-forward in the Detail pane, `follow_up` dispatch in the input textarea. The `?` overlay filters by focused panel, so only the meaning that's currently active is listed. |
 | Detail pane shows `(loading…)` and stays there | Archive load is in flight; if it never resolves, check the daemon log or press `ctrl+r` to drop the cache and retry. `(archive load failed: …)` means the underlying fetch errored — retry with `ctrl+r`. |
 | Signals / comments for a job are missing in the job Detail | They live on the parent **task** detail. Focus the Tasks panel (`1`) and move the cursor onto the parent task. |
-| External CLI writes don't show up | Press `R` to force a refresh; if the data is still stale, `ctrl+r` drops the DB connection and reopens. |
+| External CLI writes don't show up | They normally arrive automatically via the daemon's `task-changed` / `project-changed` push. Press `R` to force a refresh; if a job's transcript is still stale, `ctrl+r` tears down the live stream + transcript cache and re-reads. |
