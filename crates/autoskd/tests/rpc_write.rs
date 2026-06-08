@@ -309,3 +309,33 @@ fn tcp_requires_auth() {
     let v: Value = serde_json::from_str(&resp2).unwrap();
     assert!(v["result"]["version"].is_string(), "version resp: {resp2}");
 }
+
+/// `maint.compact` + `step.next` over the wire (the two write RPCs added so the
+/// remaining Go CLI verbs — gc + step — can flip to pure RPC clients).
+#[test]
+fn compact_and_step_next_over_uds() {
+    let (h, _addr, _daemon) = spawn_daemon();
+
+    // maint.compact succeeds and returns parseable stats with a verbatim
+    // dolt_gc() reply.
+    let g = h.call("maint.compact", json!({}));
+    assert!(g.get("error").is_none(), "compact error: {g}");
+    assert!(g["result"]["chunks_removed"].is_i64(), "stats: {g}");
+    assert!(
+        !g["result"]["raw"].as_str().unwrap().is_empty(),
+        "dolt_gc reply is non-empty: {g}"
+    );
+
+    // step.next with no active run surfaces the byte-identical CLI-final error
+    // (task id + daemon hint) — the parity-sensitive mapping.
+    let c = h.call(
+        "task.create",
+        json!({"source": "cli", "title": "t", "caller": "human"}),
+    );
+    let id = c["result"]["id"].as_str().unwrap().to_string();
+    let s = h.call("step.next", json!({"id": id, "to": "done"}));
+    assert_eq!(
+        s["error"]["message"].as_str().unwrap(),
+        format!("no active run for task {id} (is the daemon running it?)")
+    );
+}
