@@ -88,10 +88,11 @@ var _ datasource.Datasource = (*fakeDS)(nil)
 // TestLazy_SmokeDashboardLaunch verifies the TUI starts, the layout
 // fires, and the seeded task appears in the Tasks panel.
 //
-// We construct a doltlite-backed tmpdb, seed one task + one job, run
-// the TUI in a goroutine via the headless simulation screen, give it
-// a moment to lay out, then inject 'q' to quit and assert the buffer
-// of the Tasks view contains the task id.
+// We drive an in-memory fakeDS (no doltlite store at all) seeded with a
+// single task and zero jobs; `dir` is used only as the ProjectRoot. We run
+// the TUI in a goroutine via the headless simulation screen, give it a
+// moment to lay out, then inject 'q' to quit and assert the buffer of the
+// Tasks view contains the task id.
 func TestLazy_SmokeDashboardLaunch(t *testing.T) {
 	if raceEnabled {
 		t.Skip("skipping under -race: pre-existing race in test fixture's screen reads (see followup)")

@@ -122,6 +122,12 @@ func (c *Client) JobSubscribe(ctx context.Context, jobID string, opts SubscribeO
 // synthetic error frame so the consumer sees the failure.
 func (s *JobStream) readLoop(ch chan<- JobEvent, subID uint64) {
 	defer close(ch)
+	// Self-reap on exit: a daemon EOF (Decode error) or a subscribe-error
+	// response must release the local connection + the ctx-watcher goroutine
+	// (which parks on <-s.closed) instead of depending on an external Close().
+	// Close() is idempotent (sync.Once), so this is a no-op when the caller
+	// already closed the stream.
+	defer func() { _ = s.Close() }()
 	dec := json.NewDecoder(s.conn)
 	for {
 		var raw struct {

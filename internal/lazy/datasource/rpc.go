@@ -147,7 +147,11 @@ func (r *RPC) Healthz(ctx context.Context) (Health, error) {
 	if err != nil {
 		return Health{Daemon: "down", UpdatedAt: time.Now().UTC()}, nil //nolint:nilerr // health probe never errors to the TUI
 	}
-	daemon := "down"
+	// Reachable but !OK maps to "stale" (parity with the old Live.Healthz: the
+	// daemon answered but reports an unhealthy/degraded state). Only an
+	// unreachable daemon (err above) is "down". The status-bar renderer and the
+	// Health doc both advertise the three-state {ok|down|stale} contract.
+	daemon := "stale"
 	if h.OK {
 		daemon = "ok"
 	}
@@ -179,6 +183,7 @@ func (r *RPC) StreamLive(ctx context.Context, jobID string) (*LiveHandle, error)
 		defer close(ch)
 		for ev := range stream.Events() {
 			out := LiveEvent{EventID: int(ev.EventID)}
+			terminal := false
 			switch ev.Kind {
 			case "message":
 				out.Kind = "message"
@@ -195,6 +200,7 @@ func (r *RPC) StreamLive(ctx context.Context, jobID string) (*LiveHandle, error)
 				if ev.Job != nil {
 					out.Status = *ev.Job
 				}
+				terminal = true
 			case "error":
 				out.Kind = "error"
 				out.Err = errors.New(ev.Error)
@@ -204,6 +210,19 @@ func (r *RPC) StreamLive(ctx context.Context, jobID string) (*LiveHandle, error)
 			select {
 			case ch <- out:
 			case <-ctx.Done():
+				return
+			}
+			if terminal {
+				// The daemon emits exactly one terminal `done` and then keeps the
+				// shared connection open for further requests — it never EOFs the
+				// tail. Without an explicit teardown here the readLoop would park
+				// on Decode forever and the conn + goroutines + daemon
+				// subscription would leak (restores the old SSE close-on-done
+				// parity). The full transcript was already replayed (Full:true)
+				// before this frame, so nothing is lost. Closing the stream closes
+				// `ch` (via the deferred close above), so pumpLiveLoop exits via
+				// its `!ok` branch.
+				_ = stream.Close()
 				return
 			}
 		}

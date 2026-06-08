@@ -230,10 +230,14 @@ func (gu *Gui) pumpJobLive(ctx context.Context, ownerJobID string, h *datasource
 						appendTranscriptEvent(te, ev.Message, contentW)
 					case "status", "done":
 						// Status / done envelopes don't carry transcript
-						// content; the running→terminal transition is
-						// detected in applyRefreshLocked via the
-						// prevJob/cur comparison. We just ignore them
-						// here.
+						// content, so there is nothing to append here.
+						// On `done` the datasource StreamLive tears the
+						// subscription down (closes the LiveHandle), which
+						// closes h.Events and makes pumpLiveLoop exit via
+						// its `!ok` branch — so this loop self-terminates.
+						// (The archive refetch for the running→terminal
+						// transition is handled separately in
+						// applyRefreshLocked via the prevJob/cur compare.)
 					case "error":
 						te.err = ev.Err
 					}
