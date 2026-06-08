@@ -16,7 +16,8 @@ PKG      := ./cmd/autosk
 # pure RPC clients, so the cmd/autosk verb tests need a live daemon; they
 # locate it via $AUTOSKD_BIN (the connector's first lookup). Built with cargo.
 CARGO       ?= cargo
-AUTOSKD_BIN := $(CURDIR)/target/debug/autoskd
+AUTOSKD_BIN         := $(CURDIR)/target/debug/autoskd
+AUTOSKD_RELEASE_BIN := $(CURDIR)/target/release/autoskd
 
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -32,7 +33,7 @@ ifeq ($(strip $(GOBIN_DIR)),)
 GOBIN_DIR := $(firstword $(subst :, ,$(shell $(GO) env GOPATH)))/bin
 endif
 
-.PHONY: all build build-autoskd install uninstall test test-short lint \
+.PHONY: all build build-autoskd install install-autoskd uninstall test test-short lint \
         clean distclean tidy fmt vet help
 
 all: build
@@ -46,19 +47,27 @@ build:
 build-autoskd:
 	$(CARGO) build -p autoskd
 
-## install: install autosk into $$GOBIN (or $$GOPATH/bin)
-install:
+## install: install autosk + autoskd into $$GOBIN (or $$GOPATH/bin)
+install: install-autoskd
 	$(GO) install -ldflags "$(LDFLAGS)" $(PKG)
 	@echo "installed: $(GOBIN_DIR)/$(BIN_NAME)"
 
-## uninstall: remove autosk from $$GOBIN (or $$GOPATH/bin)
+## install-autoskd: build autoskd (release) and install it alongside autosk
+install-autoskd:
+	$(CARGO) build -p autoskd --release
+	@mkdir -p "$(GOBIN_DIR)"
+	@install -m 0755 "$(AUTOSKD_RELEASE_BIN)" "$(GOBIN_DIR)/autoskd"
+	@echo "installed: $(GOBIN_DIR)/autoskd"
+
+## uninstall: remove autosk + autoskd from $$GOBIN (or $$GOPATH/bin)
 uninstall:
-	@if [ -f "$(GOBIN_DIR)/$(BIN_NAME)" ]; then \
-		rm -f "$(GOBIN_DIR)/$(BIN_NAME)" && \
-		echo "removed: $(GOBIN_DIR)/$(BIN_NAME)"; \
-	else \
-		echo "not installed: $(GOBIN_DIR)/$(BIN_NAME)"; \
-	fi
+	@for b in $(BIN_NAME) autoskd; do \
+		if [ -f "$(GOBIN_DIR)/$$b" ]; then \
+			rm -f "$(GOBIN_DIR)/$$b" && echo "removed: $(GOBIN_DIR)/$$b"; \
+		else \
+			echo "not installed: $(GOBIN_DIR)/$$b"; \
+		fi; \
+	done
 
 ## test: run all tests (builds autoskd first; the verb tests auto-spawn it)
 test: build-autoskd
