@@ -51,7 +51,11 @@ impl Hub {
         self.subs.lock().unwrap().remove(&id);
     }
 
-    /// Number of connected clients (used by the idle-shutdown policy).
+    /// Number of notification-subscribed connections (those that issued
+    /// `task.subscribe`/`project.subscribe`). NB: this is a SUBSET of all live
+    /// connections — the idle-shutdown "no connected clients" predicate uses
+    /// [`crate::daemon::Daemon::live_connections`], which counts every
+    /// connection, not just subscribers.
     pub fn client_count(&self) -> usize {
         self.subs.lock().unwrap().len()
     }

@@ -4,6 +4,7 @@
 //! [`RunnerRegistry`] + [`Attachments`] hubs the attach surface needs.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -70,8 +71,29 @@ pub struct Daemon {
     pub worktree: Arc<WorktreeManager>,
     /// Broadcast hub for `task-changed`/`project-changed` notifications.
     pub hub: Arc<Hub>,
+    /// Count of live client connections (UDS + TCP), maintained by a
+    /// [`ConnGuard`] for the lifetime of each connection's `handle_conn`. Feeds
+    /// the idle-shutdown policy's "no connected clients" predicate (plan §4.2) —
+    /// this counts EVERY connection, not just the notification-subscribed subset
+    /// the [`Hub`] tracks.
+    live_conns: AtomicI64,
     cfg: DaemonConfig,
     started: Mutex<HashMap<String, ProjectRuntime>>,
+}
+
+/// RAII guard that keeps the daemon's live-connection count accurate. Created
+/// at the top of each connection's `handle_conn`; decrements on drop so the
+/// count is released even if the connection handler unwinds (poisoned-mutex
+/// panic in a writer), mirroring the [`crate::server`] `Subscription` drop
+/// safety net.
+pub struct ConnGuard {
+    daemon: Arc<Daemon>,
+}
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        self.daemon.live_conns.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 struct ProjectRuntime {
@@ -118,6 +140,7 @@ impl Daemon {
             packages,
             worktree,
             hub: Arc::new(Hub::new()),
+            live_conns: AtomicI64::new(0),
             cfg,
             started: Mutex::new(HashMap::new()),
         })
@@ -194,6 +217,22 @@ impl Daemon {
     /// Number of started (poller-running) projects (observability/tests).
     pub fn started_len(&self) -> usize {
         self.started.lock().unwrap().len()
+    }
+
+    /// Registers a new live connection and returns a [`ConnGuard`] that releases
+    /// it on drop. The count drives the idle-shutdown "no connected clients"
+    /// predicate (plan §4.2).
+    pub fn conn_guard(self: &Arc<Self>) -> ConnGuard {
+        self.live_conns.fetch_add(1, Ordering::SeqCst);
+        ConnGuard {
+            daemon: Arc::clone(self),
+        }
+    }
+
+    /// Number of live client connections (UDS + TCP), counting every connection
+    /// — not just notification subscribers. Part of the idle-shutdown policy.
+    pub fn live_connections(&self) -> i64 {
+        self.live_conns.load(Ordering::SeqCst)
     }
 
     /// True when the daemon is actively driving work: any queued/running job OR

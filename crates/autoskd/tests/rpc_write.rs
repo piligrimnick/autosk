@@ -69,19 +69,28 @@ fn spawn_daemon() -> (Harness, String, Arc<Daemon>) {
 impl Harness {
     /// One request/response over a fresh UDS connection (matches the Go client's
     /// connection-per-call model).
-    fn call(&self, method: &str, mut params: Value) -> Value {
+    fn call(&self, method: &str, params: Value) -> Value {
+        let cwd = self.cwd.clone();
+        self.call_cwd(&cwd, method, params)
+    }
+
+    /// Like [`Harness::call`] but targets an arbitrary project selector `cwd`
+    /// (used to drive `project.init` against a fresh directory).
+    fn call_cwd(&self, cwd: &str, method: &str, mut params: Value) -> Value {
         if let Value::Object(m) = &mut params {
-            m.insert("cwd".into(), json!(self.cwd));
+            m.insert("cwd".into(), json!(cwd));
         }
         let conn = UnixStream::connect(&self.sock).unwrap();
         rpc_roundtrip(conn, self.id.fetch_add(1, Ordering::SeqCst), method, params)
     }
 }
 
-fn rpc_roundtrip<S: std::io::Read + Write>(stream: S, id: u64, method: &str, params: Value) -> Value
-where
-    S: Sized,
-{
+fn rpc_roundtrip<S: std::io::Read + Write>(
+    stream: S,
+    id: u64,
+    method: &str,
+    params: Value,
+) -> Value {
     let mut w = stream;
     let req = json!({"id": id, "method": method, "params": params});
     let mut line = serde_json::to_vec(&req).unwrap();
@@ -260,6 +269,100 @@ fn lazy_resume_and_isolation_dialect_over_rpc() {
     assert!(r.get("error").is_none(), "resume: {r}");
     assert_eq!(r["result"]["status"], "work");
     assert_eq!(last_commit(), format!("lazy: resume {id}"));
+}
+
+/// The idle-shutdown "no connected clients" predicate (plan §4.2) must count
+/// EVERY live connection, not just notification subscribers: a bare connection
+/// that never subscribes still has to keep the daemon awake. Asserts the
+/// daemon's live-connection counter tracks a plain (non-subscribing) UDS
+/// connection up and back down.
+#[test]
+fn live_connection_count_tracks_bare_connections() {
+    let (h, _addr, daemon) = spawn_daemon();
+
+    // Poll the counter with a generous timeout (the accept loop spawns a
+    // per-connection thread; the guard increments at the top of handle_conn).
+    let wait_for = |want: i64| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while std::time::Instant::now() < deadline {
+            if daemon.live_connections() == want {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!(
+            "live_connections never reached {want} (last={})",
+            daemon.live_connections()
+        );
+    };
+
+    assert_eq!(daemon.live_connections(), 0);
+    let conn = UnixStream::connect(&h.sock).unwrap();
+    // A bare connection that issues NO request and NO subscription still counts.
+    wait_for(1);
+    // The hub (notification subscribers) is empty — this connection never
+    // subscribed, proving the idle predicate is not relying on hub.client_count.
+    assert_eq!(daemon.hub.client_count(), 0);
+    drop(conn);
+    wait_for(0);
+}
+
+/// `project.init` over RPC against a FRESH directory (no pre-existing
+/// `.autosk/db`): exercises the daemon's `ProjectNotFound → Manager::init`
+/// fallback so a non-Go client can stand up a brand-new v12 project with no Go
+/// process touching the DB (acceptance criterion #2). Uses `skip_bootstrap` to
+/// keep the test npm-free; idempotency is asserted on a second call.
+#[test]
+fn project_init_fresh_dir_over_rpc() {
+    let (h, _addr, daemon) = spawn_daemon();
+    // A sibling of the harness's project dir that does NOT yet contain .autosk/db.
+    let fresh = std::path::Path::new(&h.cwd)
+        .parent()
+        .unwrap()
+        .join("fresh-proj");
+    std::fs::create_dir_all(&fresh).unwrap();
+    let fresh = fresh.to_string_lossy().to_string();
+
+    let r = h.call_cwd(&fresh, "project.init", json!({"skip_bootstrap": true}));
+    assert!(r.get("error").is_none(), "project.init error: {r}");
+    assert!(
+        r["result"]["schema_version"].as_i64().unwrap() >= 1,
+        "schema_version applied: {r}"
+    );
+    // skip_bootstrap → no workflow seeded.
+    assert_eq!(r["result"]["bootstrapped"], Value::Null);
+    let db_path = r["result"]["db_path"].as_str().unwrap().to_string();
+    assert!(
+        std::path::Path::new(&db_path).exists(),
+        "db file created at {db_path}"
+    );
+
+    // The freshly-initialised project is now servable: a write + read round-trips
+    // through the daemon with no Go process involved.
+    let t = h.call_cwd(
+        &fresh,
+        "task.create",
+        json!({"source": "cli", "title": "fresh", "caller": "human"}),
+    );
+    assert!(t.get("error").is_none(), "create in fresh proj: {t}");
+    let id = t["result"]["id"].as_str().unwrap().to_string();
+    let got = h.call_cwd(&fresh, "task.get", json!({"id": id}));
+    assert_eq!(got["result"]["title"], "fresh");
+
+    // Idempotent: a second init returns the same schema version, no error.
+    let again = h.call_cwd(&fresh, "project.init", json!({"skip_bootstrap": true}));
+    assert!(again.get("error").is_none(), "second init: {again}");
+    assert_eq!(
+        again["result"]["schema_version"],
+        r["result"]["schema_version"]
+    );
+
+    // project.init registered the new project (project-changed side effect).
+    let listed = daemon.registry.list().unwrap();
+    assert!(
+        listed.iter().any(|p| p.db_path == db_path),
+        "fresh project registered: {listed:?}"
+    );
 }
 
 #[test]

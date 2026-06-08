@@ -192,7 +192,7 @@ pub fn create(
     if !p.blocks.is_empty() {
         for other in &p.blocks {
             proj.db
-                .with_write(|conn| block_translate(conn, other, &[id.clone()]))?;
+                .with_write(|conn| block_translate(conn, other, std::slice::from_ref(&id)))?;
         }
     }
     if !p.blocked_by.is_empty() {
@@ -670,6 +670,7 @@ pub fn reopen(proj: &Project, id: &str) -> Result<wire::TaskView> {
 
 /// `update --status` (CLI `update` verb, one commit `update <id>`). Also
 /// applies title/description/priority field patches when set.
+#[allow(clippy::too_many_arguments)]
 pub fn update(
     proj: &Project,
     worktrees: &dyn WorktreeManager,

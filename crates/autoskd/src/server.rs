@@ -144,6 +144,10 @@ impl Server {
         write_half: Box<dyn Write + Send>,
         require_auth: bool,
     ) {
+        // Count this connection for the idle-shutdown "no connected clients"
+        // predicate (plan §4.2). The guard releases the count on drop — including
+        // an unwind — so the daemon can never get pinned awake by a leaked count.
+        let _conn_guard = self.daemon.conn_guard();
         let writer: SharedWriter = Arc::new(Mutex::new(write_half));
         // Notifications (`task-changed`/`project-changed`) are OPT-IN: a
         // connection only receives them after `task.subscribe`/`project.subscribe`

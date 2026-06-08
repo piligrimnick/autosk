@@ -195,7 +195,11 @@ fn start_idle_watchdog(daemon: Arc<Daemon>, window: Option<std::time::Duration>)
         let mut idle_since: Option<std::time::Instant> = None;
         loop {
             std::thread::sleep(std::time::Duration::from_secs(10));
-            let busy = daemon.hub.client_count() > 0 || daemon.has_pending_work();
+            // "No connected clients" counts EVERY live connection (UDS + TCP),
+            // not just the notification-subscribed subset — a client holding a
+            // bare connection (e.g. a finished job.subscribe stream) must keep
+            // the daemon alive (plan §4.2).
+            let busy = daemon.live_connections() > 0 || daemon.has_pending_work();
             if busy {
                 idle_since = None;
                 continue;

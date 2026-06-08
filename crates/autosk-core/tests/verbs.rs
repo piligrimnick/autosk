@@ -114,13 +114,13 @@ fn block_unblock_cycle_self() {
     let a = mk(&e, "a");
     let b = mk(&e, "b");
     // self-block rejected
-    let err = verbs::block(&e.proj, Source::Cli, &a, &[a.clone()]).unwrap_err();
+    let err = verbs::block(&e.proj, Source::Cli, &a, std::slice::from_ref(&a)).unwrap_err();
     assert_eq!(err.to_string(), format!("a task cannot block itself: {a}"));
     // a blocked by b, commit message
-    verbs::block(&e.proj, Source::Cli, &a, &[b.clone()]).unwrap();
+    verbs::block(&e.proj, Source::Cli, &a, std::slice::from_ref(&b)).unwrap();
     assert_eq!(last_commit_msg(&e.proj.db), format!("block {a} by {b}"));
     // cycle: b blocked by a would close a<->b
-    let err = verbs::block(&e.proj, Source::Cli, &b, &[a.clone()]).unwrap_err();
+    let err = verbs::block(&e.proj, Source::Cli, &b, std::slice::from_ref(&a)).unwrap_err();
     assert!(err.to_string().contains("would create a cycle"), "{err}");
     // blocker not found
     let err = verbs::block(&e.proj, Source::Cli, &a, &["ask-zzzzzz".into()]).unwrap_err();
@@ -130,7 +130,7 @@ fn block_unblock_cycle_self() {
         "{err}"
     );
     // unblock (lazy dialect)
-    verbs::unblock(&e.proj, Source::Lazy, &a, &[b.clone()]).unwrap();
+    verbs::unblock(&e.proj, Source::Lazy, &a, std::slice::from_ref(&b)).unwrap();
     assert_eq!(
         last_commit_msg(&e.proj.db),
         format!("lazy: unblock {a}<-{b}")
