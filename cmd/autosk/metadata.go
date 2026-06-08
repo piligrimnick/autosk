@@ -13,19 +13,15 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"autosk/internal/agent"
+	"autosk/internal/daemon/rpcclient"
 	"autosk/internal/meta"
-	"autosk/internal/store"
-	"autosk/internal/store/doltlite"
-	"autosk/internal/workflow"
 )
 
-// newMetadataCmd is the parent for the per-task metadata CLI.
-//
-// `autosk metadata` lets humans inspect and edit the free-form JSON
-// blob attached to each task (the tasks.metadata column). Today the
-// only engine-reserved sub-object is `step_visits`, which the visit-
-// limit feature uses to enforce per-step max_visits caps.
+// newMetadataCmd is the parent for the per-task metadata CLI. Every
+// mutation routes through the daemon (which owns the dotted-path descent,
+// the reserved step_visits validation, the change-detecting commit gate,
+// and the byte-identical commit messages); the cobra layer here parses
+// the CLI flags and renders the result.
 //
 // See docs/plans/20260520-Step-Visit-Limits.md and docs/workflows.md.
 func newMetadataCmd() *cobra.Command {
@@ -60,23 +56,28 @@ func newMetadataShowCmd() *cobra.Command {
 			"max_visits caps for human consumption.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, closeFn, err := openStore(cmd.Context(), false)
+			cl, err := readClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer closeFn()
-			dl := s.(*doltlite.Store)
-			ag := agent.New(dl.DB())
-			wfs := workflow.New(dl.DB(), ag)
-			tk, err := getTaskOrErr(cmd.Context(), s, args[0])
+			tk, err := cl.GetTask(cmd.Context(), args[0])
 			if err != nil {
+				if apiErr, ok := rpcclient.IsAPIError(err); ok && apiErr.Code == rpcclient.CodeNotFound {
+					return fmt.Errorf("task not found: %s", args[0])
+				}
 				return err
 			}
 			if flagQuiet {
 				return nil
 			}
 			if visitsPretty {
-				return printVisitsPretty(cmd.Context(), os.Stdout, wfs, tk)
+				var wf *rpcclient.Workflow
+				if tk.WorkflowID != "" && tk.WorkflowName != "" {
+					if g, gerr := cl.GetWorkflow(cmd.Context(), tk.WorkflowName); gerr == nil {
+						wf = &g
+					}
+				}
+				return printVisitsPretty(os.Stdout, wf, tk.Metadata)
 			}
 			return printMetadataJSON(os.Stdout, tk.Metadata)
 		},
@@ -120,41 +121,24 @@ func newMetadataSetCmd() *cobra.Command {
 				return err
 			}
 
-			s, closeFn, err := openStore(cmd.Context(), true)
+			cl, err := writeClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer closeFn()
-
-			pathParts, err := splitMetadataKey(key)
+			res, err := cl.MetadataSet(cmd.Context(), cliSource, args[0], key, parsed, false)
 			if err != nil {
-				return err
-			}
-			// Validate engine-reserved shapes BEFORE mutating.
-			if pathParts[0] == meta.StepVisitsKey {
-				if err := validateReservedWrite(pathParts, parsed); err != nil {
-					return err
-				}
-			}
-			updated, changed, err := s.UpdateMetadata(cmd.Context(), args[0], func(m map[string]any) error {
-				return setMetadataPath(m, pathParts, parsed)
-			})
-			if err != nil {
-				if errors.Is(err, store.ErrNotFound) {
+				if apiErr, ok := rpcclient.IsAPIError(err); ok && apiErr.Code == rpcclient.CodeNotFound {
 					return fmt.Errorf("task not found: %s", args[0])
 				}
 				return err
 			}
-			if changed {
-				commitWrite(cmd.Context(), s, "metadata set "+args[0]+" --key "+key)
-			}
 			if flagQuiet {
 				return nil
 			}
-			if !changed {
+			if !res.Changed {
 				fmt.Fprintln(os.Stderr, "(no change)")
 			}
-			return printMetadataJSON(os.Stdout, updated)
+			return printMetadataJSON(os.Stdout, res.Task.Metadata)
 		},
 	}
 	cmd.Flags().StringVar(&key, "key", "", "dotted JSON object path (e.g. `step_visits.st-abcd`)")
@@ -179,35 +163,24 @@ func newMetadataUnsetCmd() *cobra.Command {
 			if key == "" {
 				return errors.New("--key is required")
 			}
-			s, closeFn, err := openStore(cmd.Context(), true)
+			cl, err := writeClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer closeFn()
-			pathParts, err := splitMetadataKey(key)
+			res, err := cl.MetadataUnset(cmd.Context(), args[0], key)
 			if err != nil {
-				return err
-			}
-			updated, changed, err := s.UpdateMetadata(cmd.Context(), args[0], func(m map[string]any) error {
-				unsetMetadataPath(m, pathParts)
-				return nil
-			})
-			if err != nil {
-				if errors.Is(err, store.ErrNotFound) {
+				if apiErr, ok := rpcclient.IsAPIError(err); ok && apiErr.Code == rpcclient.CodeNotFound {
 					return fmt.Errorf("task not found: %s", args[0])
 				}
 				return err
 			}
-			if changed {
-				commitWrite(cmd.Context(), s, "metadata unset "+args[0]+" --key "+key)
-			}
 			if flagQuiet {
 				return nil
 			}
-			if !changed {
+			if !res.Changed {
 				fmt.Fprintln(os.Stderr, "(no change)")
 			}
-			return printMetadataJSON(os.Stdout, updated)
+			return printMetadataJSON(os.Stdout, res.Task.Metadata)
 		},
 	}
 	cmd.Flags().StringVar(&key, "key", "", "dotted JSON object path to remove")
@@ -237,66 +210,24 @@ func newMetadataResetVisitsCmd() *cobra.Command {
 			if stepName != "" && stepID != "" {
 				return errors.New("--step and --step-id are mutually exclusive")
 			}
-			s, closeFn, err := openStore(cmd.Context(), true)
+			cl, err := writeClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer closeFn()
-			dl := s.(*doltlite.Store)
-			ag := agent.New(dl.DB())
-			wfs := workflow.New(dl.DB(), ag)
-
-			resolvedID := stepID
-			if stepName != "" {
-				tk, err := getTaskOrErr(cmd.Context(), s, args[0])
-				if err != nil {
-					return err
-				}
-				if tk.WorkflowID == "" {
-					return fmt.Errorf("--step requires the task to have a workflow_id; use --step-id ID for orphaned counters")
-				}
-				st, err := wfs.FindStepByName(cmd.Context(), tk.WorkflowID, stepName)
-				if err != nil {
-					if errors.Is(err, workflow.ErrNotFound) {
-						return fmt.Errorf("step %q not found in this task's workflow", stepName)
-					}
-					return err
-				}
-				resolvedID = st.ID
-			}
-
-			updated, changed, err := s.UpdateMetadata(cmd.Context(), args[0], func(m map[string]any) error {
-				meta.MutateStepVisits(m, func(sv meta.StepVisits) {
-					if resolvedID == "" {
-						for k := range sv {
-							delete(sv, k)
-						}
-						return
-					}
-					delete(sv, resolvedID)
-				})
-				return nil
-			})
+			res, err := cl.MetadataResetVisits(cmd.Context(), args[0], stepName, stepID)
 			if err != nil {
-				if errors.Is(err, store.ErrNotFound) {
+				if apiErr, ok := rpcclient.IsAPIError(err); ok && apiErr.Code == rpcclient.CodeNotFound {
 					return fmt.Errorf("task not found: %s", args[0])
 				}
 				return err
 			}
-			var hint string
-			if resolvedID != "" {
-				hint = " --step-id " + resolvedID
-			}
-			if changed {
-				commitWrite(cmd.Context(), s, "metadata reset-visits "+args[0]+hint)
-			}
 			if flagQuiet {
 				return nil
 			}
-			if !changed {
+			if !res.Changed {
 				fmt.Fprintln(os.Stderr, "(no change)")
 			}
-			return printMetadataJSON(os.Stdout, updated)
+			return printMetadataJSON(os.Stdout, res.Task.Metadata)
 		},
 	}
 	cmd.Flags().StringVar(&stepName, "step", "", "reset only this step's counter (requires task.workflow_id)")
@@ -306,46 +237,12 @@ func newMetadataResetVisitsCmd() *cobra.Command {
 
 // ---- internals -----------------------------------------------------------
 
-func getTaskOrErr(ctx context.Context, s store.Store, id string) (store.Task, error) {
-	tk, err := s.GetTask(ctx, id)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return store.Task{}, fmt.Errorf("task not found: %s", id)
-		}
-		return store.Task{}, err
-	}
-	return tk, nil
-}
-
-// splitMetadataKey splits a dotted path into its component parts.
-// Empty segments (from leading, trailing, or doubled dots) are an
-// error rather than silently dropped — the engine validates writes
-// under `step_visits` against pathParts[0], so accidental input like
-// `.step_visits.st-x` must not be reinterpreted as `step_visits.st-x`
-// and squeak past validation by accident. Returns the trimmed key
-// components or an error explaining the malformed input.
-func splitMetadataKey(k string) ([]string, error) {
-	trimmed := strings.TrimSpace(k)
-	if trimmed == "" {
-		return nil, errors.New("--key cannot be empty")
-	}
-	raw := strings.Split(trimmed, ".")
-	out := make([]string, 0, len(raw))
-	for _, p := range raw {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			return nil, fmt.Errorf("--key %q has an empty dotted segment; leading/trailing/doubled dots are not allowed", k)
-		}
-		out = append(out, p)
-	}
-	return out, nil
-}
-
 // parseSetValue resolves --value or --json-value into a parsed Go value.
 // When hasValue is true, valueArg is parsed as JSON if it starts with a
 // JSON-shape leading byte; otherwise it's treated as a string literal.
 // When jsonFile is non-empty, its contents (or stdin for "-") are
-// json.Unmarshal'd directly.
+// json.Unmarshal'd directly. The parsed value is sent to the daemon,
+// which performs the dotted-path descent + reserved-key validation.
 func parseSetValue(valueArg string, hasValue bool, jsonFile string) (any, error) {
 	if jsonFile != "" {
 		var data []byte
@@ -390,86 +287,6 @@ func parseSetValue(valueArg string, hasValue bool, jsonFile string) (any, error)
 	return valueArg, nil
 }
 
-// setMetadataPath stores `value` at the dotted `path` inside m,
-// creating intermediate JSON objects as needed. Errors when an
-// intermediate path element points at a non-object.
-func setMetadataPath(m map[string]any, path []string, value any) error {
-	cur := m
-	for i, key := range path[:len(path)-1] {
-		existing, ok := cur[key]
-		if !ok || existing == nil {
-			next := make(map[string]any)
-			cur[key] = next
-			cur = next
-			continue
-		}
-		nextMap, ok := existing.(map[string]any)
-		if !ok {
-			return fmt.Errorf("cannot descend into %q at path %s: not an object",
-				key, strings.Join(path[:i+1], "."))
-		}
-		cur = nextMap
-	}
-	cur[path[len(path)-1]] = value
-	return nil
-}
-
-// unsetMetadataPath removes the value at `path`. Returns true when a
-// removal actually happened. Empty parent objects along the path are
-// pruned bottom-up so the metadata column round-trips back to NULL
-// once the last key is gone.
-func unsetMetadataPath(m map[string]any, path []string) bool {
-	if len(path) == 0 {
-		return false
-	}
-	// Walk to the parent of the leaf, collecting the chain so we can
-	// prune empty containers afterwards.
-	chain := []map[string]any{m}
-	for _, key := range path[:len(path)-1] {
-		next, ok := chain[len(chain)-1][key].(map[string]any)
-		if !ok {
-			return false
-		}
-		chain = append(chain, next)
-	}
-	leafKey := path[len(path)-1]
-	parent := chain[len(chain)-1]
-	if _, ok := parent[leafKey]; !ok {
-		return false
-	}
-	delete(parent, leafKey)
-	// Prune empty containers, but never delete the root itself.
-	for i := len(chain) - 1; i > 0; i-- {
-		if len(chain[i]) > 0 {
-			break
-		}
-		parent := chain[i-1]
-		key := path[i-1]
-		delete(parent, key)
-	}
-	return true
-}
-
-// validateReservedWrite enforces the typed shape of engine-managed
-// keys. Today only `step_visits` is reserved; the engine refuses any
-// write that would put a non-integer leaf in there.
-func validateReservedWrite(path []string, value any) error {
-	if len(path) == 0 || path[0] != meta.StepVisitsKey {
-		return nil
-	}
-	switch len(path) {
-	case 1:
-		// Writing the entire step_visits object.
-		return meta.ValidateStepVisitsObject(value)
-	case 2:
-		// Writing one leaf inside step_visits.
-		return meta.ValidateStepVisitsLeaf(value)
-	default:
-		return fmt.Errorf("step_visits has a flat shape (step_id → int); cannot nest under %s",
-			strings.Join(path, "."))
-	}
-}
-
 // printMetadataJSON renders the metadata blob as stable pretty-printed
 // JSON. nil / empty maps render as `{}` so the output is always a valid
 // JSON object.
@@ -483,13 +300,19 @@ func printMetadataJSON(w io.Writer, m map[string]any) error {
 }
 
 // printVisitsPretty renders metadata.step_visits with step names + caps
-// resolved against the task's workflow. Falls back to bare step ids
-// when the lookup fails (e.g. orphaned counters from a dropped wf).
-func printVisitsPretty(ctx context.Context, w io.Writer, wfs *workflow.Store, tk store.Task) error {
-	sv := meta.GetStepVisits(tk.Metadata)
-	if len(sv) == 0 && len(tk.Metadata) == 0 {
+// resolved against the task's workflow (wf, possibly nil for orphaned
+// counters). Falls back to bare step ids when a step id is unknown.
+func printVisitsPretty(w io.Writer, wf *rpcclient.Workflow, md map[string]any) error {
+	sv := meta.GetStepVisits(md)
+	if len(sv) == 0 && len(md) == 0 {
 		fmt.Fprintln(w, "(no metadata)")
 		return nil
+	}
+	byID := map[string]rpcclient.WorkflowStep{}
+	if wf != nil {
+		for _, s := range wf.Steps {
+			byID[s.ID] = s
+		}
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	if len(sv) > 0 {
@@ -500,25 +323,23 @@ func printVisitsPretty(ctx context.Context, w io.Writer, wfs *workflow.Store, tk
 		}
 		sort.Strings(ids)
 		for _, id := range ids {
-			name, maxV, found := lookupStepNameAndCap(ctx, wfs, id)
-			label := id
+			st, found := byID[id]
+			label := "<unknown:" + id + ">"
 			if found {
-				label = name
-			} else {
-				label = "<unknown:" + id + ">"
+				label = st.Name
 			}
 			line := fmt.Sprintf("  %s\t%d", label, sv[id])
-			if maxV > 0 {
-				line += fmt.Sprintf(" / %d", maxV)
-				if sv[id] >= maxV {
+			if found && st.MaxVisits > 0 {
+				line += fmt.Sprintf(" / %d", st.MaxVisits)
+				if sv[id] >= st.MaxVisits {
 					line += "  *"
 				}
 			}
 			fmt.Fprintln(tw, line)
 		}
 	}
-	other := make(map[string]any, len(tk.Metadata))
-	for k, v := range tk.Metadata {
+	other := make(map[string]any, len(md))
+	for k, v := range md {
 		if k == meta.StepVisitsKey {
 			continue
 		}
@@ -537,53 +358,4 @@ func printVisitsPretty(ctx context.Context, w io.Writer, wfs *workflow.Store, tk
 		}
 	}
 	return tw.Flush()
-}
-
-// lookupStepNameAndCap resolves a step id to (name, max_visits, found)
-// via the workflow store. Used by the pretty renderer; safe to call
-// on orphan ids (returns found=false).
-func lookupStepNameAndCap(ctx context.Context, wfs *workflow.Store, stepID string) (string, int, bool) {
-	if wfs == nil || stepID == "" {
-		return "", 0, false
-	}
-	st, err := wfs.FindStepByID(ctx, stepID)
-	if err != nil {
-		return "", 0, false
-	}
-	return st.Name, st.MaxVisits, true
-}
-
-// renderVisitsSummary builds a single-line summary of step_visits for
-// the human `autosk show` renderer. Returns "" when no counters are
-// present. Format: `dev 3/5, review 5/5*, validator 1`.
-func renderVisitsSummary(ctx context.Context, wfs *workflow.Store, tk store.Task) string {
-	sv := meta.GetStepVisits(tk.Metadata)
-	if len(sv) == 0 {
-		return ""
-	}
-	ids := make([]string, 0, len(sv))
-	for k := range sv {
-		ids = append(ids, k)
-	}
-	sort.Strings(ids)
-	parts := make([]string, 0, len(ids))
-	for _, id := range ids {
-		name, maxV, found := lookupStepNameAndCap(ctx, wfs, id)
-		label := name
-		if !found {
-			label = "<unknown:" + id + ">"
-		}
-		var seg string
-		if maxV > 0 {
-			marker := ""
-			if sv[id] >= maxV {
-				marker = "*"
-			}
-			seg = fmt.Sprintf("%s %d/%d%s", label, sv[id], maxV, marker)
-		} else {
-			seg = fmt.Sprintf("%s %d", label, sv[id])
-		}
-		parts = append(parts, seg)
-	}
-	return strings.Join(parts, ", ")
 }

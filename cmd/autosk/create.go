@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,12 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"autosk/internal/agent"
-	"autosk/internal/render"
+	"autosk/internal/daemon/rpcclient"
 	"autosk/internal/store"
-	"autosk/internal/store/doltlite"
-	"autosk/internal/workflow"
-	"autosk/internal/worktree"
 )
 
 func newCreateCmd() *cobra.Command {
@@ -68,6 +63,18 @@ If --description is "-", the description is read from stdin.`,
 			if workflowArg != "" && agentArg != "" {
 				return errors.New("--workflow and --agent are mutually exclusive")
 			}
+			// Flag-combination checks stay client-side so the messages are
+			// identical without a daemon round-trip (the workflow resolution,
+			// worktree allocation + EnterStep + rollback all happen
+			// server-side in task.create).
+			if stepArg != "" {
+				switch {
+				case agentArg != "":
+					return errors.New("--step only applies with --workflow (single:<agent> workflows have a single step)")
+				case workflowArg == "":
+					return errors.New("--step requires --workflow")
+				}
+			}
 
 			if description == "-" {
 				b, err := io.ReadAll(os.Stdin)
@@ -77,149 +84,28 @@ If --description is "-", the description is read from stdin.`,
 				description = strings.TrimRight(string(b), "\n")
 			}
 
-			s, closeFn, err := openStore(cmd.Context(), true)
+			cl, err := writeClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer closeFn()
-			dl := s.(*doltlite.Store)
-			reg, err := openPackagesRegistry()
-			if err != nil {
-				return err
-			}
-			ag := agent.New(dl.DB()).WithResolver(reg)
-			wfStore := workflow.New(dl.DB(), ag)
-
-			// Resolve caller → author_id.
-			author, err := resolveCallerAgent(cmd.Context(), ag)
-			if err != nil {
-				return fmt.Errorf("resolve caller agent: %w", err)
-			}
-
-			task := store.Task{
+			t, err := cl.CreateTask(cmd.Context(), rpcclient.TaskCreateParams{
+				Source:      cliSource,
 				Title:       title,
 				Description: description,
-				Status:      store.StatusNew,
-				Priority:    priority,
-				AuthorID:    author.ID,
-			}
-
-			// Workflow assignment, if any. We always create the task as
-			// status='new' first and then call workflow.EnterStep so the
-			// workflow_id / current_step_id / status / step_visits land
-			// atomically and the entry-step visit counter goes through
-			// the cap-enforcement path. Note that hitting max_visits on
-			// the very first entry is essentially impossible (counter
-			// starts at 0 by definition for a fresh task), but the
-			// invariant "every entry into a workflow step bumps the
-			// counter" makes the engine's model uniform.
-			var (
-				entryWorkflowID, entryStepID string
-				isolatedWorkflow             bool
-			)
-			if workflowArg != "" || agentArg != "" {
-				if stepArg != "" && agentArg != "" {
-					return errors.New("--step only applies with --workflow (single:<agent> workflows have a single step)")
-				}
-				wf, entryStep, err := resolveWorkflowEntry(cmd.Context(), wfStore, ag, workflowArg, agentArg, stepArg)
-				if err != nil {
-					return err
-				}
-				entryWorkflowID = wf.ID
-				entryStepID = entryStep.ID
-				isolatedWorkflow = wf.Isolation == workflow.IsolationWorktree
-			} else if stepArg != "" {
-				return errors.New("--step requires --workflow")
-			}
-
-			t, err := s.CreateTask(cmd.Context(), task)
+				Priority:    &priority,
+				Blocks:      blocks,
+				BlockedBy:   blockedBy,
+				Workflow:    workflowArg,
+				Agent:       agentArg,
+				Step:        stepArg,
+				Caller:      callerAgentName(),
+			})
 			if err != nil {
 				return err
 			}
-			// Worktree allocation for isolated workflows. We do this
-			// AFTER CreateTask (so we have the task id) but BEFORE
-			// EnterStep — the daemon's first run for the task must see a
-			// ready worktree at the deterministic path. On failure we roll
-			// back the freshly-created task row so the user doesn't see a
-			// half-formed task in status='new'.
-			var (
-				wtAllocated bool
-				wtRoot      string
-				wtMgr       worktree.Manager
-			)
-			if entryStepID != "" && isolatedWorkflow {
-				root, perr := projectRootFromCwd()
-				if perr != nil {
-					_ = s.DeleteTask(cmd.Context(), t.ID)
-					return fmt.Errorf("create %s: resolve project root: %w", t.ID, perr)
-				}
-				wtMgr = worktree.NewManager()
-				if _, werr := wtMgr.Ensure(cmd.Context(), root, t.ID, ""); werr != nil {
-					_ = s.DeleteTask(cmd.Context(), t.ID)
-					return fmt.Errorf("create %s: allocate worktree: %w", t.ID, werr)
-				}
-				wtAllocated = true
-				wtRoot = root
-			}
-			if entryStepID != "" {
-				if err := workflow.EnterStep(cmd.Context(), s, wfStore, workflow.EnterStepInput{
-					TaskID:     t.ID,
-					StepID:     entryStepID,
-					WorkflowID: entryWorkflowID,
-				}); err != nil {
-					// CreateTask succeeded; EnterStep failed. Roll back
-					// the worktree we just allocated so the create path
-					// preserves its pre-isolation invariant of "failed
-					// create leaves no on-disk side effects". The hint
-					// `autosk cancel <id>` wouldn't clean it up otherwise:
-					// cleanupWorktreeOnTerminal bails on an empty
-					// workflow_id (the EnterStep failure means workflow_id
-					// never got stamped).
-					if wtAllocated {
-						// Reuse the outer wtMgr (already constructed for
-						// Ensure) so we don't accidentally split the
-						// per-(canonRoot, taskID) mutex across two
-						// managers in the same CLI invocation.
-						if _, terr := wtMgr.OnTerminal(cmd.Context(), wtRoot, t.ID); terr != nil {
-							fmt.Fprintf(os.Stderr, "warning: worktree rollback for %s failed: %v\n", t.ID, terr)
-						}
-					}
-					// The row exists in status='new' (no workflow_id
-					// stamped). Surface the orphan id in the error so the
-					// user can decide whether to cancel it or retry via
-					// `autosk enroll`.
-					return fmt.Errorf(
-						"created task %s but failed to enter the workflow: %w\n"+
-							"the task is in status='new'; you can drop it with `autosk cancel %s` or retry with `autosk enroll %s ...`",
-						t.ID, mapEnterStepError(err, t.ID), t.ID, t.ID,
-					)
-				}
-				// Reload to surface the stamped pointers in --json / show.
-				t, err = s.GetTask(cmd.Context(), t.ID)
-				if err != nil {
-					return err
-				}
-			}
-
-			// Edges.
-			if len(blocks) > 0 {
-				for _, otherID := range blocks {
-					if err := s.Block(cmd.Context(), otherID, t.ID); err != nil {
-						return fmt.Errorf("--blocks %s: %w", otherID, err)
-					}
-				}
-			}
-			if len(blockedBy) > 0 {
-				if err := s.Block(cmd.Context(), t.ID, blockedBy...); err != nil {
-					return fmt.Errorf("--blocked-by: %w", err)
-				}
-			}
-
-			commitWrite(cmd.Context(), s, "create "+t.ID)
 
 			if flagJSON {
-				opts := renderOptsForTask(cmd.Context(), wfStore, t)
-				return render.TaskJSONTo(os.Stdout, t, opts...)
+				return emitTaskWire(t)
 			}
 			fmt.Println(t.ID)
 			return nil
@@ -234,82 +120,4 @@ If --description is "-", the description is read from stdin.`,
 	cmd.Flags().StringVar(&agentArg, "agent", "", "shorthand for --workflow single:<name>; ensures the synthetic workflow exists")
 	cmd.Flags().StringVar(&stepArg, "step", "", "start at this step name instead of the workflow's first step (requires --workflow)")
 	return cmd
-}
-
-// resolveWorkflowEntry returns the workflow + entry step the task should
-// land on, given either --workflow NAME or --agent NAME. Exactly one of
-// the two must be non-empty (caller verifies that).
-//
-// If stepName is non-empty, the task enters at that step instead of the
-// workflow's first_step. stepName is only meaningful with --workflow;
-// callers must reject --agent + --step before getting here (single:<agent>
-// workflows have one step by construction, so the flag would be at best
-// redundant and at worst lie about an alternate entry point).
-func resolveWorkflowEntry(ctx context.Context, wfs *workflow.Store, ag *agent.Store, wfName, agentName, stepName string) (workflow.Workflow, workflow.Step, error) {
-	if wfName != "" {
-		w, err := wfs.GetByName(ctx, wfName)
-		if err != nil {
-			if errors.Is(err, workflow.ErrNotFound) {
-				return workflow.Workflow{}, workflow.Step{}, fmt.Errorf("workflow not found: %s", wfName)
-			}
-			return workflow.Workflow{}, workflow.Step{}, err
-		}
-		if stepName != "" {
-			st, err := stepByName(w, stepName)
-			if err != nil {
-				return workflow.Workflow{}, workflow.Step{}, err
-			}
-			return w, st, nil
-		}
-		st, err := stepByID(w, w.FirstStepID)
-		if err != nil {
-			return workflow.Workflow{}, workflow.Step{}, fmt.Errorf("first step missing in %s: %w", wfName, err)
-		}
-		return w, st, nil
-	}
-	// --agent NAME: ensure the agent exists, then ensure single:<name>.
-	// stepName must be empty here (caller-enforced); the single:<agent>
-	// workflow exposes exactly one step ("do") and there's nothing to pick.
-	if _, err := ag.EnsureByName(ctx, agentName); err != nil {
-		return workflow.Workflow{}, workflow.Step{}, fmt.Errorf("ensure agent %s: %w", agentName, err)
-	}
-	w, err := wfs.EnsureSingle(ctx, agentName)
-	if err != nil {
-		return workflow.Workflow{}, workflow.Step{}, fmt.Errorf("ensure single:%s: %w", agentName, err)
-	}
-	st, err := stepByID(w, w.FirstStepID)
-	if err != nil {
-		return workflow.Workflow{}, workflow.Step{}, fmt.Errorf("single:%s missing first step: %w", agentName, err)
-	}
-	return w, st, nil
-}
-
-// stepByID returns the step with the given id from a loaded Workflow.
-func stepByID(w workflow.Workflow, stepID string) (workflow.Step, error) {
-	for _, s := range w.Steps {
-		if s.ID == stepID {
-			return s, nil
-		}
-	}
-	return workflow.Step{}, fmt.Errorf("step %s not found in workflow %s", stepID, w.Name)
-}
-
-// stepByName returns the step with the given name from a loaded Workflow.
-// The error message lists the available step names so a typo on the CLI
-// surfaces the right alternatives without forcing a second `workflow show`.
-func stepByName(w workflow.Workflow, name string) (workflow.Step, error) {
-	names := make([]string, 0, len(w.Steps))
-	for _, s := range w.Steps {
-		if s.Name == name {
-			return s, nil
-		}
-		names = append(names, s.Name)
-	}
-	return workflow.Step{}, fmt.Errorf("step %q not found in workflow %s (available: %s)", name, w.Name, strings.Join(names, ", "))
-}
-
-// renderOptsForTask is a thin alias for taskRenderOpts so the older
-// callsite name keeps compiling.
-func renderOptsForTask(ctx context.Context, wfs *workflow.Store, t store.Task) []render.Option {
-	return taskRenderOpts(ctx, wfs, t)
 }

@@ -72,9 +72,15 @@ pub struct ExecNpm {
 
 impl Default for ExecNpm {
     fn default() -> Self {
-        ExecNpm {
-            bin: "npm".to_string(),
-        }
+        // `AUTOSK_NPM_BIN` overrides the `npm` binary on PATH. A test affordance
+        // (the Go CLI verb tests point it at a hermetic fake-npm that writes the
+        // same on-disk package shape) so agent install/uninstall + bootstrap stay
+        // offline + deterministic. Never set in production.
+        let bin = std::env::var("AUTOSK_NPM_BIN")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "npm".to_string());
+        ExecNpm { bin }
     }
 }
 

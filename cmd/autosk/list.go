@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"autosk/internal/daemon/rpcclient"
 	"autosk/internal/render"
 	"autosk/internal/store"
 )
@@ -24,27 +25,21 @@ func newListCmd() *cobra.Command {
 		Short:   "List tasks (default: open work — new, work, human)",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, closeFn, err := openStore(cmd.Context(), false)
-			if err != nil {
-				return err
-			}
-			defer closeFn()
+			var f rpcclient.TaskListFilter
 
-			f := store.ListFilter{Limit: limit}
-
-			// --status not given → backend default (open work).
+			// --status not given → daemon default (open work).
 			// --status all       → no filter.
 			// --status a,b,c     → those.
 			if len(statuses) > 0 {
 				if len(statuses) == 1 && strings.ToLower(statuses[0]) == "all" {
-					f.Statuses = []store.Status{} // explicit empty = no filter
+					f.Statuses = []string{} // explicit empty = no filter
 				} else {
 					for _, s := range statuses {
 						st := store.Status(strings.TrimSpace(s))
 						if !st.Valid() {
 							return fmt.Errorf("invalid status %q (valid: new, work, human, done, cancel, all)", s)
 						}
-						f.Statuses = append(f.Statuses, st)
+						f.Statuses = append(f.Statuses, string(st))
 					}
 				}
 			}
@@ -55,10 +50,21 @@ func newListCmd() *cobra.Command {
 				f.Priority = &priority
 			}
 
-			tasks, err := s.ListTasks(cmd.Context(), f)
+			cl, err := readClient(cmd.Context())
 			if err != nil {
 				return err
 			}
+			wtasks, err := cl.Tasks(cmd.Context(), f)
+			if err != nil {
+				return err
+			}
+			// --limit is applied client-side: the daemon's task.list returns
+			// the full ordered set (priority ASC, created_at ASC) and the
+			// CLI truncates, matching the old backend limit semantics.
+			if limit > 0 && len(wtasks) > limit {
+				wtasks = wtasks[:limit]
+			}
+			tasks := tasksFromWire(wtasks)
 			if flagJSON {
 				return render.TasksJSONTo(os.Stdout, tasks, nil)
 			}
