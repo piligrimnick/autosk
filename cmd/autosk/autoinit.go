@@ -9,8 +9,6 @@ import (
 	"strings"
 
 	"golang.org/x/term"
-
-	"autosk/internal/projectdb"
 )
 
 // EnvAutoInitSkipBootstrap, when set to a non-empty value, suppresses
@@ -30,11 +28,6 @@ const EnvAutoInitSkipBootstrap = "AUTOSK_AUTOINIT_SKIP_BOOTSTRAP"
 // (e.g. tmux, IDE terminals) but does not want the prompt.
 const EnvAutoInitAssumeYes = "AUTOSK_AUTOINIT_ASSUME_YES"
 
-// ErrAutoInitDeclined — the user said "n" at the interactive prompt.
-// openStore wraps this in a friendlier error before bubbling it up to
-// cobra.
-var ErrAutoInitDeclined = errors.New("user declined creating a new .autosk/db")
-
 // isInteractiveFn reports whether the current invocation has a real
 // terminal attached on both stdin (so we can read the answer) and
 // stderr (so the user can see the prompt). It is a package-level var
@@ -46,51 +39,6 @@ var isInteractiveFn = func() bool {
 // confirmReader is the source of the y/n reply. Defaults to os.Stdin;
 // tests swap it for an in-memory pipe.
 var confirmReader io.Reader = os.Stdin
-
-// resolveOrInitInteractive wraps projectdb.Resolve with an optional
-// y/n confirmation prompt before falling through to AutoInit.
-//
-// Behaviour:
-//
-//   - If a .autosk/db is discoverable (override, AUTOSK_DB, walk-up),
-//     it is returned with created=false. Same as projectdb.Resolve.
-//   - If AUTOSK_NO_AUTOINIT is set, returns projectdb.ErrAutoInitDisabled.
-//   - If the invocation is non-interactive (no TTY, --json, --quiet,
-//     AUTOSK_AUTOINIT_ASSUME_YES set), the function silently
-//     auto-creates the DB at <cwd>/.autosk/db and returns created=true.
-//     This preserves the pre-existing auto-init contract for scripts,
-//     tests, and the daemon.
-//   - Otherwise it prompts on stderr ("Create a new autosk database
-//     here? [Y/n]") and reads stdin. Empty answer / "y" / "yes"
-//     accepts; "n" / "no" returns ErrAutoInitDeclined; anything else
-//     re-prompts.
-//
-// Returns (path, created, error).
-func resolveOrInitInteractive(cwd, override string) (string, bool, error) {
-	if p, err := projectdb.Resolve(cwd, override); err == nil {
-		return p, false, nil
-	} else if !errors.Is(err, projectdb.ErrNotFound) {
-		return "", false, err
-	}
-
-	if os.Getenv(projectdb.EnvNoAutoInit) != "" {
-		return "", false, projectdb.ErrAutoInitDisabled
-	}
-
-	if shouldPromptForAutoInit() {
-		ok, err := promptCreateDB(cwd)
-		if err != nil {
-			return "", false, fmt.Errorf("read confirmation: %w", err)
-		}
-		if !ok {
-			return "", false, ErrAutoInitDeclined
-		}
-	}
-
-	// All gates passed: delegate the actual mkdir to projectdb so the
-	// on-disk layout lives in exactly one place.
-	return projectdb.ResolveOrInit(cwd, override)
-}
 
 // shouldPromptForAutoInit decides whether to surface the interactive
 // y/n prompt. Returns false when the output mode is machine-oriented

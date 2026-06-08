@@ -24,7 +24,8 @@ import (
 //     local doltlite store. autoskd is auto-spawned by the connector on first
 //     request (and runs migrations/bootstrap via project.init on a fresh dir).
 //   - Reads, writes, and the live job transcript tail all route to the daemon
-//     over the UDS; the TUI refreshes at --refresh.
+//     over the UDS. Panels refresh on the daemon's task-changed/project-changed
+//     push (no client-side poll); --refresh is the long safety re-sync floor.
 func newLazyCmd() *cobra.Command {
 	var (
 		sock        string
@@ -45,15 +46,17 @@ func newLazyCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&sock, "sock", "", "daemon socket path (default $AUTOSK_SOCK or ~/.autosk/daemon.sock)")
-	cmd.Flags().DurationVar(&refresh, "refresh", 2*time.Second, "panel refresh interval")
+	cmd.Flags().DurationVar(&refresh, "refresh", 2*time.Second,
+		"safety re-sync interval (panels update on the daemon push; floored to 30s while the push is active)")
 	cmd.Flags().BoolVar(&noChangelog, "no-changelog", false,
 		"suppress the first-run-of-a-new-release changelog popup (read-only; does not modify ~/.autosk/state.json)")
 	return cmd
 }
 
 // runLazyRPC runs the TUI against the autoskd-backed datasource (reads +
-// writes + the live transcript tail). autoskd is auto-spawned by the connector
-// on first request; the Go binary opens no local doltlite store.
+// writes + the live transcript tail + the task-changed/project-changed push).
+// autoskd is auto-spawned by the connector on first request; the Go binary
+// opens no local doltlite store.
 func runLazyRPC(ctx context.Context, sock string, refresh time.Duration, noChangelog bool) error {
 	cwd, err := getCwd()
 	if err != nil {

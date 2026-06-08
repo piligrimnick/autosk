@@ -1,0 +1,133 @@
+package rpcclient
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"sync"
+)
+
+// Notification is one server→client notification frame pushed to a connection
+// that issued task.subscribe. A single subscribe registers the connection in
+// the daemon's broadcast hub, which then pushes BOTH `task-changed` and
+// `project-changed` to it (see crates/autoskd/src/notify.rs). Params is the raw
+// payload: `task-changed` carries {root, db_path}, `project-changed` is empty.
+type Notification struct {
+	Method string          // "task-changed" | "project-changed"
+	Params json.RawMessage // raw notification params (kept opaque; callers refetch)
+}
+
+// NoteStream is an active task/project notification subscription over a
+// dedicated persistent connection. The daemon multiplexes the subscribe ack and
+// the server→client `task-changed`/`project-changed` notifications onto this one
+// line-delimited connection. Close terminates the subscription (best-effort
+// task.unsubscribe + connection close). Mirrors JobStream (stream.go).
+type NoteStream struct {
+	events    <-chan Notification
+	conn      net.Conn
+	selector  map[string]any
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+// Events is the stream of notification frames; it closes when the stream ends
+// (daemon disconnect, a subscribe error, or Close).
+func (s *NoteStream) Events() <-chan Notification { return s.events }
+
+// Close terminates the subscription. Idempotent.
+func (s *NoteStream) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.closeOnce.Do(func() {
+		// Best-effort unsubscribe so the daemon drops the hub registration
+		// promptly; closing the connection is the hard backstop (the daemon's
+		// per-connection reader breaks on EOF and unregisters).
+		_ = json.NewEncoder(s.conn).Encode(rpcRequest{
+			ID:     0,
+			Method: "task.unsubscribe",
+			Params: s.selector,
+		})
+		_ = s.conn.Close()
+		close(s.closed)
+	})
+	return nil
+}
+
+// Subscribe opens a persistent connection, subscribes to the project's
+// task-changed/project-changed notifications, and returns a stream of frames.
+// The caller MUST Close the stream. autoskd is auto-spawned on first use (the
+// connector handles dialing). A single `task.subscribe` registers the
+// connection for BOTH notification kinds (the daemon broadcasts both to every
+// notification-subscribed connection; see notify.rs).
+func (c *Client) Subscribe(ctx context.Context) (*NoteStream, error) {
+	conn, err := c.conn.Dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	subID := c.id.Add(1)
+	if err := json.NewEncoder(conn).Encode(rpcRequest{
+		ID:     subID,
+		Method: "task.subscribe",
+		Params: c.selector(nil),
+	}); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("autoskd task.subscribe: write: %w", err)
+	}
+	ch := make(chan Notification, 16)
+	s := &NoteStream{
+		events:   ch,
+		conn:     conn,
+		selector: c.selector(nil),
+		closed:   make(chan struct{}),
+	}
+	go s.readLoop(ch, subID)
+	// Honour caller cancellation: close the stream (and the connection) when the
+	// context is done so a long-lived subscription is reaped with the TUI.
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = s.Close()
+		case <-s.closed:
+		}
+	}()
+	return s, nil
+}
+
+// readLoop demultiplexes the shared connection: `task-changed`/`project-changed`
+// notifications are forwarded to the channel; the subscribe ack is ignored,
+// except that an error response to our subscribe ends the stream (so the
+// consumer's watch loop can fall back to its periodic re-sync). Self-reaps on
+// exit (deferred Close) so a daemon EOF or a subscribe error releases the
+// connection + the ctx-watcher goroutine without an external Close.
+func (s *NoteStream) readLoop(ch chan<- Notification, subID uint64) {
+	defer close(ch)
+	defer func() { _ = s.Close() }()
+	dec := json.NewDecoder(s.conn)
+	for {
+		var raw struct {
+			ID     uint64          `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+			Error  *RPCError       `json:"error"`
+		}
+		if err := dec.Decode(&raw); err != nil {
+			return // EOF / connection closed
+		}
+		switch raw.Method {
+		case "task-changed", "project-changed":
+			select {
+			case ch <- Notification{Method: raw.Method, Params: raw.Params}:
+			case <-s.closed:
+				return
+			}
+		case "":
+			// A response frame. The subscribe ack is ignored; an error response
+			// (method unsupported / project unresolved) ends the stream.
+			if raw.ID == subID && raw.Error != nil {
+				return
+			}
+		}
+	}
+}

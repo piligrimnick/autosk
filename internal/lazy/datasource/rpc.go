@@ -26,8 +26,12 @@ type RPC struct {
 // NewRPC wires a datasource over an autoskd client.
 func NewRPC(cli *rpcclient.Client) *RPC { return &RPC{cli: cli} }
 
-// Compile-time check that RPC satisfies the full TUI contract.
-var _ Datasource = (*RPC)(nil)
+// Compile-time check that RPC satisfies the full TUI contract, including the
+// optional Watcher push capability.
+var (
+	_ Datasource = (*RPC)(nil)
+	_ Watcher    = (*RPC)(nil)
+)
 
 // ---- reads ----------------------------------------------------------------
 
@@ -228,6 +232,36 @@ func (r *RPC) StreamLive(ctx context.Context, jobID string) (*LiveHandle, error)
 		}
 	}()
 	return NewLiveHandle(ch, func() error { return stream.Close() }), nil
+}
+
+// Watch opens a task-changed/project-changed subscription over the daemon's
+// task.subscribe stream and adapts the notification frames to the TUI's
+// ChangeEvent shape. The caller must Close the returned handle. This is the
+// server push that replaces lazy's former client-side 2s poll (plan §5): the
+// daemon emits `task-changed` eagerly after every write AND from a per-project
+// change poller (so its own executor-driven advances notify too), plus
+// `project-changed` on workflow/agent edits.
+func (r *RPC) Watch(ctx context.Context) (*WatchHandle, error) {
+	stream, err := r.cli.Subscribe(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan ChangeEvent, 16)
+	go func() {
+		defer close(ch)
+		for n := range stream.Events() {
+			kind := "task"
+			if n.Method == "project-changed" {
+				kind = "project"
+			}
+			select {
+			case ch <- ChangeEvent{Kind: kind}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return NewWatchHandle(ch, func() error { return stream.Close() }), nil
 }
 
 // ---- writes (Phase 3) -----------------------------------------------------

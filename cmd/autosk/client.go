@@ -81,6 +81,24 @@ func ensureProject(ctx context.Context, cl *rpcclient.Client, writeOK bool) erro
 	return nil
 }
 
+// projectDiscoverable reports whether a .autosk/db can be located for the
+// current cwd (honouring the --db / $AUTOSK_DB override). It is the daemon-era
+// analogue of "can openStore succeed here": verbs that act on a GLOBAL resource
+// (e.g. `agent uninstall`, which removes a package from the shared
+// ~/.autosk/packages prefix) use it to decide whether the project DB is even
+// available for an optional per-project check, instead of hard-failing when no
+// project is in scope. Any resolve error (including ErrNotFound) reports false,
+// mirroring the pre-daemon best-effort `openStore` that skipped the per-project
+// step on open failure.
+func projectDiscoverable() bool {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+	_, err = projectdb.Resolve(cwd, flagDB)
+	return err == nil
+}
+
 // cleanRPCError unwraps a daemon RPCError down to its bare message so the
 // CLI surfaces the daemon's (Go-identical) error text without the
 // `autoskd rpc error N:` transport prefix. Non-RPC errors pass through.

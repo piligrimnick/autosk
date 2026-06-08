@@ -52,7 +52,8 @@ type refreshResult struct {
 // active scope/filter chips, and posts the result back to the UI
 // thread via g.Update.
 //
-// Called on the 2s tick AND on demand (R key, after a write).
+// Called on the daemon's task-changed/project-changed push (the steady-state
+// driver), the long safety re-sync tick, AND on demand (R key, after a write).
 func (gu *Gui) refreshAll() {
 	timeout := 5 * gu.opts.Refresh
 	if timeout < 500*time.Millisecond {

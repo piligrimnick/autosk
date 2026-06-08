@@ -128,6 +128,19 @@ func newAgentInstallCmd() *cobra.Command {
 				cfg, _ = reg.Resolve(name)
 			}
 
+			// Custom-runner agents need the Node bootstrapper. The daemon's
+			// executor ensures it lazily at first spawn, but we mirror the
+			// pre-daemon CLI's eager install here (the CLI shares HOME with the
+			// local daemon) so an operator on a box where the runtime cannot be
+			// fetched finds out at install time, not at first job run. Best
+			// effort: a failure only downgrades to a warning.
+			runtimeStatus := ""
+			if regErr == nil && cfg.Runner != "" {
+				if rerr := reg.EnsureRuntime(ctx, ""); rerr != nil {
+					runtimeStatus = fmt.Sprintf("\nwarning: %s is a custom-runner agent but %s could not be installed: %v\nrun `autosk agent runtime install` once it is available.", name, pkgregistry.RuntimePackageName, rerr)
+				}
+			}
+
 			if flagQuiet {
 				return nil
 			}
@@ -143,15 +156,14 @@ func newAgentInstallCmd() *cobra.Command {
 				}
 				return json.NewEncoder(os.Stdout).Encode(out)
 			}
-			ver := entry.Version
-			if ver == "" {
-				ver = created.Version
-			}
-			fmt.Printf("installed %s@%s\n", name, ver)
+			fmt.Printf("installed %s@%s\n", name, entry.Version)
 			fmt.Printf("kind:       %s\n", kind)
 			fmt.Printf("agent_id:   %s\n", created.ID)
 			if regErr == nil {
 				fmt.Printf("install:    %s\n", reg.PackageInstallDir(name))
+			}
+			if runtimeStatus != "" {
+				fmt.Println(runtimeStatus)
 			}
 			return nil
 		},
@@ -162,10 +174,22 @@ func newAgentInstallCmd() *cobra.Command {
 
 // newAgentUninstallCmd: `autosk agent uninstall <pkg>`.
 //
-// Delegates to the daemon's agent.uninstall, which refuses if any workflow step
-// references the agent (unless --force) and shells `npm uninstall`. Does NOT
-// delete the agents row (workflows already reference it); users wanting a hard
-// remove can `autosk sql --write` directly.
+// Agent packages are a GLOBAL resource (~/.autosk/packages); the only thing
+// that needs the project DB is the per-project step-reference guard, and
+// --force bypasses it. So:
+//
+//   - with --force, or when no project is discoverable, the package is removed
+//     client-side via the shared packages registry (the CLI shares HOME with
+//     the local daemon). This preserves the pre-daemon behaviour, where the
+//     store was skipped under --force and best-effort on open failure, so
+//     `agent uninstall @foo/bar` and `… --force` keep working outside a
+//     project instead of hard-failing with "no .autosk/db".
+//   - otherwise the verb routes through the daemon's agent.uninstall, which
+//     refuses if any workflow step references the agent and shells
+//     `npm uninstall`.
+//
+// Neither path deletes the agents row (workflows already reference it); users
+// wanting a hard remove can `autosk sql --write` directly.
 func newAgentUninstallCmd() *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
@@ -175,6 +199,25 @@ func newAgentUninstallCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := strings.TrimSpace(args[0])
 			ctx := cmd.Context()
+
+			// --force (no ref check needed) or no project in scope → remove the
+			// global package directly, no DB required.
+			if force || !projectDiscoverable() {
+				reg, err := openPackagesRegistry()
+				if err != nil {
+					return err
+				}
+				if err := reg.Uninstall(ctx, name); err != nil {
+					return err
+				}
+				if !flagQuiet {
+					fmt.Printf("uninstalled %s\n", name)
+				}
+				return nil
+			}
+
+			// In-project, no --force: let the daemon run the step-reference
+			// guard against the project DB before uninstalling.
 			cl, err := readClient(ctx)
 			if err != nil {
 				return err

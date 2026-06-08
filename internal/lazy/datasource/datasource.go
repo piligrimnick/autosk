@@ -232,6 +232,50 @@ func NewLiveHandle(ch <-chan LiveEvent, closeFn func() error) *LiveHandle {
 	return &LiveHandle{Events: ch, close: closeFn}
 }
 
+// ChangeEvent is one daemon push delivered by a Watcher: a signal that the
+// project's task/job state (Kind=="task") or its workflow/agent registry
+// (Kind=="project") changed and the dashboard should re-fetch. It carries no
+// diff — the consumer re-reads the affected panels. Backed by the daemon's
+// task-changed/project-changed notifications (plan §5).
+type ChangeEvent struct {
+	Kind string // "task" | "project"
+}
+
+// WatchHandle is the active task-changed/project-changed subscription returned
+// by Watcher.Watch.
+type WatchHandle struct {
+	Events <-chan ChangeEvent
+	close  func() error
+}
+
+// Close terminates the subscription. Idempotent.
+func (h *WatchHandle) Close() error {
+	if h == nil || h.close == nil {
+		return nil
+	}
+	return h.close()
+}
+
+// NewWatchHandle constructs a WatchHandle; used by RPC.Watch (rpc.go) and the
+// TUI's watch-loop tests.
+func NewWatchHandle(ch <-chan ChangeEvent, closeFn func() error) *WatchHandle {
+	return &WatchHandle{Events: ch, close: closeFn}
+}
+
+// Watcher is the OPTIONAL push-notification capability a Datasource may
+// implement. The RPC datasource (rpc.go) implements it over the daemon's
+// task.subscribe stream so the TUI refreshes on a server push instead of a
+// fixed poll (plan §5: "replace lazy's client-side 2s poll with a server
+// push"). A datasource that does NOT implement Watcher (e.g. the test fakes)
+// makes the TUI fall back to its periodic safety re-sync. Kept separate from
+// Datasource so adding push refresh does not force every fake to grow a method.
+type Watcher interface {
+	// Watch opens a task-changed/project-changed subscription. The handle
+	// delivers a ChangeEvent on each daemon push until the stream ends (daemon
+	// disconnect / subscribe error) or the caller Closes it. Returns promptly.
+	Watch(ctx context.Context) (*WatchHandle, error)
+}
+
 // UpdateIsolationReport is the lazy-side mirror of
 // workflow.UpdateIsolationReport. We keep a parallel struct so the
 // TUI never imports internal/workflow directly (the datasource

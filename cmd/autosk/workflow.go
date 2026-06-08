@@ -345,6 +345,12 @@ func renderWorkflowUpdateError(err error, rep workflow.UpdateIsolationReport) er
 		for _, e := range rep.RolledBackEnsures {
 			fmt.Fprintf(&b, "\n  %s  %s", e.TaskID, e.Path)
 		}
+	}
+	// Mirror the pre-daemon ErrEnsureFailed branch: the reassurance line is
+	// emitted for every ensure-failure case (FailedTask set), including the
+	// FIRST-task failure where nothing has been applied yet so
+	// RolledBackEnsures is still empty.
+	if rep.FailedTask != "" {
 		b.WriteString("\n(workflows.isolation left unchanged)")
 	}
 	return errors.New(cleanRPCError(err).Error() + b.String())

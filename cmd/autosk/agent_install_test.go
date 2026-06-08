@@ -265,6 +265,50 @@ func TestAgentUninstall_RefusesWhenReferenced(t *testing.T) {
 	}
 }
 
+// TestAgentUninstall_NoProjectAndForce locks in the global-resource semantics:
+// agent packages live in the shared ~/.autosk/packages prefix, so uninstall
+// must NOT require a discoverable project DB. Both the no-project path and the
+// --force path (which bypasses the per-project step-reference guard) succeed
+// client-side, matching the pre-daemon best-effort behaviour. The with-project
+// refusal path is covered by TestAgentUninstall_RefusesWhenReferenced.
+func TestAgentUninstall_NoProjectAndForce(t *testing.T) {
+	withIsolatedPackagesPrefix(t)
+	// Install into the (global, shared) packages prefix via a real project.
+	proj := t.TempDir()
+	if _, err := runRoot(t, proj, "init", "--skip-bootstrap"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runRoot(t, proj, "agent", "install", "@autosk/dev-fixture"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Uninstall from a directory with NO discoverable project. Used to succeed
+	// (store skipped on open failure); must keep succeeding instead of erroring
+	// with "no .autosk/db".
+	noProj := t.TempDir()
+	out, err := runRoot(t, noProj, "agent", "uninstall", "@autosk/dev-fixture")
+	if err != nil {
+		t.Fatalf("uninstall outside a project should succeed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "uninstalled") {
+		t.Errorf("missing 'uninstalled' in output:\n%s", out)
+	}
+
+	// Reinstall, then verify --force also works outside a project (no DB needed
+	// to bypass the reference guard).
+	if _, err := runRoot(t, proj, "agent", "install", "@autosk/dev-fixture"); err != nil {
+		t.Fatal(err)
+	}
+	noProj2 := t.TempDir()
+	out, err = runRoot(t, noProj2, "agent", "uninstall", "@autosk/dev-fixture", "--force")
+	if err != nil {
+		t.Fatalf("--force uninstall outside a project should succeed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "uninstalled") {
+		t.Errorf("missing 'uninstalled' in output:\n%s", out)
+	}
+}
+
 func TestAgentInstall_RejectsBadPackageName(t *testing.T) {
 	withIsolatedPackagesPrefix(t)
 	dir := t.TempDir()

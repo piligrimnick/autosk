@@ -258,10 +258,26 @@ func Run(ctx context.Context, opts Options) error {
 		)
 	}
 
-	// Kick an initial refresh + adaptive ticker. Both go via
-	// g.OnWorker / g.Update — no goroutine-per-panel.
+	// Kick an initial refresh, then choose the steady-state refresh driver.
+	// Both go via g.OnWorker / g.Update — no goroutine-per-panel.
 	gu.scheduleRefresh()
-	go gu.adaptiveTickLoop(opts.Refresh)
+	// Preferred driver: the daemon's task-changed/project-changed push (plan
+	// §5) — panels update on a server push instead of a fixed poll. A
+	// long-interval re-sync still runs as a backstop against a notification
+	// dropped across a daemon reconnect; it is floored to safetyResyncInterval
+	// so the steady state is the push, never the former 2s poll. A datasource
+	// without the Watcher capability (the test fakes) falls back to the
+	// --refresh poll.
+	if w, ok := opts.Datasource.(datasource.Watcher); ok {
+		safety := opts.Refresh
+		if safety < safetyResyncInterval {
+			safety = safetyResyncInterval
+		}
+		go gu.watchLoop(w)
+		go gu.adaptiveTickLoop(safety)
+	} else {
+		go gu.adaptiveTickLoop(opts.Refresh)
+	}
 	go gu.spinnerLoop()
 
 	// gocui's MainLoop is hostile to non-fatal mid-flush errors: a
@@ -288,25 +304,117 @@ func Run(ctx context.Context, opts Options) error {
 	return nil
 }
 
-// adaptiveTickLoop schedules refreshes on a self-adjusting cadence.
+// safetyResyncInterval is the floor cadence the adaptive tick loop runs at
+// when the daemon push (task-changed/project-changed) is the steady-state
+// refresh driver. The push covers normal updates within milliseconds; this
+// long re-sync only catches a notification dropped across a daemon reconnect,
+// so it is deliberately well above the former 2s poll. A user --refresh larger
+// than this is honoured; anything smaller is floored to it so push mode never
+// degenerates into a tight client-side poll.
+const safetyResyncInterval = 30 * time.Second
+
+// watchBackoffMin / watchBackoffMax bound watchLoop's reconnect backoff.
+const (
+	watchBackoffMin = 250 * time.Millisecond
+	watchBackoffMax = 5 * time.Second
+)
+
+// watchLoop is the push-driven refresh driver (plan §5): it subscribes to the
+// daemon's task-changed/project-changed notifications and calls scheduleRefresh
+// on each one, so panels update on a server push instead of a fixed poll. The
+// subscription is re-established (with capped exponential backoff) whenever it
+// drops — a daemon restart, an idle auto-spawn cycle, or a transient
+// disconnect — and a refresh is forced on every (re)connect so nothing is
+// missed across the gap. scheduleRefresh already coalesces a burst into a
+// single trailing refresh, so a flurry of notifications can't queue redundant
+// work. Runs in a goroutine started by Run() only when the datasource
+// implements datasource.Watcher; exits on stopRefresh / ctx cancel (the same
+// shutdown signal the other loops honour).
+func (gu *Gui) watchLoop(w datasource.Watcher) {
+	backoff := watchBackoffMin
+	for {
+		select {
+		case <-gu.stopRefresh:
+			return
+		case <-gu.ctx.Done():
+			return
+		default:
+		}
+		handle, err := w.Watch(gu.ctx)
+		if err == nil {
+			backoff = watchBackoffMin
+			// Re-sync on (re)connect: catch any change that landed while we
+			// were not subscribed.
+			gu.scheduleRefresh()
+			gu.consumeWatch(handle)
+			_ = handle.Close()
+		}
+		// Pause before (re)connecting so a wedged/absent daemon can't spin the
+		// loop; a healthy long-lived stream pays only this 250ms gap on
+		// reconnect. Errors grow the backoff up to the cap.
+		if !gu.watchSleep(backoff) {
+			return
+		}
+		if err != nil {
+			backoff *= 2
+			if backoff > watchBackoffMax {
+				backoff = watchBackoffMax
+			}
+		}
+	}
+}
+
+// consumeWatch forwards each notification to scheduleRefresh until the stream
+// closes (daemon disconnect) or the gui stops. Returns so watchLoop can
+// reconnect (stream close) or exit (stop).
+func (gu *Gui) consumeWatch(handle *datasource.WatchHandle) {
+	for {
+		select {
+		case <-gu.stopRefresh:
+			return
+		case <-gu.ctx.Done():
+			return
+		case _, ok := <-handle.Events:
+			if !ok {
+				return // stream closed; watchLoop reconnects
+			}
+			gu.scheduleRefresh()
+		}
+	}
+}
+
+// watchSleep waits d, returning false if the gui is shutting down (so the
+// caller stops looping) and true if the full delay elapsed.
+func (gu *Gui) watchSleep(d time.Duration) bool {
+	select {
+	case <-gu.stopRefresh:
+		return false
+	case <-gu.ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
+// adaptiveTickLoop schedules a periodic refresh on a self-adjusting cadence.
+// It is the steady-state driver ONLY when the datasource has no push
+// capability; when the daemon push (watchLoop) is active this loop runs at the
+// long safetyResyncInterval purely as a backstop (a missed notification across
+// a reconnect), not as the primary refresh path.
 //
-// The classic time.NewTicker(base) loop has a nasty failure mode
-// against doltlite: when the chunk-store WAL grows long enough that
-// each fetchRefresh takes longer than the 2s tick, the worker queue
-// stays permanently saturated. Each refresh re-reads ~6 panels, each
-// panel cursor-open triggers btreeRefreshFromDisk → csReplayWal, and
-// the whole thing pegs a core indefinitely (see the post-mortem in
+// The classic time.NewTicker(base) loop has a nasty failure mode against a
+// slow datasource: when each fetchRefresh takes longer than the tick, the
+// worker queue stays permanently saturated. Each refresh re-reads ~6 panels
+// and the whole thing pegs a core indefinitely (see the post-mortem in
 // docs/daemon.md "100%-CPU lazy").
 //
-// The adaptive loop sleeps for max(base, elapsed*2) up to a 30s cap,
-// so a slow datasource self-throttles instead of melting the CPU.
-// Once compaction (autosk gc / the daemon's per-project compactor)
-// shrinks the chunk-store again, the next refresh comes back fast,
-// lastFetchNS drops, and the loop snaps back to the base cadence on
-// the very next iteration.
+// The adaptive loop sleeps for max(base, elapsed*2) up to a 30s cap, so a slow
+// datasource self-throttles instead of melting the CPU; once it speeds up
+// again, lastFetchNS drops and the loop snaps back to the base cadence on the
+// very next iteration.
 //
-// Runs in a goroutine; nothing touches the gocui screen here —
-// Refresh is g.Update-driven.
+// Runs in a goroutine; nothing touches the gocui screen here — Refresh is
+// g.Update-driven.
 func (gu *Gui) adaptiveTickLoop(base time.Duration) {
 	if base <= 0 {
 		base = 2 * time.Second

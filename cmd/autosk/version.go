@@ -88,7 +88,10 @@ func tryReadSchemaVersion(ctx context.Context) (int, string, bool) {
 	}
 	cctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
-	rows, err := cl.SQLQuery(cctx, "SELECT MAX(version) FROM schema_migrations")
+	// COALESCE(..., 0) preserves the old migrations.CurrentVersion rendering
+	// for an empty schema_migrations table (0, ok=true) instead of MAX()'s NULL
+	// → nil → ok=false → "-". A real initialized DB always has ≥1 row.
+	rows, err := cl.SQLQuery(cctx, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
 	if err != nil {
 		return 0, path, false
 	}
