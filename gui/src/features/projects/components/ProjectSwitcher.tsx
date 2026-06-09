@@ -1,6 +1,7 @@
-// ProjectSwitcher — the center-header dropdown (redesign plan §8.2, decision
-// #7). Shows the active project name; the menu switches project, removes one
-// from the registry, and opens the add/init modal.
+// ProjectSwitcher — the titlebar (status bar) dropdown, to the right of the
+// macOS traffic lights (redesign plan §8.2, decision #7). Shows the active
+// project name; the menu switches project, removes one from the registry, and
+// opens the add/init modal.
 
 import { useState } from "react";
 import { useStore } from "@/state/store";

@@ -11,6 +11,7 @@
 import { useStore } from "@/state/store";
 import { isMacPlatform } from "../utils/platform";
 import { WindowCaptionControls } from "./WindowCaptionControls";
+import { ProjectSwitcher } from "@/features/projects/components/ProjectSwitcher";
 
 export function Titlebar() {
   const { state, effects } = useStore();
@@ -18,7 +19,7 @@ export function Titlebar() {
 
   return (
     <header className={`titlebar ${isMacPlatform() ? "titlebar-mac" : ""}`} data-tauri-drag-region>
-      <span className="titlebar-brand">autosk</span>
+      <ProjectSwitcher />
       <span className="titlebar-spacer" />
 
       <div className="titlebar-status" data-tauri-drag-region="false">
