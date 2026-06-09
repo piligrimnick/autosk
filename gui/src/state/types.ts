@@ -44,6 +44,9 @@ export interface TaskExtras {
 /** Which overlay modal is open (Agents / Settings), if any. */
 export type ModalKind = "agents" | "settings" | null;
 
+/** Which sidebar accordion panel is expanded/active (lazygit-style stack). */
+export type SidebarPanel = "tasks" | "sessions" | "workflows";
+
 /** The whole app state. */
 export interface AppState {
   projects: ProjectInfo[];
@@ -67,8 +70,8 @@ export interface AppState {
   /** The job currently subscribed for a live tail (one at a time in v1). */
   subscribedJob: string | null;
 
-  /** Which overlay modal is open, if any. */
-  ui: { modal: ModalKind };
+  /** Overlay modal + the expanded sidebar accordion panel. */
+  ui: { modal: ModalKind; sidebarPanel: SidebarPanel };
   daemon: DaemonStatus;
   settings: AppSettings | null;
   /** A transient banner message (errors / confirmations). */
@@ -105,7 +108,7 @@ export function initialState(): AppState {
     messagesByJob: {},
     seenEventId: {},
     subscribedJob: null,
-    ui: { modal: null },
+    ui: { modal: null, sidebarPanel: "tasks" },
     daemon: { connected: false, mode: "local" },
     settings: null,
     notice: null,
@@ -120,6 +123,7 @@ export type Action =
   | { type: "daemon/status"; status: DaemonStatus }
   | { type: "notice/set"; notice: AppState["notice"] }
   | { type: "ui/modal"; modal: ModalKind }
+  | { type: "ui/sidebarPanel"; panel: SidebarPanel }
   // projects
   | { type: "projects/loaded"; projects: ProjectInfo[] }
   | { type: "project/select"; root: string | null }

@@ -5,7 +5,7 @@
 // of (state, action). An action may be handled by more than one slice (e.g.
 // `task/extrasLoaded` updates both tasks and the normalized job map).
 
-import type { Action, AppState, ProjectSlice } from "./types";
+import type { Action, AppState, ProjectSlice, SidebarPanel } from "./types";
 import { emptyExtras, emptyProjectSlice } from "./types";
 import { NO_SELECTION } from "./selection";
 
@@ -29,6 +29,8 @@ function uiSlice(state: AppState, action: Action): AppState {
       return { ...state, notice: action.notice };
     case "ui/modal":
       return { ...state, ui: { ...state.ui, modal: action.modal } };
+    case "ui/sidebarPanel":
+      return { ...state, ui: { ...state.ui, sidebarPanel: action.panel } };
     default:
       return state;
   }
@@ -92,11 +94,24 @@ function projectsSlice(state: AppState, action: Action): AppState {
   }
 }
 
-/** Unified entity selection. */
+/** Unified entity selection. Selecting an entity also auto-expands the matching
+ * sidebar accordion panel (task→tasks, session→sessions, workflow→workflows);
+ * an empty selection leaves the active panel as-is. */
 function selectionSlice(state: AppState, action: Action): AppState {
   switch (action.type) {
-    case "selection/set":
-      return { ...state, selection: action.selection };
+    case "selection/set": {
+      const sel = action.selection;
+      const panel: SidebarPanel | null =
+        sel.kind === "task"
+          ? "tasks"
+          : sel.kind === "session"
+            ? "sessions"
+            : sel.kind === "workflow"
+              ? "workflows"
+              : null;
+      const ui = panel ? { ...state.ui, sidebarPanel: panel } : state.ui;
+      return { ...state, selection: sel, ui };
+    }
     default:
       return state;
   }

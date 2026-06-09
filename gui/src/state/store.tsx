@@ -24,7 +24,7 @@ import {
 } from "@/services/events";
 import type { Job } from "@/types";
 import { rootReducer } from "./reducer";
-import { type Action, type AppState, type ModalKind, initialState } from "./types";
+import { type Action, type AppState, type ModalKind, type SidebarPanel, initialState } from "./types";
 import { NO_SELECTION, selectedSessionJobId, selectedTaskId } from "./selection";
 
 interface Effects {
@@ -39,6 +39,7 @@ interface Effects {
   selectWorkflow(name: string | null): void;
   clearSelection(): void;
   refreshTask(taskId: string, forceJobId?: string): Promise<void>;
+  setSidebarPanel(panel: SidebarPanel): void;
   openModal(modal: ModalKind): void;
   setNotice(notice: AppState["notice"]): void;
   resetLiveTail(): void;
@@ -281,6 +282,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         } catch (err) {
           dispatch({ type: "notice/set", notice: { kind: "error", text: String((err as Error).message ?? err) } });
         }
+      },
+
+      setSidebarPanel(panel) {
+        dispatch({ type: "ui/sidebarPanel", panel });
       },
 
       openModal(modal) {

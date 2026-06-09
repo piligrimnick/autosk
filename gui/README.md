@@ -12,9 +12,11 @@ The frontend is transport-agnostic: only the Rust backend switches.
 > [`docs/plans/20260607-Rust-Daemon-Tauri-GUI.md`](../docs/plans/20260607-Rust-Daemon-Tauri-GUI.md)
 > (§6, §9 Phase 4). Final doc/README cutover and CI release gates are Phase 5.
 >
-> The desktop UI has since been rebuilt as a **frameless 3-panel workspace**
-> (sessions · polymorphic center · tasks + workflows); design + phasing in
-> [`docs/plans/20260609-tauri-gui-redesign.md`](../docs/plans/20260609-tauri-gui-redesign.md).
+> The desktop UI is a **frameless two-panel workspace** — a left sidebar that
+> stacks Tasks / Sessions / Workflows as a lazygit-style accordion, and a main
+> panel hosting the polymorphic entity view + composer. (Earlier design notes
+> for the superseded 3-panel layout live in
+> [`docs/plans/20260609-tauri-gui-redesign.md`](../docs/plans/20260609-tauri-gui-redesign.md).)
 
 ## Layout
 
@@ -26,7 +28,7 @@ gui/
 ├── scripts/
 │   └── check-ipc-discipline.mjs   # guard: single invoke + single listen site
 ├── src/                        # React frontend (feature-folder layout)
-│   ├── main.tsx, App.tsx       # App mounts the frameless 3-panel AppShell
+│   ├── main.tsx, App.tsx       # App mounts the frameless two-panel AppShell
 │   ├── types.ts                # wire types (mirror crates/autosk-proto)
 │   ├── services/
 │   │   ├── ipc.ts              # the ONLY `invoke` site (typed shim per RPC method)
@@ -88,12 +90,15 @@ The design mirrors the CodexMonitor blueprint ("shared core + thin adapters"):
   transcript tail follows either the selected session's job or, when a task is
   selected, the task's newest running job (one `job.subscribe` at a time).
 - **UI shell.** A frameless window (macOS `titleBarStyle: Overlay`; Windows
-  `decorations:false` + custom caption controls) over a 3-panel layout: a
-  **Sessions** list (all jobs, animated status dots) on the left, a polymorphic
-  **center** (session transcript / task sheet / read-only workflow) with one
-  entity-aware composer, and a **Tasks + Workflows** stack on the right. A
-  titlebar hosts the connection indicator and the Agents/Settings modals; the
-  center header hosts the project switcher (switch / add / init / remove).
+  `decorations:false` + custom caption controls) over a two-panel layout: a
+  left **sidebar** that stacks **Tasks**, **Sessions** (all jobs, animated
+  status dots) and **Workflows** as a lazygit-style accordion — the active panel
+  grows (3:1 weight) while the others collapse, and selecting an entity
+  auto-expands its matching panel — and a **main panel** with the polymorphic
+  entity view (task sheet with comments / session transcript / read-only
+  workflow) plus one entity-aware composer. A titlebar hosts the connection
+  indicator and the Agents/Settings modals; the main-panel header hosts the
+  project switcher (switch / add / init / remove).
 
 Both invariants are enforced by `scripts/check-ipc-discipline.mjs` (run as part
 of `npm run typecheck`) and an eslint `no-restricted-imports` rule, so a stray

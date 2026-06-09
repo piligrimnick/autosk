@@ -138,6 +138,37 @@ describe("selection + sessions slices", () => {
     expect(s.jobs["b"]).toBeDefined();
   });
 
+  it("sidebar panel: ui/sidebarPanel sets the active accordion panel", () => {
+    let s = initialState();
+    expect(s.ui.sidebarPanel).toBe("tasks"); // default
+    s = rootReducer(s, { type: "ui/sidebarPanel", panel: "workflows" });
+    expect(s.ui.sidebarPanel).toBe("workflows");
+  });
+
+  it("sidebar panel: selecting an entity auto-expands the matching panel", () => {
+    let s = initialState();
+    s = rootReducer(s, { type: "selection/set", selection: { kind: "session", jobId: "j1" } });
+    expect(s.ui.sidebarPanel).toBe("sessions");
+    s = rootReducer(s, { type: "selection/set", selection: { kind: "workflow", name: "wf" } });
+    expect(s.ui.sidebarPanel).toBe("workflows");
+    s = rootReducer(s, { type: "selection/set", selection: { kind: "task", taskId: "t1" } });
+    expect(s.ui.sidebarPanel).toBe("tasks");
+  });
+
+  it("sidebar panel: clearing the selection leaves the active panel unchanged", () => {
+    let s = rootReducer(initialState(), { type: "ui/sidebarPanel", panel: "workflows" });
+    s = rootReducer(s, { type: "selection/set", selection: { kind: "none" } });
+    expect(s.ui.sidebarPanel).toBe("workflows");
+    expect(s.selection).toEqual({ kind: "none" });
+  });
+
+  it("sidebar panel: opening a modal does not disturb the active panel", () => {
+    let s = rootReducer(initialState(), { type: "ui/sidebarPanel", panel: "sessions" });
+    s = rootReducer(s, { type: "ui/modal", modal: "settings" });
+    expect(s.ui.sidebarPanel).toBe("sessions");
+    expect(s.ui.modal).toBe("settings");
+  });
+
   it("job/upsert prepends a new job to the active project's session order, idempotently", () => {
     const a = jobRow("a", "2024-01-01T00:00:00Z");
     let s: AppState = {

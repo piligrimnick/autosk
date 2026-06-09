@@ -1,7 +1,8 @@
-// AppShell — the top-level frameless 3-panel layout (redesign plan §4, §5).
-//   titlebar (drag strip) / notice / [ sessions | center | tasks+workflows ]
-// Phase 3 wires the Sessions panel (left) + the polymorphic center; the right
-// panel (Tasks + Workflows) is filled in Phase 5.
+// AppShell — the top-level frameless two-panel layout:
+//   titlebar (drag strip) / notice / [ sidebar accordion | main ]
+// The left sidebar stacks Tasks / Sessions / Workflows lazygit-style: the active
+// panel grows (3:1 weight) while the others collapse. The main panel is the
+// polymorphic entity view (task | session | workflow | empty) + composer.
 
 import { useStore } from "@/state/store";
 import { NoticeBar } from "@/components/NoticeBar";
@@ -21,12 +22,12 @@ export function AppShell() {
       <Titlebar />
       <NoticeBar />
       <div className="app-panels">
-        <SessionsPanel />
-        <CenterPanel />
-        <aside className="panel panel-right">
+        <aside className="sidebar-stack">
           <TasksPanel />
+          <SessionsPanel />
           <WorkflowsPanel />
         </aside>
+        <CenterPanel />
       </div>
       {state.ui.modal === "settings" && <SettingsModal onClose={closeModal} />}
       {state.ui.modal === "agents" && <AgentsModal onClose={closeModal} />}

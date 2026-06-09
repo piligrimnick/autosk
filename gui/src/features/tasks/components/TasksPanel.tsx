@@ -1,6 +1,6 @@
-// TasksPanel — the top half of the right panel (redesign plan §8.5): tasks
-// grouped by status, lazy-style, with a New-task action. Selecting a task shows
-// its sheet in the center.
+// TasksPanel — a sidebar accordion panel: tasks grouped by status, lazy-style,
+// with a New-task action. Selecting a task shows its sheet in the main panel.
+// Clicking the header (or a task row) expands this panel and collapses the rest.
 
 import { useState } from "react";
 import { useStore } from "@/state/store";
@@ -11,17 +11,20 @@ import { NewTaskModal } from "./NewTaskModal";
 import { TaskRow } from "./TaskRow";
 
 export function TasksPanel() {
-  const { state } = useStore();
+  const { state, effects } = useStore();
   const cwd = state.activeProject ?? "";
   const tasks = activeTasks(state);
   const groups = groupByStatus(tasks);
   const activity = taskActivityMap(state);
+  const active = state.ui.sidebarPanel === "tasks";
   const [creating, setCreating] = useState(false);
 
   return (
-    <section className="panel-section panel-section-tasks">
+    <section className={`sidebar-panel${active ? " is-active" : ""}`}>
       <PanelHeader
         title="Tasks"
+        active={active}
+        onActivate={() => effects.setSidebarPanel("tasks")}
         actions={
           cwd ? (
             <button className="btn-ghost" title="New task" onClick={() => setCreating(true)}>

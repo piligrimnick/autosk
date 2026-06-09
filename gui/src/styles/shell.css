@@ -1,7 +1,7 @@
-/* Frameless 3-panel shell (redesign plan §4, §5, §9). Grid:
+/* Frameless two-panel shell. Grid:
  *   row 1: titlebar drag strip
  *   row 2: notice bar (auto; collapses to 0 when no notice)
- *   row 3: the three panels */
+ *   row 3: [ sidebar accordion | main panel ] */
 
 /* Flex column (not grid) so a null NoticeBar doesn't leave an empty row: the
  * titlebar + (optional) notice are flex-shrink:0 and .app-panels takes the
@@ -108,7 +108,7 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: var(--panel-left-width) 1fr var(--panel-right-width);
+  grid-template-columns: var(--sidebar-width) 1fr;
   grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
 }
@@ -119,16 +119,36 @@
   min-width: 0;
   overflow: hidden;
 }
-.panel-left {
-  background: var(--bg-1);
-  border-right: 1px solid var(--border);
-}
 .panel-center {
   background: var(--bg);
 }
-.panel-right {
+
+/* ---- sidebar accordion (Tasks / Sessions / Workflows) ---------------------*/
+/* lazygit-style stack: the active panel grows (weight 3), the others collapse
+ * (weight 1). flex-basis 0 makes the heights a pure 3:1:1 ratio of the column. */
+.sidebar-stack {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
   background: var(--bg-1);
-  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+.sidebar-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: var(--panel-header-height); /* the header is always visible */
+  overflow: hidden;
+  flex: 1 1 0;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-panel:last-child {
+  border-bottom: none;
+}
+.sidebar-panel.is-active {
+  flex: 3 1 0;
 }
 .panel-header {
   display: flex;
@@ -138,6 +158,20 @@
   padding: 0 12px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+}
+/* Clickable accordion headers (sidebar panels). */
+.panel-header.is-clickable {
+  cursor: pointer;
+  user-select: none;
+}
+.panel-header.is-clickable:hover {
+  background: var(--bg-2);
+}
+.panel-header.is-active {
+  background: var(--bg-2);
+}
+.panel-header.is-active .panel-title {
+  color: var(--fg);
 }
 .panel-title {
   font-size: 11px;
@@ -199,19 +233,4 @@
   text-align: center;
   color: var(--fg-mute);
   font-size: 12px;
-}
-
-/* right panel: Tasks over Workflows (fixed split for now — plan §8.6) */
-.panel-right .panel-section {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-.panel-section-tasks {
-  flex: 1 1 62%;
-}
-.panel-section-workflows {
-  flex: 1 1 38%;
-  border-top: 1px solid var(--border);
 }

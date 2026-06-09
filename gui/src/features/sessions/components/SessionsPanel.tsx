@@ -1,6 +1,6 @@
-// SessionsPanel — the left panel: a flat list of all the active project's
-// sessions (jobs), newest first (redesign plan §8.1). Cross-linking to tasks is
-// deferred (decision #2).
+// SessionsPanel — a sidebar accordion panel: a flat list of all the active
+// project's sessions (jobs), newest first. Cross-linking to tasks is deferred.
+// Clicking the header (or a row) expands this panel and collapses the others.
 
 import { useStore } from "@/state/store";
 import { sessionsForProject } from "@/state/selectors";
@@ -12,11 +12,14 @@ export function SessionsPanel() {
   const { state, effects } = useStore();
   const sessions = sessionsForProject(state);
   const hasProject = Boolean(state.activeProject);
+  const active = state.ui.sidebarPanel === "sessions";
 
   return (
-    <aside className="panel panel-left">
+    <section className={`sidebar-panel${active ? " is-active" : ""}`}>
       <PanelHeader
         title="Sessions"
+        active={active}
+        onActivate={() => effects.setSidebarPanel("sessions")}
         actions={
           hasProject ? (
             <button className="btn-ghost" title="Refresh" onClick={() => void effects.refreshSessions()}>
@@ -38,6 +41,6 @@ export function SessionsPanel() {
           </ul>
         )}
       </div>
-    </aside>
+    </section>
   );
 }

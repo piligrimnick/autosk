@@ -6,8 +6,7 @@
   /* shell sizing */
   --titlebar-height: 40px;
   --panel-header-height: 34px;
-  --panel-left-width: 260px;
-  --panel-right-width: 320px;
+  --sidebar-width: 300px;
 
   /* macOS traffic-light inset for the titlebar (left padding) */
   --titlebar-mac-inset: 78px;
