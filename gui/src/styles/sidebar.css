@@ -97,19 +97,23 @@
 .task-list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 .task-item {
-  padding: 6px 12px 6px 18px;
+  padding: 6px 10px;
   cursor: pointer;
-  border-left: 2px solid transparent;
+  border-radius: 8px;
+  border: 1px solid transparent;
 }
 .task-item:hover {
   background: var(--bg-2);
 }
-.task-selected {
-  background: var(--bg-2);
-  border-left-color: var(--accent);
+.task-item.is-selected {
+  background: var(--bg-3);
+  border-color: var(--border);
 }
 .task-item-top {
   display: flex;

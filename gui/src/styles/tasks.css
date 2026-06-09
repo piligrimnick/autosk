@@ -16,10 +16,12 @@
   opacity: 0;
 }
 .task-item:hover .task-kebab,
-.task-selected .task-kebab {
+.task-item.is-selected .task-kebab {
   opacity: 1;
 }
 .task-kebab:hover {
-  background: var(--bg-3);
+  /* Elevated hover tone (matches .btn:hover) so it keeps contrast on both a
+   * hovered row (--bg-2) and a selected row (--bg-3). */
+  background: #323844;
   color: var(--fg);
 }

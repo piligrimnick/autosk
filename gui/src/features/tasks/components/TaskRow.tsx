@@ -17,7 +17,7 @@ export function TaskRow({ task, activity }: { task: TaskView; activity: Activity
 
   return (
     <li
-      className={`task-item${selected ? " task-selected" : ""}`}
+      className={`task-item${selected ? " is-selected" : ""}`}
       title={task.title}
       onClick={() => void effects.selectTask(task.id)}
     >

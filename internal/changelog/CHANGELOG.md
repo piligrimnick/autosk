@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **daemon:** fix empty lazy transcript and `HTTP 410 session_missing` from `daemon messages <job>`
+- **gui:** the Tasks panel now uses the same card-style selection (distinct `--bg-3` fill + full rounded border) as the Sessions and Workflows panels, instead of its inconsistent left-accent stripe over a hover-colored background.
 
 ## [0.1.5] — 2026-05-25
 
