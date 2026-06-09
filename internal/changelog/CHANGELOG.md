@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **gui:** the left sidebar is now collapsible and resizable — a toggle button in the titlebar (between the macOS traffic lights and the project switcher) shows/hides it, and dragging its right edge resizes it (clamped to 220–480px; double-click the divider to reset to the default). Both the collapsed state and the width persist across restarts.
 - **autoskd:** new Rust daemon binary serving the read-only task/job/workflow/agent/comment/signal surface over JSON-RPC on a Unix socket, with `autoskd serve` / `init` / `version` / `engine` subcommands (ask-d8f735).
 - **autoskd:** now drives workflows end-to-end natively — a per-project poller, a global worker-pool scheduler, the step executor (turn loop, kickback, worktree isolation, idle-timeout), and the compactor — plus a live job surface (`job.subscribe` transcript streaming with replay+tail, `job.input` prompt/steer/follow_up, `job.abort`, `job.cancel`) (ask-2e7e27).
 - **lazy:** the TUI now renders entirely from an auto-spawned `autoskd` daemon over JSON-RPC — reads, writes, and the live job transcript tail (`job.subscribe`) — instead of opening a local doltlite store; the single RPC-client datasource replaces the former offline/live/compose split (ask-c9251d). (Supersedes the experimental, never-released `autosk lazy --rpc` / `AUTOSK_RPC=1` opt-in, which is now the only behaviour and has been removed.)

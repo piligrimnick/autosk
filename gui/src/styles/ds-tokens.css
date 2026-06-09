@@ -8,8 +8,9 @@
   --panel-header-height: 34px;
   --sidebar-width: 300px;
 
-  /* macOS traffic-light inset for the titlebar (left padding) */
-  --titlebar-mac-inset: 78px;
+  /* macOS traffic-light inset for the titlebar (left padding) — clears the
+   * native traffic lights and leaves a gap before the first titlebar control. */
+  --titlebar-mac-inset: 94px;
 
   /* CodexMonitor-derived status hues — used by the animated session status
    * dot from Phase 3 onward. */

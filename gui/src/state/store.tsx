@@ -24,8 +24,37 @@ import {
 } from "@/services/events";
 import type { Job } from "@/types";
 import { rootReducer } from "./reducer";
-import { type Action, type AppState, type ModalKind, type SidebarPanel, initialState } from "./types";
+import {
+  type Action,
+  type AppState,
+  type ModalKind,
+  type SidebarPanel,
+  clampSidebarWidth,
+  initialState,
+} from "./types";
 import { NO_SELECTION, selectedSessionJobId, selectedTaskId } from "./selection";
+
+// localStorage keys for the sidebar geometry (layout-only UI state; not part of
+// the daemon's domain, so it lives in the browser, not the project DB).
+const LS_SIDEBAR_COLLAPSED = "autosk.sidebarCollapsed";
+const LS_SIDEBAR_WIDTH = "autosk.sidebarWidth";
+
+// Seed the reducer with the persisted sidebar geometry so the first paint is
+// already correct (no width/collapse flash). Pure in non-browser test runs
+// (`window` is undefined under vitest's node environment), where it returns the
+// plain `initialState()`.
+function hydratedInitialState(): AppState {
+  const base = initialState();
+  if (typeof window === "undefined") return base;
+  try {
+    const collapsed = window.localStorage.getItem(LS_SIDEBAR_COLLAPSED) === "1";
+    const widthRaw = window.localStorage.getItem(LS_SIDEBAR_WIDTH);
+    const sidebarWidth = widthRaw ? clampSidebarWidth(Number(widthRaw)) : base.ui.sidebarWidth;
+    return { ...base, ui: { ...base.ui, sidebarCollapsed: collapsed, sidebarWidth } };
+  } catch {
+    return base;
+  }
+}
 
 interface Effects {
   bootstrap(): Promise<void>;
@@ -40,6 +69,8 @@ interface Effects {
   clearSelection(): void;
   refreshTask(taskId: string, forceJobId?: string): Promise<void>;
   setSidebarPanel(panel: SidebarPanel): void;
+  toggleSidebar(): void;
+  setSidebarWidth(width: number): void;
   openModal(modal: ModalKind): void;
   setNotice(notice: AppState["notice"]): void;
   resetLiveTail(): void;
@@ -57,7 +88,7 @@ interface StoreValue {
 const StoreContext = createContext<StoreValue | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(rootReducer, undefined, initialState);
+  const [state, dispatch] = useReducer(rootReducer, undefined, hydratedInitialState);
 
   // Keep a ref to the latest state so the (stable) event handlers can read it
   // without re-subscribing on every render.
@@ -288,6 +319,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "ui/sidebarPanel", panel });
       },
 
+      toggleSidebar() {
+        dispatch({ type: "ui/sidebarToggle" });
+      },
+
+      setSidebarWidth(width) {
+        dispatch({ type: "ui/sidebarWidth", width });
+      },
+
       openModal(modal) {
         dispatch({ type: "ui/modal", modal });
       },
@@ -444,6 +483,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void effects.bootstrap();
   }, [effects]);
+
+  // Persist the sidebar geometry (collapse + width) across restarts.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(LS_SIDEBAR_COLLAPSED, state.ui.sidebarCollapsed ? "1" : "0");
+      window.localStorage.setItem(LS_SIDEBAR_WIDTH, String(state.ui.sidebarWidth));
+    } catch {
+      /* private mode / quota — non-fatal */
+    }
+  }, [state.ui.sidebarCollapsed, state.ui.sidebarWidth]);
 
   const value = useMemo<StoreValue>(
     () => ({ state, dispatch, effects, cwd: state.activeProject ?? "" }),

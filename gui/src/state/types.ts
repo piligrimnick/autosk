@@ -47,6 +47,17 @@ export type ModalKind = "agents" | "settings" | null;
 /** Which sidebar accordion panel is expanded/active (lazygit-style stack). */
 export type SidebarPanel = "tasks" | "sessions" | "workflows";
 
+/** Sidebar resize bounds (px). The default matches the `--sidebar-width` token. */
+export const SIDEBAR_MIN_WIDTH = 220;
+export const SIDEBAR_MAX_WIDTH = 480;
+export const SIDEBAR_DEFAULT_WIDTH = 300;
+
+/** Clamp + round a candidate sidebar width to the allowed range. */
+export function clampSidebarWidth(width: number): number {
+  if (!Number.isFinite(width)) return SIDEBAR_DEFAULT_WIDTH;
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+}
+
 /** The whole app state. */
 export interface AppState {
   projects: ProjectInfo[];
@@ -70,8 +81,15 @@ export interface AppState {
   /** The job currently subscribed for a live tail (one at a time in v1). */
   subscribedJob: string | null;
 
-  /** Overlay modal + the expanded sidebar accordion panel. */
-  ui: { modal: ModalKind; sidebarPanel: SidebarPanel };
+  /** Overlay modal, the expanded accordion panel, and the sidebar geometry. */
+  ui: {
+    modal: ModalKind;
+    sidebarPanel: SidebarPanel;
+    /** Whether the whole left sidebar is hidden (titlebar toggle). */
+    sidebarCollapsed: boolean;
+    /** Sidebar column width in px (drag-to-resize; clamped to the bounds). */
+    sidebarWidth: number;
+  };
   daemon: DaemonStatus;
   settings: AppSettings | null;
   /** A transient banner message (errors / confirmations). */
@@ -108,7 +126,7 @@ export function initialState(): AppState {
     messagesByJob: {},
     seenEventId: {},
     subscribedJob: null,
-    ui: { modal: null, sidebarPanel: "tasks" },
+    ui: { modal: null, sidebarPanel: "tasks", sidebarCollapsed: false, sidebarWidth: SIDEBAR_DEFAULT_WIDTH },
     daemon: { connected: false, mode: "local" },
     settings: null,
     notice: null,
@@ -124,6 +142,9 @@ export type Action =
   | { type: "notice/set"; notice: AppState["notice"] }
   | { type: "ui/modal"; modal: ModalKind }
   | { type: "ui/sidebarPanel"; panel: SidebarPanel }
+  | { type: "ui/sidebarToggle" }
+  | { type: "ui/sidebarSetCollapsed"; collapsed: boolean }
+  | { type: "ui/sidebarWidth"; width: number }
   // projects
   | { type: "projects/loaded"; projects: ProjectInfo[] }
   | { type: "project/select"; root: string | null }

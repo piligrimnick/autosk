@@ -4,9 +4,11 @@
 // panel grows (3:1 weight) while the others collapse. The main panel is the
 // polymorphic entity view (task | session | workflow | empty) + composer.
 
+import { useRef, type CSSProperties } from "react";
 import { useStore } from "@/state/store";
 import { NoticeBar } from "@/components/NoticeBar";
 import { Titlebar } from "./Titlebar";
+import { SidebarResizer } from "./SidebarResizer";
 import { SessionsPanel } from "@/features/sessions/components/SessionsPanel";
 import { CenterPanel } from "@/features/center/components/CenterPanel";
 import { TasksPanel } from "@/features/tasks/components/TasksPanel";
@@ -17,16 +19,28 @@ import { AgentsModal } from "@/features/agents/components/AgentsModal";
 export function AppShell() {
   const { state, effects } = useStore();
   const closeModal = () => effects.openModal(null);
+  const panelsRef = useRef<HTMLDivElement | null>(null);
+  const { sidebarCollapsed, sidebarWidth } = state.ui;
+  const panelsStyle = { "--sidebar-width": `${sidebarWidth}px` } as CSSProperties;
   return (
     <div className="app-shell">
       <Titlebar />
       <NoticeBar />
-      <div className="app-panels">
-        <aside className="sidebar-stack">
-          <TasksPanel />
-          <SessionsPanel />
-          <WorkflowsPanel />
-        </aside>
+      <div
+        ref={panelsRef}
+        className={`app-panels${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+        style={panelsStyle}
+      >
+        {!sidebarCollapsed && (
+          <>
+            <aside className="sidebar-stack">
+              <TasksPanel />
+              <SessionsPanel />
+              <WorkflowsPanel />
+            </aside>
+            <SidebarResizer containerRef={panelsRef} onCommit={effects.setSidebarWidth} />
+          </>
+        )}
         <CenterPanel />
       </div>
       {state.ui.modal === "settings" && <SettingsModal onClose={closeModal} />}

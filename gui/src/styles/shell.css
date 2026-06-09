@@ -100,12 +100,48 @@
 
 /* ---- panels ---------------------------------------------------------------*/
 .app-panels {
+  position: relative; /* anchors the absolutely-positioned sidebar resizer */
   flex: 1;
   min-height: 0;
   display: grid;
   grid-template-columns: var(--sidebar-width) 1fr;
   grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
+}
+.app-panels.sidebar-collapsed {
+  grid-template-columns: 1fr;
+}
+
+/* ---- sidebar resizer (drag the sidebar's right edge) ----------------------*/
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--sidebar-width);
+  width: 8px;
+  transform: translateX(-4px);
+  cursor: col-resize;
+  z-index: 6;
+  -webkit-app-region: no-drag;
+}
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-1px);
+  background: transparent;
+  transition: background-color var(--ds-dur-fast) ease;
+}
+.sidebar-resizer:hover::after,
+body.is-resizing .sidebar-resizer::after {
+  background: var(--accent);
+}
+body.is-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 .panel {
   display: flex;

@@ -17,8 +17,21 @@ export function Titlebar() {
   const { state, effects } = useStore();
   const d = state.daemon;
 
+  const collapsed = state.ui.sidebarCollapsed;
+
   return (
     <header className={`titlebar ${isMacPlatform() ? "titlebar-mac" : ""}`} data-tauri-drag-region>
+      <button
+        type="button"
+        className="titlebar-action"
+        data-tauri-drag-region="false"
+        title={collapsed ? "Show sidebar" : "Hide sidebar"}
+        aria-label={collapsed ? "Show sidebar" : "Hide sidebar"}
+        aria-pressed={!collapsed}
+        onClick={() => effects.toggleSidebar()}
+      >
+        <IconSidebar collapsed={collapsed} />
+      </button>
       <ProjectSwitcher />
       <span className="titlebar-spacer" />
 
@@ -60,6 +73,18 @@ export function Titlebar() {
 
       <WindowCaptionControls />
     </header>
+  );
+}
+
+function IconSidebar({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden>
+      <rect x="2.3" y="3.5" width="11.4" height="9" rx="1.6" />
+      <line x1="6.6" y1="3.7" x2="6.6" y2="12.3" />
+      {!collapsed && (
+        <rect x="2.9" y="4.1" width="3.1" height="7.8" rx="0.6" fill="currentColor" stroke="none" opacity="0.5" />
+      )}
+    </svg>
   );
 }
 

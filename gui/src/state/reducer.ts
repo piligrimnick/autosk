@@ -6,7 +6,7 @@
 // `task/extrasLoaded` updates both tasks and the normalized job map).
 
 import type { Action, AppState, ProjectSlice, SidebarPanel } from "./types";
-import { emptyExtras, emptyProjectSlice } from "./types";
+import { clampSidebarWidth, emptyExtras, emptyProjectSlice } from "./types";
 import { NO_SELECTION } from "./selection";
 
 function patchProject(
@@ -31,6 +31,12 @@ function uiSlice(state: AppState, action: Action): AppState {
       return { ...state, ui: { ...state.ui, modal: action.modal } };
     case "ui/sidebarPanel":
       return { ...state, ui: { ...state.ui, sidebarPanel: action.panel } };
+    case "ui/sidebarToggle":
+      return { ...state, ui: { ...state.ui, sidebarCollapsed: !state.ui.sidebarCollapsed } };
+    case "ui/sidebarSetCollapsed":
+      return { ...state, ui: { ...state.ui, sidebarCollapsed: action.collapsed } };
+    case "ui/sidebarWidth":
+      return { ...state, ui: { ...state.ui, sidebarWidth: clampSidebarWidth(action.width) } };
     default:
       return state;
   }

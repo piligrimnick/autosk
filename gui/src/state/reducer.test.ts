@@ -155,6 +155,28 @@ describe("selection + sessions slices", () => {
     expect(s.ui.sidebarPanel).toBe("tasks");
   });
 
+  it("sidebar collapse: ui/sidebarToggle flips, ui/sidebarSetCollapsed sets", () => {
+    let s = initialState();
+    expect(s.ui.sidebarCollapsed).toBe(false); // default
+    s = rootReducer(s, { type: "ui/sidebarToggle" });
+    expect(s.ui.sidebarCollapsed).toBe(true);
+    s = rootReducer(s, { type: "ui/sidebarToggle" });
+    expect(s.ui.sidebarCollapsed).toBe(false);
+    s = rootReducer(s, { type: "ui/sidebarSetCollapsed", collapsed: true });
+    expect(s.ui.sidebarCollapsed).toBe(true);
+  });
+
+  it("sidebar width: ui/sidebarWidth clamps to [220, 480] and rounds", () => {
+    let s = initialState();
+    expect(s.ui.sidebarWidth).toBe(300); // default
+    s = rootReducer(s, { type: "ui/sidebarWidth", width: 360.6 });
+    expect(s.ui.sidebarWidth).toBe(361);
+    s = rootReducer(s, { type: "ui/sidebarWidth", width: 50 });
+    expect(s.ui.sidebarWidth).toBe(220); // floored to min
+    s = rootReducer(s, { type: "ui/sidebarWidth", width: 9000 });
+    expect(s.ui.sidebarWidth).toBe(480); // capped to max
+  });
+
   it("sidebar panel: clearing the selection leaves the active panel unchanged", () => {
     let s = rootReducer(initialState(), { type: "ui/sidebarPanel", panel: "workflows" });
     s = rootReducer(s, { type: "selection/set", selection: { kind: "none" } });
