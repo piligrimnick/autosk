@@ -46,6 +46,31 @@ export function relativeTime(ts: string | null | undefined): string {
   return `${days}d ago`;
 }
 
+/** humanDuration — mirrors internal/lazy `humanDuration`: s/m/h/d buckets,
+ * no "ago" suffix, negatives clamp to "0s". */
+function humanDuration(ms: number): string {
+  if (ms < 0) ms = 0;
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
+/** jobWorkTime — mirrors internal/lazy `jobWorkTime`: how long pi actually
+ * worked on a job. queued (no started_at) → "—"; finished → finished−started;
+ * running → now−started. */
+export function jobWorkTime(job: { started_at?: string | null; finished_at?: string | null }): string {
+  if (!job.started_at) return "\u2014";
+  const start = new Date(job.started_at).getTime();
+  if (Number.isNaN(start)) return "\u2014";
+  const endTs = job.finished_at ? new Date(job.finished_at).getTime() : Date.now();
+  const end = Number.isNaN(endTs) ? Date.now() : endTs;
+  return humanDuration(end - start);
+}
+
 export function Spinner({ label }: { label?: string }) {
   return (
     <div className="spinner">

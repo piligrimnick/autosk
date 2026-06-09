@@ -185,13 +185,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         try {
           const tasks = await ipc.taskList(cwd, { statuses: ["new", "work", "human", "done", "cancel"] });
           dispatch({ type: "project/tasksLoaded", root: cwd, tasks });
-          // Load the project's live jobs so the tasks panel can show
-          // running/streaming indicators per task.
+          // Load the project's live jobs so the Sessions panel and the live
+          // composer can reflect running/streaming runs.
           try {
             const live = await ipc.jobList(cwd, { statuses: ["running", "queued"] });
             dispatch({ type: "jobs/upsertMany", jobs: live });
           } catch {
-            /* indicators are best-effort */
+            /* live runs are best-effort */
           }
         } catch (err) {
           dispatch({ type: "project/error", root: cwd, error: String((err as Error).message ?? err) });

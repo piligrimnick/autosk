@@ -5,7 +5,6 @@
 import { useStore } from "@/state/store";
 import { selectedSessionJob } from "@/state/selectors";
 import { EmptyState, StatusBadge, localTime } from "@/components/common";
-import { SessionStatusDot } from "@/features/sessions/components/SessionStatusDot";
 import { Transcript } from "../components/Transcript";
 
 export function SessionView() {
@@ -29,7 +28,6 @@ export function SessionView() {
     <div className="session-view">
       <div className="session-view-head">
         <div className="session-view-title">
-          <SessionStatusDot job={job} />
           <span className="mono">{job.job_id.slice(0, 8)}</span>
           <StatusBadge status={job.status} />
           <span className="session-view-meta">

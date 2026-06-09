@@ -78,50 +78,6 @@ export function jobsForTask(state: AppState, taskId: string | null): Job[] {
     .sort((a, b) => cmpTs(a.created_at, b.created_at));
 }
 
-export interface Activity {
-  running: boolean;
-  streaming: boolean;
-}
-
-/** Lightweight running/streaming flags for a task, derived from the job map. */
-export function taskActivity(state: AppState, taskId: string): Activity {
-  let running = false;
-  let streaming = false;
-  for (const job of Object.values(state.jobs)) {
-    if (job.task_id !== taskId) continue;
-    if (job.status === "running" || job.status === "queued") {
-      running = true;
-      if (job.streaming) streaming = true;
-    }
-  }
-  return { running, streaming };
-}
-
-/**
- * Build a `taskId -> Activity` map in a SINGLE pass over the (global) job map.
- * The sidebar renders one row per task across every visited project, so calling
- * `taskActivity` per row is O(tasks × jobs); compute this once per render and
- * look up instead.
- */
-export function taskActivityMap(state: AppState): Map<string, Activity> {
-  const map = new Map<string, Activity>();
-  for (const job of Object.values(state.jobs)) {
-    if (job.status !== "running" && job.status !== "queued") continue;
-    const cur = map.get(job.task_id) ?? { running: false, streaming: false };
-    cur.running = true;
-    if (job.streaming) cur.streaming = true;
-    map.set(job.task_id, cur);
-  }
-  return map;
-}
-
-const NO_ACTIVITY: Activity = { running: false, streaming: false };
-
-/** Per-task lookup against a precomputed activity map. */
-export function activityOf(map: Map<string, Activity>, taskId: string): Activity {
-  return map.get(taskId) ?? NO_ACTIVITY;
-}
-
 /** The newest non-terminal (running/queued) job for a task, if any. */
 export function runningJob(state: AppState, taskId: string | null): Job | null {
   const jobs = jobsForTask(state, taskId);

@@ -7,12 +7,17 @@ import { sessionsForProject } from "@/state/selectors";
 import { EmptyState } from "@/components/common";
 import { PanelHeader } from "@/features/layout/components/PanelHeader";
 import { SessionRow } from "./SessionRow";
+import { useSecondTick } from "../useSecondTick";
 
 export function SessionsPanel() {
   const { state, effects } = useStore();
   const sessions = sessionsForProject(state);
   const hasProject = Boolean(state.activeProject);
   const active = state.ui.sidebarPanel === "sessions";
+  // Tick once a second while any session is still running so the work-time
+  // column counts up live (a finished/queued row has a fixed value).
+  const hasLive = sessions.some((j) => Boolean(j.started_at) && !j.finished_at);
+  useSecondTick(hasLive);
 
   return (
     <section className={`sidebar-panel${active ? " is-active" : ""}`}>

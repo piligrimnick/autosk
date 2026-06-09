@@ -1,19 +1,17 @@
 // Unit tests for the derived selectors (pure; no browser, no daemon). These
 // lock the timeline interleave/ordering, composer-mode precedence, status
-// grouping, running-job selection, the one-pass activity map, and stable
-// timeline keys — several of which back the reconnect / first-load fixes.
+// grouping, running-job selection, and stable timeline keys — several of which
+// back the reconnect / first-load fixes.
 
 import { describe, it, expect } from "vitest";
 import {
   activeTask,
-  activityOf,
   buildTimeline,
   composerMode,
   runningJob,
   selectedSessionJob,
   selectedWorkflow,
   sessionsForProject,
-  taskActivityMap,
   tasksByRecency,
   timelineKey,
 } from "./selectors";
@@ -294,24 +292,6 @@ describe("runningJob", () => {
     const newer = mkJob({ job_id: "new", task_id: "t1", status: "queued", created_at: "2024-01-01T00:05:00Z" });
     const s = stateWith({ taskId: "t1", jobs: [older, newer] });
     expect(runningJob(s, "t1")?.job_id).toBe("new");
-  });
-});
-
-describe("taskActivityMap / activityOf", () => {
-  it("flags running + streaming per task in a single pass over the job map", () => {
-    const s = stateWith({
-      taskId: "t1",
-      jobs: [
-        mkJob({ job_id: "j1", task_id: "t1", status: "running", streaming: true }),
-        mkJob({ job_id: "j2", task_id: "t2", status: "queued", streaming: false }),
-        mkJob({ job_id: "j3", task_id: "t3", status: "done", streaming: true }),
-      ],
-    });
-    const map = taskActivityMap(s);
-    expect(activityOf(map, "t1")).toEqual({ running: true, streaming: true });
-    expect(activityOf(map, "t2")).toEqual({ running: true, streaming: false });
-    expect(activityOf(map, "t3")).toEqual({ running: false, streaming: false }); // terminal
-    expect(activityOf(map, "missing")).toEqual({ running: false, streaming: false });
   });
 });
 

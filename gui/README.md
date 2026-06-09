@@ -41,7 +41,7 @@ gui/
 │   │   └── types.ts            # AppState shape + action union
 │   ├── features/               # one folder per UI domain
 │   │   ├── layout/             # AppShell, Titlebar, WindowCaptionControls, PanelHeader
-│   │   ├── sessions/           # SessionsPanel, SessionRow, SessionStatusDot
+│   │   ├── sessions/           # SessionsPanel, SessionRow
 │   │   ├── center/             # CenterPanel/Header, Composer, Transcript,
 │   │   │                       #   views/ (Session | Task | Workflow | Empty)
 │   │   ├── tasks/              # TasksPanel, TaskRow, TaskRowMenu, NewTaskModal

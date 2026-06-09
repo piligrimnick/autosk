@@ -4,7 +4,7 @@
 
 import { useState } from "react";
 import { useStore } from "@/state/store";
-import { activeTasks, activityOf, taskActivityMap, tasksByRecency } from "@/state/selectors";
+import { activeTasks, tasksByRecency } from "@/state/selectors";
 import { EmptyState } from "@/components/common";
 import { PanelHeader } from "@/features/layout/components/PanelHeader";
 import { NewTaskModal } from "./NewTaskModal";
@@ -14,7 +14,6 @@ export function TasksPanel() {
   const { state, effects } = useStore();
   const cwd = state.activeProject ?? "";
   const tasks = tasksByRecency(activeTasks(state));
-  const activity = taskActivityMap(state);
   const active = state.ui.sidebarPanel === "tasks";
   const [creating, setCreating] = useState(false);
 
@@ -40,7 +39,7 @@ export function TasksPanel() {
         ) : (
           <ul className="task-list">
             {tasks.map((t) => (
-              <TaskRow key={t.id} task={t} activity={activityOf(activity, t.id)} />
+              <TaskRow key={t.id} task={t} />
             ))}
           </ul>
         )}
