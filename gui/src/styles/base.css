@@ -18,11 +18,13 @@
   --status-done: #4ade80;
   --status-cancel: #6b7280;
   /* Entity hues, matched 1:1 to lazy-mode (TokyoNight): task=Focus blue,
-   * job=Accent magenta, workflow=Warn yellow, step=PopupBox purple. */
+   * job=Accent magenta, workflow=Warn yellow, step=PopupBox purple,
+   * agent=Scope cyan. */
   --task-id: #7aa2f7;
   --job-id: #bb9af7;
   --workflow-name: #e0af68;
   --step-name: #9d7cd8;
+  --agent-name: #7dcfff;
   --radius: 8px;
   --mono: "SFMono-Regular", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -73,6 +75,12 @@ button {
 
 .dim {
   color: var(--fg-mute);
+}
+
+/* Muted "·" separator between header entities (task/session center views). */
+.meta-sep {
+  color: var(--fg-mute);
+  flex-shrink: 0;
 }
 
 /* ---- buttons ---- */

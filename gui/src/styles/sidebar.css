@@ -83,9 +83,10 @@
   flex-direction: column;
   gap: 2px;
 }
-/* One single-line row: P2  ask-xxxxxx  Title…  DONE — mirrors lazy-mode. The
- * title flex-grows and ellipsis-truncates so the status chip stays pinned to
- * the right edge (same trick as .wf-name in workflows.css). */
+/* One single-line row: DONE  ask-xxxxxx  Title…  ⛔ — the status chip LEADS the
+ * row (left edge), then the id, then the title which flex-grows and
+ * ellipsis-truncates so the optional blocked flag stays pinned to the right
+ * edge. Priority is intentionally not rendered here. */
 .task-item {
   display: flex;
   align-items: center;

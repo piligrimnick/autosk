@@ -1,13 +1,12 @@
 // TaskRow — one task in the Tasks panel (redesign plan §8.5), lazy-style: a
-// single line of priority, id, blocked flag, a flex-growing title
-// (ellipsis-truncated), and a status chip magnetised to the right edge.
+// single line that LEADS with the status chip, then id, a flex-growing title
+// (ellipsis-truncated), and the blocked flag magnetised to the right edge.
 // Left-click selects the task (center → task sheet); right-click pops a NATIVE
-// OS context menu at the cursor (no kebab button, so the status chip is never
-// occluded) — see useTaskRowMenu. Reuses the .task-item* classes from
-// sidebar.css.
+// OS context menu at the cursor (no kebab button) — see useTaskRowMenu. Reuses
+// the .task-item* classes from sidebar.css.
 
 import { useStore } from "@/state/store";
-import { PriorityDot, StatusBadge } from "@/components/common";
+import { StatusBadge } from "@/components/common";
 import type { TaskView } from "@/types";
 import { useTaskRowMenu } from "./TaskRowMenu";
 
@@ -24,15 +23,16 @@ export function TaskRow({ task }: { task: TaskView }) {
         onClick={() => void effects.selectTask(task.id)}
         onContextMenu={(e) => void openMenu(e)}
       >
-        <PriorityDot priority={task.priority} />
+        <span className="task-status-gutter">
+          <StatusBadge status={task.status} />
+        </span>
         <span className="task-id">{task.id}</span>
+        <span className="task-item-title">{task.title}</span>
         {task.blocked && (
           <span className="blocked-flag" title="blocked">
             ⛔
           </span>
         )}
-        <span className="task-item-title">{task.title}</span>
-        <StatusBadge status={task.status} className="task-status" />
       </li>
       {modals}
     </>

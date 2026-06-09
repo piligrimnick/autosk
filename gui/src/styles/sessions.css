@@ -1,6 +1,9 @@
 /* Sessions panel — a lazy-mode-style Jobs list. Each row is two lines:
- *   line 1: <work-time> <job-id> <task-id> … <STATUS chip>
- *   line 2: indented <workflow-name>:<step-name>
+ *   line 1: <STATUS chip>  <job-id>  ……  <task-id>
+ *   line 2: <work-time>     <workflow-name>:<step-name>
+ * The status chip and work-time share a fixed-width left gutter so the job-id
+ * and workflow:step align in the column to their right, with the task-id
+ * magnetised to the right edge of line 1.
  * Entity colours match lazy-mode (see base.css --job-id/--task-id/… tokens).
  * The status chip pulse reuses the global `pulse` keyframe from base.css. */
 
@@ -13,9 +16,10 @@
   gap: 2px;
 }
 .session-row {
-  /* width of the left time column; line 2 is indented to match so the
-   * workflow:step label lines up under the job id (lazy-mode rhyme). */
-  --session-time-col: 34px;
+  /* width of the left gutter column shared by the status chip (line 1) and
+   * the work-time (line 2); sized to fit the widest status label (RUNNING)
+   * so the job-id / workflow:step column to its right lines up across rows. */
+  --session-gutter: 68px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -32,7 +36,7 @@
   border-color: var(--border);
 }
 
-/* line 1: <work-time>  <job-id>  <task-id>  ………  <STATUS chip> */
+/* line 1: <STATUS chip>  <job-id>  ………  <task-id> */
 .session-row-top {
   display: flex;
   align-items: center;
@@ -40,10 +44,20 @@
   min-width: 0;
   font-size: 12px;
 }
-.session-time {
-  flex: 0 0 var(--session-time-col);
+/* shared left gutter — holds the status chip (line 1) / work-time (line 2). */
+.session-gutter {
+  flex: 0 0 var(--session-gutter);
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.session-gutter-time {
+  justify-content: center;
   color: var(--fg-mute);
   font-variant-numeric: tabular-nums;
+}
+.session-gutter .badge {
+  flex-shrink: 0;
 }
 .session-job-id {
   flex: 0 0 auto;
@@ -51,6 +65,7 @@
   white-space: nowrap;
 }
 .session-task-id {
+  margin-left: auto;
   flex: 0 1 auto;
   min-width: 0;
   color: var(--task-id);
@@ -58,23 +73,24 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.session-row-top .badge {
-  margin-left: auto;
-  flex-shrink: 0;
-}
-/* running chip stays "alive" now that the leading status dot is gone */
-.session-row-top .badge.is-live {
+/* running chip keeps a subtle pulse */
+.session-gutter .badge.is-live {
   animation: pulse 1.4s ease-in-out infinite;
 }
-.session-row-top .badge.is-live.is-streaming {
+.session-gutter .badge.is-live.is-streaming {
   animation-duration: 1s;
 }
 
-/* line 2: indented <workflow-name>:<step-name> */
+/* line 2: <work-time>  <workflow-name>:<step-name> */
 .session-row-bottom {
-  padding-left: calc(var(--session-time-col) + 8px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   font-size: 11.5px;
+}
+.session-wfstep {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -90,4 +106,7 @@
 }
 .session-no-wf {
   color: var(--fg-mute);
+}
+.session-agent-name {
+  color: var(--agent-name);
 }

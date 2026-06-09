@@ -7,7 +7,7 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "@/state/store";
 import { activeTask } from "@/state/selectors";
-import { EmptyState, PriorityDot, StatusBadge, localTime } from "@/components/common";
+import { EmptyState, StatusBadge, localTime } from "@/components/common";
 import { Markdown } from "@/components/Markdown";
 import type { Comment } from "@/types";
 
@@ -31,26 +31,41 @@ export function TaskView() {
     <div className="task-view">
       <div className="task-view-head">
         <div className="task-view-title-row">
-          <span className="mono task-view-id">{task.id}</span>
           <StatusBadge status={task.status} />
-          <PriorityDot priority={task.priority} />
+          <span className="meta-sep">·</span>
+          <span className="task-view-id">{task.id}</span>
+          <span className="meta-sep">·</span>
+          <span className="task-view-prio">P{task.priority}</span>
+          {task.workflow_name && (
+            <>
+              <span className="meta-sep">·</span>
+              <span className="task-view-wfstep">
+                <span className="task-view-wf">{task.workflow_name}</span>
+                {task.step_name && (
+                  <>
+                    <span className="task-view-step-sep">:</span>
+                    <span className="task-view-step">{task.step_name}</span>
+                  </>
+                )}
+              </span>
+            </>
+          )}
+          {task.agent_name && (
+            <>
+              <span className="meta-sep">·</span>
+              <span className="task-view-agent">{task.agent_name}</span>
+            </>
+          )}
           {task.blocked && (
-            <span className="blocked-flag" title="blocked">
-              ⛔ blocked
-            </span>
+            <>
+              <span className="meta-sep">·</span>
+              <span className="blocked-flag" title="blocked">
+                ⛔ blocked
+              </span>
+            </>
           )}
         </div>
         <h2 className="task-view-title">{task.title}</h2>
-        <div className="task-view-meta">
-          {task.workflow_name && (
-            <span>
-              {task.workflow_name}
-              {task.step_name ? `:${task.step_name}` : ""}
-            </span>
-          )}
-          {task.agent_name && <span>· {task.agent_name}</span>}
-          <span>· updated {localTime(task.updated_at)}</span>
-        </div>
       </div>
 
       <div className="task-view-body">
