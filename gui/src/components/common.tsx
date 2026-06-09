@@ -13,8 +13,8 @@ const STATUS_LABEL: Record<string, string> = {
   failed: "failed",
 };
 
-export function StatusBadge({ status }: { status: string }) {
-  const cls = `badge badge-${status}`;
+export function StatusBadge({ status, className }: { status: string; className?: string }) {
+  const cls = `badge badge-${status}${className ? ` ${className}` : ""}`;
   return <span className={cls}>{STATUS_LABEL[status] ?? status}</span>;
 }
 

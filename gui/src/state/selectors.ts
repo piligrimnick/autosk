@@ -52,30 +52,20 @@ export function sessionsForProject(state: AppState): Job[] {
   return order.map((id) => state.jobs[id]).filter(Boolean);
 }
 
-/** Status display order for the sidebar groups. */
-export const STATUS_ORDER = ["work", "human", "new", "done", "cancel"] as const;
-
-export interface StatusGroup {
-  status: string;
-  tasks: TaskView[];
-}
-
-/** Group a project's tasks by status in STATUS_ORDER, dropping empty groups. */
-export function groupByStatus(tasks: TaskView[]): StatusGroup[] {
-  const groups: StatusGroup[] = [];
-  for (const status of STATUS_ORDER) {
-    const inGroup = tasks.filter((t) => t.status === status);
-    if (inGroup.length > 0) {
-      groups.push({ status, tasks: inGroup });
-    }
-  }
-  // Any unknown status falls into a trailing catch-all group.
-  const known = new Set(STATUS_ORDER as readonly string[]);
-  const other = tasks.filter((t) => !known.has(t.status));
-  if (other.length > 0) {
-    groups.push({ status: "other", tasks: other });
-  }
-  return groups;
+/**
+ * Tasks sorted by most-recently-updated first (the Tasks panel renders one flat,
+ * ungrouped list). `updated_at` is the primary key; `created_at` then `id` break
+ * ties so the order is stable across renders. `tsMillis` (declared below) is a
+ * hoisted function, so referencing it here is fine.
+ */
+export function tasksByRecency(tasks: TaskView[]): TaskView[] {
+  return tasks.slice().sort((a, b) => {
+    const byUpdated = tsMillis(b.updated_at) - tsMillis(a.updated_at);
+    if (byUpdated !== 0) return byUpdated;
+    const byCreated = tsMillis(b.created_at) - tsMillis(a.created_at);
+    if (byCreated !== 0) return byCreated;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
 }
 
 export function jobsForTask(state: AppState, taskId: string | null): Job[] {

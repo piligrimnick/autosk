@@ -1,27 +1,7 @@
 /* Tasks panel (redesign plan §8.5). Reuses the .task-item* classes from
- * sidebar.css; adds the row kebab. */
-
-.task-groups {
-  padding: 4px 0 8px;
-}
-.task-kebab {
-  margin-left: auto;
-  background: transparent;
-  border: none;
-  color: var(--fg-mute);
-  font-size: 14px;
-  line-height: 1;
-  padding: 0 4px;
-  border-radius: 4px;
-  opacity: 0;
-}
-.task-item:hover .task-kebab,
-.task-item.is-selected .task-kebab {
-  opacity: 1;
-}
-.task-kebab:hover {
-  /* Elevated hover tone (matches .btn:hover) so it keeps contrast on both a
-   * hovered row (--bg-2) and a selected row (--bg-3). */
-  background: #323844;
-  color: var(--fg);
+ * sidebar.css; the status chip is pinned to the right edge (the flex-grown
+ * title pushes it there) and stays put — the per-task write-verb menu opens on
+ * right-click (see TaskRow), so nothing ever occludes the chip. */
+.task-status {
+  flex-shrink: 0;
 }

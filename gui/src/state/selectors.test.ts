@@ -9,12 +9,12 @@ import {
   activityOf,
   buildTimeline,
   composerMode,
-  groupByStatus,
   runningJob,
   selectedSessionJob,
   selectedWorkflow,
   sessionsForProject,
   taskActivityMap,
+  tasksByRecency,
   timelineKey,
 } from "./selectors";
 import { emptyProjectSlice, initialState, type AppState } from "./types";
@@ -240,17 +240,34 @@ describe("selectedWorkflow / activeTask", () => {
   });
 });
 
-describe("groupByStatus", () => {
-  it("orders groups by STATUS_ORDER, drops empties, and trails unknowns in 'other'", () => {
+describe("tasksByRecency", () => {
+  it("sorts by updated_at desc, then created_at desc, then id", () => {
     const tasks = [
-      mkTask({ id: "1", status: "done" }),
-      mkTask({ id: "2", status: "work" }),
-      mkTask({ id: "3", status: "weird" }),
-      mkTask({ id: "4", status: "new" }),
+      mkTask({ id: "a", updated_at: "2024-01-01T00:00:00Z" }),
+      mkTask({ id: "b", updated_at: "2024-01-03T00:00:00Z" }),
+      mkTask({ id: "c", updated_at: "2024-01-02T00:00:00Z" }),
     ];
-    const groups = groupByStatus(tasks);
-    expect(groups.map((g) => g.status)).toEqual(["work", "new", "done", "other"]);
-    expect(groups.find((g) => g.status === "other")?.tasks.map((t) => t.id)).toEqual(["3"]);
+    expect(tasksByRecency(tasks).map((t) => t.id)).toEqual(["b", "c", "a"]);
+  });
+
+  it("breaks updated_at ties by created_at desc, then id asc", () => {
+    const tasks = [
+      mkTask({ id: "z", updated_at: "2024-01-01T00:00:00Z", created_at: "2024-01-01T00:00:00Z" }),
+      mkTask({ id: "y", updated_at: "2024-01-01T00:00:00Z", created_at: "2024-01-02T00:00:00Z" }),
+      mkTask({ id: "x", updated_at: "2024-01-01T00:00:00Z", created_at: "2024-01-02T00:00:00Z" }),
+    ];
+    // y and x tie on updated_at and created_at, so id breaks it (x before y);
+    // both sort ahead of z (older created_at).
+    expect(tasksByRecency(tasks).map((t) => t.id)).toEqual(["x", "y", "z"]);
+  });
+
+  it("does not mutate the input array", () => {
+    const tasks = [
+      mkTask({ id: "a", updated_at: "2024-01-01T00:00:00Z" }),
+      mkTask({ id: "b", updated_at: "2024-01-03T00:00:00Z" }),
+    ];
+    tasksByRecency(tasks);
+    expect(tasks.map((t) => t.id)).toEqual(["a", "b"]);
   });
 });
 

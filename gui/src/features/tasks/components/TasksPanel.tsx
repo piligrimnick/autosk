@@ -4,8 +4,8 @@
 
 import { useState } from "react";
 import { useStore } from "@/state/store";
-import { activeTasks, activityOf, groupByStatus, taskActivityMap } from "@/state/selectors";
-import { EmptyState, StatusBadge } from "@/components/common";
+import { activeTasks, activityOf, taskActivityMap, tasksByRecency } from "@/state/selectors";
+import { EmptyState } from "@/components/common";
 import { PanelHeader } from "@/features/layout/components/PanelHeader";
 import { NewTaskModal } from "./NewTaskModal";
 import { TaskRow } from "./TaskRow";
@@ -13,8 +13,7 @@ import { TaskRow } from "./TaskRow";
 export function TasksPanel() {
   const { state, effects } = useStore();
   const cwd = state.activeProject ?? "";
-  const tasks = activeTasks(state);
-  const groups = groupByStatus(tasks);
+  const tasks = tasksByRecency(activeTasks(state));
   const activity = taskActivityMap(state);
   const active = state.ui.sidebarPanel === "tasks";
   const [creating, setCreating] = useState(false);
@@ -39,21 +38,11 @@ export function TasksPanel() {
         ) : tasks.length === 0 ? (
           <EmptyState title="No tasks" hint="Create one with ＋." />
         ) : (
-          <div className="task-groups">
-            {groups.map((g) => (
-              <div key={g.status} className="task-group">
-                <div className="task-group-head">
-                  <StatusBadge status={g.status} />
-                  <span className="task-group-count">{g.tasks.length}</span>
-                </div>
-                <ul className="task-list">
-                  {g.tasks.map((t) => (
-                    <TaskRow key={t.id} task={t} activity={activityOf(activity, t.id)} />
-                  ))}
-                </ul>
-              </div>
+          <ul className="task-list">
+            {tasks.map((t) => (
+              <TaskRow key={t.id} task={t} activity={activityOf(activity, t.id)} />
             ))}
-          </div>
+          </ul>
         )}
       </div>
       {creating && <NewTaskModal cwd={cwd} onClose={() => setCreating(false)} />}

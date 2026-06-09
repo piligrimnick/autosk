@@ -72,27 +72,8 @@
   background: var(--bg-2);
 }
 
-.task-groups {
-  padding: 2px 0 8px;
-}
-.task-groups-top {
-  padding: 4px 12px 8px;
-}
 .new-task-btn {
   width: 100%;
-}
-.task-group {
-  margin-bottom: 6px;
-}
-.task-group-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-}
-.task-group-count {
-  color: var(--fg-mute);
-  font-size: 11px;
 }
 .task-list {
   list-style: none;
@@ -102,7 +83,13 @@
   flex-direction: column;
   gap: 2px;
 }
+/* One single-line row: P2  ask-xxxxxx  Title…  DONE — mirrors lazy-mode. The
+ * title flex-grows and ellipsis-truncates so the status chip stays pinned to
+ * the right edge (same trick as .wf-name in workflows.css). */
 .task-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 6px 10px;
   cursor: pointer;
   border-radius: 8px;
@@ -115,28 +102,21 @@
   background: var(--bg-3);
   border-color: var(--border);
 }
-.task-item-top {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
 .task-id {
   font-family: var(--mono);
   font-size: 10.5px;
-  color: var(--fg-mute);
+  color: var(--task-id);
+  flex-shrink: 0;
 }
 .blocked-flag {
   font-size: 10px;
+  flex-shrink: 0;
 }
 .task-item-title {
+  flex: 1;
+  min-width: 0;
   font-size: 12.5px;
-  margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.task-item-step {
-  font-size: 10.5px;
-  color: var(--fg-mute);
-  margin-top: 1px;
 }

@@ -17,6 +17,8 @@
   --status-human: #f2c14e;
   --status-done: #4ade80;
   --status-cancel: #6b7280;
+  /* Task-id blue, matched to lazy-mode's task-id hue (TokyoNight Focus). */
+  --task-id: #7aa2f7;
   --radius: 8px;
   --mono: "SFMono-Regular", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
