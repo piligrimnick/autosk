@@ -1,8 +1,8 @@
-// state/types.ts — the normalized store shape + the action union (plan §6
-// "State engine"). The reducer is slice-composed (reducer.ts): each slice owns
-// a keyed sub-tree (projects / tasks / jobs / timeline / ui). The event router
-// (store.tsx) maps `job-event` / `task-changed` / `project-changed` into these
-// actions; render flows from this state.
+// state/types.ts — the normalized store shape + the action union (redesign plan
+// §3, §6). The reducer is slice-composed (reducer.ts): each slice owns a keyed
+// sub-tree (projects / selection / tasks / jobs / sessions / timeline / ui). The
+// event router (store.tsx) maps `job-event` / `task-changed` / `project-changed`
+// into these actions; render flows from this state.
 
 import type {
   Agent,
@@ -16,6 +16,8 @@ import type {
   TaskView,
   Workflow,
 } from "@/types";
+import type { Selection } from "./selection";
+import { NO_SELECTION } from "./selection";
 
 /** Per-project slice. Keyed by project root (which is also the RPC `cwd`). */
 export interface ProjectSlice {
@@ -39,7 +41,8 @@ export interface TaskExtras {
   loaded: boolean;
 }
 
-export type MainView = "tasks" | "workflows" | "agents" | "settings";
+/** Which overlay modal is open (Agents / Settings), if any. */
+export type ModalKind = "agents" | "settings" | null;
 
 /** The whole app state. */
 export interface AppState {
@@ -48,11 +51,15 @@ export interface AppState {
   activeProject: string | null; // project root
   byProject: Record<string, ProjectSlice>;
 
-  activeTaskId: string | null;
+  /** Unified entity selection (replaces `view` + `activeTaskId`). */
+  selection: Selection;
+
   extrasByTask: Record<string, TaskExtras>;
 
   /** Normalized job map (so status/done frames update one place). */
   jobs: Record<string, Job>;
+  /** Per-project session order (job ids, newest first) for the Sessions panel. */
+  sessionOrderByProject: Record<string, string[]>;
   /** Live transcript per job (ordered, deduped by event_id). */
   messagesByJob: Record<string, MessageEvent[]>;
   /** Highest event_id seen per job, for replay-then-tail dedup. */
@@ -60,7 +67,8 @@ export interface AppState {
   /** The job currently subscribed for a live tail (one at a time in v1). */
   subscribedJob: string | null;
 
-  view: MainView;
+  /** Which overlay modal is open, if any. */
+  ui: { modal: ModalKind };
   daemon: DaemonStatus;
   settings: AppSettings | null;
   /** A transient banner message (errors / confirmations). */
@@ -90,13 +98,14 @@ export function initialState(): AppState {
     projectsLoaded: false,
     activeProject: null,
     byProject: {},
-    activeTaskId: null,
+    selection: NO_SELECTION,
     extrasByTask: {},
     jobs: {},
+    sessionOrderByProject: {},
     messagesByJob: {},
     seenEventId: {},
     subscribedJob: null,
-    view: "tasks",
+    ui: { modal: null },
     daemon: { connected: false, mode: "local" },
     settings: null,
     notice: null,
@@ -106,10 +115,11 @@ export function initialState(): AppState {
 // ---- actions --------------------------------------------------------------
 
 export type Action =
-  // bootstrap / connection
+  // bootstrap / connection / ui
   | { type: "settings/loaded"; settings: AppSettings }
   | { type: "daemon/status"; status: DaemonStatus }
   | { type: "notice/set"; notice: AppState["notice"] }
+  | { type: "ui/modal"; modal: ModalKind }
   // projects
   | { type: "projects/loaded"; projects: ProjectInfo[] }
   | { type: "project/select"; root: string | null }
@@ -117,16 +127,16 @@ export type Action =
   | { type: "project/tasksLoaded"; root: string; tasks: TaskView[] }
   | { type: "project/metaLoaded"; root: string; workflows: Workflow[]; agents: Agent[] }
   | { type: "project/error"; root: string; error: string }
+  // selection
+  | { type: "selection/set"; selection: Selection }
   // tasks
-  | { type: "task/select"; id: string | null }
   | { type: "task/upserted"; root: string; task: TaskView }
   | { type: "task/extrasLoaded"; taskId: string; extras: Omit<TaskExtras, "loaded"> }
-  // jobs
+  // sessions / jobs
+  | { type: "sessions/loaded"; root: string; jobs: Job[] }
   | { type: "jobs/upsertMany"; jobs: Job[] }
   | { type: "job/upsert"; job: Job }
   // timeline / streaming
   | { type: "job/subscribed"; jobId: string | null }
   | { type: "job/messagesReset"; jobId: string; messages: MessageEvent[] }
-  | { type: "job/messageAppended"; jobId: string; eventId: number; message: MessageEvent }
-  // view
-  | { type: "view/set"; view: MainView };
+  | { type: "job/messageAppended"; jobId: string; eventId: number; message: MessageEvent };

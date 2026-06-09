@@ -1,0 +1,99 @@
+/* Sessions panel (redesign plan §8.1) — flat job list with animated status
+ * dots. The pulse animation reuses the global `pulse` keyframe from base.css. */
+
+.session-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.session-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.session-row:hover {
+  background: var(--bg-2);
+}
+.session-row.is-selected {
+  background: var(--bg-3);
+  border-color: var(--border);
+}
+.session-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.session-row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.session-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-sub {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--fg-mute);
+}
+.session-agent {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-time {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* ---- animated status dot --------------------------------------------------*/
+.session-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  display: inline-block;
+  flex-shrink: 0;
+  margin-top: 5px;
+  background: var(--fg-mute);
+}
+.session-dot-running {
+  background: var(--status-processing);
+  box-shadow: 0 0 0 4px rgba(255, 159, 67, 0.12);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.session-dot-running.is-streaming {
+  background: var(--status-reviewing);
+  box-shadow: 0 0 0 4px rgba(47, 209, 196, 0.12);
+  animation: pulse 1s ease-in-out infinite;
+}
+.session-dot-queued {
+  background: var(--status-processing);
+  opacity: 0.55;
+}
+.session-dot-done {
+  background: var(--status-ready);
+}
+.session-dot-failed {
+  background: var(--danger);
+}
+.session-dot-cancelled,
+.session-dot-other {
+  background: var(--fg-mute);
+}

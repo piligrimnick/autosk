@@ -1,11 +1,12 @@
-// NewTaskModal — task creation (lazy `CreateTask` parity). Optionally enroll
-// into a workflow/agent at creation time.
+// NewTaskModal — task creation (lazy `CreateTask` parity); optionally enroll
+// into a workflow at creation time. Relocated from src/components in the
+// feature-folder reorg (redesign plan §5).
 
 import { useState } from "react";
 import { useStore } from "@/state/store";
 import * as ipc from "@/services/ipc";
 import { activeSlice } from "@/state/selectors";
-import { Modal } from "./Modal";
+import { Modal } from "@/components/Modal";
 
 export function NewTaskModal({ cwd, onClose }: { cwd: string; onClose: () => void }) {
   const { state, effects } = useStore();

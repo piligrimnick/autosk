@@ -1,8 +1,10 @@
 // state/store.tsx — the React store: useReducer + an effects layer (async IPC
-// calls that dispatch results) + the event router (plan §6 "State engine"). The
+// calls that dispatch results) + the event router (redesign plan §6.3). The
 // event router (subscribeJobEvents / subscribeTaskChanged / subscribeProjectChanged)
-// maps daemon pushes into reducer actions and refreshes, so every lazy write
-// verb is reflected without a manual refresh.
+// maps daemon pushes into reducer actions and refreshes. Selection is the
+// unified entity model (task | session | workflow | none); the live transcript
+// tail follows either the selected session's job or, when a task is selected,
+// the task's newest running job (one subscription at a time in v1).
 
 import {
   createContext,
@@ -22,17 +24,22 @@ import {
 } from "@/services/events";
 import type { Job } from "@/types";
 import { rootReducer } from "./reducer";
-import { type Action, type AppState, type MainView, initialState } from "./types";
+import { type Action, type AppState, type ModalKind, initialState } from "./types";
+import { NO_SELECTION, selectedSessionJobId, selectedTaskId } from "./selection";
 
 interface Effects {
   bootstrap(): Promise<void>;
   refreshProjects(): Promise<void>;
   selectProject(root: string | null): Promise<void>;
   refreshTasks(root?: string): Promise<void>;
+  refreshSessions(root?: string): Promise<void>;
   refreshMeta(root?: string): Promise<void>;
   selectTask(id: string | null): Promise<void>;
+  selectSession(jobId: string | null): Promise<void>;
+  selectWorkflow(name: string | null): void;
+  clearSelection(): void;
   refreshTask(taskId: string, forceJobId?: string): Promise<void>;
-  setView(view: MainView): void;
+  openModal(modal: ModalKind): void;
   setNotice(notice: AppState["notice"]): void;
   resetLiveTail(): void;
   reconnect(): Promise<void>;
@@ -63,12 +70,49 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const effects = useMemo<Effects>(() => {
     const cwdOf = () => stateRef.current.activeProject ?? "";
 
+    async function teardownLiveTail() {
+      const prev = subRef.current;
+      if (!prev) return;
+      try {
+        await ipc.jobUnsubscribe(prev.cwd, prev.jobId);
+      } catch {
+        /* ignore */
+      }
+      subRef.current = null;
+      dispatch({ type: "job/subscribed", jobId: null });
+    }
+
+    // Reset a job's transcript and replay-then-tail it via subscribe. Tears
+    // down any previous subscription first (one live tail at a time in v1).
+    async function subscribeToJob(cwd: string, jobId: string) {
+      if (subRef.current?.jobId === jobId) return;
+      await teardownLiveTail();
+      dispatch({ type: "job/messagesReset", jobId, messages: [] });
+      try {
+        await ipc.jobSubscribe(cwd, jobId, { attach: true, full: true });
+        subRef.current = { cwd, jobId };
+        dispatch({ type: "job/subscribed", jobId });
+      } catch {
+        /* a not-ready runner just means no live frames yet */
+      }
+    }
+
+    // Load a terminal job's transcript once (immutable snapshot).
+    async function snapshotJob(cwd: string, jobId: string) {
+      if (stateRef.current.messagesByJob[jobId] !== undefined) return;
+      try {
+        const msgs = await ipc.jobMessages(cwd, jobId, true, 0);
+        dispatch({ type: "job/messagesReset", jobId, messages: msgs });
+      } catch {
+        /* best-effort; an unreadable transcript is non-fatal */
+      }
+    }
+
     async function loadTaskMessages(cwd: string, jobs: Job[], forceJobId?: string) {
       // Terminal jobs: snapshot via job.messages. Running job: live tail below.
       // Terminal-job transcripts are immutable, so load each at most once and
-      // skip it on subsequent task-changed refreshes (avoids O(jobs) disk reads
-      // per change). `forceJobId` reloads exactly the job that just finished
-      // (the `done` job-event), giving its final transcript a single refresh.
+      // skip it on subsequent task-changed refreshes. `forceJobId` reloads
+      // exactly the job that just finished (the `done` job-event).
       const have = stateRef.current.messagesByJob;
       for (const job of jobs) {
         if (job.status === "running" || job.status === "queued") continue;
@@ -77,41 +121,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const msgs = await ipc.jobMessages(cwd, job.job_id, true, 0);
           dispatch({ type: "job/messagesReset", jobId: job.job_id, messages: msgs });
         } catch {
-          /* best-effort; an unreadable transcript is non-fatal */
+          /* best-effort */
         }
       }
     }
 
-    async function subscribeLive(cwd: string, jobs: Job[]) {
-      // Pick the newest non-terminal job from the freshly-fetched list (not from
-      // stateRef, which may not have re-rendered with the new jobs yet).
+    // When a TASK is selected, tail its newest running/queued job (if any).
+    async function subscribeTaskLive(cwd: string, jobs: Job[]) {
       const liveJobs = jobs
         .filter((j) => j.status === "running" || j.status === "queued")
         .slice()
         .sort((a, b) => Date.parse(a.created_at || "") - Date.parse(b.created_at || ""));
       const live = liveJobs.length > 0 ? liveJobs[liveJobs.length - 1] : null;
-      // Tear down any previous subscription targeting a different job.
-      const prev = subRef.current;
-      if (prev && (!live || prev.jobId !== live.job_id)) {
-        try {
-          await ipc.jobUnsubscribe(prev.cwd, prev.jobId);
-        } catch {
-          /* ignore */
-        }
-        subRef.current = null;
-        dispatch({ type: "job/subscribed", jobId: null });
+      if (!live) {
+        await teardownLiveTail();
+        return;
       }
-      if (!live) return;
-      if (subRef.current?.jobId === live.job_id) return;
-      // Reset the running job's transcript, then replay-then-tail via subscribe.
-      dispatch({ type: "job/messagesReset", jobId: live.job_id, messages: [] });
-      try {
-        await ipc.jobSubscribe(cwd, live.job_id, { attach: true, full: true });
-        subRef.current = { cwd, jobId: live.job_id };
-        dispatch({ type: "job/subscribed", jobId: live.job_id });
-      } catch {
-        /* a not-ready runner just means no live frames yet */
-      }
+      await subscribeToJob(cwd, live.job_id);
     }
 
     const eff: Effects = {
@@ -130,7 +156,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         // Just load the registry. The reducer auto-selects the first project
         // (projects/loaded), which the `activeProject` effect below picks up to
-        // load its tasks+meta — avoiding a stale dispatch→read in one tick.
+        // load its tasks + sessions + meta.
         await eff.refreshProjects();
       },
 
@@ -144,9 +170,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
 
       async selectProject(root) {
-        // Record the selection only; the `activeProject` effect loads tasks+meta
-        // (covers explicit selection AND the reducer's auto-select on launch /
-        // after a registry change, with no double-load).
+        // Record the selection only; the `activeProject` effect loads tasks +
+        // sessions + meta (covers explicit selection AND the reducer's
+        // auto-select on launch / after a registry change, with no double-load).
+        await teardownLiveTail();
         dispatch({ type: "project/select", root });
       },
 
@@ -157,8 +184,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         try {
           const tasks = await ipc.taskList(cwd, { statuses: ["new", "work", "human", "done", "cancel"] });
           dispatch({ type: "project/tasksLoaded", root: cwd, tasks });
-          // Fuse Jobs into the Tasks view: load the project's live jobs so the
-          // sidebar can show running/streaming indicators per task (plan §6).
+          // Load the project's live jobs so the tasks panel can show
+          // running/streaming indicators per task.
           try {
             const live = await ipc.jobList(cwd, { statuses: ["running", "queued"] });
             dispatch({ type: "jobs/upsertMany", jobs: live });
@@ -167,6 +194,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
         } catch (err) {
           dispatch({ type: "project/error", root: cwd, error: String((err as Error).message ?? err) });
+        }
+      },
+
+      async refreshSessions(root) {
+        const cwd = root ?? cwdOf();
+        if (!cwd) return;
+        try {
+          const jobs = await ipc.jobList(cwd, {});
+          dispatch({ type: "sessions/loaded", root: cwd, jobs });
+        } catch {
+          /* sessions list is best-effort */
         }
       },
 
@@ -180,27 +218,46 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           ]);
           dispatch({ type: "project/metaLoaded", root: cwd, workflows, agents });
         } catch {
-          /* meta is non-fatal for the tasks view */
+          /* meta is non-fatal */
         }
       },
 
       async selectTask(id) {
-        dispatch({ type: "task/select", id });
+        dispatch({ type: "selection/set", selection: id ? { kind: "task", taskId: id } : NO_SELECTION });
         if (id) {
           await eff.refreshTask(id);
         } else {
-          // Leaving the task view: drop any live subscription.
-          const prev = subRef.current;
-          if (prev) {
-            try {
-              await ipc.jobUnsubscribe(prev.cwd, prev.jobId);
-            } catch {
-              /* ignore */
-            }
-            subRef.current = null;
-            dispatch({ type: "job/subscribed", jobId: null });
-          }
+          await teardownLiveTail();
         }
+      },
+
+      async selectSession(jobId) {
+        dispatch({ type: "selection/set", selection: jobId ? { kind: "session", jobId } : NO_SELECTION });
+        if (!jobId) {
+          await teardownLiveTail();
+          return;
+        }
+        const cwd = cwdOf();
+        if (!cwd) return;
+        const job = stateRef.current.jobs[jobId];
+        if (job && (job.status === "running" || job.status === "queued")) {
+          await subscribeToJob(cwd, jobId);
+        } else {
+          await teardownLiveTail();
+          await snapshotJob(cwd, jobId);
+        }
+      },
+
+      selectWorkflow(name) {
+        // Selecting a workflow leaves any live session tail running is wrong —
+        // drop it so the (one-at-a-time) subscription isn't orphaned.
+        void teardownLiveTail();
+        dispatch({ type: "selection/set", selection: name ? { kind: "workflow", name } : NO_SELECTION });
+      },
+
+      clearSelection() {
+        void teardownLiveTail();
+        dispatch({ type: "selection/set", selection: NO_SELECTION });
       },
 
       async refreshTask(taskId, forceJobId) {
@@ -216,14 +273,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           dispatch({ type: "task/upserted", root: cwd, task });
           dispatch({ type: "task/extrasLoaded", taskId, extras: { jobs, comments, signals } });
           await loadTaskMessages(cwd, jobs, forceJobId);
-          await subscribeLive(cwd, jobs);
+          // Only drive the task's live tail while a task is the active
+          // selection (a selected session owns the subscription otherwise).
+          if (selectedTaskId(stateRef.current.selection) === taskId) {
+            await subscribeTaskLive(cwd, jobs);
+          }
         } catch (err) {
           dispatch({ type: "notice/set", notice: { kind: "error", text: String((err as Error).message ?? err) } });
         }
       },
 
-      setView(view) {
-        dispatch({ type: "view/set", view });
+      openModal(modal) {
+        dispatch({ type: "ui/modal", modal });
       },
 
       setNotice(notice) {
@@ -232,9 +293,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       resetLiveTail() {
         // `job.subscribe` is per-connection daemon state; on a connection-
-        // generation change the marker is stale. Clear it so the next
-        // refreshTask re-subscribes on the NEW connection (subscribeLive's
-        // guard keys off subRef).
+        // generation change the marker is stale. Clear it so the next refresh
+        // re-subscribes on the NEW connection.
         subRef.current = null;
         dispatch({ type: "job/subscribed", jobId: null });
       },
@@ -242,8 +302,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       async reconnect() {
         // We KNOW the connection generation changed, so reset the live tail and
         // re-sync the active view DETERMINISTICALLY here rather than depending
-        // on daemon-status event ordering (a superseded connection's late EOF
-        // can otherwise reorder relative to the new connection's `true`).
+        // on daemon-status event ordering.
         eff.resetLiveTail();
         try {
           const status = await ipc.reconnectDaemon();
@@ -253,15 +312,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             const cur = stateRef.current;
             if (cur.activeProject) {
               await eff.refreshTasks(cur.activeProject);
+              await eff.refreshSessions(cur.activeProject);
               await eff.refreshMeta(cur.activeProject);
             }
-            if (cur.activeTaskId) await eff.refreshTask(cur.activeTaskId);
+            await resyncSelection(cur);
           }
         } catch (err) {
           dispatch({ type: "notice/set", notice: { kind: "error", text: String((err as Error).message ?? err) } });
         }
       },
     };
+
+    // Re-sync whatever entity is selected after a (re)connect.
+    async function resyncSelection(cur: AppState) {
+      const taskId = selectedTaskId(cur.selection);
+      if (taskId) {
+        await eff.refreshTask(taskId);
+        return;
+      }
+      const jobId = selectedSessionJobId(cur.selection);
+      if (jobId) {
+        await eff.selectSession(jobId);
+      }
+    }
+
     return eff;
   }, []);
 
@@ -273,21 +347,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "daemon/status", status });
         if (wasConnected === status.connected) return;
         // The connection generation changed (spontaneous daemon restart / socket
-        // drop — the manual reconnect/mode-switch paths reset deterministically
-        // in effects.reconnect). `job.subscribe` is per-connection daemon state,
-        // so any live tail is now bound to a dead connection: reset the marker
-        // so the next refresh re-subscribes on the new connection.
+        // drop). `job.subscribe` is per-connection state, so any live tail is
+        // bound to a dead connection: reset the marker so the next refresh
+        // re-subscribes on the new connection.
         effects.resetLiveTail();
-        // On (re)connect, proactively re-sync + re-subscribe the active view so a
-        // running job keeps streaming and any workflow/agent that changed while
-        // disconnected (refreshMeta) is picked up without a manual refresh.
         if (status.connected) {
           const cur = stateRef.current;
           if (cur.activeProject) {
             void effects.refreshTasks(cur.activeProject);
+            void effects.refreshSessions(cur.activeProject);
             void effects.refreshMeta(cur.activeProject);
           }
-          if (cur.activeTaskId) void effects.refreshTask(cur.activeTaskId);
+          const taskId = selectedTaskId(cur.selection);
+          const jobId = selectedSessionJobId(cur.selection);
+          if (taskId) void effects.refreshTask(taskId);
+          else if (jobId) void effects.selectSession(jobId);
         }
       }),
 
@@ -301,7 +375,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const cur = stateRef.current;
         if (evt.root && evt.root === cur.activeProject) {
           void effects.refreshTasks(cur.activeProject);
-          if (cur.activeTaskId) void effects.refreshTask(cur.activeTaskId);
+          void effects.refreshSessions(cur.activeProject);
+          const taskId = selectedTaskId(cur.selection);
+          if (taskId) void effects.refreshTask(taskId);
         }
       }),
 
@@ -323,11 +399,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               dispatch({ type: "job/upsert", job: evt.job });
             }
             if (evt.kind === "done") {
-              // A finished run may have advanced the workflow — refresh the task,
-              // forcing a single final reload of the just-finished job's
-              // (now-immutable) transcript.
               const cur = stateRef.current;
-              if (cur.activeTaskId) void effects.refreshTask(cur.activeTaskId, evt.job_id);
+              const taskId = selectedTaskId(cur.selection);
+              // A finished run may have advanced the workflow — refresh the
+              // selected task (forcing one final reload of the just-finished
+              // job's now-immutable transcript). If the finished job is the
+              // selected session, re-snapshot it directly.
+              if (taskId) {
+                void effects.refreshTask(taskId, evt.job_id);
+              } else if (selectedSessionJobId(cur.selection) === evt.job_id) {
+                void effects.selectSession(evt.job_id);
+              }
             }
             break;
           case "error":
@@ -341,15 +423,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
   }, [effects]);
 
-  // Load a project's tasks + meta whenever it becomes the active project. This
-  // covers BOTH an explicit user selection and the reducer's auto-select of the
-  // first project on launch (and after a registry change). Reading from
-  // committed React state (not stateRef) is what fixes the first-launch race
-  // where tasks/workflows/agents never loaded for the auto-selected project.
+  // Load a project's tasks + sessions + meta whenever it becomes the active
+  // project. Covers BOTH an explicit user selection and the reducer's
+  // auto-select of the first project on launch (and after a registry change).
   useEffect(() => {
     const root = state.activeProject;
     if (!root) return;
     void effects.refreshTasks(root);
+    void effects.refreshSessions(root);
     void effects.refreshMeta(root);
   }, [state.activeProject, effects]);
 

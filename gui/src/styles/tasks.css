@@ -1,0 +1,25 @@
+/* Tasks panel (redesign plan §8.5). Reuses the .task-item* classes from
+ * sidebar.css; adds the row kebab. */
+
+.task-groups {
+  padding: 4px 0 8px;
+}
+.task-kebab {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--fg-mute);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: 4px;
+  opacity: 0;
+}
+.task-item:hover .task-kebab,
+.task-selected .task-kebab {
+  opacity: 1;
+}
+.task-kebab:hover {
+  background: var(--bg-3);
+  color: var(--fg);
+}

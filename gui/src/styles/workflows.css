@@ -1,0 +1,111 @@
+/* Workflows panel + read-only center view (redesign plan §8.3/§8.6). */
+
+.wf-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.wf-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.wf-row:hover {
+  background: var(--bg-2);
+}
+.wf-row.is-selected {
+  background: var(--bg-3);
+  border-color: var(--border);
+}
+.wf-bullet {
+  color: var(--fg-mute);
+}
+.wf-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-wt {
+  font-size: 10px;
+  color: var(--accent-2);
+}
+
+/* ---- center: read-only workflow view -------------------------------------*/
+.workflow-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.workflow-view-head {
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.workflow-view-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.workflow-view-title {
+  margin: 0;
+  font-size: 17px;
+}
+.workflow-view-meta {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--fg-mute);
+}
+.workflow-view-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+}
+.workflow-view-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.workflow-section-head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-mute);
+  margin-bottom: 8px;
+}
+.workflow-step-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 3px 0;
+}
+.workflow-step-name {
+  color: var(--fg);
+  min-width: 120px;
+}
+.workflow-step-agent {
+  color: var(--fg-dim);
+}
+.workflow-step-next {
+  color: var(--fg-mute);
+}
+.workflow-json pre {
+  max-height: 320px;
+  overflow: auto;
+}

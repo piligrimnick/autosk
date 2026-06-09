@@ -27,6 +27,20 @@ pub fn run() {
             reconnect_daemon,
             daemon_status,
         ])
+        .setup(|_app| {
+            // macOS keeps native decorations + traffic lights via the
+            // `titleBarStyle: Overlay` window config; Windows has no overlay
+            // mode, so strip the native frame here and render custom caption
+            // controls in the React titlebar (redesign plan §4.2).
+            #[cfg(windows)]
+            {
+                use tauri::Manager;
+                if let Some(win) = _app.get_webview_window("main") {
+                    let _ = win.set_decorations(false);
+                }
+            }
+            Ok(())
+        })
         // No background pre-connect: the frontend's bootstrap() issues its first
         // daemon_request (project.list) immediately, which lazily establishes
         // the connection through the single-flight `ensure_connection`. Dropping

@@ -1,10 +1,13 @@
-// state/reducer.ts — the slice-composed reducer (plan §6). `rootReducer`
-// dispatches each action through every slice; each slice owns a keyed sub-tree
-// (projects / tasks / jobs / timeline / ui) and returns the (possibly) updated
-// state. Slices are pure functions of (state, action).
+// state/reducer.ts — the slice-composed reducer (redesign plan §6.2).
+// `rootReducer` dispatches each action through every slice; each slice owns a
+// keyed sub-tree (ui / projects / selection / tasks / jobs / sessions /
+// timeline) and returns the (possibly) updated state. Slices are pure functions
+// of (state, action). An action may be handled by more than one slice (e.g.
+// `task/extrasLoaded` updates both tasks and the normalized job map).
 
 import type { Action, AppState, ProjectSlice } from "./types";
 import { emptyExtras, emptyProjectSlice } from "./types";
+import { NO_SELECTION } from "./selection";
 
 function patchProject(
   state: AppState,
@@ -15,7 +18,7 @@ function patchProject(
   return { ...state, byProject: { ...state.byProject, [root]: patch(cur) } };
 }
 
-/** Connection / settings / notice. */
+/** Connection / settings / notice / modal. */
 function uiSlice(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "settings/loaded":
@@ -24,8 +27,8 @@ function uiSlice(state: AppState, action: Action): AppState {
       return { ...state, daemon: action.status };
     case "notice/set":
       return { ...state, notice: action.notice };
-    case "view/set":
-      return { ...state, view: action.view };
+    case "ui/modal":
+      return { ...state, ui: { ...state.ui, modal: action.modal } };
     default:
       return state;
   }
@@ -50,10 +53,13 @@ function projectsSlice(state: AppState, action: Action): AppState {
       if (!activeProject && action.projects.length > 0) {
         activeProject = action.projects[0].root;
       }
-      return { ...state, projects: action.projects, projectsLoaded: true, byProject, activeProject };
+      // The selection is scoped to the active project; drop it if the active
+      // project changed (removed, or first auto-select).
+      const selection = activeProject === state.activeProject ? state.selection : NO_SELECTION;
+      return { ...state, projects: action.projects, projectsLoaded: true, byProject, activeProject, selection };
     }
     case "project/select":
-      return { ...state, activeProject: action.root, activeTaskId: null };
+      return { ...state, activeProject: action.root, selection: NO_SELECTION };
     case "project/tasksLoading":
       return patchProject(state, action.root, (s) => ({ ...s, loading: true, error: null }));
     case "project/tasksLoaded": {
@@ -86,13 +92,21 @@ function projectsSlice(state: AppState, action: Action): AppState {
   }
 }
 
-/** Task selection + single-task upserts + per-task extras. */
+/** Unified entity selection. */
+function selectionSlice(state: AppState, action: Action): AppState {
+  switch (action.type) {
+    case "selection/set":
+      return { ...state, selection: action.selection };
+    default:
+      return state;
+  }
+}
+
+/** Single-task upserts + per-task extras. */
 function tasksSlice(state: AppState, action: Action): AppState {
   switch (action.type) {
-    case "task/select":
-      return { ...state, activeTaskId: action.id };
     case "task/upserted": {
-      const next = patchProject(state, action.root, (s) => {
+      return patchProject(state, action.root, (s) => {
         const exists = s.tasks[action.task.id] !== undefined;
         return {
           ...s,
@@ -100,7 +114,6 @@ function tasksSlice(state: AppState, action: Action): AppState {
           taskOrder: exists ? s.taskOrder : [action.task.id, ...s.taskOrder],
         };
       });
-      return next;
     }
     case "task/extrasLoaded":
       return {
@@ -115,7 +128,7 @@ function tasksSlice(state: AppState, action: Action): AppState {
   }
 }
 
-/** Normalized job map. */
+/** Normalized job map + the per-project session order (Sessions panel). */
 function jobsSlice(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "jobs/upsertMany": {
@@ -125,8 +138,21 @@ function jobsSlice(state: AppState, action: Action): AppState {
       }
       return { ...state, jobs };
     }
-    case "job/upsert":
-      return { ...state, jobs: { ...state.jobs, [action.job.job_id]: action.job } };
+    case "job/upsert": {
+      const jobs = { ...state.jobs, [action.job.job_id]: action.job };
+      // A freshly-spawned run shows up at the top of the active project's
+      // Sessions panel live (the daemon only pushes job-events for the active
+      // project's jobs).
+      let sessionOrderByProject = state.sessionOrderByProject;
+      const root = state.activeProject;
+      if (root) {
+        const order = sessionOrderByProject[root] ?? [];
+        if (!order.includes(action.job.job_id)) {
+          sessionOrderByProject = { ...sessionOrderByProject, [root]: [action.job.job_id, ...order] };
+        }
+      }
+      return { ...state, jobs, sessionOrderByProject };
+    }
     case "task/extrasLoaded": {
       // Mirror the task's jobs into the normalized map so timeline lookups and
       // status frames share one source of truth.
@@ -135,6 +161,29 @@ function jobsSlice(state: AppState, action: Action): AppState {
         jobs[j.job_id] = j;
       }
       return { ...state, jobs };
+    }
+    default:
+      return state;
+  }
+}
+
+/** Per-project session order (job.list snapshot) for the Sessions panel. */
+function sessionsSlice(state: AppState, action: Action): AppState {
+  switch (action.type) {
+    case "sessions/loaded": {
+      const jobs = { ...state.jobs };
+      for (const j of action.jobs) {
+        jobs[j.job_id] = j;
+      }
+      const order = action.jobs
+        .slice()
+        .sort((a, b) => Date.parse(b.created_at || "") - Date.parse(a.created_at || ""))
+        .map((j) => j.job_id);
+      return {
+        ...state,
+        jobs,
+        sessionOrderByProject: { ...state.sessionOrderByProject, [action.root]: order },
+      };
     }
     default:
       return state;
@@ -169,7 +218,15 @@ function timelineSlice(state: AppState, action: Action): AppState {
   }
 }
 
-const SLICES = [uiSlice, projectsSlice, tasksSlice, jobsSlice, timelineSlice];
+const SLICES = [
+  uiSlice,
+  projectsSlice,
+  selectionSlice,
+  tasksSlice,
+  jobsSlice,
+  sessionsSlice,
+  timelineSlice,
+];
 
 /** Compose every slice: each may transform the state for a given action. */
 export function rootReducer(state: AppState, action: Action): AppState {

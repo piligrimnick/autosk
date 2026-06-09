@@ -11,6 +11,10 @@ The frontend is transport-agnostic: only the Rust backend switches.
 > initiative. Canonical plan:
 > [`docs/plans/20260607-Rust-Daemon-Tauri-GUI.md`](../docs/plans/20260607-Rust-Daemon-Tauri-GUI.md)
 > (§6, §9 Phase 4). Final doc/README cutover and CI release gates are Phase 5.
+>
+> The desktop UI has since been rebuilt as a **frameless 3-panel workspace**
+> (sessions · polymorphic center · tasks + workflows); design + phasing in
+> [`docs/plans/20260609-tauri-gui-redesign.md`](../docs/plans/20260609-tauri-gui-redesign.md).
 
 ## Layout
 
@@ -21,23 +25,34 @@ gui/
 ├── vitest.config.ts            # pure-logic unit tests (no browser/daemon)
 ├── scripts/
 │   └── check-ipc-discipline.mjs   # guard: single invoke + single listen site
-├── src/                        # React frontend
-│   ├── main.tsx, App.tsx
+├── src/                        # React frontend (feature-folder layout)
+│   ├── main.tsx, App.tsx       # App mounts the frameless 3-panel AppShell
 │   ├── types.ts                # wire types (mirror crates/autosk-proto)
 │   ├── services/
 │   │   ├── ipc.ts              # the ONLY `invoke` site (typed shim per RPC method)
 │   │   └── events.ts           # the ONLY `listen` site (ref-counted fan-out hub)
 │   ├── state/
-│   │   ├── reducer.ts          # normalized, slice-composed reducer (project/task/job)
-│   │   ├── selectors.ts        # timeline interleave, composer mode, activity map
-│   │   └── store.tsx           # event router: notifications → reducer actions
-│   └── components/             # Sidebar, TaskTimeline, Composer, RightPanel,
-│                               # WorkflowsView, AgentsView, SettingsView, …
+│   │   ├── selection.ts        # entity-selection union (task|session|workflow|none)
+│   │   ├── reducer.ts          # normalized, slice-composed reducer
+│   │   ├── selectors.ts        # sessions, transcript, entity-driven composer mode
+│   │   ├── store.tsx           # effects + event router: notifications → actions
+│   │   └── types.ts            # AppState shape + action union
+│   ├── features/               # one folder per UI domain
+│   │   ├── layout/             # AppShell, Titlebar, WindowCaptionControls, PanelHeader
+│   │   ├── sessions/           # SessionsPanel, SessionRow, SessionStatusDot
+│   │   ├── center/             # CenterPanel/Header, Composer, Transcript,
+│   │   │                       #   views/ (Session | Task | Workflow | Empty)
+│   │   ├── tasks/              # TasksPanel, TaskRow, TaskRowMenu, NewTaskModal
+│   │   ├── workflows/          # WorkflowsPanel, WorkflowRow, CreateWorkflowModal
+│   │   ├── projects/           # ProjectSwitcher, AddProjectModal
+│   │   ├── agents/ · settings/ # AgentsModal, SettingsModal
+│   │   └── shared/             # Menu (portal dropdown)
+│   └── components/             # shared primitives: Modal, Markdown, NoticeBar, common
 └── src-tauri/                  # Tauri (Rust) backend — STANDALONE cargo crate,
     │                           # excluded from the root workspace (doltlite-free)
     ├── tauri.conf.json
     └── src/
-        ├── lib.rs, main.rs     # command registry
+        ├── lib.rs, main.rs     # command registry + setup(): frameless decorations (Windows)
         ├── commands.rs         # `daemon_request` chokepoint + settings/reconnect/status
         ├── state.rs            # AppState (connection, settings, connect-lock, epoch)
         ├── settings.rs         # persisted local/remote mode + host/token
@@ -67,11 +82,18 @@ The design mirrors the CodexMonitor blueprint ("shared core + thin adapters"):
   backend auto-issues `task.subscribe` + `project.subscribe` so change pushes
   flow without the frontend knowing the transport.
 - **State engine.** A normalized, slice-composed reducer keyed by
-  project/task/job. The event router (`state/store.tsx`) maps notifications into
-  reducer actions; render flows from reducer state. The center task-timeline
-  concatenates the task's jobs' transcripts chronologically, interleaves
-  comments and step-signals by timestamp, and live-tails the running job via
-  `job.subscribe`.
+  project/task/job/session. A single `selection` (task | session | workflow |
+  none) drives the polymorphic center; `state/store.tsx` holds the effects layer
+  + the event router that maps notifications into reducer actions. The live
+  transcript tail follows either the selected session's job or, when a task is
+  selected, the task's newest running job (one `job.subscribe` at a time).
+- **UI shell.** A frameless window (macOS `titleBarStyle: Overlay`; Windows
+  `decorations:false` + custom caption controls) over a 3-panel layout: a
+  **Sessions** list (all jobs, animated status dots) on the left, a polymorphic
+  **center** (session transcript / task sheet / read-only workflow) with one
+  entity-aware composer, and a **Tasks + Workflows** stack on the right. A
+  titlebar hosts the connection indicator and the Agents/Settings modals; the
+  center header hosts the project switcher (switch / add / init / remove).
 
 Both invariants are enforced by `scripts/check-ipc-discipline.mjs` (run as part
 of `npm run typecheck`) and an eslint `no-restricted-imports` rule, so a stray

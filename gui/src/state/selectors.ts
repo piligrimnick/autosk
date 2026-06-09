@@ -3,10 +3,10 @@
 // jobs' transcripts concatenated chronologically, with comments and
 // step-signals interleaved by timestamp (plan §6 "Center task-timeline").
 
-import type { Comment, Job, MessageEvent, Signal, TaskView } from "@/types";
-import { OPEN_STATUSES } from "@/types";
+import type { Comment, Job, MessageEvent, Signal, TaskView, Workflow } from "@/types";
 import type { AppState, ProjectSlice } from "./types";
 import { emptyExtras, emptyProjectSlice } from "./types";
+import { selectedSessionJobId, selectedTaskId, selectedWorkflowName } from "./selection";
 
 export function activeSlice(state: AppState): ProjectSlice {
   if (!state.activeProject) return emptyProjectSlice();
@@ -18,10 +18,38 @@ export function activeTasks(state: AppState): TaskView[] {
   return slice.taskOrder.map((id) => slice.tasks[id]).filter(Boolean);
 }
 
+/** The selected task id, or null when the selection is not a task. */
+export function activeTaskId(state: AppState): string | null {
+  return selectedTaskId(state.selection);
+}
+
 export function activeTask(state: AppState): TaskView | null {
-  if (!state.activeTaskId) return null;
+  const id = activeTaskId(state);
+  if (!id) return null;
   const slice = activeSlice(state);
-  return slice.tasks[state.activeTaskId] ?? null;
+  return slice.tasks[id] ?? null;
+}
+
+/** The Job backing the selected session, or null. */
+export function selectedSessionJob(state: AppState): Job | null {
+  const id = selectedSessionJobId(state.selection);
+  if (!id) return null;
+  return state.jobs[id] ?? null;
+}
+
+/** The selected workflow (looked up by name in the active project), or null. */
+export function selectedWorkflow(state: AppState): Workflow | null {
+  const name = selectedWorkflowName(state.selection);
+  if (!name) return null;
+  return activeSlice(state).workflows.find((w) => w.name === name) ?? null;
+}
+
+/** All sessions (jobs) of the active project, newest first (Sessions panel). */
+export function sessionsForProject(state: AppState): Job[] {
+  const root = state.activeProject;
+  if (!root) return [];
+  const order = state.sessionOrderByProject[root] ?? [];
+  return order.map((id) => state.jobs[id]).filter(Boolean);
 }
 
 /** Status display order for the sidebar groups. */
@@ -188,24 +216,40 @@ export function timelineKey(item: TimelineItem): string {
   }
 }
 
-/** The composer mode is driven by the selected task's state (plan §6). */
-export type ComposerMode = "running" | "human" | "new" | "enrolled" | "terminal";
+/**
+ * The unified composer mode, driven by the SELECTED ENTITY (redesign plan §6.4,
+ * decision #5):
+ *   - session selected + running/queued job → "steer" (steer/follow-up/abort)
+ *   - session selected + terminal job       → "readonly"
+ *   - task selected                         → task-status composer
+ *     ("new" enroll / "human" resume / "work" comment / terminal reopen),
+ *     ignoring any running job (the session view is where you steer)
+ *   - nothing (or workflow) selected        → "none"
+ */
+export type ComposerMode = "steer" | "readonly" | "new" | "human" | "enrolled" | "terminal" | "none";
 
-export function composerMode(state: AppState, task: TaskView | null): ComposerMode {
-  if (!task) return "new";
-  if (runningJob(state, task.id)) return "running";
-  switch (task.status) {
-    case "human":
-      return "human";
-    case "new":
-      return "new";
-    case "work":
-      return "enrolled";
-    default:
-      return "terminal";
+export function composerMode(state: AppState): ComposerMode {
+  const sel = state.selection;
+  if (sel.kind === "session") {
+    const job = state.jobs[sel.jobId];
+    if (job && (job.status === "running" || job.status === "queued")) return "steer";
+    return "readonly";
   }
+  if (sel.kind === "task") {
+    const task = activeSlice(state).tasks[sel.taskId];
+    if (!task) return "none";
+    switch (task.status) {
+      case "human":
+        return "human";
+      case "new":
+        return "new";
+      case "work":
+        return "enrolled";
+      default:
+        return "terminal";
+    }
+  }
+  return "none";
 }
 
-export function isOpenStatus(status: string): boolean {
-  return (OPEN_STATUSES as readonly string[]).includes(status);
-}
+

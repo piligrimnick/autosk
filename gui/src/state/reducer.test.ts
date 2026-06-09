@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest";
 import { rootReducer } from "./reducer";
 import { emptyProjectSlice, initialState, type AppState } from "./types";
-import type { MessageEvent, ProjectInfo } from "@/types";
+import type { Job, MessageEvent, ProjectInfo } from "@/types";
 
 function msg(text: string): MessageEvent {
   return { kind: "assistant_text", text };
@@ -14,6 +14,24 @@ function msg(text: string): MessageEvent {
 
 function project(root: string): ProjectInfo {
   return { root, db_path: `${root}/.autosk/db`, name: root.split("/").pop() ?? root };
+}
+
+function jobRow(id: string, createdAt: string): Job {
+  return {
+    job_id: id,
+    task_id: "t1",
+    step_id: "s1",
+    status: "running",
+    corrections_used: 0,
+    max_corrections: 0,
+    created_at: createdAt,
+    duration_ms: 0,
+    attach_count: 0,
+    streaming: false,
+    workflow_name: "wf",
+    step_name: "dev",
+    agent_name: "a",
+  };
 }
 
 describe("timelineSlice", () => {
@@ -87,5 +105,53 @@ describe("projectsSlice projects/loaded", () => {
     s = rootReducer(s, { type: "projects/loaded", projects: [] });
     expect(s.activeProject).toBeNull();
     expect(s.projectsLoaded).toBe(true);
+  });
+});
+
+describe("selection + sessions slices", () => {
+  it("project/select switches the project and clears the selection", () => {
+    const s0: AppState = { ...initialState(), selection: { kind: "task", taskId: "t1" } };
+    const s = rootReducer(s0, { type: "project/select", root: "/a" });
+    expect(s.activeProject).toBe("/a");
+    expect(s.selection).toEqual({ kind: "none" });
+  });
+
+  it("projects/loaded keeps the selection when the active project is unchanged", () => {
+    const s0: AppState = {
+      ...initialState(),
+      activeProject: "/a",
+      byProject: { "/a": emptyProjectSlice() },
+      selection: { kind: "task", taskId: "t1" },
+    };
+    const s = rootReducer(s0, { type: "projects/loaded", projects: [project("/a")] });
+    expect(s.activeProject).toBe("/a");
+    expect(s.selection).toEqual({ kind: "task", taskId: "t1" });
+  });
+
+  it("sessions/loaded fills the session order newest-first and upserts jobs", () => {
+    const a = jobRow("a", "2024-01-01T00:00:00Z");
+    const b = jobRow("b", "2024-01-02T00:00:00Z");
+    let s: AppState = { ...initialState(), activeProject: "/p" };
+    s = rootReducer(s, { type: "sessions/loaded", root: "/p", jobs: [a, b] });
+    expect(s.sessionOrderByProject["/p"]).toEqual(["b", "a"]); // newest first
+    expect(s.jobs["a"]).toBeDefined();
+    expect(s.jobs["b"]).toBeDefined();
+  });
+
+  it("job/upsert prepends a new job to the active project's session order, idempotently", () => {
+    const a = jobRow("a", "2024-01-01T00:00:00Z");
+    let s: AppState = {
+      ...initialState(),
+      activeProject: "/p",
+      jobs: { a },
+      sessionOrderByProject: { "/p": ["a"] },
+    };
+    const c = jobRow("c", "2024-01-03T00:00:00Z");
+    s = rootReducer(s, { type: "job/upsert", job: c });
+    expect(s.sessionOrderByProject["/p"]).toEqual(["c", "a"]);
+    // Re-upserting an existing job updates the map but never duplicates the order.
+    s = rootReducer(s, { type: "job/upsert", job: { ...c, status: "done" } });
+    expect(s.sessionOrderByProject["/p"]).toEqual(["c", "a"]);
+    expect(s.jobs["c"].status).toBe("done");
   });
 });

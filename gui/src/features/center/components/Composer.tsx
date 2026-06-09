@@ -1,31 +1,34 @@
-// Composer (plan §6 "Composer (state-aware)") — the delta from a single text
-// box. The available actions depend on the selected task's state:
-//   running  → prompt/steer (Cmd/Ctrl+Enter), follow_up, abort
-//   human    → add comment + resume (optionally --to <step>)
-//   new      → enroll (workflow/agent + step picker)
-//   work     → add comment (queued / between steps)
-//   terminal → reopen + comment
+// Composer — the unified, entity-aware input at the bottom of the center panel
+// (redesign plan §8.4). Mode is resolved by `composerMode(state)`:
+//   steer    → session selected, job running/queued → steer/follow-up/abort/cancel
+//   readonly → session selected, job terminal → muted strip, no input
+//   (task modes: new/human/enrolled/terminal land in Phase 4)
+//   none     → nothing renders
 
 import { useMemo, useState } from "react";
 import { useStore } from "@/state/store";
 import * as ipc from "@/services/ipc";
-import { activeSlice, activeTask, composerMode, runningJob } from "@/state/selectors";
+import { activeSlice, activeTask, composerMode, selectedSessionJob } from "@/state/selectors";
 
 export function Composer() {
   const { state } = useStore();
-  const task = activeTask(state);
-  if (!task) return null;
-  const mode = composerMode(state, task);
-
-  return (
-    <div className="composer">
-      {mode === "running" && <RunningComposer />}
-      {mode === "human" && <HumanComposer />}
-      {mode === "new" && <EnrollComposer />}
-      {mode === "enrolled" && <CommentComposer hint="Task is enrolled and waiting. Leave a note for the next step." />}
-      {mode === "terminal" && <TerminalComposer />}
-    </div>
-  );
+  const mode = composerMode(state);
+  switch (mode) {
+    case "steer":
+      return <SteerComposer />;
+    case "readonly":
+      return <ReadonlyComposer />;
+    case "new":
+      return <EnrollComposer />;
+    case "human":
+      return <HumanComposer />;
+    case "enrolled":
+      return <CommentComposer hint="Task is enrolled and waiting. Leave a note for the next step." />;
+    case "terminal":
+      return <TerminalComposer />;
+    default:
+      return null;
+  }
 }
 
 function useCwd() {
@@ -33,19 +36,18 @@ function useCwd() {
   return state.activeProject ?? "";
 }
 
-// ---- running job: steer / follow_up / abort -------------------------------
+// ---- running/queued session: steer / follow_up / abort / cancel -----------
 
-function RunningComposer() {
+function SteerComposer() {
   const { state, effects } = useStore();
   const cwd = useCwd();
-  const task = activeTask(state)!;
-  const job = runningJob(state, task.id);
-  const queued = job?.status === "queued";
+  const job = selectedSessionJob(state)!;
+  const queued = job.status === "queued";
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
 
   const send = async (behavior: "steer" | "follow_up") => {
-    if (!job || !text.trim()) return;
+    if (!text.trim()) return;
     setBusy(true);
     try {
       await ipc.jobInput(cwd, job.job_id, text, behavior);
@@ -58,7 +60,6 @@ function RunningComposer() {
   };
 
   const abort = async () => {
-    if (!job) return;
     if (!confirm("Abort the current turn?")) return;
     setBusy(true);
     try {
@@ -70,15 +71,10 @@ function RunningComposer() {
     }
   };
 
-  // Cancel (lazy `K` "cancel job"/"kill"). Distinct from abort: job.cancel stops
-  // BOTH a running run (fires its cancel token) and a QUEUED run (marks the row
-  // cancelled so no worker picks it up) and is idempotent on terminal — whereas
-  // job.abort needs a live registered runner and CONFLICTs on a queued/terminal
-  // run. No manual refresh: the daemon's job-event + task-changed pushes drive
-  // the update through the event router (plan §6 acceptance: every lazy write
-  // verb reachable + reflected without a manual refresh).
+  // Cancel (lazy `K`). Distinct from abort: job.cancel stops BOTH a running run
+  // and a QUEUED run and is idempotent on terminal; job.abort needs a live
+  // runner and CONFLICTs on a queued/terminal run.
   const cancel = async () => {
-    if (!job) return;
     const verb = queued ? "Cancel this queued job" : "Cancel (kill) the running job";
     if (!confirm(`${verb} ${job.job_id.slice(0, 8)}?`)) return;
     setBusy(true);
@@ -99,11 +95,11 @@ function RunningComposer() {
   };
 
   return (
-    <div className="composer-running">
+    <div className="composer composer-running">
       <div className="composer-state">
-        <span className={`run-indicator ${job?.streaming ? "streaming" : ""}`}>●</span> {queued ? "queued" : "running"} · job{" "}
-        {job?.job_id.slice(0, 8)}
-        {job?.streaming ? " · streaming" : ""}
+        <span className={`run-indicator ${job.streaming ? "streaming" : ""}`}>●</span>{" "}
+        {queued ? "queued" : "running"} · job {job.job_id.slice(0, 8)}
+        {job.streaming ? " · streaming" : ""}
       </div>
       <textarea
         className="composer-input"
@@ -141,7 +137,19 @@ function RunningComposer() {
   );
 }
 
-// ---- human-parked: comment + resume ---------------------------------------
+// ---- terminal session: read-only ------------------------------------------
+
+function ReadonlyComposer() {
+  const { state } = useStore();
+  const job = selectedSessionJob(state);
+  return (
+    <div className="composer composer-readonly">
+      <div className="composer-state">session is {job?.status ?? "—"} · read-only</div>
+    </div>
+  );
+}
+
+// ---- task: human-parked — comment + resume --------------------------------
 
 function HumanComposer() {
   const { state, effects } = useStore();
@@ -188,7 +196,7 @@ function HumanComposer() {
   };
 
   return (
-    <div className="composer-human">
+    <div className="composer composer-human">
       <div className="composer-state">⏸ waiting for human</div>
       <textarea
         className="composer-input"
@@ -220,7 +228,7 @@ function HumanComposer() {
   );
 }
 
-// ---- new: enroll ----------------------------------------------------------
+// ---- task: new — enroll ---------------------------------------------------
 
 function EnrollComposer() {
   const { state, effects } = useStore();
@@ -239,12 +247,10 @@ function EnrollComposer() {
   const enroll = async () => {
     setBusy(true);
     try {
-      const args =
-        kind === "workflow"
-          ? { workflow, step: step || undefined }
-          : { agent, step: step || undefined };
       if (kind === "workflow" && !workflow) throw new Error("Pick a workflow.");
       if (kind === "agent" && !agent) throw new Error("Pick an agent.");
+      const args =
+        kind === "workflow" ? { workflow, step: step || undefined } : { agent, step: step || undefined };
       await ipc.taskEnroll(cwd, task.id, args);
       await effects.refreshTask(task.id);
     } catch (err) {
@@ -255,7 +261,7 @@ function EnrollComposer() {
   };
 
   return (
-    <div className="composer-enroll">
+    <div className="composer composer-enroll">
       <div className="composer-state">🆕 new — enroll to start work</div>
       <div className="composer-actions composer-wrap">
         <div className="seg">
@@ -303,7 +309,7 @@ function EnrollComposer() {
   );
 }
 
-// ---- work (no running job): comment ---------------------------------------
+// ---- task: work (no running job) — comment ---------------------------------
 
 function CommentComposer({ hint }: { hint: string }) {
   const { state, effects } = useStore();
@@ -327,7 +333,7 @@ function CommentComposer({ hint }: { hint: string }) {
   };
 
   return (
-    <div className="composer-comment">
+    <div className="composer composer-comment">
       <div className="composer-state">{hint}</div>
       <textarea
         className="composer-input"
@@ -345,7 +351,7 @@ function CommentComposer({ hint }: { hint: string }) {
   );
 }
 
-// ---- terminal: reopen + comment -------------------------------------------
+// ---- task: terminal — reopen ----------------------------------------------
 
 function TerminalComposer() {
   const { state, effects } = useStore();
@@ -366,7 +372,7 @@ function TerminalComposer() {
   };
 
   return (
-    <div className="composer-terminal">
+    <div className="composer composer-terminal">
       <div className="composer-state">task is {task.status}</div>
       <div className="composer-actions">
         <button className="btn btn-primary" disabled={busy} onClick={() => void reopen()}>

@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **gui:** new Tauri desktop app (`gui/`) at `autosk lazy` parity — local (auto-spawned `autoskd` over UDS) and remote (TCP + token) modes behind a transport-agnostic frontend, live task-timeline streaming via `job.subscribe`, a state-aware composer (steer/follow_up/abort/cancel, comment/resume, enroll), and projects/tasks/jobs/workflows/agents views (ask-9e5f8c).
 
 ### Changed
+- **gui:** redesigned the desktop app into a **frameless 3-panel workspace** — a left **Sessions** list (every job, newest-first, with animated status dots), a polymorphic **center** (session transcript / task sheet with comments / read-only workflow definition) driven by one entity-aware composer, and a right **Tasks + Workflows** stack. A titlebar hosts the connection indicator and the Agents/Settings modals, and the center header carries a project switcher (switch / add / init / remove); the old top-nav + projects sidebar are gone.
 - **build:** `make install` now also builds `autoskd` (release) and installs it alongside `autosk` in `$GOBIN`/`$GOPATH/bin`, so auto-spawn works for source installs out of the box; `make uninstall` removes both. New `make install-autoskd` target installs only the daemon.
 - **bootstrap:** `feature-dev-generic` workflow now ships with `isolation: worktree` by default.
 - **daemon:** `autosk daemon status | messages | cancel | list` now route to the `autoskd` daemon over JSON-RPC instead of the retired Go daemon (ask-2e7e27).

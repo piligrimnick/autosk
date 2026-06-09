@@ -31,6 +31,21 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  /* The shell owns all scroll regions; the document itself never scrolls, and
+   * overscroll-behavior:none kills the macOS rubber-band bounce of the whole
+   * window when an inner pane is scrolled past its limit. */
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Inner scroll panes: contain overscroll so hitting their top/bottom doesn't
+ * chain to (and bounce) the document. */
+.panel-body,
+.session-view-transcript,
+.task-view-body,
+.workflow-view-body,
+.modal-body {
+  overscroll-behavior: contain;
 }
 
 body {

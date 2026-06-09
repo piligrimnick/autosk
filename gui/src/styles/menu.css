@@ -1,0 +1,77 @@
+/* Portal dropdown menu (redesign plan §8.5). */
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+}
+.menu {
+  min-width: 184px;
+  max-width: 280px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+.menu-item {
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.menu-item:hover:not(:disabled) {
+  background: var(--bg-3);
+}
+.menu-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.menu-item-danger {
+  color: #ff8a8a;
+}
+.menu-item-danger:hover:not(:disabled) {
+  background: #3a2626;
+}
+.menu-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-mute);
+  padding: 6px 10px 2px;
+}
+.menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+.menu-row {
+  display: flex;
+  align-items: center;
+}
+.menu-item-grow {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.menu-item-active {
+  color: var(--accent);
+}
+.menu-remove {
+  background: transparent;
+  border: none;
+  color: var(--fg-mute);
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+.menu-remove:hover {
+  background: #3a2626;
+  color: #ff8a8a;
+}

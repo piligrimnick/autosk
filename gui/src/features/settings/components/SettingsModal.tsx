@@ -1,15 +1,15 @@
-// SettingsView — backend transport mode (plan §6: "mode is an app setting").
-// Local = autoskd sidecar over UDS (auto-spawned); Remote = a configured
-// host:port + token over TCP. The frontend is identical for both — only this
-// setting (and the Rust command's switch) changes.
+// SettingsModal — backend transport mode in a titlebar-launched modal (redesign
+// plan §8.7, decision #7). Ported from the legacy SettingsView body; Local =
+// autoskd over UDS (auto-spawned), Remote = host:port + token over TCP.
 
 import { useEffect, useState } from "react";
 import { useStore } from "@/state/store";
 import * as ipc from "@/services/ipc";
 import type { AppSettings, BackendMode } from "@/types";
-import { Section } from "./common";
+import { Modal } from "@/components/Modal";
+import { Section } from "@/components/common";
 
-export function SettingsView() {
+export function SettingsModal({ onClose }: { onClose: () => void }) {
   const { state, effects } = useStore();
   const [draft, setDraft] = useState<AppSettings>(
     state.settings ?? { backend_mode: "local", remote_host: "", remote_token: "" },
@@ -40,11 +40,21 @@ export function SettingsView() {
   const setMode = (mode: BackendMode) => setDraft({ ...draft, backend_mode: mode });
 
   return (
-    <div className="view">
-      <div className="view-head">
-        <h2>Settings</h2>
-      </div>
-
+    <Modal
+      title="Settings"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn btn-primary" disabled={busy} onClick={() => void save()}>
+            Save & reconnect
+          </button>
+          <button className="btn" disabled={busy} onClick={() => void effects.reconnect()}>
+            Force reconnect
+          </button>
+          {saved && <span className="saved-tag">saved ✓</span>}
+        </>
+      }
+    >
       <Section title="Backend mode">
         <div className="seg">
           <button
@@ -96,16 +106,7 @@ export function SettingsView() {
           {state.daemon.connected ? "connected" : "disconnected"} · {state.daemon.mode}
           {state.daemon.error ? ` · ${state.daemon.error}` : ""}
         </div>
-        <div className="view-actions">
-          <button className="btn btn-primary" disabled={busy} onClick={() => void save()}>
-            Save & reconnect
-          </button>
-          <button className="btn" disabled={busy} onClick={() => void effects.reconnect()}>
-            Force reconnect
-          </button>
-          {saved && <span className="saved-tag">saved ✓</span>}
-        </div>
       </Section>
-    </div>
+    </Modal>
   );
 }

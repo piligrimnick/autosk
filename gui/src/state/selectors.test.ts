@@ -5,16 +5,37 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  activeTask,
   activityOf,
   buildTimeline,
   composerMode,
   groupByStatus,
   runningJob,
+  selectedSessionJob,
+  selectedWorkflow,
+  sessionsForProject,
   taskActivityMap,
   timelineKey,
 } from "./selectors";
-import { initialState, type AppState } from "./types";
-import type { Comment, Job, MessageEvent, Signal, TaskView } from "@/types";
+import { emptyProjectSlice, initialState, type AppState } from "./types";
+import type { Comment, Job, MessageEvent, Signal, TaskView, Workflow } from "@/types";
+
+function mkWorkflow(name: string): Workflow {
+  return {
+    id: `wf-${name}`,
+    name,
+    description: "",
+    is_synthetic: false,
+    first_step: "dev",
+    first_step_id: "s1",
+    steps: [],
+    task_count: 0,
+    isolation: "none",
+    non_terminal_task_count: 0,
+    non_terminal_tasks: [],
+    created_at: "2024-01-01T00:00:00Z",
+  };
+}
 
 function mkJob(p: Partial<Job> & Pick<Job, "job_id" | "task_id">): Job {
   return {
@@ -135,35 +156,87 @@ describe("buildTimeline", () => {
   });
 });
 
-describe("composerMode", () => {
-  it("returns 'new' for a null task", () => {
-    expect(composerMode(initialState(), null)).toBe("new");
+/** A state with the active project's slice carrying one task + a task selection. */
+function taskState(taskId: string, status: string, jobs: Job[] = []): AppState {
+  const s = initialState();
+  return {
+    ...s,
+    activeProject: "/p",
+    byProject: {
+      "/p": { ...emptyProjectSlice(), tasks: { [taskId]: mkTask({ id: taskId, status }) }, taskOrder: [taskId] },
+    },
+    jobs: Object.fromEntries(jobs.map((j) => [j.job_id, j])),
+    selection: { kind: "task", taskId },
+  };
+}
+
+describe("composerMode (entity-driven)", () => {
+  it("returns 'none' when nothing is selected", () => {
+    expect(composerMode(initialState())).toBe("none");
   });
 
-  it("prioritises a running job over the task status", () => {
+  it("session + running/queued job → 'steer'", () => {
     const job = mkJob({ job_id: "j1", task_id: "t1", status: "running" });
-    const s = stateWith({ taskId: "t1", jobs: [job] });
-    expect(composerMode(s, mkTask({ id: "t1", status: "human" }))).toBe("running");
+    const s: AppState = { ...initialState(), jobs: { j1: job }, selection: { kind: "session", jobId: "j1" } };
+    expect(composerMode(s)).toBe("steer");
+    const queued: AppState = { ...s, jobs: { j1: { ...job, status: "queued" } } };
+    expect(composerMode(queued)).toBe("steer");
   });
 
-  it("a QUEUED job alone flips the composer into 'running' (Cancel/Abort surface)", () => {
-    // The Cancel-job affordance lives in RunningComposer, which renders only
-    // when composerMode==='running'. A queued job (no running run yet) must
-    // still drive 'running' so a queued job is cancellable — the exact gap the
-    // validator bounced on. Drive it from non-'running' task statuses.
-    const job = mkJob({ job_id: "j1", task_id: "t1", status: "queued" });
-    const s = stateWith({ taskId: "t1", jobs: [job] });
-    expect(composerMode(s, mkTask({ id: "t1", status: "new" }))).toBe("running");
-    expect(composerMode(s, mkTask({ id: "t1", status: "work" }))).toBe("running");
+  it("session + terminal job → 'readonly'", () => {
+    const job = mkJob({ job_id: "j1", task_id: "t1", status: "done" });
+    const s: AppState = { ...initialState(), jobs: { j1: job }, selection: { kind: "session", jobId: "j1" } };
+    expect(composerMode(s)).toBe("readonly");
   });
 
-  it("maps statuses to modes when no job is running", () => {
-    const s = stateWith({ taskId: "t1", jobs: [] });
-    expect(composerMode(s, mkTask({ id: "t1", status: "human" }))).toBe("human");
-    expect(composerMode(s, mkTask({ id: "t1", status: "new" }))).toBe("new");
-    expect(composerMode(s, mkTask({ id: "t1", status: "work" }))).toBe("enrolled");
-    expect(composerMode(s, mkTask({ id: "t1", status: "done" }))).toBe("terminal");
-    expect(composerMode(s, mkTask({ id: "t1", status: "cancel" }))).toBe("terminal");
+  it("task status drives the mode, ignoring any running job (decision #5)", () => {
+    const running = [mkJob({ job_id: "j1", task_id: "t1", status: "running" })];
+    expect(composerMode(taskState("t1", "human", running))).toBe("human");
+    expect(composerMode(taskState("t1", "new"))).toBe("new");
+    expect(composerMode(taskState("t1", "work"))).toBe("enrolled");
+    expect(composerMode(taskState("t1", "done"))).toBe("terminal");
+    expect(composerMode(taskState("t1", "cancel"))).toBe("terminal");
+  });
+});
+
+describe("sessionsForProject / selectedSessionJob", () => {
+  it("returns the active project's jobs in session order", () => {
+    const j1 = mkJob({ job_id: "j1", task_id: "t1" });
+    const j2 = mkJob({ job_id: "j2", task_id: "t2" });
+    const s: AppState = {
+      ...initialState(),
+      activeProject: "/p",
+      jobs: { j1, j2 },
+      sessionOrderByProject: { "/p": ["j2", "j1"] },
+    };
+    expect(sessionsForProject(s).map((j) => j.job_id)).toEqual(["j2", "j1"]);
+    expect(sessionsForProject(initialState())).toEqual([]);
+  });
+
+  it("resolves the selected session's job", () => {
+    const j1 = mkJob({ job_id: "j1", task_id: "t1" });
+    const s: AppState = { ...initialState(), jobs: { j1 }, selection: { kind: "session", jobId: "j1" } };
+    expect(selectedSessionJob(s)?.job_id).toBe("j1");
+    expect(selectedSessionJob(initialState())).toBeNull();
+  });
+});
+
+describe("selectedWorkflow / activeTask", () => {
+  it("resolves the selected workflow by name in the active project", () => {
+    const wf = mkWorkflow("feature-dev");
+    const s: AppState = {
+      ...initialState(),
+      activeProject: "/p",
+      byProject: { "/p": { ...emptyProjectSlice(), workflows: [wf] } },
+      selection: { kind: "workflow", name: "feature-dev" },
+    };
+    expect(selectedWorkflow(s)?.name).toBe("feature-dev");
+    expect(selectedWorkflow(initialState())).toBeNull();
+  });
+
+  it("activeTask resolves the selected task, null otherwise", () => {
+    expect(activeTask(taskState("t1", "work"))?.id).toBe("t1");
+    expect(activeTask(initialState())).toBeNull();
   });
 });
 
