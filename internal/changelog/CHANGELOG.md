@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **gui:** new Tauri desktop app (`gui/`) at `autosk lazy` parity — local (auto-spawned `autoskd` over UDS) and remote (TCP + token) modes behind a transport-agnostic frontend, live task-timeline streaming via `job.subscribe`, a state-aware composer (steer/follow_up/abort/cancel, comment/resume, enroll), and projects/tasks/jobs/workflows/agents views (ask-9e5f8c).
 
 ### Changed
+- **gui:** on iOS/Android the app now defaults to Remote mode (the mobile sandbox cannot run a local `autoskd`).
 - **gui:** the center panel's header row is gone — the project switcher (switch / add / init / remove) now lives in the titlebar/status bar where the `autosk` brand used to be, the brand label is dropped, and the selected entity id is no longer echoed in a separate header (each view already surfaces it). The macOS traffic lights are re-centered vertically in the titlebar (`trafficLightPosition.y` 14 → 20).
 - **gui:** the Sessions panel now renders each session as a lazy-mode-style two-line row that **leads with the status chip** from a fixed-width left gutter — line 1 is `STATUS  job-xxxxxx  ……  ask-xxxxxx` (task id magnetised to the right edge), line 2 is `work-time  workflow-name:step-name` with the work-time sitting in that same gutter so the job id / workflow:step column lines up. The job id, task id, workflow name, and step name use lazy-mode's entity hues (magenta / blue / yellow / purple), and the work-time shows pi's actual work time (started→finished, or →now while running) instead of a created-at "… ago" — and, like lazy-mode, it now counts up live (a 1s tick re-renders while any session is still running). The session-transcript header in the center panel is likewise a single line that leads with the status chip, followed by `job-id · workflow:step · @agent` in the same hues, with the task id magnetised to the right edge (the old timings / attach / corrections / pid sub-line is dropped).
 - **gui:** the Tasks panel row no longer shows the per-task running/streaming activity dot between the task id and the title — the status chip is the only state signal now (running runs remain visible in the Sessions panel and the composer).
@@ -37,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **daemon:** the Go `autosk daemon serve` verb is retired — `autoskd` now drives workflows (ask-2e7e27).
 
 ### Fixed
+- **gui:** fix "Save & reconnect" failing with `Operation not permitted` on iOS — settings now persist to a sandbox-writable path, and a persist failure no longer discards the entered remote host/token for the session.
 - **daemon:** fix empty lazy transcript and `HTTP 410 session_missing` from `daemon messages <job>`
 - **gui:** the Tasks panel now uses the same card-style selection (distinct `--bg-3` fill + full rounded border) as the Sessions and Workflows panels, instead of its inconsistent left-accent stripe over a hover-colored background.
 

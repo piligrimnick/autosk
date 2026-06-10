@@ -125,7 +125,9 @@ pub async fn update_app_settings(
     state: State<'_, AppState>,
     settings: AppSettings,
 ) -> Result<AppSettings, String> {
-    settings::save(&settings)?;
+    // Apply in-memory FIRST: the new settings must take effect for this session
+    // even when persisting them fails (e.g. a read-only sandbox path on mobile);
+    // a persist failure must not strand the app on the old host/token.
     *state.settings.lock().await = settings.clone();
     // Drop the old connection so the next request reconnects with the new mode.
     // Retire its epoch BEFORE the drop (held in `old` until end of scope) so its
@@ -140,6 +142,9 @@ pub async fn update_app_settings(
         );
     }
     drop(old);
+    // Persist last; surface the failure without undoing the in-memory update.
+    settings::save(&settings)
+        .map_err(|e| format!("settings applied for this session, but persisting failed: {e}"))?;
     Ok(settings)
 }
 

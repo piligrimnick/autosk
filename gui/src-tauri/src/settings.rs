@@ -34,6 +34,12 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
+            // Mobile (iOS/Android): local mode is impossible — the app sandbox
+            // can neither run nor auto-spawn `autoskd` — so default to Remote;
+            // host/token are entered in the in-app Settings.
+            #[cfg(mobile)]
+            backend_mode: BackendMode::Remote,
+            #[cfg(not(mobile))]
             backend_mode: BackendMode::Local,
             remote_host: String::new(),
             remote_token: String::new(),
@@ -42,7 +48,24 @@ impl Default for AppSettings {
 }
 
 fn settings_path() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".autosk").join("gui-settings.json"))
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    // iOS: $HOME is the app's data-container ROOT, which the sandbox does not
+    // allow writing into (EPERM) — persist under Library/Application Support
+    // instead, which is app-writable. Desktop keeps ~/.autosk alongside the
+    // daemon's own files.
+    #[cfg(mobile)]
+    {
+        Some(
+            home.join("Library")
+                .join("Application Support")
+                .join("autosk")
+                .join("gui-settings.json"),
+        )
+    }
+    #[cfg(not(mobile))]
+    {
+        Some(home.join(".autosk").join("gui-settings.json"))
+    }
 }
 
 /// Loads persisted settings, falling back to defaults on any error.
