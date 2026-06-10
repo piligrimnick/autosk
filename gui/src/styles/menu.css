@@ -22,7 +22,7 @@
   text-align: left;
   padding: 6px 10px;
   border-radius: 6px;
-  font-size: 12.5px;
+  font-size: 13px;
   white-space: nowrap;
 }
 .menu-item:hover:not(:disabled) {
@@ -39,7 +39,7 @@
   background: #3a2626;
 }
 .menu-label {
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--fg-mute);
@@ -69,7 +69,7 @@
   color: var(--fg-mute);
   padding: 4px 8px;
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 15px;
 }
 .menu-remove:hover {
   background: #3a2626;

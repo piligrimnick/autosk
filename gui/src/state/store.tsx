@@ -33,6 +33,7 @@ import {
   initialState,
 } from "./types";
 import { NO_SELECTION, selectedSessionJobId, selectedTaskId } from "./selection";
+import { loadUiScale, saveUiScale } from "@/features/layout/utils/uiScale";
 
 // localStorage keys for the sidebar geometry (layout-only UI state; not part of
 // the daemon's domain, so it lives in the browser, not the project DB).
@@ -50,7 +51,10 @@ function hydratedInitialState(): AppState {
     const collapsed = window.localStorage.getItem(LS_SIDEBAR_COLLAPSED) === "1";
     const widthRaw = window.localStorage.getItem(LS_SIDEBAR_WIDTH);
     const sidebarWidth = widthRaw ? clampSidebarWidth(Number(widthRaw)) : base.ui.sidebarWidth;
-    return { ...base, ui: { ...base.ui, sidebarCollapsed: collapsed, sidebarWidth } };
+    return {
+      ...base,
+      ui: { ...base.ui, sidebarCollapsed: collapsed, sidebarWidth, uiScale: loadUiScale() },
+    };
   } catch {
     return base;
   }
@@ -71,6 +75,7 @@ interface Effects {
   setSidebarPanel(panel: SidebarPanel): void;
   toggleSidebar(): void;
   setSidebarWidth(width: number): void;
+  setUiScale(scale: number): void;
   openModal(modal: ModalKind): void;
   setNotice(notice: AppState["notice"]): void;
   resetLiveTail(): void;
@@ -327,6 +332,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "ui/sidebarWidth", width });
       },
 
+      setUiScale(scale) {
+        dispatch({ type: "ui/uiScale", scale });
+      },
+
       openModal(modal) {
         dispatch({ type: "ui/modal", modal });
       },
@@ -494,6 +503,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       /* private mode / quota — non-fatal */
     }
   }, [state.ui.sidebarCollapsed, state.ui.sidebarWidth]);
+
+  // Persist the UI zoom factor across restarts (layout-only UI state).
+  useEffect(() => {
+    saveUiScale(state.ui.uiScale);
+  }, [state.ui.uiScale]);
 
   const value = useMemo<StoreValue>(
     () => ({ state, dispatch, effects, cwd: state.activeProject ?? "" }),

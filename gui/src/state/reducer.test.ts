@@ -177,6 +177,17 @@ describe("selection + sessions slices", () => {
     expect(s.ui.sidebarWidth).toBe(480); // capped to max
   });
 
+  it("ui/uiScale clamps to [0.5, 3] and snaps to the 0.1 step", () => {
+    let s = initialState();
+    expect(s.ui.uiScale).toBe(1); // default
+    s = rootReducer(s, { type: "ui/uiScale", scale: 1.24 });
+    expect(s.ui.uiScale).toBe(1.2); // snapped to nearest step
+    s = rootReducer(s, { type: "ui/uiScale", scale: 0.1 });
+    expect(s.ui.uiScale).toBe(0.5); // floored to min
+    s = rootReducer(s, { type: "ui/uiScale", scale: 99 });
+    expect(s.ui.uiScale).toBe(3); // capped to max
+  });
+
   it("sidebar panel: clearing the selection leaves the active panel unchanged", () => {
     let s = rootReducer(initialState(), { type: "ui/sidebarPanel", panel: "workflows" });
     s = rootReducer(s, { type: "selection/set", selection: { kind: "none" } });

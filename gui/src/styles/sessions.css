@@ -42,7 +42,7 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: 12px;
+  font-size: 13px;
 }
 /* shared left gutter — holds the status chip (line 1) / work-time (line 2). */
 .session-gutter {
@@ -87,7 +87,7 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: 11.5px;
+  font-size: 12px;
 }
 .session-wfstep {
   min-width: 0;

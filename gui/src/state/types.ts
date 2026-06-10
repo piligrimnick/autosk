@@ -18,6 +18,7 @@ import type {
 } from "@/types";
 import type { Selection } from "./selection";
 import { NO_SELECTION } from "./selection";
+import { UI_SCALE_DEFAULT } from "@/features/layout/utils/uiScale";
 
 /** Per-project slice. Keyed by project root (which is also the RPC `cwd`). */
 export interface ProjectSlice {
@@ -89,6 +90,8 @@ export interface AppState {
     sidebarCollapsed: boolean;
     /** Sidebar column width in px (drag-to-resize; clamped to the bounds). */
     sidebarWidth: number;
+    /** Whole-UI zoom factor (webview setZoom; Cmd/Ctrl +/-/0 + settings slider). */
+    uiScale: number;
   };
   daemon: DaemonStatus;
   settings: AppSettings | null;
@@ -126,7 +129,13 @@ export function initialState(): AppState {
     messagesByJob: {},
     seenEventId: {},
     subscribedJob: null,
-    ui: { modal: null, sidebarPanel: "tasks", sidebarCollapsed: false, sidebarWidth: SIDEBAR_DEFAULT_WIDTH },
+    ui: {
+      modal: null,
+      sidebarPanel: "tasks",
+      sidebarCollapsed: false,
+      sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
+      uiScale: UI_SCALE_DEFAULT,
+    },
     daemon: { connected: false, mode: "local" },
     settings: null,
     notice: null,
@@ -145,6 +154,7 @@ export type Action =
   | { type: "ui/sidebarToggle" }
   | { type: "ui/sidebarSetCollapsed"; collapsed: boolean }
   | { type: "ui/sidebarWidth"; width: number }
+  | { type: "ui/uiScale"; scale: number }
   // projects
   | { type: "projects/loaded"; projects: ProjectInfo[] }
   | { type: "project/select"; root: string | null }

@@ -21,17 +21,17 @@
 }
 .timeline-task-id {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
   color: var(--fg-mute);
 }
 .timeline-task-title {
   margin: 6px 0 0;
-  font-size: 16px;
+  font-size: 17px;
 }
 .timeline-task-desc {
   margin: 6px 0 0;
   color: var(--fg-dim);
-  font-size: 12.5px;
+  font-size: 13px;
   white-space: pre-wrap;
   max-height: 96px;
   overflow-y: auto;
@@ -58,7 +58,7 @@
   background: var(--border);
 }
 .tl-jobstart-label {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--fg-mute);
   font-family: var(--mono);
   white-space: nowrap;
@@ -69,7 +69,7 @@
   padding: 8px 12px;
 }
 .msg-role {
-  font-size: 10.5px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--fg-mute);
@@ -102,7 +102,7 @@
   border-radius: 6px;
   padding: 8px;
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 12px;
   overflow-x: auto;
   margin: 0;
   white-space: pre-wrap;
@@ -112,7 +112,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--fg-mute);
 }
 .msg-chip {
@@ -120,7 +120,7 @@
   border-radius: 5px;
   padding: 1px 7px;
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 .tl-comment {
@@ -132,7 +132,7 @@
 .tl-meta {
   display: flex;
   justify-content: space-between;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--fg-mute);
   margin-bottom: 4px;
 }
@@ -145,7 +145,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--fg-dim);
   padding: 2px 4px;
 }
@@ -158,7 +158,7 @@
 
 /* markdown */
 .markdown {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.55;
 }
 .markdown :first-child { margin-top: 0; }
@@ -171,7 +171,7 @@
 }
 .markdown code {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
   background: var(--bg-3);
   padding: 1px 4px;
   border-radius: 4px;

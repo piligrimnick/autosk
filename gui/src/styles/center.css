@@ -33,7 +33,7 @@
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  font-size: 12px;
+  font-size: 13px;
 }
 /* job-id leads (after the status chip) in its entity hue; task-id is
  * magnetised to the right edge of the header row. */
@@ -91,7 +91,7 @@
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  font-size: 12px;
+  font-size: 13px;
 }
 /* Right cluster of the task header: the Enroll button + the ⋯ task-actions
  * button, magnetised to the right edge of the header row. */
@@ -116,7 +116,7 @@
   align-items: center;
   justify-content: center;
   border-radius: 6px;
-  font-size: 16px;
+  font-size: 17px;
   line-height: 1;
   cursor: pointer;
 }
@@ -152,7 +152,7 @@
 }
 .task-view-title {
   margin: 8px 0 0;
-  font-size: 17px;
+  font-size: 18px;
 }
 .task-view-body {
   flex: 1;
@@ -164,17 +164,17 @@
   gap: 16px;
 }
 .task-desc {
-  font-size: 13px;
+  font-size: 14px;
 }
 .task-comments-head {
-  font-size: 11px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--fg-mute);
   margin-bottom: 8px;
 }
 .task-comments-empty {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--fg-mute);
 }
 .comment {
@@ -187,7 +187,7 @@
 .comment-meta {
   display: flex;
   justify-content: space-between;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--fg-mute);
   margin-bottom: 4px;
 }

@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isMacPlatform, isTauriRuntime, isWindowsPlatform, platformKind } from "./platform";
+import {
+  isMacPlatform,
+  isTauriRuntime,
+  isWebviewZoomSupported,
+  isWindowsPlatform,
+  platformKind,
+} from "./platform";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -37,6 +43,33 @@ describe("platformKind", () => {
   it("returns unknown without navigator", () => {
     stubNavigator(undefined);
     expect(platformKind()).toBe("unknown");
+  });
+});
+
+describe("isWebviewZoomSupported", () => {
+  it("is true on Windows (incl. touch PCs)", () => {
+    stubNavigator({ platform: "Win32", maxTouchPoints: 10 });
+    expect(isWebviewZoomSupported()).toBe(true);
+  });
+
+  it("is true on a real (non-touch) Mac", () => {
+    stubNavigator({ platform: "MacIntel", maxTouchPoints: 0 });
+    expect(isWebviewZoomSupported()).toBe(true);
+  });
+
+  it("is false on an iPad that masquerades as a Mac (touch)", () => {
+    stubNavigator({ platform: "MacIntel", maxTouchPoints: 5 });
+    expect(isWebviewZoomSupported()).toBe(false);
+  });
+
+  it("is false on Linux / Android", () => {
+    stubNavigator({ platform: "Linux x86_64" });
+    expect(isWebviewZoomSupported()).toBe(false);
+  });
+
+  it("is false without a navigator", () => {
+    stubNavigator(undefined);
+    expect(isWebviewZoomSupported()).toBe(false);
   });
 });
 

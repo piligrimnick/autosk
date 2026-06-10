@@ -11,7 +11,7 @@
 }
 .view-head h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: 19px;
 }
 .view-actions {
   display: flex;
@@ -20,14 +20,25 @@
 }
 .saved-tag {
   color: var(--ok);
-  font-size: 12px;
+  font-size: 13px;
 }
 .conn-line {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12.5px;
+  font-size: 13px;
   margin-bottom: 10px;
+}
+
+.zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.zoom-slider {
+  flex: 1;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
 .card-grid {
@@ -49,11 +60,11 @@
 }
 .card-title {
   font-weight: 600;
-  font-size: 13.5px;
+  font-size: 14px;
   flex: 1;
 }
 .card-desc {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--fg-dim);
   margin: 0 0 8px;
 }
@@ -67,10 +78,10 @@
   background: var(--bg-3);
   border-radius: 5px;
   padding: 2px 7px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .card-meta {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--fg-mute);
   margin-bottom: 8px;
 }
@@ -91,11 +102,11 @@
 .agent-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: 13px;
 }
 .agent-table th {
   text-align: left;
-  font-size: 10.5px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--fg-mute);

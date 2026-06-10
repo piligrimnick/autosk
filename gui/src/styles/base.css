@@ -6,7 +6,9 @@
   --border: #333a45;
   --fg: #e6e9ef;
   --fg-dim: #9aa3b0;
-  --fg-mute: #6b7280;
+  /* Lightened from #6b7280 (~3.7:1 on --bg, below WCAG AA) to ~5.2:1 so the
+   * heavily-used "muted" text (timestamps, meta, labels) is legible. */
+  --fg-mute: #828b9c;
   --accent: #4c8dff;
   --accent-2: #6ee7b7;
   --danger: #ef5350;
@@ -58,7 +60,8 @@ body,
 
 body {
   font-family: var(--sans);
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 1.5;
   color: var(--fg);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -90,7 +93,7 @@ button {
   color: var(--fg);
   border-radius: var(--radius);
   padding: 5px 11px;
-  font-size: 12px;
+  font-size: 13px;
   transition: background 0.12s, border-color 0.12s;
 }
 .btn:hover:not(:disabled) {
@@ -117,13 +120,13 @@ button {
 }
 .btn-sm {
   padding: 3px 8px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .btn-ghost {
   background: transparent;
   border: none;
   color: var(--fg-dim);
-  font-size: 14px;
+  font-size: 15px;
   padding: 2px 6px;
   border-radius: 6px;
 }
@@ -136,7 +139,7 @@ button {
   border: none;
   color: var(--accent);
   padding: 0 4px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .btn-link:hover {
   text-decoration: underline;
@@ -151,7 +154,7 @@ button {
   color: var(--fg);
   border-radius: 6px;
   padding: 6px 8px;
-  font-size: 12px;
+  font-size: 13px;
   font-family: inherit;
   width: 100%;
 }
@@ -179,7 +182,7 @@ button {
   margin-bottom: 12px;
 }
 .field-label {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--fg-dim);
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -195,17 +198,17 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--fg-dim);
 }
 .hint {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--fg-mute);
   line-height: 1.5;
 }
 .form-error {
   color: var(--danger);
-  font-size: 12px;
+  font-size: 13px;
   margin-top: 8px;
 }
 
@@ -214,7 +217,7 @@ button {
   display: inline-block;
   padding: 1px 7px;
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -234,7 +237,7 @@ button {
   display: inline-block;
   padding: 1px 6px;
   border-radius: 5px;
-  font-size: 10.5px;
+  font-size: 11px;
   background: var(--bg-3);
   color: var(--fg-dim);
   margin-left: 4px;
@@ -245,7 +248,7 @@ button {
 }
 
 .prio {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   padding: 0 4px;
   border-radius: 4px;
@@ -258,7 +261,7 @@ button {
 
 .run-indicator {
   color: var(--ok);
-  font-size: 10px;
+  font-size: 11px;
 }
 .run-indicator.streaming {
   color: var(--accent);
@@ -271,7 +274,7 @@ button {
 
 .spinner {
   color: var(--fg-mute);
-  font-size: 12px;
+  font-size: 13px;
   padding: 12px;
 }
 .spinner-dot {
@@ -289,11 +292,11 @@ button {
   color: var(--fg-mute);
 }
 .empty-title {
-  font-size: 14px;
+  font-size: 15px;
   color: var(--fg-dim);
 }
 .empty-hint {
-  font-size: 12px;
+  font-size: 13px;
   margin-top: 6px;
 }
 
@@ -307,7 +310,7 @@ button {
   margin-bottom: 6px;
 }
 .section-title {
-  font-size: 11px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--fg-mute);

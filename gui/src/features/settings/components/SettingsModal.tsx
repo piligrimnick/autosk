@@ -8,6 +8,13 @@ import * as ipc from "@/services/ipc";
 import type { AppSettings, BackendMode } from "@/types";
 import { Modal } from "@/components/Modal";
 import { Section } from "@/components/common";
+import { isWebviewZoomSupported } from "@/features/layout/utils/platform";
+import {
+  UI_SCALE_MAX,
+  UI_SCALE_MIN,
+  UI_SCALE_STEP,
+  formatUiScale,
+} from "@/features/layout/utils/uiScale";
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const { state, effects } = useStore();
@@ -16,6 +23,17 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   );
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  // UI zoom is desktop-only (Tauri setZoom). While dragging the slider we keep a
+  // local "draft" value for smooth thumb + label feedback, but only commit it
+  // to the store (which calls setZoom) on release — not on every input frame.
+  const zoomSupported = isWebviewZoomSupported();
+  const [zoomDraft, setZoomDraft] = useState<number | null>(null);
+  const zoomValue = zoomDraft ?? state.ui.uiScale;
+  const commitZoom = (e: { currentTarget: HTMLInputElement }) => {
+    effects.setUiScale(Number(e.currentTarget.value));
+    setZoomDraft(null);
+  };
 
   useEffect(() => {
     if (state.settings) setDraft(state.settings);
@@ -55,6 +73,39 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         </>
       }
     >
+      {zoomSupported && (
+        <Section title="Appearance">
+          <label className="field">
+            <span className="field-label">UI zoom · {formatUiScale(zoomValue)}</span>
+            <div className="zoom-row">
+              <input
+                type="range"
+                className="zoom-slider"
+                min={UI_SCALE_MIN}
+                max={UI_SCALE_MAX}
+                step={UI_SCALE_STEP}
+                value={zoomValue}
+                onChange={(e) => setZoomDraft(Number(e.currentTarget.value))}
+                onPointerUp={commitZoom}
+                onKeyUp={commitZoom}
+                onBlur={commitZoom}
+              />
+              <button
+                className="btn btn-sm"
+                disabled={zoomValue === 1}
+                onClick={() => effects.setUiScale(1)}
+              >
+                Reset
+              </button>
+            </div>
+          </label>
+          <p className="hint">
+            Scales the whole window. Keyboard: <code>Cmd</code>/<code>Ctrl</code> + <code>+</code> / <code>-</code> /{" "}
+            <code>0</code>.
+          </p>
+        </Section>
+      )}
+
       <Section title="Backend mode">
         <div className="seg">
           <button

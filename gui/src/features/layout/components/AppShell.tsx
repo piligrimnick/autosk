@@ -6,6 +6,7 @@
 
 import { useRef, type CSSProperties } from "react";
 import { useStore } from "@/state/store";
+import { useUiScale } from "../hooks/useUiScale";
 import { NoticeBar } from "@/components/NoticeBar";
 import { Titlebar } from "./Titlebar";
 import { SidebarResizer } from "./SidebarResizer";
@@ -18,6 +19,8 @@ import { AgentsModal } from "@/features/agents/components/AgentsModal";
 
 export function AppShell() {
   const { state, effects } = useStore();
+  // Whole-UI zoom (Cmd/Ctrl +/-/0), persisted across restarts.
+  useUiScale();
   const closeModal = () => effects.openModal(null);
   const panelsRef = useRef<HTMLDivElement | null>(null);
   const { sidebarCollapsed, sidebarWidth } = state.ui;

@@ -30,13 +30,13 @@
 .wf-name {
   flex: 1;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .wf-wt {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--accent-2);
 }
 
@@ -59,11 +59,11 @@
 }
 .workflow-view-title {
   margin: 0;
-  font-size: 17px;
+  font-size: 18px;
 }
 .workflow-view-meta {
   margin-top: 6px;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--fg-mute);
 }
 .workflow-view-actions {
@@ -81,7 +81,7 @@
   gap: 16px;
 }
 .workflow-section-head {
-  font-size: 11px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--fg-mute);
@@ -92,7 +92,7 @@
   gap: 12px;
   flex-wrap: wrap;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
   padding: 3px 0;
 }
 .workflow-step-name {

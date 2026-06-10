@@ -19,7 +19,7 @@
   z-index: 2;
 }
 .sidebar-title {
-  font-size: 11px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--fg-mute);
@@ -31,7 +31,7 @@
 .sidebar-empty {
   padding: 14px 12px;
   color: var(--fg-mute);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .project-list {
@@ -51,13 +51,13 @@
 }
 .project-caret {
   color: var(--fg-mute);
-  font-size: 10px;
+  font-size: 11px;
   width: 12px;
 }
 .project-name {
   flex: 1;
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -105,18 +105,18 @@
 }
 .task-id {
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--task-id);
   flex-shrink: 0;
 }
 .blocked-flag {
-  font-size: 10px;
+  font-size: 11px;
   flex-shrink: 0;
 }
 .task-item-title {
   flex: 1;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

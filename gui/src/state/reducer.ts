@@ -8,6 +8,7 @@
 import type { Action, AppState, ProjectSlice, SidebarPanel } from "./types";
 import { clampSidebarWidth, emptyExtras, emptyProjectSlice } from "./types";
 import { NO_SELECTION } from "./selection";
+import { clampUiScale } from "@/features/layout/utils/uiScale";
 
 function patchProject(
   state: AppState,
@@ -37,6 +38,8 @@ function uiSlice(state: AppState, action: Action): AppState {
       return { ...state, ui: { ...state.ui, sidebarCollapsed: action.collapsed } };
     case "ui/sidebarWidth":
       return { ...state, ui: { ...state.ui, sidebarWidth: clampSidebarWidth(action.width) } };
+    case "ui/uiScale":
+      return { ...state, ui: { ...state.ui, uiScale: clampUiScale(action.scale) } };
     default:
       return state;
   }
