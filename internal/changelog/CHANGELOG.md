@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **gui:** new ⋯ button at the right edge of the task header in the center panel — pops the same task-actions menu as right-clicking the task's row in the Tasks panel.
 - **tooling:** new `scripts/migrate-v11-to-v12.sh` migrates an old Go/doltlite-0.10.8 `.autosk/db` (on-disk container format **v11**) into a fresh autoskd/doltlite-0.11.8 database (format **v12**) so existing tasks/comments/workflows/agents/runs (and `.autosk/sessions` transcripts) can be opened by the new daemon + GUI. It bridges the breaking 0.11.0 on-disk change by building two pinned commits (a 0.10.8 reader + a 0.11.8 writer) in throwaway git worktrees and copying rows table-by-table; dolt commit history is not carried over. `--adopt` backs up and swaps the migrated db into place.
 - **gui:** the left sidebar is now collapsible and resizable — a toggle button in the titlebar (between the macOS traffic lights and the project switcher) shows/hides it, and dragging its right edge resizes it (clamped to 220–480px; double-click the divider to reset to the default). Both the collapsed state and the width persist across restarts.
 - **autoskd:** new Rust daemon binary serving the read-only task/job/workflow/agent/comment/signal surface over JSON-RPC on a Unix socket, with `autoskd serve` / `init` / `version` / `engine` subcommands (ask-d8f735).
@@ -38,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **daemon:** the Go `autosk daemon serve` verb is retired — `autoskd` now drives workflows (ask-2e7e27).
 
 ### Fixed
+- **gui:** fix "plugin menu not found" when opening the task-actions menu on iOS — the same entries now render as an in-app popover where native menus are unavailable.
 - **gui:** fix the bottom of the window (composer actions) being cut off on iOS — the shell now sizes to the visible viewport and respects the safe-area insets.
 - **gui:** fix "Save & reconnect" failing with `Operation not permitted` on iOS — settings now persist to a sandbox-writable path, and a persist failure no longer discards the entered remote host/token for the session.
 - **daemon:** fix empty lazy transcript and `HTTP 410 session_missing` from `daemon messages <job>`

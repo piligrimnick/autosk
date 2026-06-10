@@ -1,6 +1,9 @@
 // useTaskRowMenu — the per-task write-verb menu for a Tasks-panel row, rendered
 // as a NATIVE OS context menu (Tauri `@tauri-apps/api/menu`) popped at the
-// cursor on right-click, mirroring CodexMonitor's sidebar menus. Status flips
+// cursor on right-click, mirroring CodexMonitor's sidebar menus. The menu is
+// built from a plain entry list so that when the native menu plugin is
+// unavailable (iOS/Android — "plugin menu not found") the SAME entries render
+// as an in-app popover at the same position instead. Status flips
 // (done/cancel/reopen) and unblock fire IPC directly; Edit / Metadata / Add
 // blocker open the co-located React modals (enroll/resume/comment live in the
 // center composer, so they are not duplicated here). Returns the row's
@@ -18,6 +21,11 @@ import type { TaskView } from "@/types";
 import { Modal } from "@/components/Modal";
 
 const TERMINAL = new Set(["done", "cancel"]);
+
+/** One menu entry — the shared shape behind both the native and in-app menus. */
+type MenuEntry =
+  | { kind: "item"; text: string; enabled?: boolean; action?: () => void }
+  | { kind: "separator" };
 
 export function useTaskRowMenu(task: TaskView): {
   openMenu: (e: MouseEvent) => Promise<void>;
@@ -40,6 +48,34 @@ export function useTaskRowMenu(task: TaskView): {
     [effects, task.id],
   );
 
+  const [popover, setPopover] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+
+  const buildEntries = useCallback((): MenuEntry[] => {
+    const entries: MenuEntry[] = [];
+    entries.push({ kind: "item", text: task.id, enabled: false });
+    entries.push({ kind: "separator" });
+    if (task.status !== "done") {
+      entries.push({ kind: "item", text: "Mark done", action: () => void run(() => ipc.taskDone(cwd, task.id)) });
+    }
+    if (task.status !== "cancel") {
+      entries.push({ kind: "item", text: "Cancel", action: () => void run(() => ipc.taskCancel(cwd, task.id)) });
+    }
+    if (TERMINAL.has(task.status)) {
+      entries.push({ kind: "item", text: "Reopen", action: () => void run(() => ipc.taskReopen(cwd, task.id)) });
+    }
+    entries.push({ kind: "separator" });
+    entries.push({ kind: "item", text: "Edit…", action: () => setModal("edit") });
+    entries.push({ kind: "item", text: "Metadata…", action: () => setModal("metadata") });
+    entries.push({ kind: "item", text: "Add blocker…", action: () => setModal("block") });
+    if (task.blocked_by.length > 0) {
+      entries.push({ kind: "separator" });
+      for (const b of task.blocked_by) {
+        entries.push({ kind: "item", text: `Unblock ${b.id}`, action: () => void run(() => ipc.taskUnblock(cwd, task.id, [b.id])) });
+      }
+    }
+    return entries;
+  }, [cwd, run, task.blocked_by, task.id, task.status]);
+
   const openMenu = useCallback(
     async (e: MouseEvent) => {
       // Suppress the webview's native context menu and pop our own at the
@@ -48,50 +84,91 @@ export function useTaskRowMenu(task: TaskView): {
       e.preventDefault();
       e.stopPropagation();
       const { clientX, clientY } = e;
+      const entries = buildEntries();
       try {
         const items: (MenuItem | PredefinedMenuItem)[] = [];
-        items.push(await MenuItem.new({ text: task.id, enabled: false }));
-        items.push(await PredefinedMenuItem.new({ item: "Separator" }));
-        if (task.status !== "done") {
-          items.push(await MenuItem.new({ text: "Mark done", action: () => void run(() => ipc.taskDone(cwd, task.id)) }));
-        }
-        if (task.status !== "cancel") {
-          items.push(await MenuItem.new({ text: "Cancel", action: () => void run(() => ipc.taskCancel(cwd, task.id)) }));
-        }
-        if (TERMINAL.has(task.status)) {
-          items.push(await MenuItem.new({ text: "Reopen", action: () => void run(() => ipc.taskReopen(cwd, task.id)) }));
-        }
-        items.push(await PredefinedMenuItem.new({ item: "Separator" }));
-        items.push(await MenuItem.new({ text: "Edit…", action: () => setModal("edit") }));
-        items.push(await MenuItem.new({ text: "Metadata…", action: () => setModal("metadata") }));
-        items.push(await MenuItem.new({ text: "Add blocker…", action: () => setModal("block") }));
-        if (task.blocked_by.length > 0) {
-          items.push(await PredefinedMenuItem.new({ item: "Separator" }));
-          for (const b of task.blocked_by) {
-            items.push(await MenuItem.new({ text: `Unblock ${b.id}`, action: () => void run(() => ipc.taskUnblock(cwd, task.id, [b.id])) }));
-          }
+        for (const en of entries) {
+          items.push(
+            en.kind === "separator"
+              ? await PredefinedMenuItem.new({ item: "Separator" })
+              : await MenuItem.new({ text: en.text, enabled: en.enabled !== false, action: en.action }),
+          );
         }
         const menu = await Menu.new({ items });
         await menu.popup(new LogicalPosition(clientX, clientY), getCurrentWindow());
-      } catch (err) {
-        effects.setNotice({ kind: "error", text: String((err as Error).message ?? err) });
+      } catch {
+        // No native menu plugin (iOS/Android) or popup failure — render the
+        // same entries as an in-app popover at the same position.
+        setPopover({ x: clientX, y: clientY, entries });
       }
     },
-    [cwd, effects, run, task.blocked_by, task.id, task.status],
+    [buildEntries],
   );
 
-  const modals = modal
-    ? createPortal(
-        <>
-          {modal === "edit" && <EditTaskModal task={task} cwd={cwd} onClose={() => setModal(null)} />}
-          {modal === "metadata" && <MetadataModal task={task} cwd={cwd} onClose={() => setModal(null)} />}
-          {modal === "block" && <BlockModal task={task} cwd={cwd} onClose={() => setModal(null)} />}
-        </>,
-        document.body,
-      )
-    : null;
+  const modals =
+    modal || popover
+      ? createPortal(
+          <>
+            {popover && <FallbackMenu {...popover} onClose={() => setPopover(null)} />}
+            {modal === "edit" && <EditTaskModal task={task} cwd={cwd} onClose={() => setModal(null)} />}
+            {modal === "metadata" && <MetadataModal task={task} cwd={cwd} onClose={() => setModal(null)} />}
+            {modal === "block" && <BlockModal task={task} cwd={cwd} onClose={() => setModal(null)} />}
+          </>,
+          document.body,
+        )
+      : null;
 
   return { openMenu, modals };
+}
+
+// FallbackMenu — the in-app stand-in for the native context menu on platforms
+// without the menu plugin (mobile). Reuses the shared .menu* dropdown styles,
+// fixed-positioned at the tap point (clamped to the viewport) and dismissed by
+// tapping the backdrop. The leading disabled entry (the task id) renders as a
+// .menu-label header.
+function FallbackMenu({ x, y, entries, onClose }: { x: number; y: number; entries: MenuEntry[]; onClose: () => void }) {
+  const height = entries.reduce((h, en) => h + (en.kind === "separator" ? 9 : 30), 8);
+  const left = Math.max(8, Math.min(x, window.innerWidth - 200));
+  const top = Math.max(8, Math.min(y, window.innerHeight - height - 8));
+  return (
+    <>
+      <div
+        className="menu-backdrop"
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+      />
+      <div className="menu" role="menu" style={{ position: "fixed", left, top, zIndex: 1001 }} onMouseDown={(e) => e.stopPropagation()}>
+        {entries.map((en, i) =>
+          en.kind === "separator" ? (
+            <div key={i} className="menu-divider" />
+          ) : en.enabled === false ? (
+            <div key={i} className="menu-label">
+              {en.text}
+            </div>
+          ) : (
+            <button
+              key={i}
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              onClick={() => {
+                onClose();
+                en.action?.();
+              }}
+            >
+              {en.text}
+            </button>
+          ),
+        )}
+      </div>
+    </>
+  );
 }
 
 function useRefresh(taskId: string) {

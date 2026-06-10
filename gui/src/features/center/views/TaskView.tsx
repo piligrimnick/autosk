@@ -2,14 +2,17 @@
 // decision #3): the lazy-style task sheet — id/status/priority/blocked header,
 // title, description (markdown), and the comments thread (markdown, oldest →
 // newest). Transcripts live in the Session view; the comment box is the
-// composer at the bottom of the center panel.
+// composer at the bottom of the center panel. The ⋯ button at the right edge
+// of the header row pops the same task-actions menu as right-clicking the
+// task's row in the Tasks panel (useTaskRowMenu).
 
 import { useEffect, useRef } from "react";
 import { useStore } from "@/state/store";
 import { activeTask } from "@/state/selectors";
 import { EmptyState, StatusBadge, localTime } from "@/components/common";
 import { Markdown } from "@/components/Markdown";
-import type { Comment } from "@/types";
+import { useTaskRowMenu } from "@/features/tasks/components/TaskRowMenu";
+import type { Comment, TaskView as TaskData } from "@/types";
 
 export function TaskView() {
   const { state } = useStore();
@@ -64,6 +67,7 @@ export function TaskView() {
               </span>
             </>
           )}
+          <TaskMenuButton task={task} />
         </div>
         <h2 className="task-view-title">{task.title}</h2>
       </div>
@@ -85,6 +89,25 @@ export function TaskView() {
         <div ref={bottomRef} />
       </div>
     </div>
+  );
+}
+
+// A separate component so useTaskRowMenu is called unconditionally (TaskView
+// early-returns when the task is missing).
+function TaskMenuButton({ task }: { task: TaskData }) {
+  const { openMenu, modals } = useTaskRowMenu(task);
+  return (
+    <>
+      <button
+        className="task-view-menu-btn"
+        title="Task actions"
+        aria-label="Task actions"
+        onClick={(e) => void openMenu(e)}
+      >
+        ⋯
+      </button>
+      {modals}
+    </>
   );
 }
 

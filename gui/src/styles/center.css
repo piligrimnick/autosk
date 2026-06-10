@@ -86,6 +86,27 @@
   flex-wrap: wrap;
   font-size: 12px;
 }
+/* ⋯ task-actions button, magnetised to the right edge of the header row;
+ * pops the same context menu as right-clicking the Tasks-panel row. */
+.task-view-menu-btn {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.task-view-menu-btn:hover {
+  background: var(--bg-3);
+  color: var(--fg);
+}
 .task-view-id {
   font-family: var(--mono);
   color: var(--task-id);
