@@ -10,6 +10,14 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* iOS WKWebView: 100vh is the LAYOUT viewport (taller than the visible
+   * area), which pushes the composer actions off-screen — dvh tracks the
+   * actual visible viewport. Desktop WebViews resolve both identically. */
+  height: 100dvh;
+  /* Keep the chrome clear of the iOS status bar / home indicator (both 0 on
+   * desktop; need viewport-fit=cover in index.html to be non-zero on iOS). */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
   overflow: hidden;
   background: var(--bg);
   color: var(--fg);

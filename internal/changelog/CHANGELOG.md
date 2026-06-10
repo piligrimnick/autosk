@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **daemon:** the Go `autosk daemon serve` verb is retired — `autoskd` now drives workflows (ask-2e7e27).
 
 ### Fixed
+- **gui:** fix the bottom of the window (composer actions) being cut off on iOS — the shell now sizes to the visible viewport and respects the safe-area insets.
 - **gui:** fix "Save & reconnect" failing with `Operation not permitted` on iOS — settings now persist to a sandbox-writable path, and a persist failure no longer discards the entered remote host/token for the session.
 - **daemon:** fix empty lazy transcript and `HTTP 410 session_missing` from `daemon messages <job>`
 - **gui:** the Tasks panel now uses the same card-style selection (distinct `--bg-3` fill + full rounded border) as the Sessions and Workflows panels, instead of its inconsistent left-accent stripe over a hover-colored background.
