@@ -163,37 +163,25 @@ export function timelineKey(item: TimelineItem): string {
 }
 
 /**
- * The unified composer mode, driven by the SELECTED ENTITY (redesign plan §6.4,
- * decision #5):
- *   - session selected + running/queued job → "steer" (steer/follow-up/abort)
- *   - session selected + terminal job       → "readonly"
- *   - task selected                         → task-status composer
- *     ("new" enroll / "human" resume / "work" comment / terminal reopen),
- *     ignoring any running job (the session view is where you steer)
+ * The unified composer mode, driven by the SELECTED ENTITY:
+ *   - session selected + running/queued job → "steer" (steer + abort; cancel
+ *     and abort live in the session header, the composer is just the input)
+ *   - session selected + terminal job       → "none" (read-only transcript)
+ *   - task selected (any status)            → "comment" (a single comment box;
+ *     enroll/resume/reopen moved to the Enroll button in the task header)
  *   - nothing (or workflow) selected        → "none"
  */
-export type ComposerMode = "steer" | "readonly" | "new" | "human" | "enrolled" | "terminal" | "none";
+export type ComposerMode = "steer" | "comment" | "none";
 
 export function composerMode(state: AppState): ComposerMode {
   const sel = state.selection;
   if (sel.kind === "session") {
     const job = state.jobs[sel.jobId];
     if (job && (job.status === "running" || job.status === "queued")) return "steer";
-    return "readonly";
+    return "none";
   }
   if (sel.kind === "task") {
-    const task = activeSlice(state).tasks[sel.taskId];
-    if (!task) return "none";
-    switch (task.status) {
-      case "human":
-        return "human";
-      case "new":
-        return "new";
-      case "work":
-        return "enrolled";
-      default:
-        return "terminal";
-    }
+    return activeSlice(state).tasks[sel.taskId] ? "comment" : "none";
   }
   return "none";
 }

@@ -12,6 +12,7 @@ import { activeTask } from "@/state/selectors";
 import { EmptyState, StatusBadge, localTime } from "@/components/common";
 import { Markdown } from "@/components/Markdown";
 import { useTaskRowMenu } from "@/features/tasks/components/TaskRowMenu";
+import { EnrollButton } from "../components/EnrollModal";
 import type { Comment, TaskView as TaskData } from "@/types";
 
 export function TaskView() {
@@ -67,7 +68,10 @@ export function TaskView() {
               </span>
             </>
           )}
-          <TaskMenuButton task={task} />
+          <span className="task-view-actions">
+            <EnrollButton task={task} />
+            <TaskMenuButton task={task} />
+          </span>
         </div>
         <h2 className="task-view-title">{task.title}</h2>
       </div>

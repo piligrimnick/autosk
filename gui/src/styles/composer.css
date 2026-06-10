@@ -4,50 +4,57 @@
   padding: 12px 20px;
   flex-shrink: 0;
 }
-.composer-state {
-  font-size: 11.5px;
-  color: var(--fg-dim);
-  margin-bottom: 8px;
+
+/* Chat-style input: a single-line field that auto-grows (sized in JS) up to 10
+ * lines and then scrolls, with the send button (↑) pinned to the bottom-right
+ * corner so it keeps its bottom/right padding as the field grows. */
+.composer-input-wrap {
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: 6px;
 }
 .composer-input {
   width: 100%;
-  min-height: 64px;
+  box-sizing: border-box;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--fg);
-  padding: 8px 10px;
+  padding: 9px 46px 9px 12px; /* right padding clears the send button */
   font-family: inherit;
   font-size: 13px;
-  resize: vertical;
+  line-height: 1.4;
+  resize: none;
+  overflow-y: hidden;
 }
 .composer-input:focus {
   outline: none;
   border-color: var(--accent);
 }
-.composer-actions {
-  display: flex;
+.composer-send {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 8px;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.12s, opacity 0.12s;
 }
-.composer-wrap {
-  flex-wrap: wrap;
+.composer-send:hover:not(:disabled) {
+  background: #3d7df0;
 }
-.composer-inline {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  color: var(--fg-dim);
-}
-.composer-inline .select {
-  width: auto;
+.composer-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
+/* Segmented toggle — used by the Settings modal (local/remote backend). */
 .seg {
   display: inline-flex;
   border: 1px solid var(--border);

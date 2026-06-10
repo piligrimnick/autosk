@@ -181,19 +181,19 @@ describe("composerMode (entity-driven)", () => {
     expect(composerMode(queued)).toBe("steer");
   });
 
-  it("session + terminal job → 'readonly'", () => {
+  it("session + terminal job → 'none' (read-only transcript, no composer)", () => {
     const job = mkJob({ job_id: "j1", task_id: "t1", status: "done" });
     const s: AppState = { ...initialState(), jobs: { j1: job }, selection: { kind: "session", jobId: "j1" } };
-    expect(composerMode(s)).toBe("readonly");
+    expect(composerMode(s)).toBe("none");
   });
 
-  it("task status drives the mode, ignoring any running job (decision #5)", () => {
+  it("any selected task → 'comment', regardless of status or a running job", () => {
     const running = [mkJob({ job_id: "j1", task_id: "t1", status: "running" })];
-    expect(composerMode(taskState("t1", "human", running))).toBe("human");
-    expect(composerMode(taskState("t1", "new"))).toBe("new");
-    expect(composerMode(taskState("t1", "work"))).toBe("enrolled");
-    expect(composerMode(taskState("t1", "done"))).toBe("terminal");
-    expect(composerMode(taskState("t1", "cancel"))).toBe("terminal");
+    expect(composerMode(taskState("t1", "human", running))).toBe("comment");
+    expect(composerMode(taskState("t1", "new"))).toBe("comment");
+    expect(composerMode(taskState("t1", "work"))).toBe("comment");
+    expect(composerMode(taskState("t1", "done"))).toBe("comment");
+    expect(composerMode(taskState("t1", "cancel"))).toBe("comment");
   });
 });
 

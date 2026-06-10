@@ -42,8 +42,15 @@
   color: var(--job-id);
   white-space: nowrap;
 }
-.session-view-task-id {
+/* Right cluster of the session header: the live job controls (abort / cancel)
+ * sit just before the task id, the whole group magnetised to the right edge. */
+.session-view-right {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.session-view-task-id {
   font-family: var(--mono);
   color: var(--task-id);
   white-space: nowrap;
@@ -86,10 +93,20 @@
   flex-wrap: wrap;
   font-size: 12px;
 }
-/* ⋯ task-actions button, magnetised to the right edge of the header row;
- * pops the same context menu as right-clicking the Tasks-panel row. */
-.task-view-menu-btn {
+/* Right cluster of the task header: the Enroll button + the ⋯ task-actions
+ * button, magnetised to the right edge of the header row. */
+.task-view-actions {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.task-view-enroll-btn {
+  white-space: nowrap;
+}
+/* ⋯ task-actions button; pops the same context menu as right-clicking the
+ * Tasks-panel row. */
+.task-view-menu-btn {
   background: transparent;
   border: none;
   color: var(--fg-dim);
@@ -177,9 +194,4 @@
 .comment-author {
   font-weight: 600;
   color: var(--warn);
-}
-
-/* ---- composer: read-only variant -----------------------------------------*/
-.composer-readonly .composer-state {
-  margin-bottom: 0;
 }
