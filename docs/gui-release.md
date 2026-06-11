@@ -89,22 +89,36 @@ open gui/src-tauri/gen/apple/autosk-gui.xcodeproj
 
 ```bash
 cd gui
-npm run tauri -- ios build           # release; emits a signed .ipa
+npm run tauri -- ios build --export-method debugging   # release; emits a signed .ipa
 ```
 
-The `.ipa` lands under `gui/src-tauri/gen/apple/build/`. Install it onto the
-iPad with any of:
+This embeds the production front-end bundle (`tsc && vite build` →
+`frontendDist`) into the `.ipa`, so the installed app is fully standalone — no
+dev server needed. `--export-method debugging` signs for direct installation
+onto your own device (the default `app-store-connect` export targets App Store
+Connect uploads and fails with a free Apple ID).
+
+The `.ipa` lands under `gui/src-tauri/gen/apple/build/arm64/`. Install it onto
+the iPad with any of:
 
 - **Xcode** → Window → *Devices & Simulators* → drag the `.ipa` onto the device,
+- the CLI — `xcrun devicectl list devices` to find the device id, then
+  `xcrun devicectl device install app --device <device-id> <path-to.ipa>`,
 - **Apple Configurator**, or
 - **TestFlight** (requires a paid Apple Developer account).
 
-For a single connected iPad, build + sign + install + launch in one step
-(unlock the iPad and tap **Trust** first):
+For quick iteration on a single connected iPad, build + sign + install + launch
+in one step (unlock the iPad and tap **Trust** first):
 
 ```bash
 npm run tauri -- ios dev --release   # drop --release for a debug build
 ```
+
+> **Warning.** `ios dev` is a **dev-mode** run even with `--release` (the flag
+> only affects the Rust build): the installed app loads its UI from the Vite
+> dev server on your Mac (`devUrl`) and stops working as soon as that process
+> exits or the Mac leaves the network. For a standalone install always use
+> `ios build` as shown above.
 
 After install: on the iPad, **Settings → General → VPN & Device Management →
 trust** your developer certificate.
