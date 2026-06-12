@@ -1,0 +1,17 @@
+{
+  "name": "@autosk/core",
+  "version": "0.0.0",
+  "description": "autoskd v2 daemon binary: file store, project manager, extension loader, scheduler, JSON-RPC v2 server. Placeholder in P1.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "autoskd": "./src/index.ts"
+  },
+  "dependencies": {
+    "@autosk/sdk": "workspace:*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

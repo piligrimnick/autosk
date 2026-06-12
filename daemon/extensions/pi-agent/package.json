@@ -1,0 +1,24 @@
+{
+  "name": "@autosk/pi-agent",
+  "version": "0.0.0",
+  "description": "autosk extension that drives `pi --mode rpc` as an agent (model/thinking/first_message, kickback loop, autosk_transit pi-tool bridge). Placeholder in P1; built in P6.",
+  "license": "MIT",
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "files": [
+    "src/",
+    "README.md"
+  ],
+  "dependencies": {
+    "@autosk/sdk": "workspace:*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}
