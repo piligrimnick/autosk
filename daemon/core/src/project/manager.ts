@@ -1,0 +1,132 @@
+/**
+ * The per-daemon project cache (plan §3.7(1)).
+ *
+ * Each RPC carries a `{cwd}` selector (+ optional explicit path override). The
+ * manager resolves it to a canonical root, opens that project lazily on first
+ * sight (constructing its `Store`, running the startup scan, starting the
+ * watcher), and caches the handle keyed by root so concurrent resolves of the
+ * same project share one store. A per-root open lock serialises first-open so
+ * two racing resolvers cannot both construct a store for one project.
+ *
+ * The handle bundles the file `Store` today; the extension registry (P3) and
+ * scheduler (P4) get bundled here too.
+ *
+ * Resolving a project does NOT add it to the registry — only `addProject`
+ * mutates `~/.autosk/projects.json`.
+ */
+
+import type { ProjectInfo } from "@autosk/sdk";
+
+import { systemClock, type Clock } from "../store/clock.ts";
+import { KeyedMutex } from "../store/lock.ts";
+import { Store, type StoreOptions } from "../store/store.ts";
+import { initProject } from "./init.ts";
+import { ProjectRegistry } from "./registry.ts";
+import { canonicalize, resolveProjectRoot } from "./resolve.ts";
+
+/** An opened project: its canonical root + the bundled file store. */
+export interface ProjectHandle {
+  root: string;
+  store: Store;
+  /** RFC3339 UTC time the project was opened (for `healthz`). */
+  opened_at: string;
+}
+
+export interface ProjectManagerOptions {
+  /** The persisted registry (defaults to `~/.autosk/projects.json`). */
+  registry?: ProjectRegistry;
+  /** Options passed to every project's `Store`. */
+  store?: StoreOptions;
+  /** Clock for `opened_at` (defaults to the system clock). */
+  clock?: Clock;
+}
+
+export class ProjectManager {
+  private readonly registry: ProjectRegistry;
+  private readonly storeOpts: StoreOptions;
+  private readonly clock: Clock;
+
+  private projects = new Map<string, ProjectHandle>();
+  private openLocks = new KeyedMutex();
+
+  constructor(opts: ProjectManagerOptions = {}) {
+    this.registry = opts.registry ?? ProjectRegistry.openDefault();
+    this.storeOpts = opts.store ?? {};
+    this.clock = opts.clock ?? systemClock;
+  }
+
+  // -- resolution / lazy open ----------------------------------------------
+
+  /** Resolves a `{cwd}` (+ optional override) to an opened project handle. */
+  async resolve(cwd: string, override?: string): Promise<ProjectHandle> {
+    const root = await resolveProjectRoot(cwd, override);
+    return this.open(root);
+  }
+
+  /** Opens (or returns the cached) project handle for a canonical `root`. */
+  async open(root: string): Promise<ProjectHandle> {
+    const cached = this.projects.get(root);
+    if (cached) return cached;
+    return this.openLocks.run(root, async () => {
+      const again = this.projects.get(root);
+      if (again) return again;
+      const store = new Store(root, this.storeOpts);
+      await store.open();
+      const handle: ProjectHandle = { root, store, opened_at: this.clock() };
+      this.projects.set(root, handle);
+      return handle;
+    });
+  }
+
+  /** Currently-loaded project handles (order unspecified). */
+  loaded(): ProjectHandle[] {
+    return [...this.projects.values()];
+  }
+
+  /** Closes every open store (stops watchers). */
+  async close(): Promise<void> {
+    for (const handle of this.projects.values()) {
+      await handle.store.close();
+    }
+    this.projects.clear();
+  }
+
+  // -- registry (explicit list) --------------------------------------------
+
+  /** Registered projects, ordered by root. */
+  listProjects(): Promise<ProjectInfo[]> {
+    return this.registry.list();
+  }
+
+  /**
+   * Registers a project. Walks up from `cwd` to the nearest `.autosk/` (exactly
+   * like {@link resolve} and every cwd-keyed read), so `project.add` works from
+   * a nested subdirectory, not only from the project root. The canonical root is
+   * stored. (Use {@link initProject} first for greenfield.)
+   */
+  async addProject(cwd: string, name?: string): Promise<ProjectInfo> {
+    const root = await resolveProjectRoot(cwd);
+    return this.registry.add(root, name);
+  }
+
+  /**
+   * Unregisters the project resolved from `cwd`. Walks up like {@link addProject}
+   * so removal works from a subdir; falls back to the canonical `cwd` when no
+   * `.autosk/` is found, so a STALE registry entry can still be removed after
+   * its project directory was deleted.
+   */
+  async removeProject(cwd: string): Promise<boolean> {
+    let root: string;
+    try {
+      root = await resolveProjectRoot(cwd);
+    } catch {
+      root = await canonicalize(cwd);
+    }
+    return this.registry.remove(root);
+  }
+
+  /** Creates a `.autosk/` skeleton (does not register — see {@link addProject}). */
+  initProject(dir: string): Promise<ProjectInfo> {
+    return initProject(dir);
+  }
+}

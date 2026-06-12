@@ -33,4 +33,7 @@ This package contains three layers:
   method / notification manifest the Go and Tauri clients mirror (plan §4).
 
 It also ships the `singleStep(agentName)` workflow factory and the shared id
-helpers (`newTaskId`, `newSessionId`, `newEntryId`).
+helpers (`newTaskId`, `newCommentId`, `newSessionId`, `newEntryId`). Comment ids
+are strings in v2 (v1's autoincrement ints die with the SQL store), and
+`newCommentId` is collision-checked against a task's existing comment ids since
+the id is the edit/delete key.

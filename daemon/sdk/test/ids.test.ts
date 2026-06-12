@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { newEntryId, newSessionId, newTaskId } from "../src/index.ts";
+import { newCommentId, newEntryId, newSessionId, newTaskId } from "../src/index.ts";
 
 describe("newTaskId", () => {
   test("matches ask-<6 hex>", () => {
@@ -13,6 +13,30 @@ describe("newTaskId", () => {
     for (let i = 0; i < 1000; i++) seen.add(newTaskId());
     // 24 bits of entropy — collisions in 1000 draws are vanishingly unlikely.
     expect(seen.size).toBeGreaterThan(990);
+  });
+});
+
+describe("newCommentId", () => {
+  test("matches cm-<6 hex>", () => {
+    for (let i = 0; i < 100; i++) {
+      expect(newCommentId()).toMatch(/^cm-[0-9a-f]{6}$/);
+    }
+  });
+
+  test("is unique across many draws", () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 1000; i++) seen.add(newCommentId());
+    expect(seen.size).toBeGreaterThan(990);
+  });
+
+  test("never collides when checked against a taken set (the edit/delete key)", () => {
+    const taken = new Set<string>();
+    for (let i = 0; i < 2000; i++) {
+      const id = newCommentId(taken);
+      expect(taken.has(id)).toBe(false);
+      taken.add(id);
+    }
+    expect(taken.size).toBe(2000);
   });
 });
 

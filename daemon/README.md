@@ -13,7 +13,12 @@ stack (and doltlite) once parity lands; see
   proto-v2 types are the single source of truth that the Go and Tauri
   clients mirror (P7/P8).
 - **`core/`** — `@autosk/core`: the daemon binary (file store, project
-  manager, extension loader, scheduler, RPC server). Placeholder in P1.
+  manager, extension loader, scheduler, RPC server). P2 landed the **file
+  store + project manager** (`src/store/`, `src/project/`) — the on-disk
+  task/comment/session formats, atomic writes, mtime cache, watcher
+  reconciliation, and the `~/.autosk/projects.json` registry + walk-up
+  resolution. Extension loader, scheduler, and RPC server are still to come
+  (P3–P5).
 - **`extensions/pi-agent/`** — `@autosk/pi-agent`: the shipped extension that
   drives `pi --mode rpc` as an autosk agent. Placeholder in P1 (built in P6).
 

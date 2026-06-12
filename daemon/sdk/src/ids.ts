@@ -2,6 +2,11 @@
  * Shared id helpers (plan §3.1, §3.2, §6 P1).
  *
  *  - Task ids: `ask-` + 6 lowercase hex chars (unchanged from v1).
+ *  - Comment ids: `cm-` + 6 lowercase hex chars (v2 makes comment ids strings;
+ *    v1 used autoincrement integers, which die with the SQL store). Because the
+ *    comment id is the edit/delete key, `newCommentId` is collision-checked
+ *    against a per-task taken set (like `newEntryId`), so two comments on one
+ *    task can never share an id.
  *  - Session ids: time-ordered UUIDv7, so on-disk session files sort by
  *    creation time and stay globally unique.
  *  - Transcript entry ids: 8-char hex, collision-checked against a taken set
@@ -21,6 +26,21 @@ function randomHex(bytes: number): string {
 /** A new task id: `ask-<6 hex>`. */
 export function newTaskId(): string {
   return `ask-${randomHex(3)}`;
+}
+
+/**
+ * A new comment id: `cm-<6 hex>`, collision-checked against `taken` (the comment
+ * ids already on the task). The id is the mutation key for edit/delete, so a
+ * duplicate within one task would silently retarget the wrong comment — passing
+ * the existing ids guarantees uniqueness within the task. Falls back to a wider
+ * id only after 100 straight collisions (astronomically unlikely).
+ */
+export function newCommentId(taken?: TakenIds): string {
+  for (let i = 0; i < 100; i++) {
+    const id = `cm-${randomHex(3)}`;
+    if (!isTaken(taken, id)) return id;
+  }
+  return `cm-${randomHex(8)}`;
 }
 
 /**
