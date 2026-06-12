@@ -214,7 +214,22 @@ Notes:
   session-scoped daemon RPC is needed; core stays closed.
 - `onSteer` / `onFollowup` are invoked when a client calls
   `session.input` on a live session; `onAbort` on `session.abort`.
-  All optional; absent → the RPC returns `unsupported_by_agent`.
+  All three hooks are optional, but the absent-hook contract differs
+  between input and abort (settled in P4; see `SessionRuntime` in
+  `daemon/core/src/engine/session.ts`):
+  - **steer / followup** — an absent hook (or a session still queued /
+    already settled) cannot deliver the message, so `session.input`
+    returns `{ handled: false }`, which the RPC maps to
+    `unsupported_by_agent`.
+  - **abort** — `session.abort` *always acts* on a live session: the
+    `AbortSignal` fires, the meta is sealed `aborted`, and the task is
+    parked to `human`, whether or not the agent declares `onAbort` and
+    whether or not `onRun` had started. It therefore returns
+    `{ handled: true }` whenever it acts and is **never**
+    `unsupported_by_agent`; `{ handled: false }` is returned only for an
+    already-settled session (nothing left to abort). P5 must NOT
+    translate abort's `{ handled: false }` into `unsupported_by_agent`
+    the way it does for steer/followup.
 - `ctx.transit` semantics: resolve target → call `workflow.onTransit`
   (may throw → the error propagates to the agent, which may retry with
   a different target) → atomically update `task.json` + close the

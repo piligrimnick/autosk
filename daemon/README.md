@@ -27,8 +27,15 @@ stack (and doltlite) once parity lands; see
   and the live-code hazard guard that parks any in-flight `work` task whose
   workflow/step has vanished from the registry to `human`. `ProjectManager.open()`
   builds each project's registry, logs load diagnostics, and runs the hazard
-  guard before the scheduler can pick anything up. Scheduler and RPC server are
-  still to come (P4–P5).
+  guard before the scheduler can pick anything up. P4 landed the **engine**
+  (`src/engine/`) — the scheduler (a single event-driven scan + a global FIFO
+  worker pool, `--workers`, shared across projects, plus a slow safety rescan),
+  the session lifecycle, `ctx.transit` (onTransit validation → atomic `task.json`
+  commit → isolation acquire/release), the pi-format transcript writer, the
+  `AgentRunContext` (tasks/workflows/log/comment/exec/spawn), steer/followup/abort
+  routing, and crash recovery (running/queued sessions → `failed: daemon_restart`,
+  task → `human`). The engine is RPC-independent — driven purely via the Engine
+  API in tests. The RPC v2 server is still to come (P5).
 - **`extensions/pi-agent/`** — `@autosk/pi-agent`: the shipped extension that
   drives `pi --mode rpc` as an autosk agent. Placeholder in P1 (built in P6).
 

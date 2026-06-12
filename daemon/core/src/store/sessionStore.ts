@@ -203,6 +203,67 @@ export class SessionStore {
     });
   }
 
+  /**
+   * Conditionally patches a meta only if its current status equals `expect`.
+   * Returns the meta (patched when applied, current otherwise) and whether the
+   * patch was applied.
+   *
+   * The engine uses this to make the `queued → running` transition ATOMIC against
+   * a concurrent `session.abort`: if an abort already sealed the queued session
+   * (`status:aborted`), a late `running` write must NOT resurrect it. Both writes
+   * serialise on the per-session lock, and the status precondition is evaluated
+   * under that lock, so exactly one of {start, abort} wins.
+   */
+  async patchMetaIf(
+    id: string,
+    expect: SessionStatus,
+    patch: Partial<Pick<SessionMeta, "status" | "error" | "started_at" | "ended_at">>,
+  ): Promise<{ meta: SessionMeta; applied: boolean }> {
+    return this.locks.run(`session::${id}`, async () => {
+      const current = this.metaCache.get(id)?.value ?? (await this.getMeta(id));
+      if (!current) throw new Error(`session not found: ${id}`);
+      if (current.status !== expect) return { meta: current, applied: false };
+      const next: SessionMeta = { ...current, ...patch };
+      const sig = await atomicWrite(this.paths.sessionMeta(id), serializeSessionMeta(next));
+      this.metaCache.set(id, { sig, value: next });
+      this.indexMeta(next);
+      return { meta: next, applied: true };
+    });
+  }
+
+  /**
+   * Rewrites the transcript header's `cwd` in place.
+   *
+   * Used by the engine once isolation is acquired in the worker (plan §3.5): the
+   * session is created with `cwd` = the project root, then this records the real
+   * run directory (the isolation handle's path) on the header. It runs under the
+   * per-session lock BEFORE any entry is appended — at that point the file is just
+   * the header line — but it preserves any trailing lines defensively. A missing
+   * or unparseable transcript is a no-op (nothing to rewrite).
+   */
+  async setHeaderCwd(id: string, cwd: string): Promise<void> {
+    await this.locks.run(`session::${id}`, async () => {
+      const path = this.paths.sessionTranscript(id);
+      let text: string;
+      try {
+        text = await readFile(path, "utf8");
+      } catch {
+        return;
+      }
+      const nl = text.indexOf("\n");
+      const headerLine = nl >= 0 ? text.slice(0, nl) : text;
+      const rest = nl >= 0 ? text.slice(nl + 1) : "";
+      let header: SessionHeader;
+      try {
+        header = JSON.parse(headerLine) as SessionHeader;
+      } catch {
+        return;
+      }
+      header.cwd = cwd;
+      await atomicWrite(path, serializeSessionHeader(header) + "\n" + rest);
+    });
+  }
+
   /** Appends one transcript entry (a single newline-terminated JSON line). */
   async appendEntry(id: string, entry: TranscriptEntry): Promise<void> {
     await this.locks.run(`session::${id}`, async () => {

@@ -3,7 +3,7 @@
  * writes, an mtime cache, and hybrid-ownership reconciliation.
  */
 
-export { Store, type StoreOptions } from "./store.ts";
+export { Store, type StoreOptions, type SchedulingRow } from "./store.ts";
 export { TaskStore } from "./taskStore.ts";
 export { SessionStore, type CreateSessionInput } from "./sessionStore.ts";
 export { ProjectPaths, AUTOSK_DIR } from "./paths.ts";

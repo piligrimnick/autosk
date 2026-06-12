@@ -13,6 +13,7 @@ import { RPC_METHODS, type RpcMethod } from "@autosk/sdk";
 export * from "./store/index.ts";
 export * from "./project/index.ts";
 export * from "./extensions/index.ts";
+export * from "./engine/index.ts";
 
 /** The version the daemon reports over `meta.version`. */
 export const VERSION = "0.0.0-dev";

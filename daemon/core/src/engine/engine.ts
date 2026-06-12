@@ -1,0 +1,507 @@
+/**
+ * The engine (plan §3.7(3-4)): the single scheduler loop + global worker pool,
+ * session lifecycle, `ctx.transit` commit path, isolation acquire/release, the
+ * transcript writer, steer/followup/abort routing, and crash recovery.
+ *
+ * It is RPC-independent — the daemon (P5) constructs it once, feeds it projects
+ * via {@link addProject}, and drives it through {@link enroll} / {@link resume} /
+ * {@link sessionInput} / {@link sessionAbort}; tests drive the exact same API.
+ *
+ * Scheduling is event-driven, not polled (plan §3.7(3)): a transit / enroll /
+ * resume / finished session kicks a coalesced scan that finds every schedulable
+ * task (status=work, an agent step, not blocked, no live session), claims it by
+ * creating a `queued` session, and enqueues it onto the FIFO pool capped at
+ * `--workers`. Scans never overlap (a guard flag), so the "no live session"
+ * check plus session-creation-as-claim guarantee one session per task.
+ */
+
+import {
+  newSessionId,
+  type SessionMeta,
+  type StepTarget,
+  type TaskView,
+  type TranscriptEntry,
+  type WorkflowDefinition,
+} from "@autosk/sdk";
+
+import { systemClock, type Clock } from "../store/clock.ts";
+import { consoleLogger, type Logger } from "../store/logger.ts";
+import { TranscriptWriter } from "./transcript.ts";
+import { buildTransitContext, positionFor, validateTarget } from "./transition.ts";
+import { SessionRuntime } from "./session.ts";
+import {
+  ENGINE_COMMENT_AUTHOR,
+  EngineError,
+  errMsg,
+  type EngineEvent,
+  type EngineListener,
+  type EngineProject,
+  type SessionHost,
+} from "./types.ts";
+
+/** Default size of the global FIFO worker pool (plan §3.7(3)). */
+export const DEFAULT_WORKERS = 4;
+
+/**
+ * Default period of the safety rescan (plan §3.7(3)): the net for schedulability
+ * changes that emit NO engine event (e.g. a task unblocked or enrolled by an
+ * external edit to a file the daemon did not author). Scheduling stays
+ * event-driven; this is a slow backstop, not a poll loop.
+ */
+export const DEFAULT_RESCAN_MS = 30_000;
+
+export interface EngineOptions {
+  /** Global worker-pool size (shared across all projects). Defaults to {@link DEFAULT_WORKERS}. */
+  workers?: number;
+  /** Safety-rescan period in ms (0 disables). Defaults to {@link DEFAULT_RESCAN_MS}. */
+  rescanMs?: number;
+  clock?: Clock;
+  logger?: Logger;
+}
+
+/** What `enroll` accepts: a named workflow XOR an agent (a `single:<agent>` synthetic). */
+export type EnrollTarget = { workflow: string } | { agent: string };
+
+export class Engine implements SessionHost {
+  readonly clock: Clock;
+  readonly logger: Logger;
+  private readonly workers: number;
+
+  private readonly projects = new Map<string, EngineProject>();
+  /** Live session runtimes keyed by session id (for input/abort routing). */
+  private readonly running = new Map<string, SessionRuntime>();
+  private readonly listeners = new Set<EngineListener>();
+
+  /** The FIFO of claimed-but-not-yet-running session runtimes. */
+  private queue: SessionRuntime[] = [];
+  /** Currently-executing worker count (≤ workers). */
+  private active = 0;
+
+  private stopped = false;
+  private scanning = false;
+  private scanRequested = false;
+
+  private readonly rescanMs: number;
+  private rescanTimer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(opts: EngineOptions = {}) {
+    this.clock = opts.clock ?? systemClock;
+    this.logger = opts.logger ?? consoleLogger;
+    this.workers = Math.max(1, opts.workers ?? DEFAULT_WORKERS);
+    this.rescanMs = opts.rescanMs ?? DEFAULT_RESCAN_MS;
+    this.ensureRescanTimer();
+  }
+
+  // -- project membership --------------------------------------------------
+
+  /**
+   * Adds a project to the engine: runs crash recovery (interrupted sessions →
+   * `failed: daemon_restart`, their tasks → `human`) then kicks a scan so any
+   * already-`work` task is dispatched. Idempotent per root.
+   */
+  async addProject(project: EngineProject): Promise<void> {
+    if (this.projects.has(project.root)) return;
+    this.projects.set(project.root, project);
+    await this.recoverProject(project);
+    this.kickScan();
+  }
+
+  /** Currently-registered project roots. */
+  projectRoots(): string[] {
+    return [...this.projects.keys()];
+  }
+
+  // -- lifecycle -----------------------------------------------------------
+
+  /** (Re)enables scheduling, restarts the safety rescan, and kicks a scan. */
+  start(): void {
+    this.stopped = false;
+    this.ensureRescanTimer();
+    this.kickScan();
+  }
+
+  /**
+   * Halts scheduling and detaches every live session WITHOUT writing terminal
+   * state (deviation: simulates a daemon stop/crash). The dropped queue + the
+   * `queued`/`running` metas left on disk are reaped by {@link recoverProject} —
+   * which runs from {@link addProject} (i.e. a fresh process re-registering its
+   * projects), NOT from {@link start}. A `stop()`→`start()` on the SAME instance
+   * (without re-adding projects) does not recover them, so P5's idle-shutdown
+   * must re-add projects rather than merely restart. Detaching fires each
+   * session's `AbortSignal` so a well-behaved agent unblocks promptly.
+   */
+  stop(): void {
+    this.stopped = true;
+    this.clearRescanTimer();
+    this.queue = [];
+    for (const rt of this.running.values()) rt.detach();
+  }
+
+  /** Starts the periodic safety rescan (idempotent; no-op when disabled). */
+  private ensureRescanTimer(): void {
+    if (this.rescanTimer !== null || this.rescanMs <= 0) return;
+    this.rescanTimer = setInterval(() => this.kickScan(), this.rescanMs);
+    // Never keep the process (or a test runner) alive just for the backstop.
+    this.rescanTimer.unref?.();
+  }
+
+  /** Stops the periodic safety rescan (idempotent). */
+  private clearRescanTimer(): void {
+    if (this.rescanTimer === null) return;
+    clearInterval(this.rescanTimer);
+    this.rescanTimer = null;
+  }
+
+  // -- subscriptions -------------------------------------------------------
+
+  on(listener: EngineListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  off(listener: EngineListener): void {
+    this.listeners.delete(listener);
+  }
+
+  /** Pool stats for `meta.healthz` (P5). */
+  stats(): { workers: number; queued: number; running: number } {
+    return { workers: this.workers, queued: this.queue.length, running: this.active };
+  }
+
+  // -- enroll / resume (client-driven transitions) -------------------------
+
+  /**
+   * Enrolls a `new` task into a workflow (`{ workflow }`) or materialises a
+   * `single:<agent>` for an agent (`{ agent }`), transitioning it to the
+   * workflow's first step. Runs `onTransit` for the enroll → firstStep edge
+   * (a throw rejects the enroll).
+   */
+  async enroll(root: string, taskId: string, target: EnrollTarget): Promise<TaskView> {
+    const project = this.requireProject(root);
+    const { wf, workflowName } = this.resolveEnrollTarget(project, target);
+
+    const view = await this.requireTask(project, taskId);
+    if (view.status !== "new") {
+      throw EngineError.conflict(`cannot enroll ${taskId}: status is ${view.status}, expected new`);
+    }
+
+    const to: StepTarget = { step: wf.firstStep };
+    await this.runOnTransit(project, wf, taskId, workflowName, "", to);
+    const updated = await project.store.setPosition(taskId, positionFor(wf, "", to));
+    this.emitTask(project, updated);
+    this.kickScan();
+    return updated;
+  }
+
+  /**
+   * Re-enters a parked (`human`) task into its workflow. Defaults to the same
+   * step the task was parked at; `to` overrides the target. Runs `onTransit`.
+   */
+  async resume(root: string, taskId: string, to?: StepTarget): Promise<TaskView> {
+    const project = this.requireProject(root);
+    const view = await this.requireTask(project, taskId);
+    if (view.status !== "human") {
+      throw EngineError.conflict(`cannot resume ${taskId}: status is ${view.status}, expected human`);
+    }
+    if (view.workflow === null || view.step === null) {
+      throw EngineError.conflict(`cannot resume ${taskId}: task is not enrolled`);
+    }
+    const wf = project.registry.resolveWorkflow(view.workflow);
+    if (!wf) {
+      throw EngineError.conflict(`cannot resume ${taskId}: workflow_missing: ${view.workflow}`);
+    }
+    const target: StepTarget = to ?? { step: view.step };
+    // `runOnTransit` validates the target before invoking `onTransit`, so no
+    // separate `validateTarget` call is needed here (ISSUE #9c).
+    await this.runOnTransit(project, wf, taskId, view.workflow, view.step, target);
+    const updated = await project.store.setPosition(taskId, positionFor(wf, view.step, target));
+    this.emitTask(project, updated);
+    this.kickScan();
+    return updated;
+  }
+
+  // -- session input / abort ----------------------------------------------
+
+  /** Routes a steer/followup into a live session (plan §3.4). */
+  async sessionInput(
+    root: string,
+    sessionId: string,
+    input: { message: string; kind: "steer" | "followup" },
+  ): Promise<{ handled: boolean }> {
+    const rt = this.requireSession(root, sessionId);
+    return rt.input(input.kind, input.message);
+  }
+
+  /** Aborts a live session: fires its signal + `onAbort`, marks it aborted (plan §3.4). */
+  async sessionAbort(root: string, sessionId: string): Promise<{ handled: boolean }> {
+    const rt = this.requireSession(root, sessionId);
+    return rt.abort();
+  }
+
+  // -- scheduler -----------------------------------------------------------
+
+  /** Requests a coalesced scan (no-op while stopped). */
+  kickScan(): void {
+    if (this.stopped) return;
+    this.scanRequested = true;
+    void this.drainScans();
+  }
+
+  /** Drains scan requests one at a time — scans never overlap. */
+  private async drainScans(): Promise<void> {
+    if (this.scanning) return;
+    this.scanning = true;
+    try {
+      while (this.scanRequested && !this.stopped) {
+        this.scanRequested = false;
+        await this.scanAll();
+      }
+    } catch (e) {
+      this.logger.error(`scheduler scan failed: ${errMsg(e)}`);
+    } finally {
+      this.scanning = false;
+    }
+  }
+
+  private async scanAll(): Promise<void> {
+    for (const project of this.projects.values()) {
+      if (this.stopped) return;
+      await this.scanProject(project);
+    }
+    this.pump();
+  }
+
+  /** Finds schedulable tasks in one project and claims+enqueues a session for each. */
+  private async scanProject(project: EngineProject): Promise<void> {
+    const rows = await project.store.listSchedulable();
+    for (const row of rows) {
+      if (this.stopped) return;
+      if (row.blocked) continue; // deviation #1: never dispatch a blocked task
+      if (row.workflow === null || row.step === null) continue;
+      if (project.store.sessions.hasLiveSession(row.id)) continue; // already running/queued
+      await this.dispatch(project, row.id);
+    }
+  }
+
+  /**
+   * Claims a task for execution: re-read it FRESH, create the `queued` session
+   * (the claim), build the runtime, and enqueue it onto the pool.
+   *
+   * The fresh re-read is load-bearing (BLOCKER #1): the enumerating scan's
+   * snapshot can go stale across `await`s (a sibling transition may have advanced
+   * THIS task and sealed its session while we were dispatching another), so the
+   * snapshot is never trusted — workflow/step/agent are re-derived here and any
+   * change (status≠work, a new live session, a different step) aborts the claim.
+   * Isolation is NOT acquired here; the worker acquires it bounded by the pool
+   * (plan §3.5, ISSUE #5).
+   */
+  private async dispatch(project: EngineProject, taskId: string): Promise<void> {
+    const row = await project.store.schedulingRow(taskId).catch(() => null);
+    if (!row || row.status !== "work" || row.blocked) return;
+    if (row.workflow === null || row.step === null) return;
+    const wf = project.registry.resolveWorkflow(row.workflow);
+    if (!wf) return; // unknown workflow — the live-code hazard guard parks it
+    const stepDef = wf.steps[row.step];
+    if (!stepDef) return; // unknown step — hazard guard parks it
+    if (stepDef.human || !stepDef.agent) return; // human-owned step: never scheduled
+    const agent = project.registry.getAgent(stepDef.agent);
+    if (!agent) return; // missing agent — hazard guard parks it
+    if (project.store.sessions.hasLiveSession(taskId)) return; // already running/queued
+
+    const sessionId = newSessionId();
+    await project.store.sessions.create({
+      id: sessionId,
+      task_id: taskId,
+      workflow: row.workflow,
+      step: row.step,
+      agent: stepDef.agent,
+      cwd: project.root, // isolation (if any) is acquired in the worker and rewrites this
+      timestamp: this.clock(),
+    });
+
+    const runtime = new SessionRuntime({
+      host: this,
+      project,
+      workflow: wf,
+      workflowName: row.workflow,
+      agent,
+      agentName: stepDef.agent,
+      sessionId,
+      taskId,
+      step: row.step,
+    });
+    this.running.set(sessionId, runtime);
+    this.queue.push(runtime);
+  }
+
+  /** Starts as many queued sessions as the pool cap allows. */
+  private pump(): void {
+    while (!this.stopped && this.active < this.workers && this.queue.length > 0) {
+      const rt = this.queue.shift()!;
+      if (rt.isSettled()) {
+        // Aborted (or otherwise finalised) while still queued — it already sealed
+        // its own meta; drop it without occupying a worker slot (BLOCKER #2).
+        this.running.delete(rt.id);
+        continue;
+      }
+      this.active += 1;
+      void this.runJob(rt);
+    }
+  }
+
+  private async runJob(rt: SessionRuntime): Promise<void> {
+    try {
+      await rt.run();
+    } catch (e) {
+      this.logger.error(`session ${rt.id} crashed: ${errMsg(e)}`);
+    } finally {
+      this.running.delete(rt.id);
+      this.active -= 1;
+      this.pump();
+      this.kickScan();
+    }
+  }
+
+  // -- crash recovery ------------------------------------------------------
+
+  /**
+   * Reaps sessions interrupted by a daemon restart (plan §3.7(4)): any meta left
+   * `running` OR `queued` (deviation #2: a queued meta is equally orphaned and
+   * would deadlock the task) → `failed: daemon_restart`, and its `work` task →
+   * `human`. No retention/GC — session files just accumulate.
+   */
+  private async recoverProject(project: EngineProject): Promise<void> {
+    for (const meta of project.store.sessions.allMetas()) {
+      if (meta.status !== "running" && meta.status !== "queued") continue;
+      await project.store.sessions.patchMeta(meta.id, {
+        status: "failed",
+        error: "daemon_restart",
+        ended_at: this.clock(),
+      });
+      await this.appendRecoveryEntries(project, meta.id);
+      const view = await project.store.taskView(meta.task_id).catch(() => null);
+      if (view && view.status === "work") {
+        await this.park(project, meta.task_id, "daemon_restart");
+      }
+    }
+  }
+
+  /** Appends the structural `autosk:error` + `autosk:session_end` to a reaped transcript. */
+  private async appendRecoveryEntries(project: EngineProject, sessionId: string): Promise<void> {
+    const writer = new TranscriptWriter(project.store.sessions, sessionId, this.clock, this.logger);
+    writer.error("daemon_restart");
+    writer.sessionEnd("failed", "daemon_restart");
+    await writer.flush();
+  }
+
+  // -- SessionHost ---------------------------------------------------------
+
+  /** Parks a task to `human` with `error` (status flip keeps workflow/step + an `autosk` comment). */
+  async park(project: EngineProject, taskId: string, error: string): Promise<void> {
+    const view = await project.store.taskView(taskId).catch(() => null);
+    if (!view) return;
+    const updated = await project.store.setPosition(taskId, {
+      status: "human",
+      workflow: view.workflow,
+      step: view.step,
+    });
+    await project.store.addComment(taskId, { author: ENGINE_COMMENT_AUTHOR, text: error });
+    this.emitTask(project, updated);
+  }
+
+  async notifyTaskChanged(project: EngineProject, taskId: string): Promise<void> {
+    const view = await project.store.taskView(taskId).catch(() => null);
+    if (view) this.emitTask(project, view);
+  }
+
+  emitSession(project: EngineProject, meta: SessionMeta, kind: "status" | "done" | "error"): void {
+    const event: EngineEvent = { type: "session-event", root: project.root, session_id: meta.id, kind, meta };
+    if (meta.error !== undefined) event.error = meta.error;
+    this.emit(event);
+  }
+
+  emitSessionMessage(project: EngineProject, sessionId: string, entry: TranscriptEntry): void {
+    this.emit({ type: "session-event", root: project.root, session_id: sessionId, kind: "message", entry });
+  }
+
+  // -- internals -----------------------------------------------------------
+
+  private emitTask(project: EngineProject, task: TaskView): void {
+    this.emit({ type: "task-changed", root: project.root, task });
+  }
+
+  private emit(event: EngineEvent): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch (e) {
+        this.logger.warn(`engine listener threw: ${errMsg(e)}`);
+      }
+    }
+  }
+
+  /** Shared `onTransit` invocation for enroll/resume (the session path has its own). */
+  private async runOnTransit(
+    project: EngineProject,
+    wf: WorkflowDefinition,
+    taskId: string,
+    workflowName: string,
+    leavingStep: string,
+    to: StepTarget,
+  ): Promise<void> {
+    validateTarget(wf, to);
+    if (!wf.onTransit) return;
+    const tctx = buildTransitContext({
+      store: project.store,
+      taskId,
+      workflow: workflowName,
+      leavingStep,
+      author: ENGINE_COMMENT_AUTHOR,
+    });
+    await wf.onTransit(tctx, to);
+  }
+
+  private resolveEnrollTarget(
+    project: EngineProject,
+    target: EnrollTarget,
+  ): { wf: WorkflowDefinition; workflowName: string } {
+    if ("agent" in target) {
+      if (!project.registry.hasAgent(target.agent)) {
+        throw EngineError.invalidParams(`unknown agent: ${target.agent}`);
+      }
+      const wf = project.registry.singleStepFor(target.agent);
+      return { wf, workflowName: wf.name };
+    }
+    const wf = project.registry.resolveWorkflow(target.workflow);
+    if (!wf) throw EngineError.invalidParams(`unknown workflow: ${target.workflow}`);
+    return { wf, workflowName: target.workflow };
+  }
+
+  private requireProject(root: string): EngineProject {
+    const project = this.projects.get(root);
+    if (!project) throw EngineError.projectNotFound(`project not registered with engine: ${root}`);
+    return project;
+  }
+
+  private async requireTask(project: EngineProject, taskId: string): Promise<TaskView> {
+    try {
+      return await project.store.taskView(taskId);
+    } catch {
+      throw EngineError.notFound(`task not found: ${taskId}`);
+    }
+  }
+
+  private requireSession(root: string, sessionId: string): SessionRuntime {
+    if (!this.projects.has(root)) {
+      throw EngineError.projectNotFound(`project not registered with engine: ${root}`);
+    }
+    const rt = this.running.get(sessionId);
+    // Cross-check the runtime actually belongs to the named project, not merely
+    // that `root` is some registered project (ISSUE #6): a session id from project
+    // A must not be routable under project B's root.
+    if (!rt || rt.projectRoot !== root) {
+      throw EngineError.notFound(`session not running: ${sessionId}`);
+    }
+    return rt;
+  }
+}

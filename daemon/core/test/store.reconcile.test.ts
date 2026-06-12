@@ -379,19 +379,40 @@ describe("reconciliation — watcher echo suppression", () => {
         task.status = "done"; // engine-owned: the watcher must reject + restore
       });
 
-      // A real fs.watch event is REQUIRED here (no rescan fallback), so the
-      // deadline must clear FSEvents' worst-case coalescing under load. macOS
-      // recursive watch can lag well past a few seconds on a busy box (B1: at
-      // 5s this flaked ~2/4 under parallel `bun test`), while a healthy watcher
-      // still fires in tens of ms — so 20s keeps a passing run fast and only a
-      // genuinely-broken watcher ever hits the deadline.
+      // A real fs.watch event is REQUIRED here (no rescan fallback). macOS
+      // recursive watch (FSEvents) can silently DROP the lone event under
+      // parallel-suite load and needs a beat to warm up after the watch starts —
+      // and with the rescan disabled there is nothing to recover a dropped event,
+      // so a single edit racing a cold/overloaded watcher would hang the full
+      // 20s (B1: this flaked ~12% even at a 20s deadline under parallel
+      // `bun test`). Re-emit the edit until the watcher catches ONE event: the
+      // store's signature-based reconcile is idempotent, a healthy watcher still
+      // passes on the first event in tens of ms, and only a genuinely-broken
+      // (never-delivering) watcher reaches the deadline.
+      let lastPoke = 0;
       await waitFor(async () => {
-        const onDisk = parseTask(await readFile(store.paths.taskJson(t.id), "utf8"));
-        return onDisk.status === "work" && log.warns.length > 0;
+        let onDisk;
+        try {
+          onDisk = parseTask(await readFile(store.paths.taskJson(t.id), "utf8"));
+        } catch {
+          return false; // torn read mid-write — retry
+        }
+        if (onDisk.status === "work" && log.warns.length > 0) return true;
+        const now = Date.now();
+        if (onDisk.status !== "work" && now - lastPoke > 250) {
+          lastPoke = now;
+          await externalEdit(store, t.id, (task) => {
+            task.status = "done";
+          });
+        }
+        return false;
       }, 20000);
     } finally {
       await store.close();
       dir.cleanup();
     }
-  });
+    // Bun's per-test timeout defaults to 5s, which would preempt the 20s waitFor
+    // above; give the test a deadline past its own waitFor so only a
+    // genuinely-broken watcher fails.
+  }, 25000);
 });

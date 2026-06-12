@@ -1,0 +1,118 @@
+/**
+ * The per-session transcript writer (plan §3.2, §3.4).
+ *
+ * Backs `ctx.log.message` / `ctx.log.custom` and the engine's own structural
+ * `autosk:*` entries. The SDK declares `log.message` / `log.custom` synchronous
+ * (`void`), but appending to the `.jsonl` is async IO, so writes are funnelled
+ * through a serial promise chain that preserves append order; the engine awaits
+ * {@link flush} before sealing a session so no entry is lost. Each enqueued
+ * append catches its own error (a transcript write must never crash a session),
+ * keeping the chain free of rejections.
+ */
+
+import {
+  newEntryId,
+  type CustomEntry,
+  type ErrorData,
+  type MessageEntry,
+  type SessionEndData,
+  type SteerData,
+  type StepTarget,
+  type TranscriptEntry,
+  type TranscriptMessage,
+  type TransitData,
+} from "@autosk/sdk";
+
+import type { Clock } from "../store/clock.ts";
+import type { Logger } from "../store/logger.ts";
+import type { SessionStore } from "../store/sessionStore.ts";
+
+export class TranscriptWriter {
+  private chain: Promise<void> = Promise.resolve();
+  private readonly taken = new Set<string>();
+
+  constructor(
+    private readonly sessions: SessionStore,
+    private readonly sessionId: string,
+    private readonly clock: Clock,
+    private readonly logger: Logger,
+    /** Called after each entry is durably appended (the engine's message fan-out). */
+    private readonly onEntry?: (entry: TranscriptEntry) => void,
+  ) {}
+
+  // -- agent channels (ctx.log) -------------------------------------------
+
+  /** Writes a pi message-schema entry. */
+  message(message: TranscriptMessage): void {
+    this.append({ type: "message", id: this.id(), timestamp: this.now(), message } as MessageEntry);
+  }
+
+  /** Writes a generic `custom` entry. */
+  custom(customType: string, data?: unknown): void {
+    const entry: CustomEntry = { type: "custom", id: this.id(), timestamp: this.now(), customType };
+    if (data !== undefined) entry.data = data;
+    this.append(entry);
+  }
+
+  // -- engine structural channels (autosk:*) ------------------------------
+
+  /** `autosk:transit` — one committed transition. */
+  transit(to: StepTarget, from?: TransitData["from"]): void {
+    const data: TransitData = { to };
+    if (from) data.from = from;
+    this.append(this.engine("autosk:transit", data));
+  }
+
+  /** `autosk:steer` — a steer/followup message injected into the live session. */
+  steer(kind: SteerData["kind"], message: string): void {
+    this.append(this.engine("autosk:steer", { kind, message } satisfies SteerData));
+  }
+
+  /** `autosk:error` — an error surfaced during the session. */
+  error(error: string, message?: string): void {
+    const data: ErrorData = { error };
+    if (message !== undefined) data.message = message;
+    this.append(this.engine("autosk:error", data));
+  }
+
+  /** `autosk:session_end` — the session's terminal status. */
+  sessionEnd(status: SessionEndData["status"], error?: string): void {
+    const data: SessionEndData = { status };
+    if (error !== undefined) data.error = error;
+    this.append(this.engine("autosk:session_end", data));
+  }
+
+  /** Awaits every queued append (the engine calls this before sealing a session). */
+  async flush(): Promise<void> {
+    await this.chain;
+  }
+
+  // -- internals ----------------------------------------------------------
+
+  private engine(customType: string, data: unknown): CustomEntry {
+    return { type: "custom", id: this.id(), timestamp: this.now(), customType, data };
+  }
+
+  private append(entry: TranscriptEntry): void {
+    this.chain = this.chain.then(async () => {
+      try {
+        await this.sessions.appendEntry(this.sessionId, entry);
+        this.onEntry?.(entry);
+      } catch (e) {
+        this.logger.warn(
+          `transcript ${this.sessionId}: append failed (${e instanceof Error ? e.message : String(e)})`,
+        );
+      }
+    });
+  }
+
+  private id(): string {
+    const id = newEntryId(this.taken);
+    this.taken.add(id);
+    return id;
+  }
+
+  private now(): string {
+    return this.clock();
+  }
+}

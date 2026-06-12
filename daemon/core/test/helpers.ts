@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Clock } from "../src/index.ts";
+import type { Clock, Store } from "../src/index.ts";
 
 /** Creates a fresh temp dir; returns its path + a cleanup fn. */
 export function tempDir(): { path: string; cleanup: () => void } {
@@ -36,4 +36,32 @@ export async function waitFor(
     if (Date.now() > deadline) throw new Error("waitFor: timed out");
     await new Promise((r) => setTimeout(r, stepMs));
   }
+}
+
+/**
+ * A "fully settled" barrier — the correct sync point for any assertion on
+ * session-meta status or isolation state after a run finishes.
+ *
+ * The engine's commit path flips the TASK's observable status at step 1
+ * (`setPosition`, so a concurrent scan keeps seeing the live session and never
+ * re-dispatches the old step) but only seals the session meta and releases
+ * isolation at steps 3-4 — separated by a real transcript `flush()`. So a bare
+ * `waitFor(() => taskView.status === X)` fires EARLY, while the session is still
+ * `running` and the worktree unreleased; asserting on those a beat later is a
+ * race that loses under full-suite load. This waits until the task has reached
+ * `status` AND no session is still live (`queued`/`running`) for it, which is
+ * true only AFTER the seal (step 4). Reordering the engine to seal first is NOT
+ * an option — it would re-introduce the stale-step re-dispatch (BLOCKER #1) — so
+ * the barrier is what must move, not the commit order.
+ */
+export async function waitForComplete(
+  store: Store,
+  taskId: string,
+  status: string,
+  timeoutMs = 2000,
+): Promise<void> {
+  await waitFor(async () => {
+    const view = await store.taskView(taskId);
+    return view.status === status && store.sessions.liveSessionsForTask(taskId).length === 0;
+  }, timeoutMs);
 }

@@ -43,6 +43,21 @@ import { TasksWatcher, type WatcherOptions } from "./watcher.ts";
 /** Statuses that count as an *open* blocker (anything not terminal). */
 const OPEN_STATUSES: ReadonlySet<TaskStatus> = new Set(["new", "work", "human"]);
 
+/**
+ * The minimal task projection the scheduler needs (plan §3.7(3)). Deliberately
+ * lighter than {@link TaskView}: NO `comment_count` (a per-task `comments.jsonl`
+ * read) and NO reverse `blocks` index — the scheduler only consults
+ * id/status/workflow/step/blocked, and it runs on every session completion, so
+ * the hot path must not pay for those.
+ */
+export interface SchedulingRow {
+  id: string;
+  status: TaskStatus;
+  workflow: string | null;
+  step: string | null;
+  blocked: boolean;
+}
+
 export interface StoreOptions {
   clock?: Clock;
   logger?: Logger;
@@ -525,6 +540,53 @@ export class Store {
     }
     views.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     return filter ? views.filter((v) => matchesFilter(v, filter)) : views;
+  }
+
+  /**
+   * Lightweight scheduling rows for every `work` task (the scheduler hot path).
+   *
+   * Reconciles the whole project first — so external edits (a task unblocked or
+   * enrolled directly on disk) are picked up, which the engine's periodic safety
+   * rescan relies on — then returns only {@link SchedulingRow} fields. Unlike
+   * {@link listTaskViews} it reads NO `comments.jsonl` and builds NO reverse
+   * `blocks` index (the O(N) costs the scheduler does not need).
+   */
+  async listSchedulable(): Promise<SchedulingRow[]> {
+    await this.reconcileAll();
+    const rows: SchedulingRow[] = [];
+    for (const id of this.tasks.cachedIds()) {
+      const t = this.tasks.peek(id);
+      if (!t || t.status !== "work") continue;
+      rows.push(this.schedulingRowFor(t));
+    }
+    rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return rows;
+  }
+
+  /**
+   * A fresh {@link SchedulingRow} for one task (reconciles just that task). The
+   * scheduler re-reads this immediately before claiming a task so it never
+   * dispatches at a step that advanced under an `await` since the enumerating
+   * scan snapshot was taken. Returns `null` if the task is gone.
+   */
+  async schedulingRow(id: string): Promise<SchedulingRow | null> {
+    await this.reconcileTask(id);
+    const t = this.tasks.peek(id);
+    return t ? this.schedulingRowFor(t) : null;
+  }
+
+  /**
+   * Derives a {@link SchedulingRow} from a stored record. `blocked` is computed
+   * from the blockers' CACHED statuses (a dangling/unknown blocker is treated as
+   * not-open, mirroring {@link buildView}); a scan only ever needs an answer good
+   * enough to gate this pass — the next reconciled scan corrects any staleness.
+   */
+  private schedulingRowFor(t: StoredTask): SchedulingRow {
+    const blocked = t.blocked_by.some((bid) => {
+      const b = this.tasks.peek(bid);
+      return b !== undefined && OPEN_STATUSES.has(b.status);
+    });
+    return { id: t.id, status: t.status, workflow: t.workflow, step: t.step, blocked };
   }
 
   /** A reconciled map of every cached task (id → record). */
