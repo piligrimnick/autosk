@@ -221,6 +221,8 @@ Notes:
   session on terminal/sibling transitions → fire isolation lifecycle
   hooks → emit notifications. A second `transit` in the same session
   throws.
+- use `~/me/dev/pi` as reference when you need to check pi internal
+  implementation details.
 
 ### 3.5 Isolation modules (sandcastle pattern)
 
