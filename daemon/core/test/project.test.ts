@@ -10,6 +10,7 @@ import { join } from "node:path";
 
 import {
   canonicalize,
+  CapturingLogger,
   initProject,
   InvalidProjectError,
   ProjectManager,
@@ -143,7 +144,15 @@ describe("ProjectManager", () => {
   beforeEach(() => {
     dir = tempDir();
     registry = new ProjectRegistry(join(dir.path, "home", ".autosk", "projects.json"));
-    mgr = new ProjectManager({ registry, store: { watch: false } });
+    // Point the extension loader at the test's temp home so open() never reads
+    // the real ~/.autosk/ global extensions.
+    mgr = new ProjectManager({
+      registry,
+      store: { watch: false },
+      extensions: { home: join(dir.path, "home") },
+      // A silent capturing logger keeps the suite output clean.
+      logger: new CapturingLogger(),
+    });
   });
   afterEach(async () => {
     await mgr.close();

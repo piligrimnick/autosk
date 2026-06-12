@@ -89,8 +89,9 @@ export interface WorkflowStepInfo {
   human: boolean;
   /**
    * Targets the engine can reach from this step. Because the actual graph is
-   * decided at runtime by `onTransit`, this is the conservative declared set:
-   * the workflow's sibling steps plus the terminal/park statuses.
+   * decided at runtime by `onTransit`, this is the conservative declared set (a
+   * superset): every step in the workflow — including the step itself, since a
+   * self-loop is a valid retry target — plus the terminal/park statuses.
    */
   targets: StepTarget[];
 }

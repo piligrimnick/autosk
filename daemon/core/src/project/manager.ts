@@ -17,17 +17,29 @@
 
 import type { ProjectInfo } from "@autosk/sdk";
 
+import {
+  loadProjectRegistry,
+  validateInFlightTasks,
+  type ExtensionEnv,
+  type ExtensionRegistry,
+} from "../extensions/index.ts";
 import { systemClock, type Clock } from "../store/clock.ts";
 import { KeyedMutex } from "../store/lock.ts";
+import { consoleLogger, type Logger } from "../store/logger.ts";
 import { Store, type StoreOptions } from "../store/store.ts";
 import { initProject } from "./init.ts";
 import { ProjectRegistry } from "./registry.ts";
 import { canonicalize, resolveProjectRoot } from "./resolve.ts";
 
-/** An opened project: its canonical root + the bundled file store. */
+/**
+ * An opened project: its canonical root, the bundled file store, and the
+ * per-project extension registry (workflows + agents + load diagnostics).
+ */
 export interface ProjectHandle {
   root: string;
   store: Store;
+  /** The project's extension registry (P3): workflows, agents, diagnostics. */
+  extensions: ExtensionRegistry;
   /** RFC3339 UTC time the project was opened (for `healthz`). */
   opened_at: string;
 }
@@ -39,12 +51,22 @@ export interface ProjectManagerOptions {
   store?: StoreOptions;
   /** Clock for `opened_at` (defaults to the system clock). */
   clock?: Clock;
+  /**
+   * Extension loader environment (global-source `home`). Defaults to
+   * `process.env.HOME`; tests inject a temp home so they never touch the real
+   * `~/.autosk/`.
+   */
+  extensions?: ExtensionEnv;
+  /** Logger for live-code hazard parks (defaults to the console logger). */
+  logger?: Logger;
 }
 
 export class ProjectManager {
   private readonly registry: ProjectRegistry;
   private readonly storeOpts: StoreOptions;
   private readonly clock: Clock;
+  private readonly extensionsEnv: ExtensionEnv;
+  private readonly logger: Logger;
 
   private projects = new Map<string, ProjectHandle>();
   private openLocks = new KeyedMutex();
@@ -53,6 +75,8 @@ export class ProjectManager {
     this.registry = opts.registry ?? ProjectRegistry.openDefault();
     this.storeOpts = opts.store ?? {};
     this.clock = opts.clock ?? systemClock;
+    this.extensionsEnv = opts.extensions ?? {};
+    this.logger = opts.logger ?? consoleLogger;
   }
 
   // -- resolution / lazy open ----------------------------------------------
@@ -72,9 +96,37 @@ export class ProjectManager {
       if (again) return again;
       const store = new Store(root, this.storeOpts);
       await store.open();
-      const handle: ProjectHandle = { root, store, opened_at: this.clock() };
-      this.projects.set(root, handle);
-      return handle;
+      try {
+        // Build the per-project extension registry (discovery + factories, with
+        // error isolation), then run the live-code hazard guard against the
+        // just-loaded store: a `work` task whose workflow/step vanished from the
+        // registry is parked to `human` before the scheduler can ever pick it up.
+        const extensions = await loadProjectRegistry(root, this.extensionsEnv);
+        // Surface load diagnostics in the daemon log too (not only via the
+        // `project.diagnostics` RPC): a CLI-only operator who never calls that
+        // RPC would otherwise have zero signal that an extension failed to load.
+        const diags = extensions.diagnostics;
+        if (diags.length > 0) {
+          const sources = [...new Set(diags.map((d) => d.source))].join(", ");
+          this.logger.warn(
+            `extensions: ${diags.length} load diagnostic(s) opening ${root} ` +
+              `(sources: ${sources}); see project.diagnostics`,
+          );
+        }
+        const parked = await validateInFlightTasks(store, extensions);
+        for (const p of parked) {
+          this.logger.warn(`live-code hazard: parked ${p.taskId} to human (${p.error})`);
+        }
+        const handle: ProjectHandle = { root, store, extensions, opened_at: this.clock() };
+        this.projects.set(root, handle);
+        return handle;
+      } catch (e) {
+        // The registry load swallows its own errors, but a hazard-guard store
+        // write could still fail; don't leave the store's watcher running for a
+        // project that never got cached.
+        await store.close();
+        throw e;
+      }
     });
   }
 

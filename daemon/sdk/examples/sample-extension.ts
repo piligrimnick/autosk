@@ -13,7 +13,6 @@ import type {
   AutoskAPI,
   WorkflowDefinition,
 } from "@autosk/sdk";
-import { singleStep } from "@autosk/sdk";
 
 const devAgent: AgentDefinition = {
   name: "dev",
@@ -66,6 +65,7 @@ export default function sampleExtension(autosk: AutoskAPI): void {
   autosk.registerAgent(devAgent);
   autosk.registerAgent(reviewAgent);
   autosk.registerWorkflow(featureDev);
-  // The singleStep factory materialises a `single:<agent>` workflow.
-  autosk.registerWorkflow(singleStep("dev"));
+  // NOTE: `single:<agent>` workflows are NOT registered — the `singleStep`
+  // builtin materialises them on demand from `task.enroll {agent}`, and the
+  // `single:` namespace is reserved (registering it is rejected as a diagnostic).
 }
