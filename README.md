@@ -54,7 +54,7 @@ Here you can press `n` to create new task or `?` to see hotkeys.
 ### [Desktop GUI](gui/README.md)
 
 A native desktop app (Tauri: React/Vite UI + Rust backend) at feature parity
-with `autosk lazy` — projects in a sidebar, a live task timeline, and a
+with `autosk lazy` — projects in a sidebar, a live session transcript, and a
 state-aware composer (steer / follow-up / abort, comment / resume, enroll).
 The Tauri backend is a **pure JSON-RPC client of `autoskd`**; the front end is
 transport-agnostic and runs in either mode:
@@ -62,7 +62,7 @@ transport-agnostic and runs in either mode:
 - **Local** — connects over the Unix-domain socket and **auto-spawns** `autoskd`
   when it isn't already running. Zero configuration, exactly like `autosk lazy`.
 - **Remote** — dials a configured `host:port` and authenticates with a token
-  (first request is `auth{token}`). The remote `autoskd` must be running
+  (first request is `meta.auth{token}`). The remote `autoskd` must be running
   explicitly — you can't auto-spawn a process on another host. Set the mode and
   host/token in the in-app **Settings** view.
 
