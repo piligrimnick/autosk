@@ -1,7 +1,7 @@
 {
-  "name": "@autosk/pi-agent",
+  "name": "@autosk/worktree",
   "version": "0.0.0",
-  "description": "autosk extension that drives `pi --mode rpc` as an agent (model/thinking/first_message, kickback loop, autosk_transit pi-tool bridge).",
+  "description": "Shipped autoskd v2 isolation provider: per-task git worktree isolation (worktreeIsolation()) attachable to any workflow.",
   "license": "MIT",
   "type": "module",
   "publishConfig": {

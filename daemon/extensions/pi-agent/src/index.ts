@@ -1,36 +1,228 @@
 /**
- * @autosk/pi-agent — placeholder for P1.
+ * `@autosk/pi-agent` — drive `pi --mode rpc` as an autoskd v2 agent (plan §3.4).
  *
- * P6 ports v1's "standard branch" here: spawn `pi --mode rpc`, drive it over
- * JSON-lines stdio via `ctx.spawn` (`ChildHandle`), mirror pi session entries
- * into `ctx.log`, register an `autosk_transit` pi-tool and bridge its calls to
- * `ctx.transit`, and reimplement the kickback loop as this extension's private
- * logic. For now this is an inert extension factory so the package typechecks
- * and the workspace wiring stays exercised.
+ * Ports v1's "standard branch" (`crates/autosk-core/src/{pi,executor}.rs`):
+ * spawn `pi --mode rpc` with the role's model/thinking/first-message, drive it
+ * over JSON-Lines stdio via {@link PiDriver}, mirror pi session entries into the
+ * autosk transcript 1:1, and reimplement the kickback/corrections loop as this
+ * extension's PRIVATE logic (the engine no longer has the concept).
+ *
+ * Transit channel (plan §3.4, resolved-#2): an injected pi extension registers
+ * an `autosk_transit` tool into the spawned pi; the driver observes the tool
+ * call on pi's RPC event stream and translates it into `ctx.transit(...)`. A
+ * workflow `onTransit` rejection is fed back to the model as a corrective
+ * follow-up (same model-visible effect as a tool error) so it can pick another
+ * target — core stays closed.
  */
 
-import type { AutoskAPI } from "@autosk/sdk";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
+import type { AgentDefinition, AgentRunContext, StepTarget } from "@autosk/sdk";
+
+import { PiDriver } from "./driver.ts";
+import { kickbackMessage, renderInitialPrompt, rejectionMessage } from "./prompt.ts";
+
+export {
+  PiDriver,
+  parseTarget,
+  buildInputCommand,
+  isStateMismatch,
+  TRANSIT_TOOL_NAME,
+  type TurnEnd,
+} from "./driver.ts";
+export {
+  renderInitialPrompt,
+  kickbackMessage,
+  rejectionMessage,
+  targetLabel,
+  targetLabels,
+} from "./prompt.ts";
+
+/** Configuration for one pi-backed agent role (plan §3.4, extended in P6). */
 export interface PiAgentOptions {
   /** Agent name to register (e.g. `"@autosk/pi-agent/dev"`). */
   name: string;
   /** pi model spec, e.g. `"sonnet:high"`. */
   model?: string;
+  /** pi thinking level: `off`|`minimal`|`low`|`medium`|`high`|`xhigh`. */
+  thinking?: string;
+  /** Inline first-message seed (wins over {@link firstMessageFile}). */
+  firstMessage?: string;
   /** Path to a file whose contents seed the first message. */
   firstMessageFile?: string;
-  /** Extra args forwarded to `pi`. */
+  /** Extra args forwarded verbatim to `pi`. */
   extraArgs?: string[];
+  /** pi extensions to load (`-e <path>` each). */
+  piExtensions?: string[];
+  /** pi skills to enable (`--skill <name>` each). */
+  piSkills?: string[];
+  /**
+   * Max corrective turns before giving up and returning without a transit
+   * (the engine then parks via `agent_did_not_transit`). Default `3`.
+   */
+  maxCorrections?: number;
+  /** `pi` binary to spawn. Defaults to `$AUTOSK_PI_BIN` or `"pi"`. The e2e tests point this at a stub. */
+  piBin?: string;
+}
+
+/** The injected pi extension that registers the `autosk_transit` tool. */
+const TRANSIT_EXTENSION_PATH = fileURLToPath(new URL("./pi-transit-extension.ts", import.meta.url));
+
+/** Per-session driver registry so steer/followup/abort reach the live pi. */
+const liveSessions = new Map<string, PiDriver>();
+
+/**
+ * Builds the pi-backed {@link AgentDefinition} for one role (plan §3.4). The
+ * returned agent spawns `pi --mode rpc` on each `onRun`, drives it to a single
+ * `autosk_transit`, and forwards steer/followup/abort into the live process.
+ */
+export function piAgent(opts: PiAgentOptions): AgentDefinition {
+  if (!opts.name || opts.name.trim() === "") {
+    throw new Error("piAgent: `name` is required");
+  }
+  const maxCorrections = opts.maxCorrections ?? 3;
+  // Resolve the first-message seed at most once per process: extension code is
+  // frozen until the daemon restarts (the loader caches modules), so re-reading
+  // the prompt file on every `onRun` is wasted IO on the hot path.
+  let firstMessageOnce: Promise<string> | null = null;
+  const firstMessage = (): Promise<string> => (firstMessageOnce ??= resolveFirstMessage(opts));
+
+  return {
+    name: opts.name,
+
+    async onRun(ctx: AgentRunContext): Promise<void> {
+      const cmd = buildPiCommand(opts);
+      const child = ctx.spawn(cmd, { cwd: ctx.cwd });
+      const driver = new PiDriver(child, {
+        onMessage: (m) => ctx.log.message(m),
+        onCustom: (t, d) => ctx.log.custom(t, d),
+        signal: ctx.signal,
+        warn: (message) => ctx.log.custom("pi-agent:warn", { message }),
+      });
+      // Register the live driver BEFORE the first `await`: the engine marks the
+      // session steerable as soon as `onRun` starts, so a steer/followup landing
+      // while we resolve the first message must reach this driver instead of
+      // being silently dropped-but-acked.
+      liveSessions.set(ctx.session.id, driver);
+      try {
+        const seed = await firstMessage();
+        await runTurns(ctx, driver, opts, seed, maxCorrections);
+      } finally {
+        liveSessions.delete(ctx.session.id);
+        await driver.shutdown().catch(() => {});
+      }
+    },
+
+    onSteer: (ctx, message) => forward(ctx, "steer", message),
+    onFollowup: (ctx, message) => forward(ctx, "followup", message),
+
+    async onAbort(ctx): Promise<void> {
+      const driver = liveSessions.get(ctx.session.id);
+      // ctx.signal has already fired (the engine aborts before onAbort), so the
+      // child is being killed; this just asks pi to wind down gracefully first.
+      if (driver) await driver.shutdown().catch(() => {});
+    },
+  };
 }
 
 /**
- * Build the pi-backed agent definition. P6 implements `onRun`; for now this
- * throws if actually run so a half-wired daemon fails loudly rather than
- * silently no-op'ing.
+ * The kickback/corrections turn loop (v1 `turn_loop`, now private to the agent):
+ * prompt → wait for the turn to end → if the model called `autosk_transit`,
+ * commit it (a rejection is fed back as a correction); else kick back. After the
+ * budget is exhausted, return WITHOUT a transit so the engine parks the task via
+ * `agent_did_not_transit`.
  */
-export function piAgent(_opts: PiAgentOptions): never {
-  throw new Error("@autosk/pi-agent is not implemented until P6");
+async function runTurns(
+  ctx: AgentRunContext,
+  driver: PiDriver,
+  opts: PiAgentOptions,
+  firstMessage: string,
+  maxCorrections: number,
+): Promise<void> {
+  const targets = ctx.workflows.current.targets;
+  const task = await ctx.tasks.current();
+  const comments = await ctx.tasks.comments();
+  await driver.sendPrompt(
+    renderInitialPrompt({
+      firstMessage,
+      agentName: opts.name,
+      workflow: ctx.workflows.current.workflow,
+      step: ctx.workflows.current.step,
+      task,
+      targets,
+      comments,
+    }),
+  );
+
+  let corrections = 0;
+  for (;;) {
+    const how = await driver.waitForTurnEnd();
+    if (how === "aborted") return; // engine finalises the session as aborted
+    if (how === "exited") {
+      throw new Error(`pi exited (code=${driver.exitCode}) before recording a transition`);
+    }
+
+    const target = driver.takePendingTarget();
+    if (target) {
+      const rejection = await commitTransit(ctx, target);
+      if (!rejection) return; // success — the engine sealed the session as done
+      if (corrections >= maxCorrections) return; // give up → engine parks
+      corrections++;
+      await driver.sendPrompt(rejectionMessage(target, rejection, targets, corrections, maxCorrections));
+      continue;
+    }
+
+    // No transit this turn → kick back (bounded by the same budget).
+    if (corrections >= maxCorrections) return; // give up → engine parks
+    corrections++;
+    await driver.sendPrompt(kickbackMessage(task.id, targets, corrections, maxCorrections));
+  }
 }
 
-export default function piAgentExtension(_autosk: AutoskAPI): void {
-  // P6: autosk.registerAgent(piAgent({ ... })) for the dev/review/etc. roles.
+/** Commits a transit; returns `null` on success or the rejection message string. */
+async function commitTransit(ctx: AgentRunContext, target: StepTarget): Promise<string | null> {
+  try {
+    await ctx.transit(target);
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+/** Forwards a steer/followup into the live pi for the calling session. */
+async function forward(ctx: AgentRunContext, kind: "steer" | "followup", message: string): Promise<void> {
+  const driver = liveSessions.get(ctx.session.id);
+  if (driver) await driver.input(kind, message);
+}
+
+/** Resolves the role's first-message seed (inline wins, else file, else ""). */
+async function resolveFirstMessage(opts: PiAgentOptions): Promise<string> {
+  if (opts.firstMessage !== undefined) return opts.firstMessage;
+  if (opts.firstMessageFile) return readFile(opts.firstMessageFile, "utf8");
+  return "";
+}
+
+/** Builds the `pi --mode rpc …` argv (v1 `buildPiExtraArgs` + the daemon flags). */
+export function buildPiCommand(opts: PiAgentOptions): string[] {
+  const bin = opts.piBin ?? process.env.AUTOSK_PI_BIN ?? "pi";
+  const args = [bin, "--mode", "rpc"];
+  if (opts.model) args.push("--model", opts.model);
+  if (opts.thinking) args.push("--thinking", opts.thinking);
+  // Inject the autosk_transit tool first so it is always available.
+  args.push("-e", TRANSIT_EXTENSION_PATH);
+  for (const ext of opts.piExtensions ?? []) args.push("-e", ext);
+  for (const skill of opts.piSkills ?? []) args.push("--skill", skill);
+  args.push(...(opts.extraArgs ?? []));
+  return args;
+}
+
+/**
+ * Default extension factory. P6 ships no pre-registered roles here — roles are
+ * registered by `@autosk/feature-dev` (and any operator extension) via
+ * `piAgent({...})`. Kept as a no-op default export so the package is a valid,
+ * discoverable extension on its own.
+ */
+export default function piAgentExtension(): void {
+  /* roles are registered by consuming extensions via piAgent({...}). */
 }

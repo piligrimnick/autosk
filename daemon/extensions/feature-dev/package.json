@@ -1,0 +1,30 @@
+{
+  "name": "@autosk/feature-dev",
+  "version": "0.0.0",
+  "description": "Shipped autoskd v2 reference workflow: feature-dev (dev → review → docs → validator → accept) wired to @autosk/pi-agent roles and worktree isolation.",
+  "license": "MIT",
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "autosk": {
+    "extensions": ["./src/index.ts"]
+  },
+  "files": [
+    "src/",
+    "prompts/",
+    "README.md"
+  ],
+  "dependencies": {
+    "@autosk/pi-agent": "workspace:*",
+    "@autosk/sdk": "workspace:*",
+    "@autosk/worktree": "workspace:*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

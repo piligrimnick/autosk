@@ -57,9 +57,35 @@ stack (and doltlite) once parity lands; see
   store and do **not** run `workflow.onTransit` (they reject a live session with
   `CONFLICT`); `project.remove` is lazy — it forgets the project in the registry
   and emits `project-changed` but leaves an already-open handle running until the
-  next daemon start.
-- **`extensions/pi-agent/`** — `@autosk/pi-agent`: the shipped extension that
-  drives `pi --mode rpc` as an autosk agent. Placeholder in P1 (built in P6).
+  next daemon start. P6 added the **daemon-bundled extension discovery** seam
+  that ships `@autosk/feature-dev` to every project: an opt-in, lowest-priority
+  `bundledDir` source in the extension loader (`src/extensions/loader.ts`),
+  overridable by any project-local / global / npm extension of the same name,
+  which the default `ProjectManager` points at `daemon/extensions/`
+  (`$AUTOSK_BUNDLED_EXTENSIONS` override) so a project can enroll into the
+  bundled workflow with **no per-project files**. The seam is unset by default,
+  so existing tests (which inject their own `projectManager`) are unaffected.
+- **`extensions/worktree/`** — `@autosk/worktree`: the shipped **isolation
+  provider** `worktreeIsolation()` — per-task git-worktree isolation attachable
+  to any workflow, a byte-identical port of v1's worktree behaviour
+  (deterministic `~/.autosk/worktrees/<slug>/<task-id>` path on branch
+  `autosk/<task-id>`, branch-preserving terminal release, dir-kept on
+  sibling/human-park, missing-dir re-allocation). See
+  [`extensions/worktree/README.md`](extensions/worktree/README.md).
+- **`extensions/pi-agent/`** — `@autosk/pi-agent`: the shipped **agent**
+  `piAgent({...})` that drives `pi --mode rpc` over JSON-lines stdio, mirrors
+  pi's transcript entries (messages / custom) into the autosk transcript 1:1,
+  and bridges step transitions through an injected `autosk_transit` pi-tool
+  observed on pi's RPC event stream (plus a private kickback/corrections loop
+  and steer / followup / abort forwarding into the live pi). See
+  [`extensions/pi-agent/README.md`](extensions/pi-agent/README.md).
+- **`extensions/feature-dev/`** — `@autosk/feature-dev`: the shipped
+  **reference workflow** `dev → review → docs → validator → accept` (with
+  review→dev / validator→dev bounce-backs, a `ctx.visits("dev")` visit cap, and
+  `worktreeIsolation()`), wired to four `@autosk/pi-agent` roles and replacing
+  v1's `feature-dev-generic` bootstrap. It is the package the daemon discovers
+  via the bundled-extension seam above. See
+  [`extensions/feature-dev/README.md`](extensions/feature-dev/README.md).
 
 ## Scripts
 

@@ -11,6 +11,7 @@
  */
 
 import net from "node:net";
+import { fileURLToPath } from "node:url";
 
 import { Engine, type EngineOptions } from "../engine/index.ts";
 import { ProjectManager } from "../project/index.ts";
@@ -70,7 +71,13 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<StartD
   }
 
   const token = resolveDaemonToken(opts, logger);
-  const projectManager = opts.projectManager ?? new ProjectManager({ logger });
+  // The default project manager discovers the daemon-BUNDLED extensions
+  // (`@autosk/feature-dev` + its pi-agent roles) at the lowest priority, so every
+  // project can enroll into `feature-dev` with no per-project files (P6 step-4
+  // decision). Tests inject their own `projectManager`, so this default branch
+  // is never hit by the suite.
+  const projectManager =
+    opts.projectManager ?? new ProjectManager({ logger, extensions: { bundledDir: defaultBundledDir() } });
   const engine = opts.engine ?? new Engine({ ...opts.engineOptions, logger });
 
   // Idle-shutdown is disabled in TCP mode (a remote daemon is a long-lived service).
@@ -138,6 +145,18 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<StartD
 
   logger.info(`autoskd ${VERSION}: listening on ${socketPath}`);
   return { daemon, server, socketPath, token, tcpAddress, shutdown };
+}
+
+/**
+ * The daemon-bundled extensions directory: `$AUTOSK_BUNDLED_EXTENSIONS`, else the
+ * repo's `daemon/extensions/` resolved relative to this module. A non-existent
+ * path is harmless (discovery yields nothing); the env override covers the
+ * compiled-binary case (P7) where the source-tree path no longer exists.
+ */
+function defaultBundledDir(): string {
+  const override = process.env.AUTOSK_BUNDLED_EXTENSIONS;
+  if (override && override.trim() !== "") return override;
+  return fileURLToPath(new URL("../../../extensions", import.meta.url));
 }
 
 /** Resolves the configured token: explicit override, else the token file (or `null`). */

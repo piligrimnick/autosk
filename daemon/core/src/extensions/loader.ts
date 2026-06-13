@@ -34,6 +34,15 @@ export interface ExtensionEnv {
    * `process.env.HOME`. Injected by tests so they never touch the real `$HOME`.
    */
   home?: string;
+  /**
+   * A daemon-bundled extensions directory (plan §3.6 / P6 step-4 decision),
+   * discovered exactly like the global dir but at the LOWEST priority so a
+   * project/global extension of the same name overrides a bundled one. This is
+   * how the shipped `@autosk/feature-dev` workflow + pi-agent roles reach every
+   * project with zero per-project files. Unset by default (so it adds nothing
+   * unless a caller — the production daemon — opts in).
+   */
+  bundledDir?: string;
 }
 
 /**
@@ -59,6 +68,8 @@ export interface ResolvedProjectEntries {
  *   2. global dir          `<home>/.autosk/extensions/`
  *   3. npm packages from `settings.json#extensions`, project settings before
  *      global settings, resolved under `<home>/.autosk/packages/node_modules/`.
+ *   4. daemon-bundled dir  `env.bundledDir` (lowest priority — overridable by
+ *      any of the above on a name collision).
  */
 export function resolveProjectEntries(
   projectRoot: string,
@@ -101,6 +112,9 @@ export function resolveProjectEntries(
       if (res.error) packageDiagnostics.push({ source: name, error: res.error });
     }
   }
+
+  // (4) daemon-bundled dir, lowest priority — discovered like the global dir.
+  if (env.bundledDir) ordered.push(...discoverDir(env.bundledDir));
 
   // Dedup by entry path — first occurrence (highest priority) wins.
   const seen = new Set<string>();
