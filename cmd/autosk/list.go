@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -16,7 +15,6 @@ import (
 func newListCmd() *cobra.Command {
 	var (
 		statuses []string
-		priority int
 		limit    int
 	)
 	cmd := &cobra.Command{
@@ -43,12 +41,6 @@ func newListCmd() *cobra.Command {
 					}
 				}
 			}
-			if cmd.Flags().Changed("priority") {
-				if priority < store.MinPriority || priority > store.MaxPriority {
-					return errors.New("priority must be 0..3")
-				}
-				f.Priority = &priority
-			}
 
 			cl, err := readClient(cmd.Context())
 			if err != nil {
@@ -58,15 +50,14 @@ func newListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// --limit is applied client-side: the daemon's task.list returns
-			// the full ordered set (priority ASC, created_at ASC) and the
-			// CLI truncates, matching the old backend limit semantics.
+			// --limit is applied client-side.
 			if limit > 0 && len(wtasks) > limit {
 				wtasks = wtasks[:limit]
 			}
 			tasks := tasksFromWire(wtasks)
+			deco := wireListDecorator(wtasks)
 			if flagJSON {
-				return render.TasksJSONTo(os.Stdout, tasks, nil)
+				return render.TasksJSONTo(os.Stdout, tasks, deco)
 			}
 			if len(tasks) == 0 {
 				if !flagQuiet {
@@ -74,11 +65,10 @@ func newListCmd() *cobra.Command {
 				}
 				return nil
 			}
-			return render.Tasks(os.Stdout, tasks, nil)
+			return render.Tasks(os.Stdout, tasks, deco)
 		},
 	}
 	cmd.Flags().StringSliceVar(&statuses, "status", nil, "filter by status (comma-separated; 'all' = no filter; default: new,work,human)")
-	cmd.Flags().IntVarP(&priority, "priority", "p", 0, "filter by exact priority (0..3)")
 	cmd.Flags().IntVar(&limit, "limit", 0, "max rows (0 = unlimited)")
 	return cmd
 }

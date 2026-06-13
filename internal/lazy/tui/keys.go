@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -10,7 +9,6 @@ import (
 	"github.com/jesseduffield/gocui"
 
 	"autosk/internal/lazy/datasource"
-	"autosk/internal/store"
 )
 
 // bindingSpec describes one TUI keybinding plus the metadata the
@@ -55,9 +53,9 @@ type bindingSpec struct {
 // We split into three tiers:
 //
 //   - globals (quit, tab switching, palette, filter, help, scope clear)
-//   - per-panel (Tasks/Jobs/Workflows/Agents list nav + write verbs)
-//   - Detail pane scroll (winDetail) + Job-input textarea
-//     (winJobInput) when a running job is selected
+//   - per-panel (Tasks/Sessions/Workflows/Agents list nav + write verbs)
+//   - Detail pane scroll (winDetail) + session-input textarea
+//     (winSessionInput) when a non-terminal session is selected
 //
 // The slice is materialised by bindingSpecs(); bindKeys() is the
 // thin loop that registers each entry with gocui.
@@ -111,20 +109,20 @@ func (gu *Gui) bindingSpecs() []bindingSpec {
 		{View: "", Key: gocui.KeyEsc, Mod: gocui.ModNone, Handler: gu.handleEsc, Tag: "global"},
 		// panel switching
 		{View: "", Key: '1', Mod: gocui.ModNone, Handler: gu.focusPanel(panelTasks), Description: "focus Tasks", Tag: "global"},
-		{View: "", Key: '2', Mod: gocui.ModNone, Handler: gu.focusPanel(panelJobs), Description: "focus Jobs", Tag: "global"},
+		{View: "", Key: '2', Mod: gocui.ModNone, Handler: gu.focusPanel(panelSessions), Description: "focus Sessions", Tag: "global"},
 		{View: "", Key: '3', Mod: gocui.ModNone, Handler: gu.focusPanel(panelWorkflows), Description: "focus Workflows", Tag: "global"},
 		{View: "", Key: '4', Mod: gocui.ModNone, Handler: gu.focusPanel(panelAgents), Description: "focus Agents", Tag: "global"},
 		{View: "", Key: '0', Mod: gocui.ModNone, Handler: gu.focusPanel(panelDetail), Description: "focus Detail", Tag: "global"},
 		{View: "", Key: gocui.KeyTab, Mod: gocui.ModNone, Handler: gu.cyclePanel(+1), Description: "cycle side panel", Tag: "global"},
 		// refresh + scope + filter + palette
 		{View: "", Key: 'R', Mod: gocui.ModNone, Handler: gu.handleRefresh, Description: "refresh now", Tag: "global"},
-		// Ctrl-R is the "hard refresh": force the doltlite store to drop
-		// its pooled connection (recover from a cross-process dolt_gc
-		// that atomic-rewrote .autosk/db). Plain R alone fires the same
-		// adaptive tick the 2s timer uses — useful as a one-shot kick;
-		// Ctrl-R is the escape hatch when the operator suspects the
-		// underlying fd is on an orphan inode.
-		{View: "", Key: gocui.KeyCtrlR, Mod: gocui.ModNone, Handler: gu.handleForceReconnect, Description: "hard refresh (reopen db conn)", Tag: "global"},
+		// Ctrl-R is the "hard refresh": call the datasource Reconnect
+		// lever and force a full re-fetch. With the RPC datasource
+		// Reconnect is a daemon-side no-op (the Go binary holds no
+		// store connection), so this is functionally a forced refresh;
+		// it survives as the recovery hatch the contract still exposes.
+		// Plain R alone fires the same adaptive tick the 2s timer uses.
+		{View: "", Key: gocui.KeyCtrlR, Mod: gocui.ModNone, Handler: gu.handleForceReconnect, Description: "hard refresh", Tag: "global"},
 		{View: "", Key: '*', Mod: gocui.ModNone, Handler: gu.handleClearScope, Description: "clear scope chips", Short: "clear scope", Tag: "global", DisplayOnScreen: true},
 		{View: "", Key: '/', Mod: gocui.ModNone, Handler: gu.openFilter, Description: "filter focused panel", Short: "filter", Tag: "global", DisplayOnScreen: true},
 		{View: "", Key: ':', Mod: gocui.ModNone, Handler: gu.openPalette, Description: "command palette", Short: "palette", Tag: "global", DisplayOnScreen: true},
@@ -139,20 +137,20 @@ func (gu *Gui) bindingSpecs() []bindingSpec {
 		{View: winTasks, Key: 'k', Mod: gocui.ModNone, Handler: gu.cursorUp(panelTasks), Description: "up", Tag: "navigation"},
 		{View: winTasks, Key: gocui.KeyArrowDown, Mod: gocui.ModNone, Handler: gu.cursorDown(panelTasks), Tag: "navigation"},
 		{View: winTasks, Key: gocui.KeyArrowUp, Mod: gocui.ModNone, Handler: gu.cursorUp(panelTasks), Tag: "navigation"},
-		{View: winTasks, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.tasksEnter, Description: "filter Jobs + focus"},
-		// Space — commit the cursor row as the Jobs-panel scope chip
+		{View: winTasks, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.tasksEnter, Description: "filter Sessions + focus"},
+		// Space — commit the cursor row as the Sessions-panel scope chip
 		// without leaving the Tasks panel. The counterpart to Enter
 		// (which commits + jumps). j/k do NOT auto-commit anymore
 		// (operator complaint: cursor-driven re-filtering was noisy),
 		// so this is the only path on Tasks for setting scope.TaskID.
 		// Press * to clear.
-		{View: winTasks, Key: ' ', Mod: gocui.ModNone, Handler: gu.tasksScopeFromCursor, Description: "set Jobs scope to selected task"},
+		{View: winTasks, Key: ' ', Mod: gocui.ModNone, Handler: gu.tasksScopeFromCursor, Description: "set Sessions scope to selected task"},
 
-		{View: winJobs, Key: 'j', Mod: gocui.ModNone, Handler: gu.cursorDown(panelJobs), Description: "down", Tag: "navigation"},
-		{View: winJobs, Key: 'k', Mod: gocui.ModNone, Handler: gu.cursorUp(panelJobs), Description: "up", Tag: "navigation"},
-		{View: winJobs, Key: gocui.KeyArrowDown, Mod: gocui.ModNone, Handler: gu.cursorDown(panelJobs), Tag: "navigation"},
-		{View: winJobs, Key: gocui.KeyArrowUp, Mod: gocui.ModNone, Handler: gu.cursorUp(panelJobs), Tag: "navigation"},
-		{View: winJobs, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.jobsEnter, Description: "focus input (live) / Detail (terminal)"},
+		{View: winSessions, Key: 'j', Mod: gocui.ModNone, Handler: gu.cursorDown(panelSessions), Description: "down", Tag: "navigation"},
+		{View: winSessions, Key: 'k', Mod: gocui.ModNone, Handler: gu.cursorUp(panelSessions), Description: "up", Tag: "navigation"},
+		{View: winSessions, Key: gocui.KeyArrowDown, Mod: gocui.ModNone, Handler: gu.cursorDown(panelSessions), Tag: "navigation"},
+		{View: winSessions, Key: gocui.KeyArrowUp, Mod: gocui.ModNone, Handler: gu.cursorUp(panelSessions), Tag: "navigation"},
+		{View: winSessions, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.sessionsEnter, Description: "focus input (live) / Detail (terminal)"},
 
 		{View: winWorkflows, Key: 'j', Mod: gocui.ModNone, Handler: gu.cursorDown(panelWorkflows), Description: "down", Tag: "navigation"},
 		{View: winWorkflows, Key: 'k', Mod: gocui.ModNone, Handler: gu.cursorUp(panelWorkflows), Description: "up", Tag: "navigation"},
@@ -164,7 +162,8 @@ func (gu *Gui) bindingSpecs() []bindingSpec {
 		{View: winAgents, Key: 'k', Mod: gocui.ModNone, Handler: gu.cursorUp(panelAgents), Description: "up", Tag: "navigation"},
 		{View: winAgents, Key: gocui.KeyArrowDown, Mod: gocui.ModNone, Handler: gu.cursorDown(panelAgents), Tag: "navigation"},
 		{View: winAgents, Key: gocui.KeyArrowUp, Mod: gocui.ModNone, Handler: gu.cursorUp(panelAgents), Tag: "navigation"},
-		{View: winAgents, Key: gocui.KeyEnter, Mod: gocui.ModNone, Handler: gu.agentsEnter, Description: "agent-scope picker"},
+		// Agents pane is READ-ONLY in v2 (no agent-scope picker); Enter
+		// carries no binding so it never surfaces in the cheatsheet.
 
 		// Tasks write verbs.
 		{View: winTasks, Key: 'n', Mod: gocui.ModNone, Handler: gu.taskNew, Description: "new task", Short: "new", DisplayOnScreen: true},
@@ -176,34 +175,21 @@ func (gu *Gui) bindingSpecs() []bindingSpec {
 		{View: winTasks, Key: 'b', Mod: gocui.ModNone, Handler: gu.taskBlock, Description: "add blocker", Short: "block", DisplayOnScreen: true},
 		{View: winTasks, Key: 'u', Mod: gocui.ModNone, Handler: gu.taskUnblock, Description: "remove blocker", Short: "unblock", DisplayOnScreen: true},
 		{View: winTasks, Key: 'm', Mod: gocui.ModNone, Handler: gu.taskComment, Description: "add comment", Short: "comment", DisplayOnScreen: true},
-		{View: winTasks, Key: 'M', Mod: gocui.ModNone, Handler: gu.taskMetadataEdit, Description: "edit metadata", Short: "metadata", DisplayOnScreen: true},
-		{View: winTasks, Key: 'p', Mod: gocui.ModNone, Handler: gu.taskPriority, Description: "set priority", Short: "prio", DisplayOnScreen: true},
 		{View: winTasks, Key: 'o', Mod: gocui.ModNone, Handler: gu.taskReopen, Description: "reopen task", Short: "reopen", DisplayOnScreen: true},
 		// Note: there is no `c claim` binding. The v0.2 schema has no
 		// claim verb — tasks self-advance via workflow steps. `c` is
 		// bound to `change` (edit title + description in the two-pane
 		// compose); use `e` to enroll instead.
 
-		// Workflows write verbs.
-		{View: winWorkflows, Key: 'n', Mod: gocui.ModNone, Handler: gu.workflowNew, Description: "new workflow (from file)", Short: "new", DisplayOnScreen: true},
-		{View: winWorkflows, Key: 'D', Mod: gocui.ModNone, Handler: gu.workflowDelete, Description: "delete workflow", Short: "delete", DisplayOnScreen: true},
-		{View: winWorkflows, Key: 'i', Mod: gocui.ModNone, Handler: gu.workflowIsolation, Description: "toggle isolation", Short: "iso", DisplayOnScreen: true},
+		// Workflows + Agents panes are READ-ONLY in v2 (workflows/agents are
+		// code registered by extensions), so they carry no write verbs.
 
-		// Agents "write" verbs are intentionally informational only:
-		// the daemon has no /v1/agents endpoint in v1, so both keys
-		// flash a toast directing the operator at the corresponding
-		// `autosk agent {install|uninstall} <pkg>` CLI invocation. The
-		// bindings stay so the help screen's 'i install / u uninstall'
-		// row is honest and discoverable.
-		{View: winAgents, Key: 'i', Mod: gocui.ModNone, Handler: gu.agentInstall, Description: "install (via CLI hint)", Short: "install", DisplayOnScreen: true},
-		{View: winAgents, Key: 'u', Mod: gocui.ModNone, Handler: gu.agentUninstall, Description: "uninstall (via CLI hint)", Short: "uninstall", DisplayOnScreen: true},
-
-		// Jobs hotkeys.
-		{View: winJobs, Key: 'K', Mod: gocui.ModNone, Handler: gu.jobCancel, Description: "cancel job", Short: "kill", DisplayOnScreen: true},
+		// Sessions hotkeys.
+		{View: winSessions, Key: 'K', Mod: gocui.ModNone, Handler: gu.sessionAbort, Description: "abort session", Short: "abort", DisplayOnScreen: true},
 
 		// Detail pane scroll bindings. Same shape that used to live on
 		// the Inspector body view — j/k single line, Ctrl-F/Ctrl-B page,
-		// g/G start/end. Applies to BOTH task-detail and job-detail
+		// g/G start/end. Applies to BOTH task-detail and session-detail
 		// content (the pane is one view; the renderer picks the body
 		// based on focused panel).
 		{View: winDetail, Key: 'j', Mod: gocui.ModNone, Handler: gu.detailScroll(+1), Description: "line down", Tag: "navigation"},
@@ -217,21 +203,21 @@ func (gu *Gui) bindingSpecs() []bindingSpec {
 		{View: winDetail, Key: 'g', Mod: gocui.ModNone, Handler: gu.detailScrollTo(false), Description: "top", Tag: "navigation"},
 		{View: winDetail, Key: 'G', Mod: gocui.ModNone, Handler: gu.detailScrollTo(true), Description: "bottom", Tag: "navigation"},
 
-		// Job-input bindings (relocated from the old fullscreen-inspector input view).
-		// Bound only on winJobInput; the view itself only exists when
-		// the selected job is running, so these bindings are dormant
+		// Session-input bindings (relocated from the old fullscreen-inspector input view).
+		// Bound only on winSessionInput; the view itself only exists when
+		// the selected session is running, so these bindings are dormant
 		// otherwise.
-		{View: winJobInput, Key: gocui.KeyCtrlD, Mod: gocui.ModNone, Handler: gu.liveSend, Description: "send"},
-		{View: winJobInput, Key: gocui.KeyCtrlF, Mod: gocui.ModNone, Handler: gu.liveFollowUp, Description: "follow up"},
-		{View: winJobInput, Key: gocui.KeyCtrlA, Mod: gocui.ModNone, Handler: gu.liveAbort, Description: "abort agent turn"},
-		{View: winJobInput, Key: gocui.KeyEsc, Mod: gocui.ModNone, Handler: gu.jobInputEscape, Description: "cancel input"},
-		{View: winJobInput, Key: gocui.KeyCtrlC, Mod: gocui.ModNone, Handler: gu.quit},
+		{View: winSessionInput, Key: gocui.KeyCtrlD, Mod: gocui.ModNone, Handler: gu.liveSend, Description: "send"},
+		{View: winSessionInput, Key: gocui.KeyCtrlF, Mod: gocui.ModNone, Handler: gu.liveFollowUp, Description: "follow up"},
+		{View: winSessionInput, Key: gocui.KeyCtrlA, Mod: gocui.ModNone, Handler: gu.liveAbort, Description: "abort agent turn"},
+		{View: winSessionInput, Key: gocui.KeyEsc, Mod: gocui.ModNone, Handler: gu.sessionInputEscape, Description: "cancel input"},
+		{View: winSessionInput, Key: gocui.KeyCtrlC, Mod: gocui.ModNone, Handler: gu.quit},
 		// Scroll the Detail pane above without leaving the textarea.
-		{View: winJobInput, Key: gocui.KeyCtrlB, Mod: gocui.ModNone, Handler: gu.detailScrollPage(-1), Description: "page up Detail", Tag: "navigation"},
-		{View: winJobInput, Key: gocui.KeyPgup, Mod: gocui.ModNone, Handler: gu.detailScrollPage(-1), Tag: "navigation"},
-		{View: winJobInput, Key: gocui.KeyPgdn, Mod: gocui.ModNone, Handler: gu.detailScrollPage(+1), Description: "page down Detail", Tag: "navigation"},
-		{View: winJobInput, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.detailScroll(+1), Tag: "navigation"},
-		{View: winJobInput, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.detailScroll(-1), Tag: "navigation"},
+		{View: winSessionInput, Key: gocui.KeyCtrlB, Mod: gocui.ModNone, Handler: gu.detailScrollPage(-1), Description: "page up Detail", Tag: "navigation"},
+		{View: winSessionInput, Key: gocui.KeyPgup, Mod: gocui.ModNone, Handler: gu.detailScrollPage(-1), Tag: "navigation"},
+		{View: winSessionInput, Key: gocui.KeyPgdn, Mod: gocui.ModNone, Handler: gu.detailScrollPage(+1), Description: "page down Detail", Tag: "navigation"},
+		{View: winSessionInput, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.detailScroll(+1), Tag: "navigation"},
+		{View: winSessionInput, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.detailScroll(-1), Tag: "navigation"},
 
 		// Mouse-wheel scroll bindings. gocui surfaces wheel events as
 		// MouseWheelUp/Down keys per-view; without these bindings the
@@ -246,8 +232,8 @@ func (gu *Gui) bindingSpecs() []bindingSpec {
 		// selection is visible again (scrollOffAdjust's centring path).
 		{View: winTasks, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.panelScroll(panelTasks, +panelScrollStep), Tag: "navigation"},
 		{View: winTasks, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.panelScroll(panelTasks, -panelScrollStep), Tag: "navigation"},
-		{View: winJobs, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.panelScroll(panelJobs, +panelScrollStep), Tag: "navigation"},
-		{View: winJobs, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.panelScroll(panelJobs, -panelScrollStep), Tag: "navigation"},
+		{View: winSessions, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.panelScroll(panelSessions, +panelScrollStep), Tag: "navigation"},
+		{View: winSessions, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.panelScroll(panelSessions, -panelScrollStep), Tag: "navigation"},
 		{View: winWorkflows, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.panelScroll(panelWorkflows, +panelScrollStep), Tag: "navigation"},
 		{View: winWorkflows, Key: gocui.MouseWheelUp, Mod: gocui.ModNone, Handler: gu.panelScroll(panelWorkflows, -panelScrollStep), Tag: "navigation"},
 		{View: winAgents, Key: gocui.MouseWheelDown, Mod: gocui.ModNone, Handler: gu.panelScroll(panelAgents, +panelScrollStep), Tag: "navigation"},
@@ -386,10 +372,10 @@ func (gu *Gui) bindingSpecs() []bindingSpec {
 // When p is panelDetail we also stash the OUTGOING focus into
 // state.detailFocus so renderDetail can keep rendering the right
 // entity body (the panelDetail arm itself has nothing to draw).
-// The stash normalises panelJobInput → panelJobs so a transition
-// from the input flow into the Detail pane still renders Job
-// Detail (renderDetail also normalises on the read side, but the
-// model field stays sensible this way too).
+// The stash normalises panelSessionInput → panelSessions so a
+// transition from the input flow into the Detail pane still renders
+// Session Detail (renderDetail also normalises on the read side, but
+// the model field stays sensible this way too).
 func (gu *Gui) focusPanel(p panelID) func(*gocui.Gui, *gocui.View) error {
 	return func(*gocui.Gui, *gocui.View) error {
 		changed := false
@@ -404,11 +390,11 @@ func (gu *Gui) focusPanel(p panelID) func(*gocui.Gui, *gocui.View) error {
 		})
 		if changed {
 			gu.snapViewportToCursor(p)
-			if p == panelJobs {
-				// Hydrate the transcript cache for the now-selected job.
+			if p == panelSessions {
+				// Hydrate the transcript cache for the now-selected session.
 				// Without this the Detail pane stays on "(loading...)"
-				// until the operator presses j/k — see settleOnPanelJobs.
-				gu.settleOnPanelJobs()
+				// until the operator presses j/k — see settleOnPanelSessions.
+				gu.settleOnPanelSessions()
 			}
 		}
 		return nil
@@ -418,16 +404,16 @@ func (gu *Gui) focusPanel(p panelID) func(*gocui.Gui, *gocui.View) error {
 // cyclePanel cycles through the four side panels by step.
 //
 // Source-side normalisation: cyclePanel may fire from any view,
-// including the synthetic panelJobInput (caret in winJobInput) and
-// panelDetail (focus parked on the right pane via '0'). Neither is
-// in the 0..3 cycle range, so we normalise them first —
-// panelJobInput→panelJobs (predictable: the operator was working a
-// running job, so Tab steps OFF the job they were composing for to
-// the next side panel), panelDetail→detailFocus (the side panel
-// that owned the selection before '0' was pressed). Without this
-// normalisation, (int(panelJobInput=5) + 1) % 4 = 2 = panelWorkflows
-// would skip the Jobs column entirely on Tab from the input — a
-// UX regression vs. the pre-redesign state where Tab inside the
+// including the synthetic panelSessionInput (caret in winSessionInput)
+// and panelDetail (focus parked on the right pane via '0'). Neither
+// is in the 0..3 cycle range, so we normalise them first —
+// panelSessionInput→panelSessions (predictable: the operator was
+// working a running session, so Tab steps OFF the session they were
+// composing for to the next side panel), panelDetail→detailFocus (the
+// side panel that owned the selection before '0' was pressed).
+// Without this normalisation, (int(panelSessionInput) + 1) % 4 would
+// skip the Sessions column entirely on Tab from the input — a UX
+// regression vs. the pre-redesign state where Tab inside the
 // fullscreen inspector was scoped to inspector-tab cycling.
 func (gu *Gui) cyclePanel(step int) func(*gocui.Gui, *gocui.View) error {
 	return func(*gocui.Gui, *gocui.View) error {
@@ -436,8 +422,8 @@ func (gu *Gui) cyclePanel(step int) func(*gocui.Gui, *gocui.View) error {
 		gu.st.withLock(func() {
 			src := gu.st.focused
 			switch src {
-			case panelJobInput:
-				src = panelJobs
+			case panelSessionInput:
+				src = panelSessions
 			case panelDetail:
 				src = gu.st.detailFocus.normalizeForDetail()
 				if src == panelDetail {
@@ -454,12 +440,12 @@ func (gu *Gui) cyclePanel(step int) func(*gocui.Gui, *gocui.View) error {
 		})
 		if changed {
 			gu.snapViewportToCursor(landed)
-			if landed == panelJobs {
+			if landed == panelSessions {
 				// Same hydration reason as focusPanel: Tab/Shift-Tab
-				// landing on Jobs without moving the cursor would
+				// landing on Sessions without moving the cursor would
 				// otherwise leave the Detail pane stuck on
-				// "(loading...)". See settleOnPanelJobs.
-				gu.settleOnPanelJobs()
+				// "(loading...)". See settleOnPanelSessions.
+				gu.settleOnPanelSessions()
 			}
 		}
 		return nil
@@ -481,10 +467,10 @@ func (gu *Gui) cursorDown(p panelID) func(*gocui.Gui, *gocui.View) error {
 				before = gu.st.taskCursor
 				gu.st.taskCursor = clampCursor(gu.st.taskCursor+1, len(gu.st.tasks))
 				after = gu.st.taskCursor
-			case panelJobs:
-				before = gu.st.jobCursor
-				gu.st.jobCursor = clampCursor(gu.st.jobCursor+1, len(gu.st.jobs))
-				after = gu.st.jobCursor
+			case panelSessions:
+				before = gu.st.sessionCursor
+				gu.st.sessionCursor = clampCursor(gu.st.sessionCursor+1, len(gu.st.sessions))
+				after = gu.st.sessionCursor
 			case panelWorkflows:
 				before = gu.st.workflowCursor
 				gu.st.workflowCursor = clampCursor(gu.st.workflowCursor+1, len(gu.st.workflows))
@@ -511,10 +497,10 @@ func (gu *Gui) cursorUp(p panelID) func(*gocui.Gui, *gocui.View) error {
 				before = gu.st.taskCursor
 				gu.st.taskCursor = clampCursor(gu.st.taskCursor-1, len(gu.st.tasks))
 				after = gu.st.taskCursor
-			case panelJobs:
-				before = gu.st.jobCursor
-				gu.st.jobCursor = clampCursor(gu.st.jobCursor-1, len(gu.st.jobs))
-				after = gu.st.jobCursor
+			case panelSessions:
+				before = gu.st.sessionCursor
+				gu.st.sessionCursor = clampCursor(gu.st.sessionCursor-1, len(gu.st.sessions))
+				after = gu.st.sessionCursor
 			case panelWorkflows:
 				before = gu.st.workflowCursor
 				gu.st.workflowCursor = clampCursor(gu.st.workflowCursor-1, len(gu.st.workflows))
@@ -541,65 +527,66 @@ func (gu *Gui) cursorUp(p panelID) func(*gocui.Gui, *gocui.View) error {
 // Per-panel contract:
 //
 //   - panelTasks: schedule a refresh so the detail pane picks up
-//     the highlighted task's comments and signals.
+//     the highlighted task's comments.
 //   - panelWorkflows: applyScope so the Tasks panel auto-filters
 //     to the highlighted workflow.
-//   - panelJobs: delegates to settleOnPanelJobs — the same per-job
-//     side-effect block that focusPanel('2'), cyclePanel Tab, and
-//     tasksEnter invoke when focus LANDS on Jobs without a cursor
-//     move. The chain is:
-//     afterCursorMove(panelJobs)
-//     → settleOnPanelJobs
-//     → scheduleJobLive (debounced timer)
-//     → scheduleJobArchive (eager OnWorker dispatch, coalesced).
-//     The Detail pane reads state.jobTranscript[jobID] every
-//     frame; the SSE pump appends into it.
+//   - panelSessions: delegates to settleOnPanelSessions — the same
+//     per-session side-effect block that focusPanel('2'), cyclePanel
+//     Tab, and tasksEnter invoke when focus LANDS on Sessions without
+//     a cursor move. The chain is:
+//     afterCursorMove(panelSessions)
+//     → settleOnPanelSessions
+//     → scheduleSessionLive (debounced timer)
+//     → scheduleSessionArchive (eager OnWorker dispatch, coalesced).
+//     The Detail pane reads state.sessionTranscript[sessionID] every
+//     frame; the session-event pump appends into it.
 //   - panelAgents: scheduleRefresh only.
 func (gu *Gui) afterCursorMove(p panelID) {
 	switch p {
 	case panelWorkflows:
 		gu.applyScope()
-	case panelJobs:
-		gu.settleOnPanelJobs()
+	case panelSessions:
+		gu.settleOnPanelSessions()
 	default:
 		gu.scheduleRefresh()
 	}
 }
 
-// settleOnPanelJobs runs the per-job side effects that must follow
-// the operator arriving on the Jobs panel — whether by a j/k cursor
-// move OR by a focus change that LANDS on panelJobs (focusPanel '2',
-// cyclePanel Tab/Shift-Tab landing on Jobs, tasksEnter on a task).
+// settleOnPanelSessions runs the per-session side effects that must
+// follow the operator arriving on the Sessions panel — whether by a
+// j/k cursor move OR by a focus change that LANDS on panelSessions
+// (focusPanel '2', cyclePanel Tab/Shift-Tab landing on Sessions,
+// tasksEnter on a task).
 //
 // Without this on the focus-change paths the Detail pane would stay
 // stuck on "(loading...)" until the operator pressed j/k:
-// scheduleJobArchive is the only thing that seeds state.jobTranscript
-// for a fresh selection, and afterCursorMove was the only caller, so
-// arriving at panelJobs without moving the cursor left the transcript
-// cache unhydrated. Reusing the same body keeps cursor moves and
-// focus moves observationally equivalent — both arm the live SSE +
-// archive fetch and both drop a stale input draft authored against a
-// different job.
-func (gu *Gui) settleOnPanelJobs() {
+// scheduleSessionArchive is the only thing that seeds
+// state.sessionTranscript for a fresh selection, and afterCursorMove
+// was the only caller, so arriving at panelSessions without moving
+// the cursor left the transcript cache unhydrated. Reusing the same
+// body keeps cursor moves and focus moves observationally equivalent
+// — both arm the live session-event stream + archive fetch and both
+// drop a stale input draft authored against a different session.
+func (gu *Gui) settleOnPanelSessions() {
 	gu.scheduleRefresh()
-	if j, ok := gu.st.selectedJobLocked(); ok {
-		running := isJobRunning(j)
-		// Discard any input draft that belongs to a different job
+	if s, ok := gu.st.selectedSessionLocked(); ok {
+		running := isSessionRunning(s)
+		// Discard any input draft that belongs to a different session
 		// BEFORE we kick the live/archive scheduling — the next
 		// renderViews pass will repopulate the view from
-		// state.jobInput, which is now empty for this job.
-		gu.clearJobInputIfStale(j.JobID)
-		gu.scheduleJobLive(j.JobID, running)
-		gu.scheduleJobArchive(j.JobID, running)
+		// state.sessionInput, which is now empty for this session.
+		gu.clearSessionInputIfStale(s.ID)
+		gu.scheduleSessionLive(s.ID, running)
+		gu.scheduleSessionArchive(s.ID, running)
 	} else {
-		gu.clearJobInputIfStale("")
-		gu.stopJobLive()
+		gu.clearSessionInputIfStale("")
+		gu.stopSessionLive()
 	}
 }
 
 // tasksScopeFromCursor is the Space-key handler on the Tasks panel:
 // commits the current cursor row as scope.TaskID (filtering the
-// Jobs panel) without changing focus. The complement to tasksEnter
+// Sessions panel) without changing focus. The complement to tasksEnter
 // (which commits + jumps) and the only path j/k navigation leaves
 // open after the cursor-move auto-scope was removed.
 func (gu *Gui) tasksScopeFromCursor(*gocui.Gui, *gocui.View) error {
@@ -632,10 +619,8 @@ func (gu *Gui) applyScope() {
 			}
 		case panelWorkflows:
 			if w, ok := gu.st.selectedWorkflow(); ok {
-				gu.st.scope.WorkflowID = w.ID
 				gu.st.scope.WorkflowName = w.Name
 			} else {
-				gu.st.scope.WorkflowID = ""
 				gu.st.scope.WorkflowName = ""
 			}
 		}
@@ -658,19 +643,20 @@ func (gu *Gui) handleRefresh(*gocui.Gui, *gocui.View) error {
 	return nil
 }
 
-// handleForceReconnect is the Ctrl-R handler: drop any pooled
-// *sqlite3.SQLiteConn inside the doltlite store, clear the per-job
+// handleForceReconnect is the Ctrl-R handler: clear the per-session
 // transcript cache (so the next selection re-hydrates from a fresh
-// archive read), tear down any active SSE subscription, and
-// schedule a refresh. The reconnect happens on a worker so the UI
-// thread stays responsive (the Ping inside Reconnect blocks until
-// the fresh conn handshakes). On error we still fall through to
-// scheduleRefresh — a stale read is better than no read.
+// archive read), tear down any active session-event subscription,
+// call the datasource Reconnect lever, and schedule a refresh. With
+// the RPC datasource Reconnect is a daemon-side no-op, so this is
+// effectively a forced re-fetch + transcript-cache flush. The
+// Reconnect call happens on a worker so the UI thread stays
+// responsive. On error we still fall through to scheduleRefresh — a
+// stale read is better than no read.
 func (gu *Gui) handleForceReconnect(*gocui.Gui, *gocui.View) error {
 	gu.flashf("info", "reconnect")
-	gu.stopJobLive()
+	gu.stopSessionLive()
 	gu.st.withLock(func() {
-		gu.st.jobTranscript = map[string]*jobTranscriptEntry{}
+		gu.st.sessionTranscript = map[string]*sessionTranscriptEntry{}
 	})
 	gu.g.OnWorker(func(_ gocui.Task) error {
 		ctx, cancel := context.WithTimeout(gu.ctx, 5*time.Second)
@@ -689,8 +675,8 @@ func (gu *Gui) handleForceReconnect(*gocui.Gui, *gocui.View) error {
 }
 
 // handleEsc closes the active popup; falls back to clearing filter
-// chips. Esc on winJobInput is bound directly to jobInputEscape so
-// it doesn't route through here.
+// chips. Esc on winSessionInput is bound directly to
+// sessionInputEscape so it doesn't route through here.
 func (gu *Gui) handleEsc(g *gocui.Gui, v *gocui.View) error {
 	// Snapshot popup.Kind under the lock so concurrent mutations
 	// from g.Update closures don't race against the read.
@@ -706,8 +692,8 @@ func (gu *Gui) handleEsc(g *gocui.Gui, v *gocui.View) error {
 		switch gu.st.focused {
 		case panelTasks:
 			gu.st.filter.Tasks = ""
-		case panelJobs:
-			gu.st.filter.Jobs = ""
+		case panelSessions:
+			gu.st.filter.Sessions = ""
 		case panelWorkflows:
 			gu.st.filter.Workflows = ""
 		case panelAgents:
@@ -724,14 +710,14 @@ func (gu *Gui) toggleLog(*gocui.Gui, *gocui.View) error {
 	return nil
 }
 
-// tasksEnter cross-links to Jobs (filter by this task) and focuses Jobs.
+// tasksEnter cross-links to Sessions (filter by this task) and focuses Sessions.
 func (gu *Gui) tasksEnter(*gocui.Gui, *gocui.View) error {
 	gu.applyScope()
-	gu.st.withLock(func() { gu.st.focused = panelJobs })
-	// Hydrate the Detail pane for the now-selected job. Without this
-	// the operator lands on the Jobs panel with the transcript stuck
-	// on "(loading...)" until they press j/k — see settleOnPanelJobs.
-	gu.settleOnPanelJobs()
+	gu.st.withLock(func() { gu.st.focused = panelSessions })
+	// Hydrate the Detail pane for the now-selected session. Without this
+	// the operator lands on the Sessions panel with the transcript stuck
+	// on "(loading...)" until they press j/k — see settleOnPanelSessions.
+	gu.settleOnPanelSessions()
 	return nil
 }
 
@@ -742,80 +728,44 @@ func (gu *Gui) workflowsEnter(*gocui.Gui, *gocui.View) error {
 	return nil
 }
 
-// agentsEnter prompts the user to opt into the agent scope.
-//
-// Design plan §3.4: the relation is ambiguous (author vs.
-// current_step.agent are different concepts), so we force the
-// operator to pick ONE. The choice flows into scope.AgentRel and is
-// surfaced both on the Tasks-panel scope chip and in the status bar.
-func (gu *Gui) agentsEnter(*gocui.Gui, *gocui.View) error {
-	a, ok := gu.st.selectedAgentLocked()
-	if !ok {
-		return nil
-	}
-	gu.openMenu("Filter Tasks by agent "+a.Name+"?", []string{
-		"by author (author_id == " + a.Name + ")",
-		"by current step (current_step.agent == " + a.Name + ")",
-		"cancel",
-	}, func(i int) error {
-		var rel agentRel
-		switch i {
-		case 0:
-			rel = agentRelAuthor
-		case 1:
-			rel = agentRelStep
-		default:
-			return nil
-		}
-		gu.st.withLock(func() {
-			gu.st.scope.Agent = a.Name
-			gu.st.scope.AgentRel = rel
-			gu.st.focused = panelTasks
-		})
-		gu.scheduleRefresh()
-		return nil
-	})
-	return nil
-}
-
-// jobsEnter focuses the appropriate view for the highlighted job:
-//   - non-terminal job (queued or running, daemon accepts SendInput)
-//     → winJobInput, caret blinks inside the textarea.
-//   - terminal job (no SendInput dispatch surface) → logical focus
+// sessionsEnter focuses the appropriate view for the highlighted session:
+//   - non-terminal session (queued or running, daemon accepts SessionInput)
+//     → winSessionInput, caret blinks inside the textarea.
+//   - terminal session (no SessionInput dispatch surface) → logical focus
 //     to panelDetail so j/k scroll the transcript above.
 //
-// The visibility predicate (isJobLive) intentionally mirrors the
-// layout-pass gate on winJobInput: Enter only routes to the input
+// The visibility predicate (isSessionLive) intentionally mirrors the
+// layout-pass gate on winSessionInput: Enter only routes to the input
 // view when that view actually exists this frame.
 //
-// On the live-job branch we set state.focused = panelJobInput
-// (a synthetic focus identity whose window() is winJobInput). The
+// On the live-session branch we set state.focused = panelSessionInput
+// (a synthetic focus identity whose window() is winSessionInput). The
 // layout pass calls g.SetCurrentView(focused.window()) on every
 // frame; without recording the focus in the model the next layout
-// would yank current-view back to winJobs within ~100ms (spinner
+// would yank current-view back to winSessions within ~100ms (spinner
 // tick cadence) and the caret would jump out of the textarea.
 //
-// On the terminal-job branch we stash detailFocus = panelJobs so
-// renderDetail keeps emitting the Job Detail body even though
+// On the terminal-session branch we stash detailFocus = panelSessions so
+// renderDetail keeps emitting the Session Detail body even though
 // focused now reads panelDetail.
-func (gu *Gui) jobsEnter(*gocui.Gui, *gocui.View) error {
-	j, ok := gu.st.selectedJobLocked()
+func (gu *Gui) sessionsEnter(*gocui.Gui, *gocui.View) error {
+	s, ok := gu.st.selectedSessionLocked()
 	if !ok {
 		return nil
 	}
-	if isJobLive(j) {
-		gu.st.withLock(func() { gu.st.focused = panelJobInput })
+	if isSessionLive(s) {
+		gu.st.withLock(func() { gu.st.focused = panelSessionInput })
 		// Also SetCurrentView synchronously so tests that don't
-		// drive a layout pass between jobsEnter and the assertion
+		// drive a layout pass between sessionsEnter and the assertion
 		// observe the focus change immediately. The layout pass
 		// would otherwise be the one to actually move the caret.
 		if gu.g != nil {
-			_, _ = gu.g.SetCurrentView(winJobInput)
+			_, _ = gu.g.SetCurrentView(winSessionInput)
 		}
 		return nil
 	}
 	gu.st.withLock(func() {
-		gu.st.detailFocus = panelJobs
+		gu.st.detailFocus = panelSessions
 		gu.st.focused = panelDetail
 	})
 	return nil
@@ -823,13 +773,13 @@ func (gu *Gui) jobsEnter(*gocui.Gui, *gocui.View) error {
 
 // openFilter opens the per-panel filter prompt.
 func (gu *Gui) openFilter(*gocui.Gui, *gocui.View) error {
-	gu.openPrompt("filter: facets like p:1 status:done wf:name agent:name + free text", "", func(value string) error {
+	gu.openPrompt("filter: status:done wf:name + free text", "", func(value string) error {
 		gu.st.withLock(func() {
 			switch gu.st.focused {
 			case panelTasks:
 				gu.st.filter.Tasks = value
-			case panelJobs:
-				gu.st.filter.Jobs = value
+			case panelSessions:
+				gu.st.filter.Sessions = value
 			case panelWorkflows:
 				gu.st.filter.Workflows = value
 			case panelAgents:
@@ -850,16 +800,12 @@ func (gu *Gui) openPalette(*gocui.Gui, *gocui.View) error {
 		"task done",
 		"task cancel",
 		"task reopen",
-		"task priority",
 		"task resume",
 		"task enroll",
 		"task block",
 		"task unblock",
 		"task comment",
-		"task metadata",
-		"workflow create",
-		"workflow delete",
-		"job cancel",
+		"session abort",
 		"scope clear",
 		"refresh",
 		"quit",
@@ -883,8 +829,6 @@ func (gu *Gui) dispatchPaletteCommand(cmd string) {
 		_ = gu.taskCancel(nil, nil)
 	case "task reopen":
 		_ = gu.taskReopen(nil, nil)
-	case "task priority":
-		_ = gu.taskPriority(nil, nil)
 	case "task resume":
 		_ = gu.taskResume(nil, nil)
 	case "task enroll":
@@ -895,14 +839,8 @@ func (gu *Gui) dispatchPaletteCommand(cmd string) {
 		_ = gu.taskUnblock(nil, nil)
 	case "task comment":
 		_ = gu.taskComment(nil, nil)
-	case "task metadata":
-		_ = gu.taskMetadataEdit(nil, nil)
-	case "workflow create":
-		_ = gu.workflowNew(nil, nil)
-	case "workflow delete":
-		_ = gu.workflowDelete(nil, nil)
-	case "job cancel":
-		_ = gu.jobCancel(nil, nil)
+	case "session abort":
+		_ = gu.sessionAbort(nil, nil)
 	case "scope clear":
 		_ = gu.handleClearScope(nil, nil)
 	case "refresh":
@@ -921,10 +859,10 @@ func (gu *Gui) dispatchPaletteCommand(cmd string) {
 // Bucketing rules (lazygit's uniqueBindings parity):
 //
 //   - Local      = entries whose View == focused panel's window AND
-//                  Tag != "navigation".
+//     Tag != "navigation".
 //   - Global     = entries with Tag == "global" (or View == "").
 //   - Navigation = entries whose View == focused panel's window AND
-//                  Tag == "navigation".
+//     Tag == "navigation".
 //
 // Dedup is by Description within bucket (keep first occurrence) so
 // equivalent aliases (j vs ArrowDown, q vs Ctrl-C) only surface
@@ -1116,7 +1054,7 @@ func (gu *Gui) taskNew(*gocui.Gui, *gocui.View) error {
 			return nil
 		}
 		gu.g.OnWorker(func(_ gocui.Task) error {
-			id, err := gu.ds.CreateTask(gu.ctx, summary, description, store.DefaultPriority)
+			id, err := gu.ds.CreateTask(gu.ctx, summary, description)
 			if err != nil {
 				gu.flashf("err", "task new: %v", err)
 				return nil
@@ -1144,76 +1082,6 @@ func (gu *Gui) taskEdit(*gocui.Gui, *gocui.View) error {
 	return nil
 }
 
-// taskMetadataEdit opens the single-pane multi-line compose editor
-// pre-filled with the selected task's metadata as pretty-printed
-// JSON (`{}` when empty/nil). On submit the text is parsed back
-// into a map[string]any and pushed via Datasource.SetMetadata. On
-// parse failure (invalid JSON, or a JSON value that isn't an
-// object) the popup is re-opened with the typed text intact so the
-// user can fix it.
-func (gu *Gui) taskMetadataEdit(*gocui.Gui, *gocui.View) error {
-	t, ok := gu.st.selectedTaskLocked()
-	if !ok {
-		return nil
-	}
-	initial := "{}"
-	if len(t.Metadata) > 0 {
-		b, err := json.MarshalIndent(t.Metadata, "", "  ")
-		if err != nil {
-			// Defensive: a map of any may carry a non-marshalable
-			// value (e.g. a func smuggled in by a buggy caller).
-			// Surface the error and bail without opening the popup.
-			gu.flashf("err", "metadata: %v", err)
-			return nil
-		}
-		initial = string(b)
-	}
-	gu.openSingleComposeForMetadata(t.ID, initial)
-	return nil
-}
-
-// openSingleComposeForMetadata is the openSingleCompose wrapper for
-// the metadata-edit flow. Same shape as openTaskComposeForEdit: the
-// validation-error branch re-invokes itself with the same typed
-// text so the popup "stays open" without the user re-typing.
-//
-// JSON validation has two gates: json.Unmarshal must succeed AND
-// the decoded value must actually be a JSON object. Both `null` and
-// non-object JSON (arrays, strings, numbers, bool) decode into a
-// map[string]any without an error — `null` populates a nil map and
-// non-objects fail mid-decode — but the user-visible contract per
-// plan AC #9 is that only a JSON OBJECT is acceptable. Treat the
-// nil-map case as a validation failure so typing the literal `null`
-// doesn't silently wipe metadata. (Note: json.Unmarshal of an
-// array / string / number / bool into a map[string]any returns a
-// proper error, so they go through the existing err branch.)
-func (gu *Gui) openSingleComposeForMetadata(id, initial string) {
-	gu.openSingleCompose("Metadata "+id, "JSON object", initial, func(text string) error {
-		var m map[string]any
-		if err := json.Unmarshal([]byte(text), &m); err != nil {
-			gu.flashf("err", "invalid JSON: %v", err)
-			gu.openSingleComposeForMetadata(id, text)
-			return nil
-		}
-		if m == nil {
-			// `null` unmarshals cleanly into a nil map. Reject so it
-			// doesn't act as a silent metadata-wipe (plan AC #9).
-			gu.flashf("err", "invalid JSON: metadata must be a JSON object")
-			gu.openSingleComposeForMetadata(id, text)
-			return nil
-		}
-		gu.runDispatch(func() {
-			if err := gu.ds.SetMetadata(gu.ctx, id, m); err != nil {
-				gu.flashf("err", "metadata: %v", err)
-				return
-			}
-			gu.flashf("info", "metadata updated %s", id)
-			gu.refreshAll()
-		})
-		return nil
-	})
-}
-
 // openTaskComposeForEdit is the openTaskCompose wrapper for the
 // edit flow. Extracted so the validation-error branch (empty title)
 // can re-invoke itself with the same (id, summary, description)
@@ -1233,7 +1101,7 @@ func (gu *Gui) openTaskComposeForEdit(id, summary, description string) {
 			return nil
 		}
 		gu.runDispatch(func() {
-			if err := gu.ds.UpdateTitleDescription(gu.ctx, id, s, d); err != nil {
+			if err := gu.ds.UpdateTask(gu.ctx, id, &s, &d); err != nil {
 				gu.flashf("err", "edit: %v", err)
 				return
 			}
@@ -1251,7 +1119,7 @@ func (gu *Gui) taskDone(*gocui.Gui, *gocui.View) error {
 	}
 	gu.confirmThen(fmt.Sprintf("mark %s done?", t.ID), func() {
 		gu.g.OnWorker(func(_ gocui.Task) error {
-			if err := gu.ds.UpdateStatus(gu.ctx, t.ID, store.StatusDone); err != nil {
+			if err := gu.ds.TaskDone(gu.ctx, t.ID); err != nil {
 				gu.flashf("err", "done: %v", err)
 				return nil
 			}
@@ -1270,7 +1138,7 @@ func (gu *Gui) taskCancel(*gocui.Gui, *gocui.View) error {
 	}
 	gu.confirmThen(fmt.Sprintf("cancel %s?", t.ID), func() {
 		gu.g.OnWorker(func(_ gocui.Task) error {
-			if err := gu.ds.UpdateStatus(gu.ctx, t.ID, store.StatusCancel); err != nil {
+			if err := gu.ds.TaskCancel(gu.ctx, t.ID); err != nil {
 				gu.flashf("err", "cancel: %v", err)
 				return nil
 			}
@@ -1288,7 +1156,7 @@ func (gu *Gui) taskReopen(*gocui.Gui, *gocui.View) error {
 		return nil
 	}
 	gu.g.OnWorker(func(_ gocui.Task) error {
-		if err := gu.ds.UpdateStatus(gu.ctx, t.ID, store.StatusNew); err != nil {
+		if err := gu.ds.TaskReopen(gu.ctx, t.ID); err != nil {
 			gu.flashf("err", "reopen: %v", err)
 			return nil
 		}
@@ -1323,15 +1191,15 @@ func (gu *Gui) taskEnroll(*gocui.Gui, *gocui.View) error {
 		gu.flashf("info", "no workflows defined")
 		return nil
 	}
-	wfCursor := pickerInitialWorkflowCursor(wfs, t.WorkflowID)
-	stepCursor := pickerInitialStepCursor(wfs, wfCursor, t.CurrentStepID)
+	wfCursor := pickerInitialWorkflowCursor(wfs, t.WorkflowName)
+	stepCursor := pickerInitialStepCursor(wfs, wfCursor, t.StepName)
 	taskID := t.ID
 	gu.openEnrollPicker(
 		"Enroll "+taskID+" — pick workflow",
 		wfs, wfCursor, stepCursor, false,
 		func(wfName, stepName string) error {
 			gu.runDispatch(func() {
-				if err := gu.ds.Enroll(gu.ctx, taskID, wfName, stepName); err != nil {
+				if err := gu.ds.EnrollWorkflow(gu.ctx, taskID, wfName); err != nil {
 					gu.flashf("err", "enroll: %v", err)
 					return
 				}
@@ -1355,33 +1223,31 @@ func (gu *Gui) taskEnroll(*gocui.Gui, *gocui.View) error {
 // distinct resume modes:
 //
 //   - `autosk resume <id>`           — status-only flip
-//     (StatusHuman → StatusWork), step_visits untouched,
-//     max_visits NOT enforced. Routes through Resume(id, "").
-//   - `autosk resume <id> --to STEP` — deliberate transition,
-//     step_visits[STEP]++, max_visits enforced. Routes through
+//     (StatusHuman → StatusWork) at the current step. Routes
+//     through Resume(id, "").
+//   - `autosk resume <id> --to STEP` — deliberate transition to a
+//     sibling step (runs the workflow's onTransit). Routes through
 //     Resume(id, STEP).
 //
 // The picker always pre-selects the task's current step, so the
 // natural "just resume" gesture (Enter on the pre-selected row)
-// would otherwise dispatch the bumping --to path against the same
-// step the operator was parked on — firing max_visits on tasks
-// that hit human via the cap in the first place
-// (docs/plans/20260520-Step-Visit-Limits.md). To restore CLI
-// parity we collapse "picked step == current step" to the no-bump
-// branch; picking a DIFFERENT step still bumps as before.
+// would otherwise dispatch the --to path against the same step the
+// operator was parked on, re-running onTransit needlessly. To
+// restore CLI parity we collapse "picked step == current step" to
+// the status-only branch; picking a DIFFERENT step still transits.
 func (gu *Gui) taskResume(*gocui.Gui, *gocui.View) error {
 	t, ok := gu.st.selectedTaskLocked()
 	if !ok {
 		return nil
 	}
-	if t.WorkflowID == "" {
+	if t.WorkflowName == "" {
 		gu.flashf("warn", "task has no workflow; enroll first")
 		return nil
 	}
 	var wf *datasource.Workflow
 	gu.st.withRLock(func() {
 		for i := range gu.st.workflows {
-			if gu.st.workflows[i].ID == t.WorkflowID {
+			if gu.st.workflows[i].Name == t.WorkflowName {
 				w := gu.st.workflows[i]
 				wf = &w
 				break
@@ -1393,9 +1259,9 @@ func (gu *Gui) taskResume(*gocui.Gui, *gocui.View) error {
 		return nil
 	}
 	wfs := []datasource.Workflow{*wf}
-	stepCursor := pickerInitialStepCursor(wfs, 0, t.CurrentStepID)
+	stepCursor := pickerInitialStepCursor(wfs, 0, t.StepName)
 	taskID := t.ID
-	currentStepName := resumeCurrentStepName(*wf, t.CurrentStepID)
+	currentStepName := resumeCurrentStepName(*wf, t.StepName)
 	gu.openEnrollPicker(
 		"Resume "+taskID+" — pick step",
 		wfs, 0, stepCursor, true,
@@ -1440,7 +1306,7 @@ func resumeCurrentStepName(wf datasource.Workflow, currentStepID string) string 
 		return ""
 	}
 	for _, s := range wf.Steps {
-		if s.ID == currentStepID {
+		if s.Name == currentStepID {
 			return s.Name
 		}
 	}
@@ -1456,7 +1322,7 @@ func pickerInitialWorkflowCursor(wfs []datasource.Workflow, workflowID string) i
 		return 0
 	}
 	for i := range wfs {
-		if wfs[i].ID == workflowID {
+		if wfs[i].Name == workflowID {
 			return i
 		}
 	}
@@ -1472,7 +1338,7 @@ func pickerInitialStepCursor(wfs []datasource.Workflow, wfCursor int, stepID str
 		return 0
 	}
 	for i, s := range wfs[wfCursor].Steps {
-		if s.ID == stepID {
+		if s.Name == stepID {
 			return i
 		}
 	}
@@ -1554,247 +1420,18 @@ func (gu *Gui) taskComment(*gocui.Gui, *gocui.View) error {
 	return nil
 }
 
-func (gu *Gui) taskPriority(*gocui.Gui, *gocui.View) error {
-	t, ok := gu.st.selectedTaskLocked()
+func (gu *Gui) sessionAbort(*gocui.Gui, *gocui.View) error {
+	s, ok := gu.st.selectedSessionLocked()
 	if !ok {
 		return nil
 	}
-	gu.openMenu("priority for "+t.ID, []string{"0", "1", "2", "3"}, func(i int) error {
+	gu.confirmThen("abort session "+s.ID+"?", func() {
 		gu.g.OnWorker(func(_ gocui.Task) error {
-			if err := gu.ds.UpdatePriority(gu.ctx, t.ID, i); err != nil {
-				gu.flashf("err", "priority: %v", err)
+			if err := gu.ds.AbortSession(gu.ctx, s.ID); err != nil {
+				gu.flashf("err", "abort session: %v", err)
 				return nil
 			}
-			gu.flashf("info", "P%d on %s", i, t.ID)
-			gu.refreshAll()
-			return nil
-		})
-		return nil
-	})
-	return nil
-}
-
-func (gu *Gui) workflowNew(*gocui.Gui, *gocui.View) error {
-	gu.openPrompt("workflow file path:", "", func(path string) error {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			return nil
-		}
-		gu.g.OnWorker(func(_ gocui.Task) error {
-			name, err := gu.ds.CreateWorkflow(gu.ctx, path)
-			if err != nil {
-				gu.flashf("err", "workflow new: %v", err)
-				return nil
-			}
-			gu.flashf("info", "workflow %s created", name)
-			gu.refreshAll()
-			return nil
-		})
-		return nil
-	})
-	return nil
-}
-
-func (gu *Gui) workflowDelete(*gocui.Gui, *gocui.View) error {
-	w, ok := gu.st.selectedWorkflowLocked()
-	if !ok {
-		return nil
-	}
-	gu.confirmThen("delete workflow "+w.Name+"?", func() {
-		gu.g.OnWorker(func(_ gocui.Task) error {
-			if err := gu.ds.DeleteWorkflow(gu.ctx, w.Name); err != nil {
-				gu.flashf("err", "wf delete: %v", err)
-				return nil
-			}
-			gu.flashf("info", "wf %s deleted", w.Name)
-			gu.refreshAll()
-			return nil
-		})
-	})
-	return nil
-}
-
-// workflowIsolation is the `i` handler on the Workflows panel. It
-// opens a two-option popupMenu listing the available isolation
-// modes; confirming a different value chains into a popupConfirm
-// whose body enumerates the affected non-terminal tasks (or notes
-// that none are affected). Synthetic rows respond with a status-bar
-// message instead — single:<agent> workflows are pinned to none by
-// construction so the menu has no useful action.
-//
-// The menu is implemented atop popupMenu (so j/k/Enter wiring is
-// reused); we wrap the OnSelect in a closure that captures the
-// selected workflow and the operator's choice. The destructive
-// branch (different value) chains into openConfirm.
-func (gu *Gui) workflowIsolation(*gocui.Gui, *gocui.View) error {
-	w, ok := gu.st.selectedWorkflowLocked()
-	if !ok {
-		return nil
-	}
-	if w.IsSynthetic {
-		gu.flashf("info", "isolation is locked to 'none' on synthetic workflows")
-		return nil
-	}
-	cur := w.Isolation
-	if cur == "" {
-		cur = "none"
-	}
-	modes := []string{"none", "worktree"}
-	lines := make([]string, 0, len(modes))
-	for _, m := range modes {
-		label := "isolation: " + m
-		if m == cur {
-			label += "   ← current"
-		}
-		lines = append(lines, label)
-	}
-	name := w.Name
-	nonTerminalCount := w.NonTerminalTaskCount
-	// Copy the slice so the closure isn't tied to the lifetime of the
-	// model under the lock (the refresh goroutine rewrites
-	// w.NonTerminalTasks wholesale on the next tick).
-	nonTerminalTasks := make([]datasource.NonTerminalTaskRef, len(w.NonTerminalTasks))
-	copy(nonTerminalTasks, w.NonTerminalTasks)
-	gu.openIsolationMenu("Flip isolation of "+name, lines, func(idx int) error {
-		if idx < 0 || idx >= len(modes) {
-			return nil
-		}
-		target := modes[idx]
-		if target == cur {
-			// No-op: close the popup silently.
-			return nil
-		}
-		body := buildIsolationConfirmBody(cur, target, nonTerminalCount, nonTerminalTasks)
-		force := nonTerminalCount > 0
-		gu.openConfirm(body, func() error {
-			gu.g.OnWorker(func(_ gocui.Task) error {
-				rep, err := gu.ds.UpdateWorkflowIsolation(gu.ctx, name, target, force)
-				if err != nil {
-					gu.flashf("err", "workflow isolation: %v", err)
-					return nil
-				}
-				// Single flash: state.flash is a one-slot field, so a
-				// success followed by a leftover-warning would otherwise
-				// overwrite the success ack between the Enter and the
-				// next paint. Combine the two pieces of information into
-				// one info-level toast; the command log keeps both
-				// lines via appendLog anyway.
-				switch {
-				case rep.Noop:
-					gu.flashf("info", "workflow %s: already %s", name, target)
-				case len(rep.LeftoverWorktrees) > 0:
-					gu.flashf("info",
-						"workflow %s: isolation %s→%s; %d worktree(s) left on disk, use `autosk worktree rm`",
-						name, rep.From, rep.To, len(rep.LeftoverWorktrees))
-				default:
-					gu.flashf("info", "workflow %s: isolation %s→%s", name, rep.From, rep.To)
-				}
-				gu.refreshAll()
-				return nil
-			})
-			return nil
-		})
-		return nil
-	})
-	return nil
-}
-
-// isolationConfirmTaskCap bounds the number of per-task lines
-// rendered inside the confirm popup body. Above this we append a
-// `... and N more` suffix. Sized to match
-// datasource.NonTerminalTaskSampleSize so the popup never asks for
-// more rows than the data source is willing to ship; plan §8 risk
-// #4.
-const isolationConfirmTaskCap = datasource.NonTerminalTaskSampleSize
-
-// buildIsolationConfirmBody renders the popupConfirm body for the
-// isolation flip. Pure function so the layout pins in
-// popup_isolation_test.go can exercise the wording without driving a
-// gocui screen.
-//
-// total is the FULL non-terminal-task count (not len(tasks); tasks
-// may be a capped sample). The body enumerates every task in `tasks`
-// up to isolationConfirmTaskCap and appends `... and N more` when
-// the total exceeds the rendered prefix.
-func buildIsolationConfirmBody(from, to string, total int, tasks []datasource.NonTerminalTaskRef) string {
-	head := fmt.Sprintf("Flip isolation: %s → %s", from, to)
-	if total == 0 {
-		return head + "\nNo tasks are currently affected."
-	}
-
-	var header, tail string
-	switch {
-	case from == "none" && to == "worktree":
-		header = fmt.Sprintf("\n%d non-terminal task(s) will get a fresh worktree allocated from HEAD:", total)
-		tail = "\nThis is the --force path. Continue?"
-	case from == "worktree" && to == "none":
-		header = fmt.Sprintf("\n%d non-terminal task(s) keep their worktree directories on disk:", total)
-		tail = "\nRemove them later with `autosk worktree rm <task-id>` once you have salvaged anything you need. Continue?"
-	default:
-		header = fmt.Sprintf("\n%d non-terminal task(s) affected:", total)
-		tail = "\nContinue?"
-	}
-
-	var b strings.Builder
-	b.WriteString(head)
-	b.WriteString(header)
-	rendered := len(tasks)
-	if rendered > isolationConfirmTaskCap {
-		rendered = isolationConfirmTaskCap
-	}
-	for i := 0; i < rendered; i++ {
-		t := tasks[i]
-		status := string(t.Status)
-		if status == "" {
-			status = "unknown"
-		}
-		step := t.StepName
-		if step == "" {
-			step = "(none)"
-		}
-		fmt.Fprintf(&b, "\n  - %s (status=%s, current step=%s)", t.ID, status, step)
-	}
-	if total > rendered {
-		fmt.Fprintf(&b, "\n  ... and %d more", total-rendered)
-	}
-	b.WriteString(tail)
-	return b.String()
-}
-
-// agentInstall and agentUninstall are intentionally informational in
-// v1: the daemon has no /v1/agents endpoint so live mode returns the
-// same error as offline. A popup with two no-op options is a fake
-// choice; flashf is the right verb — one piece of info, no demand
-// for an action that doesn't exist. The hotkeys stay bound so the
-// help screen line 'i install / u uninstall' is honest (it points
-// to the CLI workaround).
-func (gu *Gui) agentInstall(*gocui.Gui, *gocui.View) error {
-	gu.flashf("info", "agent install: quit lazy and run 'autosk agent install <pkg>'")
-	return nil
-}
-
-func (gu *Gui) agentUninstall(*gocui.Gui, *gocui.View) error {
-	a, ok := gu.st.selectedAgentLocked()
-	name := "<pkg>"
-	if ok && a.Name != "" {
-		name = a.Name
-	}
-	gu.flashf("info", "agent uninstall: quit lazy and run 'autosk agent uninstall %s'", name)
-	return nil
-}
-
-func (gu *Gui) jobCancel(*gocui.Gui, *gocui.View) error {
-	j, ok := gu.st.selectedJobLocked()
-	if !ok {
-		return nil
-	}
-	gu.confirmThen("cancel job "+j.JobID+"?", func() {
-		gu.g.OnWorker(func(_ gocui.Task) error {
-			if err := gu.ds.CancelJob(gu.ctx, j.JobID); err != nil {
-				gu.flashf("err", "cancel job: %v", err)
-				return nil
-			}
-			gu.flashf("info", "job %s cancelled", j.JobID)
+			gu.flashf("info", "session %s aborted", s.ID)
 			gu.refreshAll()
 			return nil
 		})

@@ -19,16 +19,17 @@ var updateGolden = flag.Bool("update", false, "rewrite golden files")
 // Stable inputs so the rendered output is deterministic.
 //
 // We don't run the binary end-to-end; we exercise the renderer directly with
-// fixed inputs. End-to-end tests would re-run cobra + doltlite, which adds
-// flakiness around timing and IDs; these goldens nail down the wire shape.
+// fixed inputs. These goldens nail down the v2 task wire shape (no priority /
+// author / metadata; workflow + step are names).
 
 func fixedTask() store.Task {
 	return store.Task{
 		ID:          "ask-a1b2c3",
-		Title:       "Wire up doltlite store",
-		Description: "Implement Open/Close/Migrate and the smoke test.",
+		Title:       "Wire up the file store",
+		Description: "Implement the task store and the smoke test.",
 		Status:      store.StatusWork,
-		Priority:    1,
+		Workflow:    "feature-dev",
+		Step:        "dev",
 		CreatedAt:   time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC),
 		UpdatedAt:   time.Date(2026, 5, 13, 11, 42, 13, 0, time.UTC),
 	}
@@ -48,7 +49,6 @@ func TestGolden_ListJSON(t *testing.T) {
 		fixedTask(),
 		{
 			ID: "ask-c3d4e5", Title: "second one", Status: store.StatusNew,
-			Priority:  0,
 			CreatedAt: time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC),
 			UpdatedAt: time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC),
 		},
@@ -119,7 +119,7 @@ func compareGoldenText(t *testing.T, name string, got []byte) {
 		t.Fatalf("read %s: %v  (run with -update to create)", path, err)
 	}
 	if !bytes.Equal(bytes.TrimRight(want, "\n"), bytes.TrimRight(got, "\n")) {
-		t.Errorf("golden mismatch %s:\n--- want ---\n%s\n--- got ---\n%s\n(run `go test -tags libsqlite3 ./cmd/autosk -update` to refresh)",
+		t.Errorf("golden mismatch %s:\n--- want ---\n%s\n--- got ---\n%s\n(run `go test ./cmd/autosk -update` to refresh)",
 			path, string(want), string(got))
 	}
 }
@@ -149,7 +149,7 @@ func compareGolden(t *testing.T, name string, got []byte) {
 		_ = json.Unmarshal(want, &w)
 		var g any
 		_ = json.Unmarshal(got, &g)
-		t.Errorf("golden mismatch %s:\n  want: %s\n  got:  %s\n  (run `go test -tags libsqlite3 ./cmd/autosk -update` to refresh)",
+		t.Errorf("golden mismatch %s:\n  want: %s\n  got:  %s\n  (run `go test ./cmd/autosk -update` to refresh)",
 			path,
 			strings.TrimRight(string(want), "\n"),
 			strings.TrimRight(string(got), "\n"))

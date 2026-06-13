@@ -22,9 +22,6 @@ var (
 	// ErrInvalidStatus — the proposed Status is not in the enum.
 	ErrInvalidStatus = errors.New("invalid status value")
 
-	// ErrInvalidPriority — priority is outside MinPriority..MaxPriority.
-	ErrInvalidPriority = errors.New("priority must be in 0..3")
-
 	// ErrEmptyTitle — title is required and may not be empty.
 	ErrEmptyTitle = errors.New("title may not be empty")
 

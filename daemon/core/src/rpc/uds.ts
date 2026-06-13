@@ -8,9 +8,15 @@
  * — bind never errors — so that signal is gone. We replace it with an explicit
  * **pidfile lock**:
  *
- *  1. Create `<sock>.lock` atomically with `O_CREAT|O_EXCL` (`open(..,"wx")`)
- *     and write our pid. Exactly one racer wins this create; the rest get
- *     `EEXIST`.
+ *  1. Write our pid to a private temp file, then atomically `link()` it onto
+ *     `<sock>.lock`. `link` fails with `EEXIST` when the lock exists, so
+ *     exactly one racer wins — and, crucially, the lock file the instant it is
+ *     visible at its final path ALREADY carries a valid pid. (An earlier
+ *     `open("wx")`+`write` claim left a window where the lock existed but was
+ *     still empty; a racer reading it then misread `""` as a dead holder and
+ *     wrongly reclaimed a live lock — letting two daemons bind the same
+ *     socket. The link makes content atomic with existence and closes that
+ *     window.)
  *  2. An `EEXIST` racer reads the holder's pid and probes liveness with
  *     `process.kill(pid, 0)`: alive ⇒ {@link AlreadyRunningError} (exit 0); a
  *     dead pid ⇒ a stale lock from a crashed daemon, which is reclaimed.
@@ -22,7 +28,7 @@
  * "processes" share a live pid, so the loser still sees a live holder).
  */
 
-import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
+import { chmodSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { dirname } from "node:path";
 
@@ -34,11 +40,20 @@ export class AlreadyRunningError extends Error {
   }
 }
 
-/** A bound single-instance listener plus its teardown. */
+/** A single-instance listener (lock claimed) plus its lifecycle hooks. */
 export interface UnixListenHandle {
   server: net.Server;
-  /** The bound socket path. */
+  /** The socket path the lock guards. */
   path: string;
+  /**
+   * Begins accepting connections (binds the socket, `chmod 0600`s it). Call
+   * this AFTER attaching the server's `"connection"` handler so a client that
+   * connects the instant the socket appears is never dropped (a `net.Server`
+   * silently discards `"connection"` events emitted before a listener exists,
+   * which left concurrent first-callers hanging on a request that the daemon
+   * never read). Rejecting unwinds the lock.
+   */
+  listen(): Promise<void>;
   /** Closes the server and removes the socket + lock files (idempotent). */
   release(): void;
 }
@@ -92,51 +107,71 @@ export async function listenUnix(socketPath: string): Promise<UnixListenHandle> 
   }
 
   const lockPath = lockPathFor(socketPath);
-  let lockFd: number | null = null;
-  for (let attempt = 0; attempt < 8 && lockFd === null; attempt++) {
+  // A private staging file we link into place; unique per process so concurrent
+  // racers never collide on it.
+  const lockTmp = `${lockPath}.${process.pid}.tmp`;
+  let claimed = false;
+  for (let attempt = 0; attempt < 8 && !claimed; attempt++) {
+    writeFileSync(lockTmp, `${process.pid}\n`, { mode: 0o600 });
     try {
-      lockFd = openSync(lockPath, "wx", 0o600);
-      writeSync(lockFd, `${process.pid}\n`);
+      // Atomic claim: link() fails EEXIST when the lock is held. On success the
+      // lock file already carries our pid (no empty-file window).
+      linkSync(lockTmp, lockPath);
+      claimed = true;
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") {
+        tryUnlink(lockTmp);
+        throw e;
+      }
       // Someone holds the lock. Alive ⇒ already running; dead ⇒ stale, reclaim.
-      if (holderAlive(lockPath)) throw new AlreadyRunningError(socketPath);
+      if (holderAlive(lockPath)) {
+        tryUnlink(lockTmp);
+        throw new AlreadyRunningError(socketPath);
+      }
       tryUnlink(lockPath);
       tryUnlink(socketPath);
       // loop and re-attempt the atomic claim
+    } finally {
+      // The lock now lives at lockPath (a hardlink to the same inode); the
+      // staging name is no longer needed either way.
+      tryUnlink(lockTmp);
     }
   }
-  if (lockFd === null) {
+  if (!claimed) {
     throw new Error(`could not acquire daemon lock at ${lockPath}`);
   }
 
-  // We hold the lock: reap any stale socket file, then bind.
+  // We hold the lock: reap any stale socket file. The actual bind is deferred
+  // to listen() so the caller can wire the connection handler first.
   tryUnlink(socketPath);
   const server = net.createServer();
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const onError = (e: unknown) => reject(e);
-      server.once("error", onError);
-      server.listen(socketPath, () => {
-        server.removeListener("error", onError);
-        resolve();
-      });
-    });
+
+  const listen = async (): Promise<void> => {
     try {
-      chmodSync(socketPath, 0o600);
-    } catch {
-      // best-effort hardening; the parent dir is already 0700
+      await new Promise<void>((resolve, reject) => {
+        const onError = (e: unknown) => reject(e);
+        server.once("error", onError);
+        server.listen(socketPath, () => {
+          server.removeListener("error", onError);
+          resolve();
+        });
+      });
+      try {
+        chmodSync(socketPath, 0o600);
+      } catch {
+        // best-effort hardening; the parent dir is already 0700
+      }
+    } catch (e) {
+      tryUnlink(lockPath);
+      throw e;
     }
-  } catch (e) {
-    closeSync(lockFd);
-    tryUnlink(lockPath);
-    throw e;
-  }
+  };
 
   let released = false;
   return {
     server,
     path: socketPath,
+    listen,
     release: () => {
       if (released) return;
       released = true;
@@ -146,11 +181,6 @@ export async function listenUnix(socketPath: string): Promise<UnixListenHandle> 
         /* already closing */
       }
       tryUnlink(socketPath);
-      try {
-        closeSync(lockFd);
-      } catch {
-        /* already closed */
-      }
       tryUnlink(lockPath);
     },
   };

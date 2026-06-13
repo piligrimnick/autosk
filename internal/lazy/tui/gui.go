@@ -295,12 +295,12 @@ func Run(ctx context.Context, opts Options) error {
 	if mainErr != nil && mainErr != gocui.ErrQuit && !errors.Is(mainErr, gocui.ErrQuit) {
 		cancel()
 		close(gu.stopRefresh)
-		gu.stopJobLive()
+		gu.stopSessionLive()
 		return mainErr
 	}
 	cancel()
 	close(gu.stopRefresh)
-	gu.stopJobLive()
+	gu.stopSessionLive()
 	return nil
 }
 
@@ -484,8 +484,8 @@ func (gu *Gui) spinnerLoop() {
 func (gu *Gui) hasActiveJob() bool {
 	var any bool
 	gu.st.withRLock(func() {
-		for i := range gu.st.jobs {
-			if runstore.RunStatus(gu.st.jobs[i].Status) == runstore.StatusRunning {
+		for i := range gu.st.sessions {
+			if runstore.RunStatus(gu.st.sessions[i].Status) == runstore.StatusRunning {
 				any = true
 				return
 			}
@@ -588,26 +588,26 @@ func (gu *Gui) renderViews() {
 	gu.st.withRLock(func() {
 		focused := gu.st.focused
 
-		// taskJobIdx is published by applyRefreshLocked from the
-		// TaskID-unfiltered jobs read; reading it here under the
+		// taskSessionIdx is published by applyRefreshLocked from the
+		// TaskID-unfiltered sessions read; reading it here under the
 		// model's RLock is correct — the spinner ticker only triggers
 		// a layout pass, it doesn't refetch.
 		spinTick := gu.spinnerTick.Load()
 		tasksBody, tasksHdr := renderTasksPanel(
 			gu.st.tasks, gu.st.taskCursor,
 			gu.st.scope, gu.st.filter.Tasks,
-			gu.innerWidth(winTasks), spinTick, gu.st.taskJobIdx,
+			gu.innerWidth(winTasks), spinTick, gu.st.taskSessionIdx,
 		)
 		gu.writeView(winTasks, "[1] Tasks", tasksBody)
 		gu.applyRowHighlight(winTasks, tasksHdr, gu.st.taskCursor, len(gu.st.tasks), focused == panelTasks)
 
-		jobsBody, jobsHdr := renderJobsPanel(gu.st.jobs, gu.st.jobCursor, gu.st.scope, gu.st.filter.Jobs, gu.innerWidth(winJobs))
-		gu.writeView(winJobs, "[2] Jobs", jobsBody)
-		// Keep the Jobs row highlight on while the caret is in
-		// winJobInput (panelJobInput) — the operator is still working
-		// the selected running job, just typing instead of navigating.
-		jobsHighlighted := focused == panelJobs || focused == panelJobInput
-		gu.applyRowHighlight(winJobs, jobsHdr, gu.st.jobCursor, len(gu.st.jobs), jobsHighlighted)
+		sessionsBody, sessionsHdr := renderSessionsPanel(gu.st.sessions, gu.st.sessionCursor, gu.st.scope, gu.st.filter.Sessions, gu.innerWidth(winSessions))
+		gu.writeView(winSessions, "[2] Sessions", sessionsBody)
+		// Keep the Sessions row highlight on while the caret is in
+		// winSessionInput (panelSessionInput) — the operator is still working
+		// the selected running session, just typing instead of navigating.
+		sessionsHighlighted := focused == panelSessions || focused == panelSessionInput
+		gu.applyRowHighlight(winSessions, sessionsHdr, gu.st.sessionCursor, len(gu.st.sessions), sessionsHighlighted)
 
 		wfBody, wfHdr := renderWorkflowsPanel(gu.st.workflows, gu.st.workflowCursor, gu.st.filter.Workflows)
 		gu.writeView(winWorkflows, "[3] Workflows", wfBody)
@@ -618,7 +618,7 @@ func (gu *Gui) renderViews() {
 		gu.applyRowHighlight(winAgents, agHdr, gu.st.agentCursor, len(gu.st.agents), focused == panelAgents)
 
 		// Detail pane: writeViewSticky's bottom-anchor behaviour is
-		// the right policy ONLY for the live job transcript — it auto-
+		// the right policy ONLY for the live session transcript — it auto-
 		// tails new events as they arrive. For Task / Workflow / Agent
 		// detail the same policy would wrongly scroll past the title /
 		// description on the very first render (the first frame's
@@ -627,16 +627,16 @@ func (gu *Gui) renderViews() {
 		//
 		// When the entity rendered into the pane changes between
 		// frames (cursor moves to a different task, focus flips from
-		// Tasks to Jobs, etc.), clear winDetail's buffer + reset its
+		// Tasks to Sessions, etc.), clear winDetail's buffer + reset its
 		// origin to (0,0) so the new entity starts from its natural
-		// anchor: top for non-job, bottom for job (writeViewSticky
+		// anchor: top for non-session, bottom for session (writeViewSticky
 		// snaps to bottom because prevLines is now 0). Clearing the
 		// buffer also matters for the sticky-tail computation:
 		// without it, leftover lines from the previous entity would
-		// fail the "at bottom" predicate and the new job's transcript
+		// fail the "at bottom" predicate and the new session's transcript
 		// would land at the top instead of tailing the latest events.
 		curDetailKey := detailEntityKey(gu.st)
-		isJobDetail := detailShowsJob(gu.st)
+		isSessionDetail := detailShowsSession(gu.st)
 		if curDetailKey != gu.lastDetailKey {
 			if v, err := gu.g.View(winDetail); err == nil && v != nil {
 				v.Clear()
@@ -646,7 +646,7 @@ func (gu *Gui) renderViews() {
 			gu.lastDetailKey = curDetailKey
 		}
 		detailBody := renderDetail(gu.st, gu.innerWidth(winDetail))
-		if isJobDetail {
+		if isSessionDetail {
 			gu.writeViewSticky(winDetail, "[0] Detail", detailBody)
 		} else {
 			gu.writeView(winDetail, "[0] Detail", detailBody)
@@ -660,20 +660,20 @@ func (gu *Gui) renderViews() {
 		optsWin := gu.st.focused.normalizeForDetail().window()
 		gu.writeView(winOptionsStrip, "", renderOptionsStrip(gu.bindingSpecs(), optsWin, gu.innerWidth(winOptionsStrip)))
 
-		// Job-input textarea is allocated by layout whenever the
-		// selected job is non-terminal AND the Detail pane is
-		// currently showing that job. The Detail-pane gate matters:
+		// Session-input textarea is allocated by layout whenever the
+		// selected session is non-terminal AND the Detail pane is
+		// currently showing that session. The Detail-pane gate matters:
 		// when the operator is on the Tasks panel (Detail shows the
-		// task), the input must NOT appear just because the Jobs
-		// panel's cursor happens to point at a live job. renderViews
+		// task), the input must NOT appear just because the Sessions
+		// panel's cursor happens to point at a live session. renderViews
 		// mirrors layout's gate so writeView doesn't poke at a view
-		// that doesn't exist this frame. When the job is terminal
+		// that doesn't exist this frame. When the session is terminal
 		// the input view is absent and the Detail pane uses its full
 		// inner height for the transcript.
-		if isJobDetail {
-			if j, ok := gu.st.selectedJob(); ok && isJobLive(j) {
-				title := "input — ctrl+d send  ctrl+f follow_up  ctrl+a abort  esc cancel"
-				gu.writeView(winJobInput, title, gu.st.jobInput)
+		if isSessionDetail {
+			if s, ok := gu.st.selectedSession(); ok && isSessionLive(s) {
+				title := "input — ctrl+d send  ctrl+f follow-up  ctrl+a abort  esc cancel"
+				gu.writeView(winSessionInput, title, gu.st.sessionInput)
 			}
 		}
 	})
@@ -830,9 +830,9 @@ func (gu *Gui) snapViewportToCursor(p panelID) {
 		case panelTasks:
 			cursor = gu.st.taskCursor
 			rowCount = len(gu.st.tasks)
-		case panelJobs:
-			cursor = gu.st.jobCursor
-			rowCount = len(gu.st.jobs)
+		case panelSessions:
+			cursor = gu.st.sessionCursor
+			rowCount = len(gu.st.sessions)
 		case panelWorkflows:
 			cursor = gu.st.workflowCursor
 			rowCount = len(gu.st.workflows)
@@ -891,8 +891,8 @@ func (gu *Gui) panelScroll(p panelID, step int) func(*gocui.Gui, *gocui.View) er
 			switch p {
 			case panelTasks:
 				rowCount = len(gu.st.tasks)
-			case panelJobs:
-				rowCount = len(gu.st.jobs)
+			case panelSessions:
+				rowCount = len(gu.st.sessions)
 			case panelWorkflows:
 				rowCount = len(gu.st.workflows)
 			case panelAgents:
@@ -979,19 +979,17 @@ func headerLinesForLocked(p panelID, st *state) int {
 		if st.scope.WorkflowName != "" {
 			h++
 		}
-		if st.scope.Agent != "" {
-			h++
-		}
+		// NOTE: agent scoping removed in v2
 		if st.filter.Tasks != "" {
 			h++
 		}
 		return h
-	case panelJobs:
+	case panelSessions:
 		h := 0
 		if st.scope.TaskID != "" {
 			h++
 		}
-		if st.filter.Jobs != "" {
+		if st.filter.Sessions != "" {
 			h++
 		}
 		return h
@@ -1007,50 +1005,50 @@ func headerLinesForLocked(p panelID, st *state) int {
 	return 0
 }
 
-// taskJobIndex is the per-row projection of the jobs snapshot that
-// the Tasks panel consults for its job-presence markers:
+// taskSessionIndex is the per-row projection of the sessions snapshot that
+// the Tasks panel consults for its session-presence markers:
 //
-//   - Active is the set of tasks with at least one running job. It
+//   - Active is the set of tasks with at least one running session. It
 //     drives the animated braille spinner (blue, task-id hue).
-//   - Any is the set of tasks with at least one job in ANY status
-//     (queued / running / done / failed / cancel). It drives the
-//     static ">" marker (magenta, job-id hue) shown when no spinner
+//   - Any is the set of tasks with at least one session in ANY status
+//     (queued / running / done / failed / aborted). It drives the
+//     static ">" marker (magenta, session-id hue) shown when no spinner
 //     is animating.
 //
 // Active ⊆ Any by construction — the renderer picks the spinner
 // first and falls back to the marker only when the row isn't
-// actively running. Pre-sized maps from len(jobs) so the common
-// "one task per job" case avoids a rehash.
+// actively running. Pre-sized maps from len(sessions) so the common
+// "one task per session" case avoids a rehash.
 //
 // The index is built at refresh time from the TaskID-UNFILTERED
-// jobs read (see fetchRefresh), NOT from the filtered slice that
-// drives the Jobs panel. Otherwise an active scope.TaskID would
-// shrink the Jobs query down to one task and every other row in
+// sessions read (see fetchRefresh), NOT from the filtered slice that
+// drives the Sessions panel. Otherwise an active scope.TaskID would
+// shrink the Sessions query down to one task and every other row in
 // Tasks would lose its marker — a regression noticed the first time
-// an operator pressed Space on a row that had jobs.
-type taskJobIndex struct {
+// an operator pressed Space on a row that had sessions.
+type taskSessionIndex struct { // renamed from taskJobIndex
 	Active map[string]bool
 	Any    map[string]bool
 }
 
-// taskJobIndexFromJobs builds a taskJobIndex from a jobs slice.
+// taskSessionIndexFromSessions builds a taskSessionIndex from a sessions slice.
 // Pure function so refresh.go can call it on the unfiltered fetch
 // result (no lock needed; the slice is owned by the calling
 // goroutine until applyRefreshLocked publishes it). Returns empty
-// (but non-nil) maps when there are no jobs so the renderer can do
+// (but non-nil) maps when there are no sessions so the renderer can do
 // a single map lookup per row without nil-checking.
-func taskJobIndexFromJobs(jobs []datasource.Job) taskJobIndex {
-	idx := taskJobIndex{
-		Active: make(map[string]bool, len(jobs)),
-		Any:    make(map[string]bool, len(jobs)),
+func taskSessionIndexFromSessions(sessions []datasource.Session) taskSessionIndex {
+	idx := taskSessionIndex{ // renamed from taskJobIndex
+		Active: make(map[string]bool, len(sessions)),
+		Any:    make(map[string]bool, len(sessions)),
 	}
-	for i := range jobs {
-		tid := jobs[i].TaskID
+	for i := range sessions {
+		tid := sessions[i].TaskID
 		if tid == "" {
 			continue
 		}
 		idx.Any[tid] = true
-		if runstore.RunStatus(jobs[i].Status) == runstore.StatusRunning {
+		if sessions[i].Status == runstore.StatusRunning {
 			idx.Active[tid] = true
 		}
 	}

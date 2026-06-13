@@ -435,19 +435,9 @@ func renderEnrollStepBody(steps []datasource.WorkflowStep, cursor int) string {
 	return b.String()
 }
 
-// filterPickerWorkflows returns the subset of `in` that should
-// appear in the picker: real workflows only. Synthetic
-// single:<agent> workflows are pinned to one step ("do") and the
-// CLI directs operators to use `autosk enroll --agent NAME` to
-// invoke them; surfacing them in the picker would imply they're
-// switchable through it, which they aren't.
+// filterPickerWorkflows returns the workflows to show in the picker. v2
+// workflows are all real, read-only registry entries, so this is now the
+// identity (kept as a seam so callers don't change).
 func filterPickerWorkflows(in []datasource.Workflow) []datasource.Workflow {
-	out := make([]datasource.Workflow, 0, len(in))
-	for _, w := range in {
-		if w.IsSynthetic {
-			continue
-		}
-		out = append(out, w)
-	}
-	return out
+	return in
 }

@@ -12,11 +12,9 @@ import (
 // helper (which acks then writes the supplied frames).
 func TestWatch_MapsNotifications(t *testing.T) {
 	ds, _ := streamDaemon(t, []map[string]any{
-		{"method": "task-changed", "params": map[string]any{
-			"root": "/repo", "db_path": "/repo/.autosk/db"}},
+		{"method": "task-changed", "params": map[string]any{"root": "/repo"}},
 		{"method": "project-changed", "params": map[string]any{}},
-		{"method": "task-changed", "params": map[string]any{
-			"root": "/repo", "db_path": "/repo/.autosk/db"}},
+		{"method": "task-changed", "params": map[string]any{"root": "/repo"}},
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

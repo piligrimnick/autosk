@@ -21,8 +21,8 @@ import (
 func TestDatasourceVerbsTimeout(t *testing.T) {
 	ctx := context.Background()
 	ds := fakeDaemon(t, map[string]any{
-		"healthz": map[string]any{"ok": true, "workers": 0, "queued": 0, "running": 0,
-			"db_path": "/repo/.autosk/db", "project_root": "/repo", "projects": []any{}},
+		"meta.healthz": map[string]any{"ok": true, "workers": 0, "queued": 0, "running": 0,
+			"projects": []any{}},
 	})
 
 	w := &timeoutWrapper{ds: ds, limit: 100 * time.Millisecond, t: t}
@@ -31,10 +31,10 @@ func TestDatasourceVerbsTimeout(t *testing.T) {
 	if _, err := w.Tasks(ctx, DefaultTaskFilter()); err != nil {
 		t.Fatalf("Tasks: %v", err)
 	}
-	if _, err := w.Jobs(ctx, JobFilter{}); err != nil {
-		t.Fatalf("Jobs: %v", err)
+	if _, err := w.Sessions(ctx, ""); err != nil {
+		t.Fatalf("Sessions: %v", err)
 	}
-	if _, err := w.Workflows(ctx, true); err != nil {
+	if _, err := w.Workflows(ctx); err != nil {
 		t.Fatalf("Workflows: %v", err)
 	}
 	if _, err := w.Agents(ctx); err != nil {
@@ -80,20 +80,20 @@ func (w *timeoutWrapper) Tasks(ctx context.Context, f TaskFilter) ([]Task, error
 	})
 	return out, err
 }
-func (w *timeoutWrapper) Jobs(ctx context.Context, f JobFilter) ([]Job, error) {
-	var out []Job
-	err := w.check("Jobs", func() error {
+func (w *timeoutWrapper) Sessions(ctx context.Context, taskID string) ([]Session, error) {
+	var out []Session
+	err := w.check("Sessions", func() error {
 		var e error
-		out, e = w.ds.Jobs(ctx, f)
+		out, e = w.ds.Sessions(ctx, taskID)
 		return e
 	})
 	return out, err
 }
-func (w *timeoutWrapper) Workflows(ctx context.Context, syn bool) ([]Workflow, error) {
+func (w *timeoutWrapper) Workflows(ctx context.Context) ([]Workflow, error) {
 	var out []Workflow
 	err := w.check("Workflows", func() error {
 		var e error
-		out, e = w.ds.Workflows(ctx, syn)
+		out, e = w.ds.Workflows(ctx)
 		return e
 	})
 	return out, err
@@ -115,4 +115,63 @@ func (w *timeoutWrapper) Healthz(ctx context.Context) (Health, error) {
 		return e
 	})
 	return out, err
+}
+
+// Stub implementations for remaining v2 interface methods
+func (w *timeoutWrapper) GetTask(ctx context.Context, id string) (Task, error) {
+	return w.ds.GetTask(ctx, id)
+}
+func (w *timeoutWrapper) GetSession(ctx context.Context, id string) (Session, error) {
+	return w.ds.GetSession(ctx, id)
+}
+func (w *timeoutWrapper) Comments(ctx context.Context, taskID string) ([]Comment, error) {
+	return w.ds.Comments(ctx, taskID)
+}
+func (w *timeoutWrapper) CreateTask(ctx context.Context, title, description string) (string, error) {
+	return w.ds.CreateTask(ctx, title, description)
+}
+func (w *timeoutWrapper) TaskDone(ctx context.Context, id string) error {
+	return w.ds.TaskDone(ctx, id)
+}
+func (w *timeoutWrapper) TaskCancel(ctx context.Context, id string) error {
+	return w.ds.TaskCancel(ctx, id)
+}
+func (w *timeoutWrapper) TaskReopen(ctx context.Context, id string) error {
+	return w.ds.TaskReopen(ctx, id)
+}
+func (w *timeoutWrapper) UpdateTask(ctx context.Context, id string, title, description *string) error {
+	return w.ds.UpdateTask(ctx, id, title, description)
+}
+func (w *timeoutWrapper) EnrollWorkflow(ctx context.Context, id, workflow string) error {
+	return w.ds.EnrollWorkflow(ctx, id, workflow)
+}
+func (w *timeoutWrapper) EnrollAgent(ctx context.Context, id, agent string) error {
+	return w.ds.EnrollAgent(ctx, id, agent)
+}
+func (w *timeoutWrapper) Resume(ctx context.Context, id, toStep string) error {
+	return w.ds.Resume(ctx, id, toStep)
+}
+func (w *timeoutWrapper) Block(ctx context.Context, id, blocker string) error {
+	return w.ds.Block(ctx, id, blocker)
+}
+func (w *timeoutWrapper) Unblock(ctx context.Context, id, blocker string) error {
+	return w.ds.Unblock(ctx, id, blocker)
+}
+func (w *timeoutWrapper) AddComment(ctx context.Context, taskID, text string) error {
+	return w.ds.AddComment(ctx, taskID, text)
+}
+func (w *timeoutWrapper) AbortSession(ctx context.Context, id string) error {
+	return w.ds.AbortSession(ctx, id)
+}
+func (w *timeoutWrapper) SessionInput(ctx context.Context, id, message, kind string) error {
+	return w.ds.SessionInput(ctx, id, message, kind)
+}
+func (w *timeoutWrapper) Reconnect(ctx context.Context) error {
+	return w.ds.Reconnect(ctx)
+}
+func (w *timeoutWrapper) SessionTranscript(ctx context.Context, sessionID string) ([]LiveEvent, error) {
+	return w.ds.SessionTranscript(ctx, sessionID)
+}
+func (w *timeoutWrapper) StreamSession(ctx context.Context, sessionID string) (*LiveHandle, error) {
+	return w.ds.StreamSession(ctx, sessionID)
 }

@@ -1,23 +1,30 @@
 # autosk — Makefile
 #
-# The Go binary (CLI + lazy TUI) is a pure JSON-RPC client of autoskd and no
-# longer links doltlite: it builds with plain `go build`, CGO-free, with no
-# `-tags libsqlite3` and no libdoltlite.a. autoskd (Rust) is the sole doltlite
-# consumer; it fetches its own pinned doltlite via crates/autosk-core/build.rs
-# (`scripts/fetch-doltlite.sh 0.11.8`), independently of this Makefile.
+# The Go binary (CLI + lazy TUI) is a pure JSON-RPC client of autoskd (proto-v2)
+# and builds with plain `go build`, CGO-free. autoskd is the Bun/TypeScript
+# daemon under daemon/; it is compiled to a standalone binary with
+# `bun build --compile` (it embeds the Bun runtime, so no global bun is needed
+# at runtime).
 
 GO       ?= go
+BUN      ?= bun
 BIN_DIR  := bin
 BIN_NAME := autosk
 BIN      := $(BIN_DIR)/$(BIN_NAME)
 PKG      := ./cmd/autosk
 
-# autoskd — the Rust daemon that owns .autosk/db. The CLI/lazy front ends are
-# pure RPC clients, so the cmd/autosk verb tests need a live daemon; they
-# locate it via $AUTOSKD_BIN (the connector's first lookup). Built with cargo.
-CARGO       ?= cargo
-AUTOSKD_BIN         := $(CURDIR)/target/debug/autoskd
-AUTOSKD_RELEASE_BIN := $(CURDIR)/target/release/autoskd
+# autoskd — the Bun daemon that owns .autosk/ (tasks/sessions/extensions on
+# disk; no database). The CLI/lazy front ends are pure RPC clients, so the
+# cmd/autosk verb tests need a live daemon; they locate it via $AUTOSKD_BIN (the
+# connector's first lookup). Compiled with `bun build --compile`.
+DAEMON_DIR          := $(CURDIR)/daemon
+DAEMON_ENTRY        := $(DAEMON_DIR)/core/src/index.ts
+AUTOSKD_BIN         := $(BIN_DIR)/autoskd
+# The daemon-bundled extensions (feature-dev + pi-agent roles) live under
+# daemon/extensions/. The compiled binary cannot resolve them from its baked
+# import.meta.url, so the test/install targets point $AUTOSK_BUNDLED_EXTENSIONS
+# at the source tree (where their node_modules also resolve).
+BUNDLED_EXTENSIONS  := $(DAEMON_DIR)/extensions
 
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -43,21 +50,23 @@ build:
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BIN) $(PKG)
 
-## build-autoskd: compile the Rust daemon (needed by the cmd/autosk verb tests)
+## build-autoskd: compile the Bun daemon into bin/autoskd (verb tests need it)
 build-autoskd:
-	$(CARGO) build -p autoskd
+	@mkdir -p $(BIN_DIR)
+	cd $(DAEMON_DIR) && $(BUN) install --frozen-lockfile >/dev/null 2>&1 || (cd $(DAEMON_DIR) && $(BUN) install)
+	cd $(DAEMON_DIR) && $(BUN) build --compile $(DAEMON_ENTRY) --outfile $(CURDIR)/$(AUTOSKD_BIN)
 
 ## install: install autosk + autoskd into $$GOBIN (or $$GOPATH/bin)
 install: install-autoskd
 	$(GO) install -ldflags "$(LDFLAGS)" $(PKG)
 	@echo "installed: $(GOBIN_DIR)/$(BIN_NAME)"
 
-## install-autoskd: build autoskd (release) and install it alongside autosk
-install-autoskd:
-	$(CARGO) build -p autoskd --release
+## install-autoskd: compile the Bun daemon and install it alongside autosk
+install-autoskd: build-autoskd
 	@mkdir -p "$(GOBIN_DIR)"
-	@install -m 0755 "$(AUTOSKD_RELEASE_BIN)" "$(GOBIN_DIR)/autoskd"
+	@install -m 0755 "$(CURDIR)/$(AUTOSKD_BIN)" "$(GOBIN_DIR)/autoskd"
 	@echo "installed: $(GOBIN_DIR)/autoskd"
+	@echo "note: set AUTOSK_BUNDLED_EXTENSIONS=$(BUNDLED_EXTENSIONS) for the bundled feature-dev workflow"
 
 ## uninstall: remove autosk + autoskd from $$GOBIN (or $$GOPATH/bin)
 uninstall:
@@ -69,13 +78,13 @@ uninstall:
 		fi; \
 	done
 
-## test: run all tests (builds autoskd first; the verb tests auto-spawn it)
+## test: run all tests (compiles autoskd first; the verb tests auto-spawn it)
 test: build-autoskd
-	AUTOSKD_BIN=$(AUTOSKD_BIN) $(GO) test ./...
+	AUTOSKD_BIN=$(CURDIR)/$(AUTOSKD_BIN) AUTOSK_BUNDLED_EXTENSIONS=$(BUNDLED_EXTENSIONS) $(GO) test ./...
 
 ## test-short: skip long tests
 test-short: build-autoskd
-	AUTOSKD_BIN=$(AUTOSKD_BIN) $(GO) test -short ./...
+	AUTOSKD_BIN=$(CURDIR)/$(AUTOSKD_BIN) AUTOSK_BUNDLED_EXTENSIONS=$(BUNDLED_EXTENSIONS) $(GO) test -short ./...
 
 ## lint: run golangci-lint (must be installed)
 lint:
@@ -98,9 +107,8 @@ vet:
 clean:
 	rm -rf $(BIN_DIR) dist
 
-## distclean: clean + drop the downloaded doltlite cache (Rust autoskd refetches)
+## distclean: clean (alias; the Bun daemon keeps no extra build cache here)
 distclean: clean
-	rm -rf $(CURDIR)/.doltlite
 
 ## help: show this help
 help:

@@ -65,40 +65,33 @@ func TestRPC_MapsReadSurface(t *testing.T) {
 	ds := fakeDaemon(t, map[string]any{
 		"task.list": []map[string]any{{
 			"id": "ask-000001", "title": "Build", "description": "d", "status": "work",
-			"priority": 1, "author_id": "ag-0001", "author_name": "human",
-			"workflow_id": "wf-0001", "workflow_name": "feature-dev",
-			"current_step_id": "st-0001", "step_name": "dev", "agent_name": "@a/g",
+			"workflow": "feature-dev", "step": "dev",
 			"blocked": false, "blocked_by": []any{},
 			"blocks":        []map[string]any{{"id": "ask-000003", "status": "new"}},
-			"comment_count": 2, "metadata": map[string]any{"k": "v"},
-			"created_at": "2023-11-14T22:15:00Z", "updated_at": "2023-11-14T22:16:40Z",
+			"comment_count": 2,
+			"created_at":    "2023-11-14T22:15:00Z", "updated_at": "2023-11-14T22:16:40Z",
 		}},
-		"agent.list": []map[string]any{
-			{"id": "ag-0001", "name": "human", "is_human": true, "source": "builtin",
-				"version": "", "model": "", "thinking": "", "extra_args": []any{},
-				"pi_skills": []any{}, "pi_ext": []any{}, "tasks_owned": 2},
+		"registry.agent.list": []map[string]any{
+			{"name": "human"},
 		},
-		"workflow.list": []map[string]any{{
-			"id": "wf-0001", "name": "feature-dev", "description": "",
-			"is_synthetic": false, "first_step": "dev",
+		"registry.workflow.list": []map[string]any{{
+			"name": "feature-dev", "description": "",
+			"first_step": "dev",
 			"steps": []map[string]any{{
-				"id": "st-0001", "name": "dev", "agent_name": "@a/g",
-				"next_steps": []any{"review"}, "next_status": []any{}, "task_count": 1,
+				"name": "dev", "agent": "@a/g",
+				"human": false, "targets": []map[string]any{{"step": "review"}},
 			}},
-			"task_count": 1, "isolation": "worktree",
-			"non_terminal_task_count": 1,
-			"non_terminal_tasks":      []map[string]any{{"id": "ask-000001", "status": "work", "step_name": "dev"}},
+			"isolation": "worktree",
 		}},
-		"job.list": []map[string]any{{
-			"job_id": "job-000001", "task_id": "ask-000001", "step_id": "st-0001",
-			"status": "done", "transition_id": 1, "corrections_used": 0, "max_corrections": 3,
-			"created_at": "2023-11-14T22:16:10Z", "started_at": "2023-11-14T22:16:11Z",
-			"finished_at": "2023-11-14T22:16:20Z", "duration_ms": 9000,
-			"attach_count": 0, "streaming": false,
-			"workflow_name": "feature-dev", "step_name": "dev", "agent_name": "@a/g",
+		"session.list": []map[string]any{{
+			"id": "session-000001", "task_id": "ask-000001",
+			"workflow": "feature-dev", "step": "dev", "agent": "@a/g",
+			"status": "done", "error": "",
+			"started_at": "2023-11-14T22:16:11Z",
+			"ended_at":   "2023-11-14T22:16:20Z",
 		}},
-		"healthz": map[string]any{"ok": true, "workers": 0, "queued": 0, "running": 1,
-			"db_path": "/repo/.autosk/db", "project_root": "/repo", "projects": []any{}},
+		"meta.healthz": map[string]any{"ok": true, "workers": 0, "queued": 0, "running": 1,
+			"projects": []any{}},
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -118,32 +111,32 @@ func TestRPC_MapsReadSurface(t *testing.T) {
 	if len(tk.Blocks) != 1 || tk.Blocks[0].ID != "ask-000003" || tk.Blocks[0].Status != store.StatusNew {
 		t.Errorf("blocks mapping wrong: %+v", tk.Blocks)
 	}
-	if tk.CommentCount != 2 || tk.Metadata["k"] != "v" {
-		t.Errorf("count/metadata wrong: %+v", tk)
+	if tk.CommentCount != 2 {
+		t.Errorf("count wrong: %+v", tk)
 	}
 	if tk.CreatedAt.IsZero() {
 		t.Errorf("created_at not parsed")
 	}
 
 	agents, err := ds.Agents(ctx)
-	if err != nil || len(agents) != 1 || !agents[0].IsHuman || agents[0].Source != "builtin" {
+	if err != nil || len(agents) != 1 || agents[0].Name != "human" {
 		t.Errorf("Agents mapping wrong: %+v err=%v", agents, err)
 	}
 
-	wfs, err := ds.Workflows(ctx, true)
+	wfs, err := ds.Workflows(ctx)
 	if err != nil || len(wfs) != 1 || wfs[0].FirstStep != "dev" || len(wfs[0].Steps) != 1 {
 		t.Fatalf("Workflows mapping wrong: %+v err=%v", wfs, err)
 	}
-	if wfs[0].Steps[0].NextSteps[0] != "review" || wfs[0].Isolation != "worktree" {
+	if wfs[0].Steps[0].Targets[0] != "review" || wfs[0].Isolation != "worktree" {
 		t.Errorf("workflow step mapping wrong: %+v", wfs[0].Steps[0])
 	}
 
-	jobs, err := ds.Jobs(ctx, JobFilter{})
-	if err != nil || len(jobs) != 1 || jobs[0].JobID != "job-000001" || jobs[0].DurationMS != 9000 {
-		t.Fatalf("Jobs mapping wrong: %+v err=%v", jobs, err)
+	sessions, err := ds.Sessions(ctx, "ask-000001")
+	if err != nil || len(sessions) != 1 || sessions[0].ID != "session-000001" {
+		t.Fatalf("Sessions mapping wrong: %+v err=%v", sessions, err)
 	}
-	if jobs[0].WorkflowName != "feature-dev" || jobs[0].StepName != "dev" {
-		t.Errorf("job labels wrong: %+v", jobs[0])
+	if sessions[0].Workflow != "feature-dev" || sessions[0].Step != "dev" {
+		t.Errorf("session labels wrong: %+v", sessions[0])
 	}
 
 	h, err := ds.Healthz(ctx)
@@ -159,27 +152,29 @@ func TestRPC_MapsReadSurface(t *testing.T) {
 func TestRPC_WritesDispatch(t *testing.T) {
 	ds := fakeDaemon(t, map[string]any{
 		"task.create": map[string]any{
-			"id": "ask-000009", "title": "t", "status": "new", "priority": 2,
-			"blocked_by": []any{}, "blocks": []any{},
+			"id": "ask-000009", "title": "t", "description": "", "status": "new",
+			"workflow": nil, "step": nil, "blocked": false,
+			"blocked_by": []any{}, "blocks": []any{}, "comment_count": 0,
 			"created_at": "2023-11-14T22:15:00Z", "updated_at": "2023-11-14T22:15:00Z",
 		},
-		"task.setStatus": map[string]any{
-			"id": "ask-1", "title": "x", "status": "done",
-			"blocked_by": []any{}, "blocks": []any{},
+		"task.done": map[string]any{
+			"id": "ask-1", "title": "x", "description": "", "status": "done",
+			"workflow": nil, "step": nil, "blocked": false,
+			"blocked_by": []any{}, "blocks": []any{}, "comment_count": 0,
 			"created_at": "2023-11-14T22:15:00Z", "updated_at": "2023-11-14T22:15:00Z",
 		},
-		"comment.add": map[string]any{
-			"id": 1, "task_id": "ask-1", "author_id": "ag-0001", "author_name": "human",
-			"text": "hi", "created_at": "2023-11-14T22:15:00Z",
+		"task.comment.add": map[string]any{
+			"id": "cm-1", "author": "human",
+			"text": "hi", "created_at": "2023-11-14T22:15:00Z", "updated_at": "2023-11-14T22:15:00Z",
 		},
 	})
 	ctx := context.Background()
-	id, err := ds.CreateTask(ctx, "t", "", 2)
+	id, err := ds.CreateTask(ctx, "t", "")
 	if err != nil || id != "ask-000009" {
 		t.Errorf("CreateTask id=%q err=%v, want ask-000009/nil", id, err)
 	}
-	if err := ds.UpdateStatus(ctx, "ask-1", store.StatusDone); err != nil {
-		t.Errorf("UpdateStatus err = %v, want nil", err)
+	if err := ds.TaskDone(ctx, "ask-1"); err != nil {
+		t.Errorf("TaskDone err = %v, want nil", err)
 	}
 	if err := ds.AddComment(ctx, "ask-1", "hi"); err != nil {
 		t.Errorf("AddComment err = %v, want nil", err)

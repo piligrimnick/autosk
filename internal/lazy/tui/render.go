@@ -31,7 +31,6 @@ var (
 	styleWarn   lipgloss.Style
 	styleErr    lipgloss.Style
 	styleOK     lipgloss.Style
-	styleScope  lipgloss.Style
 	styleFilter lipgloss.Style
 
 	// Per-task-status colours for the Tasks panel. The palette slot
@@ -79,7 +78,6 @@ func RebuildStyles() {
 	styleWarn = lipgloss.NewStyle().Foreground(p.Warn.Lipgloss())
 	styleErr = lipgloss.NewStyle().Foreground(p.Err.Lipgloss())
 	styleOK = lipgloss.NewStyle().Foreground(p.OK.Lipgloss())
-	styleScope = lipgloss.NewStyle().Foreground(p.Scope.Lipgloss()).Bold(true)
 	styleFilter = lipgloss.NewStyle().Foreground(p.Filter.Lipgloss())
 
 	// Task-status colours. We borrow hues from existing palette slots
@@ -163,9 +161,6 @@ func renderStepName(name string) string {
 	}
 	return styleStepName.Render(name)
 }
-
-// (renderSignalTarget lives further down in this file and is reused
-// by the signals box in renderTaskDetail.)
 
 // partitionBlockers splits a blocker list into (active, closed),
 // preserving the original order inside each group. Active is anything
@@ -262,24 +257,21 @@ func spinnerFrame(tick uint64) string {
 	return spinnerFrames[tick%uint64(len(spinnerFrames))]
 }
 
-// glyphForJobStatus returns the icon + label for a job's status.
-func glyphForJobStatus(j datasource.Job) string {
-	switch runstore.RunStatus(j.Status) {
+// glyphForSessionStatus returns the icon + label for a session's status.
+func glyphForSessionStatus(s datasource.Session) string {
+	switch s.Status {
 	case runstore.StatusQueued:
 		return "· queued"
 	case runstore.StatusRunning:
-		if j.Streaming {
-			return "◐ stream"
-		}
-		return "◑ idle"
+		return "◐ running"
 	case runstore.StatusDone:
 		return "◯ done"
 	case runstore.StatusFailed:
 		return "✗ failed"
-	case runstore.StatusCancel:
-		return "‣ cancel"
+	case runstore.StatusAborted:
+		return "‣ aborted"
 	}
-	return j.Status
+	return string(s.Status)
 }
 
 // statusColumnWidth caps the rendered status string at this many
@@ -300,16 +292,15 @@ const statusColumnWidth = 6
 // glance-scan key, rightmost is the long human-readable label that
 // extends to the right edge):
 //
-//	[P{prio}-Muted] [id-TaskID] [job-marker] [status-coloured] [title-default]
+//	[id-TaskID] [session-marker] [status-coloured] [title-default]
 //
-// Priority is leftmost because it's the most common scan axis ("what
-// matters most right now?") and uses the same muted gray as other
-// metadata so the bright Accent id stays the visual anchor for each
-// row. The status column is coloured per-value (styleForTaskStatus)
-// so the operator can spot terminal vs. open work by hue alone.
+// The id is leftmost and wears the bright Accent hue so it stays the
+// visual anchor for each row (v2 dropped the v1 priority column). The
+// status column is coloured per-value (styleForTaskStatus) so the
+// operator can spot terminal vs. open work by hue alone.
 //
-// The job-marker column is a single cell with three states, driven
-// by jobIdx (built from the current jobs snapshot):
+// The session-marker column is a single cell with three states, driven
+// by sessionIdx (built from the current sessions snapshot):
 //
 //   - active job (running) → braille spinner frame in styleTaskID
 //     (blue), animated by Gui.spinnerLoop at ~100ms.
@@ -337,21 +328,12 @@ const statusColumnWidth = 6
 func renderTasksPanel(
 	tasks []datasource.Task, _ int,
 	scope scope, filter string,
-	width int, spinnerTick uint64, jobIdx taskJobIndex,
+	width int, spinnerTick uint64, sessionIdx taskSessionIndex, // renamed from jobIdx
 ) (string, int) {
 	var b strings.Builder
 	header := 0
 	if scope.WorkflowName != "" {
 		fmt.Fprintf(&b, "%s\n", styleMuted.Render(fmt.Sprintf("(scoped by wf=%s)", scope.WorkflowName)))
-		header++
-	}
-	if scope.Agent != "" {
-		rel := scope.AgentRel.String()
-		if rel != "" {
-			fmt.Fprintf(&b, "%s\n", styleMuted.Render(fmt.Sprintf("(scoped by agent=%s as %s)", scope.Agent, rel)))
-		} else {
-			fmt.Fprintf(&b, "%s\n", styleMuted.Render(fmt.Sprintf("(scoped by agent=%s)", scope.Agent)))
-		}
 		header++
 	}
 	if filter != "" {
@@ -371,24 +353,22 @@ func renderTasksPanel(
 	// marker. The total below counts the inter-column separators
 	// too — keep it in sync with the Fprintf format string below.
 	const (
-		prioW   = 2  // "P0".."P3"
 		idW     = 10 // "ask-XXXXXX" (no trailing slack)
 		markerW = 1  // spinner braille frame, >, or blank
-		// 4 single-space separators between the 5 columns.
-		fixedW = prioW + 1 + idW + 1 + markerW + 1 + statusColumnWidth + 1
+		// 3 single-space separators between the 4 columns.
+		fixedW = idW + 1 + markerW + 1 + statusColumnWidth + 1
 	)
 	spin := spinnerFrame(spinnerTick)
 	for _, t := range tasks {
-		prio := styleMuted.Render(fmt.Sprintf("P%d", t.Priority))
 		id := styleTaskID.Render(fmt.Sprintf("%-*s", idW, t.ID))
-		// Job-marker cell: 3-state, all exactly 1 cell wide so the
+		// Session-marker cell: 3-state, all exactly 1 cell wide so the
 		// status column lands at the same x regardless of which state
-		// fires. See renderTasksPanel's doc comment for the rationale.
+		// fires.
 		marker := " "
 		switch {
-		case jobIdx.Active[t.ID]:
+		case sessionIdx.Active[t.ID]:
 			marker = styleTaskID.Render(spin)
-		case jobIdx.Any[t.ID]:
+		case sessionIdx.Any[t.ID]:
 			marker = styleJobID.Render(">")
 		}
 		statusRaw := truncate(string(t.Status), statusColumnWidth)
@@ -411,15 +391,15 @@ func renderTasksPanel(
 			titleW = 30
 		}
 		title := truncate(t.Title, titleW)
-		fmt.Fprintf(&b, "%s %s %s %s %s\n", prio, id, marker, status, title)
+		fmt.Fprintf(&b, "%s %s %s %s\n", id, marker, status, title)
 	}
 	return b.String(), header
 }
 
-// renderJobsPanel renders the Jobs panel. See renderTasksPanel for
-// the per-column colour rationale; jobs use:
+// renderSessionsPanel renders the Sessions panel. See renderTasksPanel
+// for the per-column colour rationale; sessions use:
 //
-//	[worktime-Muted] [jobid-JobID] [glyph-status-hue] [wf-WorkflowName:step-StepName] [attached-Muted] … [taskid-TaskID]
+//	[worktime-Muted] [sessionid-JobID] [glyph-status-hue] [wf-WorkflowName:step-StepName] [attached-Muted] … [taskid-TaskID]
 //
 // The wf:step column is composed in entity colours via
 // renderWorkflowStep (yellow workflow + default-colour colon +
@@ -427,31 +407,31 @@ func renderTasksPanel(
 // visible width (workflowStepPlainWidth) so ANSI escapes don't
 // bleed into the %-20s budget.
 //
-// The leftmost column is the job's actual work time — StartedAt → now
-// while running, StartedAt → FinishedAt once terminal, and a muted
-// em-dash for jobs that haven't started yet (status=queued). This
+// The leftmost column is the session's actual work time — StartedAt →
+// now while running, StartedAt → EndedAt once terminal, and a muted
+// em-dash for sessions that haven't started yet (status=queued). This
 // answers "how long is this run actually taking?" at a glance, which
 // for a worker-pool dashboard is more useful than the queued-at age
 // the column used to show. The 4-char column accommodates
 // humanDuration's longest output (e.g. "23h", "7d", or the rare
 // "100d") without misaligning the rest of the row.
 //
-// The status glyph is coloured by styleForJobStatus, the same helper
-// the Job Detail header uses, so the running+streaming case reads as
-// a green "◐ stream" badge (no separate `*live*` chip on the right
-// — the old chip duplicated information the glyph itself can carry).
+// The status glyph is coloured by styleForSessionStatus, the same
+// helper the Session Detail header uses, so the running case reads as
+// a green badge (no separate `*live*` chip on the right — the old
+// chip duplicated information the glyph itself can carry).
 //
 // The task-id column is right-aligned to the panel's inner right
 // edge so the column lines up at the same x regardless of how long
 // the workflow:step text in front of it is. It wears the same blue
 // TaskID hue as the Tasks panel id column so a glance lets the
-// operator cross-reference a job row back to its task. width is the
+// operator cross-reference a session row back to its task. width is the
 // panel's inner cell width; on the first layout pass it can be 0,
 // in which case the renderer falls back to a single-space gap
 // between wf:step (+attached) and the task id — the next frame will
 // redraw with the real width and the column will snap to the right
 // edge.
-func renderJobsPanel(jobs []datasource.Job, _ int, scope scope, filter string, width int) (string, int) {
+func renderSessionsPanel(sessions []datasource.Session, _ int, scope scope, filter string, width int) (string, int) {
 	var b strings.Builder
 	header := 0
 	if scope.TaskID != "" {
@@ -468,8 +448,8 @@ func renderJobsPanel(jobs []datasource.Job, _ int, scope scope, filter string, w
 		fmt.Fprintf(&b, "%s\n", styleFilter.Render("/ "+filter))
 		header++
 	}
-	if len(jobs) == 0 {
-		b.WriteString(styleMuted.Render("(no jobs)") + "\n")
+	if len(sessions) == 0 {
+		b.WriteString(styleMuted.Render("(no sessions)") + "\n")
 		return b.String(), header
 	}
 	// Fixed-width columns up to (and including) wf:step. wfstepCol
@@ -482,57 +462,30 @@ func renderJobsPanel(jobs []datasource.Job, _ int, scope scope, filter string, w
 	// the frame on that row only.
 	const (
 		worktimeW = 4
-		jobidW    = 9
-		// glyphW = max visible width across glyphForJobStatus outputs
-		// ("· queued", "◐ stream", "✗ failed", "‣ cancel" — 8 cells
-		// each). The previous value was 9, which added a stray
-		// trailing space inside the column on top of the inter-column
-		// separator and made the gap before wf:step read as two
-		// spaces. 8 is tight against the longest glyph, so the
-		// separator alone carries the visual gap.
-		glyphW    = 8
+		sidW      = 9
+		glyphW    = 9 // max visible width across glyphForSessionStatus outputs
 		wfstepCol = 20
-		// 4 single-space separators between the 5 fixed left columns.
-		leftBaseW = worktimeW + 1 + jobidW + 1 + glyphW + 1
+		// 3 single-space separators between the fixed left columns.
+		leftBaseW = worktimeW + 1 + sidW + 1 + glyphW + 1
 	)
-	for _, j := range jobs {
-		work := styleMuted.Render(fmt.Sprintf("%-*s", worktimeW, jobWorkTime(j)))
-		id := styleJobID.Render(fmt.Sprintf("%-*s", jobidW, j.JobID))
-		// Pad the raw glyph text BEFORE styling so the trailing
-		// spaces pick up the status hue (cosmetic on whitespace,
-		// keeps the byte width matching the visible width budget).
-		glyph := styleForJobStatus(j).Render(fmt.Sprintf("%-*s", glyphW, glyphForJobStatus(j)))
-		wfstep := renderWorkflowStep(j.WorkflowName, j.StepName)
-		wfW := workflowStepPlainWidth(j.WorkflowName, j.StepName)
+	for _, s := range sessions {
+		work := styleMuted.Render(fmt.Sprintf("%-*s", worktimeW, sessionWorkTime(s)))
+		id := styleJobID.Render(fmt.Sprintf("%-*s", sidW, truncate(s.ID, sidW)))
+		glyph := styleForSessionStatus(s).Render(fmt.Sprintf("%-*s", glyphW, glyphForSessionStatus(s)))
+		wfstep := renderWorkflowStep(s.Workflow, s.Step)
+		wfW := workflowStepPlainWidth(s.Workflow, s.Step)
 		if pad := wfstepCol - wfW; pad > 0 {
 			wfstep += strings.Repeat(" ", pad)
 			wfW = wfstepCol
 		}
-		attached := ""
-		attachedW := 0
-		if j.AttachCount > 0 {
-			chip := fmt.Sprintf(" (%d)", j.AttachCount)
-			attached = styleMuted.Render(chip)
-			attachedW = utf8.RuneCountInString(chip)
-		}
-		taskIDLen := utf8.RuneCountInString(j.TaskID)
-		// Filler pushes the task id to the panel's right edge.
-		// Floor at 1 so the column never collides with attached / wf:step
-		// when the pane is too narrow (or when width hasn't been wired
-		// yet on the first layout pass).
-		//
-		// The `-1` reserves the rightmost cell: gocui's View.InnerSize
-		// reports the column count, but a row whose visible width
-		// equals that count loses its last cell at render time (the
-		// wrap-on-edge boundary eats it). Leaving one cell of slack on
-		// the right keeps the task id's last hex digit visible.
-		filler := width - 1 - (leftBaseW + wfW) - attachedW - taskIDLen
+		taskIDLen := utf8.RuneCountInString(s.TaskID)
+		filler := width - 1 - (leftBaseW + wfW) - taskIDLen
 		if filler < 1 {
 			filler = 1
 		}
-		taskID := styleTaskID.Render(j.TaskID)
-		fmt.Fprintf(&b, "%s %s %s %s%s%s%s\n",
-			work, id, glyph, wfstep, attached,
+		taskID := styleTaskID.Render(s.TaskID)
+		fmt.Fprintf(&b, "%s %s %s %s%s%s\n",
+			work, id, glyph, wfstep,
 			strings.Repeat(" ", filler), taskID)
 	}
 	return b.String(), header
@@ -563,20 +516,14 @@ func renderWorkflowsPanel(wfs []datasource.Workflow, _ int, filter string) (stri
 	}
 	for _, w := range wfs {
 		name := styleWorkflowName.Render(fmt.Sprintf("%-24s", w.Name))
-		// Marker column is fixed-width so the `N steps` column lines
-		// up across rows regardless of the isolation mode. 4 cells =
-		// space + "[wt]".
+		// Marker column is fixed-width so the `N steps` column lines up.
 		marker := "    "
-		if !w.IsSynthetic && w.Isolation == "worktree" {
+		if w.Isolation == "worktree" {
 			marker = styleMuted.Render("[wt]")
 		}
 		steps := styleMuted.Render(fmt.Sprintf("%d steps", len(w.Steps)))
 		first := styleMuted.Render("first=") + renderStepName(w.FirstStep)
-		synth := ""
-		if w.IsSynthetic {
-			synth = " " + styleMuted.Render("(synthetic)")
-		}
-		fmt.Fprintf(&b, "%s %s %s  %s%s\n", name, marker, steps, first, synth)
+		fmt.Fprintf(&b, "%s %s %s  %s\n", name, marker, steps, first)
 	}
 	return b.String(), header
 }
@@ -601,52 +548,39 @@ func renderAgentsPanel(ags []datasource.Agent, _ int, filter string) (string, in
 		return b.String(), header
 	}
 	for _, a := range ags {
-		gRune := "○"
-		switch a.Source {
-		case "installed":
-			gRune = "●"
-		case "db_only":
-			gRune = "!"
-		}
-		glyph := styleMuted.Render(gRune)
-		name := styleAgentName.Render(fmt.Sprintf("%-26s", a.Name))
-		ver := a.Version
-		if ver == "" {
-			ver = "—"
-		}
-		verStyled := styleMuted.Render(fmt.Sprintf("%-9s", ver))
-		source := styleMuted.Render(a.Source)
-		fmt.Fprintf(&b, "%s %s %s %s\n", glyph, name, verStyled, source)
+		glyph := styleMuted.Render("○")
+		name := styleAgentName.Render(a.Name)
+		fmt.Fprintf(&b, "%s %s\n", glyph, name)
 	}
 	return b.String(), header
 }
 
 // renderDetail renders the right detail pane for whatever is focused.
 //
-// The caller already holds the model's RLock; s.comments[t.ID],
-// s.signals[t.ID], and s.jobTranscript[j.JobID] are read directly
-// here to avoid re-locking.
+// The caller already holds the model's RLock; s.comments[t.ID] and
+// s.sessionTranscript[sessionID] are read directly here to avoid
+// re-locking.
 //
 // width is the inner cell width of the detail view (innerWidth of
 // winDetail). It's forwarded to renderTaskDetail / renderWorkflowDetail
-// / renderJobDetail so the markdown render of task.Description /
+// / renderSessionDetail so the markdown render of task.Description /
 // workflow.Description / comment.Text / assistant_text events can
 // wrap at the pane's width. A width of 0 means the gocui view
 // hasn't been sized yet (first layout pass before the Manager
 // wires the view); markdown.Render handles that by emitting the
 // raw text instead of running glamour at width=0.
 func renderDetail(s *state, width int) string {
-	// When focus is on panelDetail (e.g. via '0' or via jobsEnter on a
-	// terminal job), the renderer needs to know which side panel's
-	// entity is being inspected. We consult state.detailFocus — which
-	// is captured eagerly on every transition INTO panelDetail —
+	// When focus is on panelDetail (e.g. via '0' or via sessionsEnter
+	// on a terminal session), the renderer needs to know which side
+	// panel's entity is being inspected. We consult state.detailFocus —
+	// which is captured eagerly on every transition INTO panelDetail —
 	// instead of falling through to "(nothing selected)".
 	//
-	// panelJobInput collapses onto panelJobs in both directions: when
-	// the caret lives in the input view we still want Job Detail
-	// above; and if the operator presses '0' from the input flow,
-	// detailFocus will hold panelJobInput which we likewise map to
-	// panelJobs here.
+	// panelSessionInput collapses onto panelSessions in both directions:
+	// when the caret lives in the input view we still want Session
+	// Detail above; and if the operator presses '0' from the input
+	// flow, detailFocus will hold panelSessionInput which we likewise
+	// map to panelSessions here.
 	active := s.focused.normalizeForDetail()
 	if active == panelDetail {
 		active = s.detailFocus.normalizeForDetail()
@@ -654,11 +588,11 @@ func renderDetail(s *state, width int) string {
 	switch active {
 	case panelTasks:
 		if t, ok := s.selectedTask(); ok {
-			return renderTaskDetail(t, s.comments[t.ID], s.signals[t.ID], width)
+			return renderTaskDetail(t, s.comments[t.ID], width)
 		}
-	case panelJobs:
-		if j, ok := s.selectedJob(); ok {
-			return renderJobDetail(j, s.jobTranscript[j.JobID], width)
+	case panelSessions:
+		if sess, ok := s.selectedSession(); ok {
+			return renderSessionDetail(sess, s.sessionTranscript[sess.ID], width)
 		}
 	case panelWorkflows:
 		if w, ok := s.selectedWorkflow(); ok {
@@ -672,7 +606,7 @@ func renderDetail(s *state, width int) string {
 	return styleMuted.Render("(nothing selected)")
 }
 
-func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals []datasource.Signal, width int) string {
+func renderTaskDetail(t datasource.Task, comments []datasource.Comment, width int) string {
 	var b strings.Builder
 
 	// Header row: P{prio} <id> <status> <wf:step> <agent>.
@@ -687,15 +621,11 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 	// empty so a task without a workflow doesn't render "(no-wf)"
 	// at the top of every pane open.
 	hdr := []string{
-		styleMuted.Render(fmt.Sprintf("P%d", t.Priority)),
 		renderTaskID(t.ID),
 		styleForTaskStatus(t.Status).Render(string(t.Status)),
 	}
 	if t.WorkflowName != "" {
 		hdr = append(hdr, renderWorkflowStep(t.WorkflowName, t.StepName))
-	}
-	if t.AgentName != "" {
-		hdr = append(hdr, renderAgentName(t.AgentName))
 	}
 	b.WriteString(strings.Join(hdr, " ") + "\n")
 
@@ -747,9 +677,6 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 		commentsHalf = styleMuted.Render(fmt.Sprintf("comments: %d", t.CommentCount))
 	}
 	b.WriteString(createdHalf + " " + commentsHalf + "\n")
-	if t.AuthorName != "" {
-		fmt.Fprintf(&b, "author: %s\n", renderAgentName(t.AuthorName))
-	}
 
 	// First-frame fallback: when innerWidth returns 0 (the gocui view
 	// hasn't been sized yet) we skip the box-drawing entirely and
@@ -772,7 +699,7 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 			}
 			fmt.Fprintf(&b, "\n%s %s\n%s\n",
 				timeformat.FormatDateTimeSmart(c.CreatedAt),
-				renderAgentName(c.AuthorName), c.Text)
+				renderAgentName(c.Author), c.Text)
 		}
 		return b.String()
 	}
@@ -824,69 +751,11 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, signals 
 			continue
 		}
 		label := timeformat.FormatDateTimeSmart(c.CreatedAt) +
-			" " + renderAgentName(c.AuthorName)
+			" " + renderAgentName(c.Author)
 		b.WriteString("\n" + drawLabeledBox(label, body, width) + "\n")
 	}
 
-	// ── Recent signals (N) box ───────────────────────────────────
-	// Show ALL signals rather than the old last-3 cap: the operator
-	// asked for the full kickback history visible at a glance, and
-	// the box renders inside a scrollable pane so a tall list isn't
-	// a usability problem. SignalsForTask returns newest-first.
-	if len(signals) > 0 {
-		// Stack signals as a four-column table:
-		//
-		//	<datetime>  <source>  →  <target>
-		//
-		// with two literal spaces between every column. Datetime is
-		// right-aligned in a 19-cell column sized for the full
-		// "YYYY-MM-DD HH:MM:SS" form; today's events render time-only
-		// (8 cells) so they fall under the time half of yesterday's
-		// full stamps with the date half left blank. The source
-		// column is padded to the widest workflowStepPlainWidth
-		// across all rows so the arrow lands in the same place on
-		// every line.
-		//
-		// Both sides of the arrow wear their entity colour. The
-		// source is rendered as `workflow:step` via
-		// renderWorkflowStep — yellow workflow name, default-colour
-		// colon, purple step name — so a glance at the kickback
-		// history tells which workflow each transition belongs to.
-		// This matches the wf/step column rendered by
-		// renderJobsPanel. Orphaned/legacy rows whose workflow id
-		// can't be resolved degrade to renderWorkflowStep's muted
-		// `(no-wf)` fallback so the layout still aligns.
-		//
-		// The target stays a single token: either a sibling step
-		// name (purple, via renderStepName) or a lifecycle
-		// terminal (done/cancel/human) which picks up its
-		// task-status hue via renderSignalTarget. Same per-token
-		// strategy renderWorkflowDetail uses on the step graph.
-		//
-		// Padding is emitted as PLAIN spaces outside the styled
-		// spans so trailing whitespace doesn't pick up the entity
-		// hue (purely cosmetic on whitespace, but it keeps the
-		// rendered escapes tight in case the operator copies the
-		// pane out).
-		const dateW = 19 // len("2006-01-02 15:04:05")
-		srcW := 1
-		for _, s := range signals {
-			if w := workflowStepPlainWidth(s.WorkflowName, s.StepName); w > srcW {
-				srcW = w
-			}
-		}
-		lines := make([]string, 0, len(signals))
-		for _, s := range signals {
-			stamp := fmt.Sprintf("%*s", dateW, timeformat.FormatDateTimeSmart(s.CreatedAt))
-			srcPad := strings.Repeat(" ", srcW-workflowStepPlainWidth(s.WorkflowName, s.StepName))
-			lines = append(lines, fmt.Sprintf("%s  %s%s  →  %s",
-				stamp,
-				renderWorkflowStep(s.WorkflowName, s.StepName), srcPad,
-				renderSignalTarget(s.Target)))
-		}
-		label := styleMuted.Render(fmt.Sprintf("Recent signals (%d)", len(signals)))
-		b.WriteString("\n" + drawLabeledBox(label, strings.Join(lines, "\n"), width) + "\n")
-	}
+	// (v2 has no signals — the kickback-history box was removed.)
 
 	return b.String()
 }
@@ -1002,9 +871,9 @@ func wrapPlain(s string, width int) string {
 	return strings.Join(out, "\n")
 }
 
-// renderJobDetail renders the Job Detail pane: structured header
-// (jobID, status glyph, wf:step, agent, timestamps, corrections,
-// session) followed by one drawLabeledBox per transcript event.
+// renderSessionDetail renders the Session Detail pane: structured
+// header (sessionID, status glyph, wf:step, agent, timestamps,
+// session) followed by one drawLabeledBox per transcript line.
 //
 // te may be nil (the cache hasn't been seeded yet — the worker is
 // about to fetch). When te is nil the header is still emitted and
@@ -1013,61 +882,47 @@ func wrapPlain(s string, width int) string {
 // width is the inner cell width of the detail pane (matches
 // renderTaskDetail's `width` parameter — i.e. innerWidth(winDetail),
 // frame-excluded). When width <= 0 (first layout pass) we fall back
-// to a plain-text dump that mirrors the previous renderJobDetail
-// shape — enough to not panic, and the next frame will redraw with
-// the real width.
-func renderJobDetail(j datasource.Job, te *jobTranscriptEntry, width int) string {
+// to a plain-text dump — enough to not panic, and the next frame
+// will redraw with the real width.
+func renderSessionDetail(s datasource.Session, te *sessionTranscriptEntry, width int) string {
 	var b strings.Builder
 
 	// ---- header --------------------------------------------------
 
-	// Row 1: jobID  status-glyph  wf:step  agent.
+	// Row 1: sessionID  status-glyph  wf:step  agent.
 	scan := []string{}
-	if id := renderJobID(j.JobID); id != "" {
+	if id := renderJobID(s.ID); id != "" {
 		scan = append(scan, id)
 	}
-	if glyph := renderJobStatusGlyph(j); glyph != "" {
-		scan = append(scan, glyph)
+	scan = append(scan, styleForSessionStatus(s).Render(glyphForSessionStatus(s)))
+	if s.Workflow != "" {
+		scan = append(scan, renderWorkflowStep(s.Workflow, s.Step))
 	}
-	if j.WorkflowName != "" {
-		scan = append(scan, renderWorkflowStep(j.WorkflowName, j.StepName))
+	if s.Agent != "" {
+		scan = append(scan, "agent="+renderAgentName(s.Agent))
 	}
-	if j.AgentName != "" {
-		scan = append(scan, "agent="+renderAgentName(j.AgentName))
+	b.WriteString(strings.Join(scan, "  ") + "\n")
+
+	// Row 2: started / ended smart timestamps.
+	var times []string
+	if s.StartedAt != nil && !s.StartedAt.IsZero() {
+		times = append(times, styleMuted.Render("started ")+timeformat.FormatDateTimeSmart(*s.StartedAt))
 	}
-	if len(scan) > 0 {
-		b.WriteString(strings.Join(scan, "  ") + "\n")
+	if s.EndedAt != nil && !s.EndedAt.IsZero() {
+		times = append(times, styleMuted.Render("ended ")+timeformat.FormatDateTimeSmart(*s.EndedAt))
+	}
+	if len(times) > 0 {
+		b.WriteString(strings.Join(times, "  ") + "\n")
 	}
 
-	// Row 2: created / started / finished smart timestamps.
-	times := []string{styleMuted.Render("created ") + timeformat.FormatDateTimeSmart(j.CreatedAt)}
-	if j.StartedAt != nil && !j.StartedAt.IsZero() {
-		times = append(times, styleMuted.Render("started ")+timeformat.FormatDateTimeSmart(*j.StartedAt))
-	}
-	if j.FinishedAt != nil && !j.FinishedAt.IsZero() {
-		times = append(times, styleMuted.Render("finished ")+timeformat.FormatDateTimeSmart(*j.FinishedAt))
-	}
-	b.WriteString(strings.Join(times, "  ") + "\n")
-
-	// Row 3: attached / corrections / pid.
-	meta := []string{
-		styleMuted.Render("attached ") + fmt.Sprintf("%d", j.AttachCount),
-		styleMuted.Render("corrections ") + fmt.Sprintf("%d/%d", j.CorrectionsUsed, j.MaxCorrections),
-	}
-	if j.PID != nil {
-		meta = append(meta, styleMuted.Render("pid ")+fmt.Sprintf("%d", *j.PID))
-	}
-	b.WriteString(strings.Join(meta, "  ") + "\n")
-
-	// Row 4: session path — whole row muted. The colon matches the
-	// acceptance-criterion spelling ("muted `session:` row").
-	if j.SessionPath != "" {
-		b.WriteString(styleMuted.Render("session: "+j.SessionPath) + "\n")
+	// Task row (muted) so the operator can cross-reference the session.
+	if s.TaskID != "" {
+		b.WriteString(styleMuted.Render("task: ") + renderTaskID(s.TaskID) + "\n")
 	}
 
-	// Optional error row. Same colon convention.
-	if j.Error != "" {
-		b.WriteString(styleErr.Render("error: "+j.Error) + "\n")
+	// Optional error row.
+	if s.Error != "" {
+		b.WriteString(styleErr.Render("error: "+s.Error) + "\n")
 	}
 
 	// ---- transcript ---------------------------------------------
@@ -1135,44 +990,26 @@ func renderJobDetail(j datasource.Job, te *jobTranscriptEntry, width int) string
 	return b.String()
 }
 
-// renderJobStatusGlyph paints glyphForJobStatus's text in the
-// matching task-status hue. The status enum is mapped onto the
-// existing styleStatus* slots so a green DONE row in Tasks reads
-// as a green "done" glyph in Job Detail. The Jobs panel uses the
-// same hue scheme via styleForJobStatus directly (it needs to pad
-// the glyph string before styling, so it bypasses the helper).
-func renderJobStatusGlyph(j datasource.Job) string {
-	txt := glyphForJobStatus(j)
-	if txt == "" {
-		return ""
-	}
-	return styleForJobStatus(j).Render(txt)
-}
-
-// styleForJobStatus returns the lipgloss style that paints a job's
-// status glyph in its semantic hue. Pulled out of renderJobStatusGlyph
-// so the Jobs panel can apply the same colouring to a pre-padded
-// glyph string without duplicating the switch. running+streaming is
-// the only "alive" state that reads green (styleOK) — same hue Detail
-// uses for the badge, which is what replaced the old per-row `*live*`
-// chip. done/cancel both fade to styleMuted (gray): a finished job
+// styleForSessionStatus returns the lipgloss style that paints a
+// session's status glyph in its semantic hue. The Sessions panel
+// applies the same colouring to a pre-padded glyph string without
+// duplicating the switch. running is the only "alive" state that
+// reads green (styleOK) — same hue Detail uses for the badge.
+// done/cancel both fade to styleMuted (gray): a finished session
 // is historical context, not something the operator needs the panel
 // to scream about. failed stays red (styleErr) because failures DO
 // want attention.
-func styleForJobStatus(j datasource.Job) lipgloss.Style {
-	switch runstore.RunStatus(j.Status) {
+func styleForSessionStatus(s datasource.Session) lipgloss.Style {
+	switch s.Status {
 	case runstore.StatusRunning:
-		if j.Streaming {
-			return styleOK
-		}
-		return styleStatusWork
+		return styleOK
 	case runstore.StatusQueued:
 		return styleMuted
 	case runstore.StatusDone:
 		return styleMuted
 	case runstore.StatusFailed:
 		return styleErr
-	case runstore.StatusCancel:
+	case runstore.StatusAborted:
 		return styleMuted
 	}
 	return styleMuted
@@ -1216,7 +1053,7 @@ func renderWorkflowDetail(w datasource.Workflow, width int) string {
 	// identifies the pane, and the row reads as a single scan line
 	// keyed on the workflow name in its entity hue.
 	hdr := renderWorkflowName(w.Name)
-	if !w.IsSynthetic && w.Isolation == "worktree" {
+	if w.Isolation == "worktree" {
 		hdr += " " + styleMuted.Render("[wt]")
 	}
 	hdr += " " + styleMuted.Render("first step:") + " " + renderStepName(w.FirstStep)
@@ -1254,21 +1091,22 @@ func renderWorkflowDetail(w datasource.Workflow, width int) string {
 		// mixes both, so we colour each token before joining
 		// instead of styling the joined string.
 		var tokens []string
-		for _, n := range s.NextSteps {
+		for _, n := range s.Targets {
 			tokens = append(tokens, renderStepName(n))
-		}
-		for _, st := range s.NextStatus {
-			tokens = append(tokens, styleForTaskStatus(store.Status(st)).Render(st))
 		}
 		nexts := strings.Join(tokens, ", ")
 		if nexts == "" {
 			nexts = styleMuted.Render("(none)")
 		}
+		agentLabel := s.AgentName
+		if s.Human {
+			agentLabel = "(human)"
+		}
 		stepPad := strings.Repeat(" ", stepW-utf8.RuneCountInString(s.Name))
-		agentPad := strings.Repeat(" ", agentW-utf8.RuneCountInString(s.AgentName))
+		agentPad := strings.Repeat(" ", agentW-utf8.RuneCountInString(agentLabel))
 		lines = append(lines,
 			renderStepName(s.Name)+stepPad+" "+
-				styleMuted.Render("agent=")+renderAgentName(s.AgentName)+agentPad+" "+
+				styleMuted.Render("agent=")+renderAgentName(agentLabel)+agentPad+" "+
 				styleMuted.Render("next=")+nexts)
 	}
 
@@ -1281,34 +1119,8 @@ func renderWorkflowDetail(w datasource.Workflow, width int) string {
 
 func renderAgentDetail(a datasource.Agent) string {
 	var b strings.Builder
-	fmt.Fprintln(&b,
-		styleHeader.Render("agent")+" "+renderAgentName(a.Name)+
-			"  "+styleMuted.Render("("+a.Source+")"))
-	if a.Version != "" {
-		fmt.Fprintf(&b, "version: %s\n", a.Version)
-	}
-	if a.Model != "" {
-		fmt.Fprintf(&b, "model: %s\n", a.Model)
-	}
-	if a.Thinking != "" {
-		fmt.Fprintf(&b, "thinking: %s\n", a.Thinking)
-	}
-	if len(a.ExtraArgs) > 0 {
-		fmt.Fprintf(&b, "extra args: %s\n", strings.Join(a.ExtraArgs, " "))
-	}
-	if len(a.PiExt) > 0 {
-		fmt.Fprintf(&b, "pi_extensions:\n")
-		for _, p := range a.PiExt {
-			fmt.Fprintf(&b, "  %s\n", p)
-		}
-	}
-	if len(a.PiSkills) > 0 {
-		fmt.Fprintf(&b, "pi_skills:\n")
-		for _, p := range a.PiSkills {
-			fmt.Fprintf(&b, "  %s\n", p)
-		}
-	}
-	fmt.Fprintf(&b, "tasks owned: %d\n", a.TasksOwned)
+	fmt.Fprintln(&b, styleHeader.Render("agent")+" "+renderAgentName(a.Name))
+	b.WriteString(styleMuted.Render("(registered by an extension; v2 agents are code)") + "\n")
 	return b.String()
 }
 
@@ -1363,14 +1175,6 @@ func renderStatusBar(s *state, projectRoot string) string {
 		}
 		if s.scope.WorkflowName != "" {
 			bits = append(bits, "wf="+renderWorkflowName(s.scope.WorkflowName))
-		}
-		if s.scope.Agent != "" {
-			rel := s.scope.AgentRel.String()
-			chip := "agent=" + renderAgentName(s.scope.Agent)
-			if rel != "" {
-				chip += " " + styleMuted.Render("("+rel+")")
-			}
-			bits = append(bits, chip)
 		}
 		scopeStr = strings.Join(bits, " ")
 	}
@@ -1435,7 +1239,7 @@ func renderOptionsStrip(specs []bindingSpec, focusedWin string, innerWidth int) 
 
 	sep := styleMuted.Render(" | ")
 	ellipsis := styleMuted.Render("…")
-	sepVisible := lipgloss.Width(" | ")     // 3
+	sepVisible := lipgloss.Width(" | ")    // 3
 	ellipsisVisible := lipgloss.Width("…") // 1
 
 	// Compose left-to-right, truncating with "…" once we'd exceed
@@ -1560,58 +1364,26 @@ func humanDuration(d time.Duration) string {
 // real work for two seconds. Switching to StartedAt-based elapsed
 // time makes the column answer the question operators actually ask
 // when triaging the Jobs list.
-func jobWorkTime(j datasource.Job) string {
-	if j.StartedAt == nil || j.StartedAt.IsZero() {
+func sessionWorkTime(s datasource.Session) string {
+	if s.StartedAt == nil || s.StartedAt.IsZero() {
 		return "—"
 	}
 	end := time.Now()
-	if j.FinishedAt != nil && !j.FinishedAt.IsZero() {
-		end = *j.FinishedAt
+	if s.EndedAt != nil && !s.EndedAt.IsZero() {
+		end = *s.EndedAt
 	}
-	return humanDuration(end.Sub(*j.StartedAt))
+	return humanDuration(end.Sub(*s.StartedAt))
 }
 
-// renderTranscript turns a list of MessageEvents into a single-string
-// block. Used only by renderJobDetail's width<=0 first-frame
-// fallback now — the inspector tabs that originally consumed it
-// are gone; the regular per-event boxed renderer in
-// renderTranscriptEventBox covers every other code path.
-func renderTranscript(events []datasource.MessageEvent) string {
+// renderTranscript turns a list of transcript lines into a
+// single-string block. Used only by renderSessionDetail's width<=0
+// first-frame fallback now — the inspector tabs that originally
+// consumed it are gone; the regular per-line boxed renderer in
+// renderTranscriptLineBox covers every other code path.
+func renderTranscript(events []datasource.LiveEvent) string {
 	var b strings.Builder
 	for _, e := range events {
-		stamp := ""
-		if !e.TS.IsZero() {
-			// Smart timeline: today → time only, older → full datetime.
-			stamp = timeformat.FormatDateTimeSmart(e.TS) + " "
-		}
-		head := styleHeader.Render(stamp + e.Kind)
-		if e.Name != "" {
-			head += " " + styleAccent.Render(e.Name)
-		}
-		b.WriteString(head + "\n")
-		if e.Text != "" {
-			b.WriteString("  " + strings.ReplaceAll(e.Text, "\n", "\n  ") + "\n")
-		}
+		b.WriteString(renderTranscriptLineBox(e.Line, 0) + "\n")
 	}
 	return b.String()
-}
-
-// renderSignalTarget colours a step_signals.target value: a target
-// that names a sibling step gets the StepName hue (purple); a
-// lifecycle terminal (done / cancel / human) gets its task-status
-// hue so the kickback chain reads as "step → status" with each half
-// visually grounded in its panel counterpart.
-//
-// Originally lived in inspector.go (since deleted with the
-// fullscreen inspector); the helper is reused by
-// renderTaskDetail's signals box.
-func renderSignalTarget(target string) string {
-	if target == "" {
-		return ""
-	}
-	switch store.Status(target) {
-	case store.StatusDone, store.StatusCancel, store.StatusHuman:
-		return styleForTaskStatus(store.Status(target)).Render(target)
-	}
-	return renderStepName(target)
 }

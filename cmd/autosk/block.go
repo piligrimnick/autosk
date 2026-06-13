@@ -7,10 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newBlockCmd: `autosk block <id> <blocker>...` — variadic, transactional.
-// The daemon owns the cycle / self-block / not-found checks and the
-// `block <id> by <comma-joined>` commit; error messages are reproduced
-// server-side verbatim.
+// newBlockCmd: `autosk block <id> <blocker>...` — add blocker edges. v2
+// task.block takes a single blocker, so multiple are applied in a loop.
 func newBlockCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "block <id> <blocker-id>...",
@@ -23,8 +21,10 @@ func newBlockCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := cl.Block(cmd.Context(), cliSource, id, blockers); err != nil {
-				return err
+			for _, b := range blockers {
+				if _, err := cl.Block(cmd.Context(), id, b); err != nil {
+					return err
+				}
 			}
 			if !flagQuiet {
 				fmt.Printf("blocked %s by %v\n", id, blockers)
@@ -59,9 +59,16 @@ func newUnblockCmd() *cobra.Command {
 				return err
 			}
 			if all {
-				n, err := cl.UnblockAll(cmd.Context(), id)
+				t, err := cl.GetTask(cmd.Context(), id)
 				if err != nil {
 					return err
+				}
+				n := 0
+				for _, ref := range t.BlockedBy {
+					if _, err := cl.Unblock(cmd.Context(), id, ref.ID); err != nil {
+						return err
+					}
+					n++
 				}
 				if !flagQuiet {
 					fmt.Printf("unblocked %s (%d edge(s) removed)\n", id, n)
@@ -69,8 +76,10 @@ func newUnblockCmd() *cobra.Command {
 				return nil
 			}
 			blockers := args[1:]
-			if err := cl.Unblock(cmd.Context(), cliSource, id, blockers); err != nil {
-				return err
+			for _, b := range blockers {
+				if _, err := cl.Unblock(cmd.Context(), id, b); err != nil {
+					return err
+				}
 			}
 			if !flagQuiet {
 				fmt.Printf("unblocked %s from %v\n", id, blockers)
@@ -82,8 +91,8 @@ func newUnblockCmd() *cobra.Command {
 	return cmd
 }
 
-// newDepCmd: `autosk dep list <id>` — read-only viewer over the wire view's
-// derived blocked_by / blocks edges.
+// newDepCmd: `autosk dep list <id>` — read-only viewer over the derived
+// blocked_by / blocks edges.
 func newDepCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dep",

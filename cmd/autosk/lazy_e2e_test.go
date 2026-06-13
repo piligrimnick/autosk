@@ -33,53 +33,39 @@ func (f *fakeDS) GetTask(_ context.Context, id string) (datasource.Task, error) 
 	}
 	return datasource.Task{}, nil
 }
-func (f *fakeDS) Jobs(context.Context, datasource.JobFilter) ([]datasource.Job, error) {
+func (f *fakeDS) Sessions(context.Context, string) ([]datasource.Session, error) {
 	return nil, nil
 }
-func (f *fakeDS) GetJob(context.Context, string) (datasource.Job, error) {
-	return datasource.Job{}, nil
+func (f *fakeDS) GetSession(context.Context, string) (datasource.Session, error) {
+	return datasource.Session{}, nil
 }
-func (f *fakeDS) Workflows(context.Context, bool) ([]datasource.Workflow, error) { return nil, nil }
-func (f *fakeDS) Agents(context.Context) ([]datasource.Agent, error)             { return nil, nil }
+func (f *fakeDS) Workflows(context.Context) ([]datasource.Workflow, error) { return nil, nil }
+func (f *fakeDS) Agents(context.Context) ([]datasource.Agent, error)       { return nil, nil }
 func (f *fakeDS) Comments(context.Context, string) ([]datasource.Comment, error) {
 	return nil, nil
 }
-func (f *fakeDS) Signals(context.Context, string) ([]datasource.Signal, error) { return nil, nil }
-func (f *fakeDS) SignalsForTask(context.Context, string) ([]datasource.Signal, error) {
-	return nil, nil
-}
-func (f *fakeDS) Messages(context.Context, string, bool, int) ([]datasource.MessageEvent, error) {
-	return nil, nil
-}
+
 func (f *fakeDS) Healthz(context.Context) (datasource.Health, error) {
 	return datasource.Health{Daemon: "down"}, nil
 }
-func (f *fakeDS) CreateTask(context.Context, string, string, int) (string, error) { return "", nil }
-func (f *fakeDS) UpdateStatus(context.Context, string, store.Status) error        { return nil }
-func (f *fakeDS) UpdatePriority(context.Context, string, int) error               { return nil }
-func (f *fakeDS) UpdateTitleDescription(context.Context, string, string, string) error {
-	return nil
+func (f *fakeDS) CreateTask(context.Context, string, string) (string, error) { return "", nil }
+func (f *fakeDS) TaskDone(context.Context, string) error                     { return nil }
+func (f *fakeDS) TaskCancel(context.Context, string) error                   { return nil }
+func (f *fakeDS) TaskReopen(context.Context, string) error                   { return nil }
+func (f *fakeDS) UpdateTask(context.Context, string, *string, *string) error { return nil }
+func (f *fakeDS) EnrollWorkflow(context.Context, string, string) error       { return nil }
+func (f *fakeDS) EnrollAgent(context.Context, string, string) error          { return nil }
+func (f *fakeDS) Resume(context.Context, string, string) error               { return nil }
+func (f *fakeDS) Block(context.Context, string, string) error                { return nil }
+func (f *fakeDS) Unblock(context.Context, string, string) error              { return nil }
+func (f *fakeDS) AddComment(context.Context, string, string) error           { return nil }
+func (f *fakeDS) AbortSession(context.Context, string) error                 { return nil }
+func (f *fakeDS) SessionInput(context.Context, string, string, string) error { return nil }
+func (f *fakeDS) Reconnect(context.Context) error                            { return nil }
+func (f *fakeDS) SessionTranscript(context.Context, string) ([]datasource.LiveEvent, error) {
+	return nil, nil
 }
-func (f *fakeDS) Enroll(context.Context, string, string, string) error      { return nil }
-func (f *fakeDS) Resume(context.Context, string, string) error              { return nil }
-func (f *fakeDS) Block(context.Context, string, string) error               { return nil }
-func (f *fakeDS) Unblock(context.Context, string, string) error             { return nil }
-func (f *fakeDS) AddComment(context.Context, string, string) error          { return nil }
-func (f *fakeDS) SetMetadata(context.Context, string, map[string]any) error { return nil }
-func (f *fakeDS) CreateWorkflow(context.Context, string) (string, error)    { return "", nil }
-func (f *fakeDS) DeleteWorkflow(context.Context, string) error              { return nil }
-func (f *fakeDS) UpdateWorkflowIsolation(context.Context, string, string, bool) (datasource.UpdateIsolationReport, error) {
-	return datasource.UpdateIsolationReport{}, nil
-}
-func (f *fakeDS) InstallAgent(context.Context, string, string) error { return nil }
-func (f *fakeDS) UninstallAgent(context.Context, string) error       { return nil }
-func (f *fakeDS) CancelJob(context.Context, string) error            { return nil }
-func (f *fakeDS) SendInput(context.Context, string, string, string) (string, error) {
-	return "", nil
-}
-func (f *fakeDS) AbortJob(context.Context, string) error { return nil }
-func (f *fakeDS) Reconnect(context.Context) error        { return nil }
-func (f *fakeDS) StreamLive(context.Context, string) (*datasource.LiveHandle, error) {
+func (f *fakeDS) StreamSession(context.Context, string) (*datasource.LiveHandle, error) {
 	return nil, datasource.ErrDaemonRequired
 }
 
@@ -102,10 +88,9 @@ func TestLazy_SmokeDashboardLaunch(t *testing.T) {
 	dir := t.TempDir()
 
 	task := datasource.Task{
-		ID:       "ask-a1b2c3",
-		Title:    "Refactor auth",
-		Status:   store.StatusNew,
-		Priority: 1,
+		ID:     "ask-a1b2c3",
+		Title:  "Refactor auth",
+		Status: store.StatusNew,
 	}
 	fake := &fakeDS{tasks: []datasource.Task{task}}
 	tui.SetDebugLogger(t.Logf)

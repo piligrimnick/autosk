@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"strings"
 	"testing"
 
 	"autosk/internal/lazy/datasource"
@@ -72,15 +71,15 @@ func TestAfterCursorMove_WorkflowsDoesApplyScope(t *testing.T) {
 	gu := &Gui{st: newState()}
 	gu.dispatch = func(func()) {}
 	gu.st.workflows = []datasource.Workflow{
-		{ID: "wf-1", Name: "feature-dev"},
-		{ID: "wf-2", Name: "ops"},
+		{Name: "feature-dev"},
+		{Name: "ops"},
 	}
 	gu.st.workflowCursor = 1
 	gu.st.focused = panelWorkflows
 
 	gu.afterCursorMove(panelWorkflows)
 
-	if gu.st.scope.WorkflowID != "wf-2" || gu.st.scope.WorkflowName != "ops" {
+	if gu.st.scope.WorkflowName != "ops" {
 		t.Fatalf("Workflows cursor-move did not apply scope: %+v", gu.st.scope)
 	}
 }
@@ -127,18 +126,18 @@ func TestTasksScopeFromCursor(t *testing.T) {
 func TestScope_WorkflowToTasks(t *testing.T) {
 	gu := &Gui{st: newState()}
 	gu.st.workflows = []datasource.Workflow{
-		{ID: "wf-1", Name: "feature-dev"},
-		{ID: "wf-2", Name: "ops"},
+		{Name: "feature-dev"},
+		{Name: "ops"},
 	}
 	gu.st.workflowCursor = 0
 	gu.st.focused = panelWorkflows
 	gu.st.withLock(func() {
 		if w, ok := gu.st.selectedWorkflow(); ok {
-			gu.st.scope.WorkflowID = w.ID
+			// WorkflowID removed in v2
 			gu.st.scope.WorkflowName = w.Name
 		}
 	})
-	if gu.st.scope.WorkflowID != "wf-1" || gu.st.scope.WorkflowName != "feature-dev" {
+	if gu.st.scope.WorkflowName != "feature-dev" {
 		t.Fatalf("scope=%+v want wf-1/feature-dev", gu.st.scope)
 	}
 }
@@ -148,39 +147,12 @@ func TestScope_WorkflowToTasks(t *testing.T) {
 // TaskFilter fields (AuthorName vs StepAgentName) instead of conflating.
 // The previous bug treated both popup options identically; the
 // design plan \u00a73.4 forces the distinction.
-func TestScope_AgentRelDistinct(t *testing.T) {
-	cases := []struct {
-		rel  agentRel
-		want string
-	}{
-		{agentRelAuthor, "author"},
-		{agentRelStep, "step"},
-		{agentRelNone, ""},
-	}
-	for _, tc := range cases {
-		s := scope{Agent: "dev", AgentRel: tc.rel}
-		if got := s.AgentRel.String(); got != tc.want {
-			t.Errorf("rel %v: String()=%q want %q", tc.rel, got, tc.want)
-		}
-	}
-	// And the chips render with the relation tag when non-empty.
-	st := newState()
-	st.scope = scope{Agent: "dev", AgentRel: agentRelAuthor}
-	bar := renderStatusBar(st, "/proj")
-	if !strings.Contains(bar, "agent=dev (author)") {
-		t.Errorf("status bar missing (author) tag: %q", bar)
-	}
-	st.scope = scope{Agent: "dev", AgentRel: agentRelStep}
-	bar = renderStatusBar(st, "/proj")
-	if !strings.Contains(bar, "agent=dev (step)") {
-		t.Errorf("status bar missing (step) tag: %q", bar)
-	}
-}
+// TestScope_AgentRelDistinct was removed - agentRel functionality was removed in v2
 
 // TestScope_ClearAllChips verifies handleClearScope drops every chip.
 func TestScope_ClearAllChips(t *testing.T) {
 	gu := &Gui{st: newState()}
-	gu.st.scope = scope{TaskID: "ask-xxxxxx", WorkflowID: "wf-y", WorkflowName: "n", Agent: "a", AgentRel: agentRelStep}
+	gu.st.scope = scope{TaskID: "ask-xxxxxx", WorkflowName: "n"}
 	gu.st.withLock(func() { gu.st.scope = scope{} })
 	if !gu.st.scope.IsEmpty() {
 		t.Fatalf("scope not empty: %+v", gu.st.scope)

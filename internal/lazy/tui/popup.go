@@ -69,25 +69,6 @@ func (gu *Gui) openMenu(title string, lines []string, onSelect func(int) error) 
 	gu.requestRedraw()
 }
 
-// openIsolationMenu is the workflow-isolation flavour of openMenu. The
-// renderer treats popupIsolation identically to popupMenu (same
-// layout, same key bindings, same view) so it routes through the same
-// drawPopup path; the only practical difference is the Kind field on
-// popupState, which lets tests pin the binding without relying on
-// title-string heuristics and keeps any future divergence cheap.
-//
-// Routes through replacePopup (see openMenu for the R10 rationale).
-func (gu *Gui) openIsolationMenu(title string, lines []string, onSelect func(int) error) {
-	gu.replacePopup(popupState{
-		Kind:     popupIsolation,
-		Title:    title,
-		Lines:    lines,
-		Cursor:   0,
-		OnSelect: onSelect,
-	})
-	gu.requestRedraw()
-}
-
 // openConfirm pushes a Confirm popup; onAccept runs on y/Enter.
 // Routes through replacePopup (see openMenu for the R10 rationale).
 func (gu *Gui) openConfirm(prompt string, onAccept func() error) {

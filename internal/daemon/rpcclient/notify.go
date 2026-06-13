@@ -8,11 +8,12 @@ import (
 	"sync"
 )
 
-// Notification is one server→client notification frame pushed to a connection
-// that issued task.subscribe. A single subscribe registers the connection in
-// the daemon's broadcast hub, which then pushes BOTH `task-changed` and
-// `project-changed` to it (see crates/autoskd/src/notify.rs). Params is the raw
-// payload: `task-changed` carries {root, db_path}, `project-changed` is empty.
+// Notification is one server→client notification frame. In v2 the daemon scopes
+// `task-changed` to connections that issued task.subscribe and `project-changed`
+// to connections that issued project.subscribe; this client issues task.subscribe
+// (which opens the project and starts its fs watcher) and treats both kinds as a
+// "re-fetch" signal. Params is the raw payload (kept opaque; callers refetch):
+// `task-changed` carries {root, task}, `project-changed` carries {project}.
 type Notification struct {
 	Method string          // "task-changed" | "project-changed"
 	Params json.RawMessage // raw notification params (kept opaque; callers refetch)
@@ -44,11 +45,8 @@ func (s *NoteStream) Close() error {
 		// Best-effort unsubscribe so the daemon drops the hub registration
 		// promptly; closing the connection is the hard backstop (the daemon's
 		// per-connection reader breaks on EOF and unregisters).
-		_ = json.NewEncoder(s.conn).Encode(rpcRequest{
-			ID:     0,
-			Method: "task.unsubscribe",
-			Params: s.selector,
-		})
+		_ = json.NewEncoder(s.conn).Encode(rpcRequest{ID: 0, Method: "task.unsubscribe", Params: s.selector})
+		_ = json.NewEncoder(s.conn).Encode(rpcRequest{ID: 0, Method: "project.unsubscribe", Params: s.selector})
 		_ = s.conn.Close()
 		close(s.closed)
 	})
@@ -56,11 +54,11 @@ func (s *NoteStream) Close() error {
 }
 
 // Subscribe opens a persistent connection, subscribes to the project's
-// task-changed/project-changed notifications, and returns a stream of frames.
-// The caller MUST Close the stream. autoskd is auto-spawned on first use (the
-// connector handles dialing). A single `task.subscribe` registers the
-// connection for BOTH notification kinds (the daemon broadcasts both to every
-// notification-subscribed connection; see notify.rs).
+// task-changed AND project-changed notifications, and returns a stream of
+// frames. The caller MUST Close the stream. autoskd is auto-spawned on first use
+// (the connector handles dialing). v2 scopes the two notification kinds to
+// separate subscriptions (task.subscribe opens the project + its fs watcher;
+// project.subscribe registers for registry-level pushes), so we issue both.
 func (c *Client) Subscribe(ctx context.Context) (*NoteStream, error) {
 	conn, err := c.conn.Dial(ctx)
 	if err != nil {
@@ -74,6 +72,14 @@ func (c *Client) Subscribe(ctx context.Context) (*NoteStream, error) {
 	}); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("autoskd task.subscribe: write: %w", err)
+	}
+	if err := json.NewEncoder(conn).Encode(rpcRequest{
+		ID:     c.id.Add(1),
+		Method: "project.subscribe",
+		Params: c.selector(nil),
+	}); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("autoskd project.subscribe: write: %w", err)
 	}
 	ch := make(chan Notification, 16)
 	s := &NoteStream{

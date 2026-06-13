@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -22,14 +21,14 @@ type refreshResult struct {
 	tasks      []datasource.Task
 	taskSearch string // post-facet free text remainder
 	terr       error
-	jobs       []datasource.Job
-	jerr       error
-	// taskJobIdx mirrors the state field of the same name: a
-	// per-task job-presence projection built from the
-	// TaskID-UNFILTERED jobs read so the Tasks-panel ">" marker
+	sessions   []datasource.Session // renamed from jobs
+	serr       error                // renamed from jerr
+	// taskSessionIdx mirrors the state field of the same name: a
+	// per-task session-presence projection built from the
+	// TaskID-UNFILTERED sessions read so the Tasks-panel ">" marker
 	// doesn't disappear for unrelated tasks when scope.TaskID is
-	// active. See state.taskJobIdx for the rationale.
-	taskJobIdx       taskJobIndex
+	// active. See state.taskSessionIdx for the rationale.
+	taskSessionIdx   taskSessionIndex // renamed from taskJobIdx
 	visibleWorkflows []datasource.Workflow
 	workflowSearch   string
 	werr             error
@@ -37,13 +36,12 @@ type refreshResult struct {
 	agentSearch      string
 	aerr             error
 	health           datasource.Health
-	jobsSearch       string
+	sessionsSearch   string // renamed from jobsSearch
 
 	selectedTaskID   string
 	selectedComments []datasource.Comment
 	hasCommentsErr   bool
-	selectedSignals  []datasource.Signal
-	hasSignalsErr    bool
+	// NOTE: selectedSignals removed in v2 - no signals
 
 	fallbacksNow uint64
 }
@@ -91,17 +89,8 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 		ft = gu.st.filter
 	})
 
-	// Workflows are needed both as a list and as a wf-name→wf-id
-	// resolver for the wf:<name> facet on the Tasks filter (which the
-	// help text in openFilter advertises). Fetch them first so the
-	// facet parser can resolve names before we hit Tasks.
-	workflows, werr := gu.ds.Workflows(ctx, true)
-	wfByName := map[string]string{}
-	if werr == nil {
-		for _, w := range workflows {
-			wfByName[strings.ToLower(w.Name)] = w.ID
-		}
-	}
+	// Workflows are read-only from code in v2, no wfByName resolver needed
+	workflows, werr := gu.ds.Workflows(ctx)
 
 	// The dashboard surfaces ALL statuses by default — a non-nil but
 	// empty Statuses slice is the datasource's escape hatch for
@@ -111,55 +100,44 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 	// and the by-recency sort below keeps stale terminal rows from
 	// drowning out fresh work.
 	tasksFilter := datasource.TaskFilter{Statuses: []store.Status{}}
-	if sc.WorkflowID != "" {
-		tasksFilter.WorkflowID = sc.WorkflowID
+	if sc.WorkflowName != "" {
+		tasksFilter.WorkflowName = sc.WorkflowName // renamed from WorkflowID
 	}
-	if sc.Agent != "" {
-		switch sc.AgentRel {
-		case agentRelAuthor:
-			tasksFilter.AuthorName = sc.Agent
-		case agentRelStep:
-			tasksFilter.StepAgentName = sc.Agent
-		}
-	}
-	applyFacetFilter(&tasksFilter, ft.Tasks, wfByName)
+	// NOTE: Agent scoping removed in v2
+	applyFacetFilter(&tasksFilter, ft.Tasks)
 	tasks, terr := gu.ds.Tasks(ctx, tasksFilter)
 	if terr != nil {
 		dlog("refresh: ds.Tasks: %v", terr)
 	}
 
-	// Jobs fetch intentionally OMITS sc.TaskID from the server-side
+	// Sessions fetch intentionally OMITS sc.TaskID from the server-side
 	// filter — we need the full set so the Tasks-panel marker column
-	// (taskJobIdx, below) can mark every task with at least one job,
+	// (taskSessionIdx, below) can mark every task with at least one session,
 	// not only the one currently scoped. The TaskID filter is then
-	// re-applied client-side for the Jobs-panel slice. Workflow
-	// scope still rides the wire because it's symmetric with the
-	// Tasks panel — we don't want to mark tasks outside the scoped
-	// workflow either.
-	jobsFilter := datasource.JobFilter{}
-	if sc.WorkflowID != "" {
-		jobsFilter.WorkflowID = sc.WorkflowID
+	// re-applied client-side for the Sessions-panel slice.
+	allSessions, serr := gu.ds.Sessions(ctx, "") // empty taskID = all sessions
+	if serr != nil {
+		dlog("refresh: ds.Sessions: %v", serr)
 	}
-	allJobs, jerr := gu.ds.Jobs(ctx, jobsFilter)
-	if jerr != nil {
-		dlog("refresh: ds.Jobs: %v", jerr)
-	}
-	taskJobIdx := taskJobIndexFromJobs(allJobs)
-	jobs := allJobs
+	taskSessionIdx := taskSessionIndexFromSessions(allSessions)
+	sessions := allSessions
 	if sc.TaskID != "" {
-		jobs = filterJobsByTaskID(allJobs, sc.TaskID)
+		// Task scope is the narrowest — a task belongs to exactly one
+		// workflow, so filtering by TaskID already constrains the
+		// workflow.
+		sessions = filterSessionsByTaskID(allSessions, sc.TaskID)
+	} else if sc.WorkflowName != "" {
+		// Workflow-only scope: session.list has no server-side workflow
+		// filter, but SessionMeta carries .Workflow, so scope the panel
+		// slice client-side to the active workflow (parity with v1's
+		// workflow-scoped jobs view). The marker column above stays
+		// derived from allSessions, so every task still shows its
+		// has-sessions glyph regardless of the active scope.
+		sessions = filterSessionsByWorkflow(allSessions, sc.WorkflowName)
 	}
 
-	// Workflows fetched above. Re-filter to drop synthetic ones from
-	// the dashboard list (we wanted them included for the facet
-	// resolver, but the user-facing Workflows panel hides them).
-	visibleWorkflows := make([]datasource.Workflow, 0, len(workflows))
-	for _, w := range workflows {
-		if w.IsSynthetic {
-			continue
-		}
-		visibleWorkflows = append(visibleWorkflows, w)
-	}
+	// Workflows are now read-only from code (v2), no synthetic filtering needed
+	visibleWorkflows := workflows
 	agents, aerr := gu.ds.Agents(ctx)
 	health, _ := gu.ds.Healthz(ctx)
 
@@ -170,9 +148,7 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 		}
 	})
 	var selectedComments []datasource.Comment
-	var selectedSignals []datasource.Signal
 	hasCommentsErr := false
-	hasSignalsErr := false
 	if selectedTaskID != "" {
 		var cerr error
 		selectedComments, cerr = gu.ds.Comments(ctx, selectedTaskID)
@@ -184,13 +160,7 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 			hasCommentsErr = true
 			selectedComments = nil
 		}
-		var serr error
-		selectedSignals, serr = gu.ds.SignalsForTask(ctx, selectedTaskID)
-		if serr != nil {
-			dlog("refresh: ds.SignalsForTask(%s): %v", selectedTaskID, serr)
-			hasSignalsErr = true
-			selectedSignals = nil
-		}
+		// NOTE: signals removed in v2
 	}
 
 	// Pick up the live datasource's fallback counter so renderStatusBar
@@ -204,14 +174,14 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 
 	return refreshResult{
 		tasks: tasks, taskSearch: tasksFilter.Search, terr: terr,
-		jobs: jobs, jobsSearch: ft.Jobs, jerr: jerr,
-		taskJobIdx:       taskJobIdx,
+		sessions: sessions, sessionsSearch: ft.Sessions, serr: serr, // renamed from jobs
+		taskSessionIdx:   taskSessionIdx, // renamed from taskJobIdx
 		visibleWorkflows: visibleWorkflows, workflowSearch: ft.Workflows, werr: werr,
 		agents: agents, agentSearch: ft.Agents, aerr: aerr,
 		health:           health,
 		selectedTaskID:   selectedTaskID,
 		selectedComments: selectedComments, hasCommentsErr: hasCommentsErr,
-		selectedSignals: selectedSignals, hasSignalsErr: hasSignalsErr,
+		// NOTE: selectedSignals removed in v2
 		fallbacksNow: fallbacksNow,
 	}
 }
@@ -222,29 +192,29 @@ func (gu *Gui) fetchRefresh(ctx context.Context) refreshResult {
 //
 // Detail-pane side effects:
 //
-//   - When the currently-selected job transitions from running to
+//   - When the currently-selected session transitions from running to
 //     terminal between snapshots, its transcript entry's loadedAt
 //     is zeroed so the next selection-driven hydration refetches
 //     the archive (so final-flushed events appear). The schedule
 //     is queued AFTER the lock is released, via OnWorker, so we
 //     don't block the apply path on the refetch.
-//   - When state.jobLiveJobID no longer appears in the jobs slice
-//     (filter / scope removed it), stopJobLive tears down the
-//     subscription.
+//   - When state.sessionLiveSessionID no longer appears in the sessions
+//     slice (filter / scope removed it), stopSessionLive tears down
+//     the subscription.
 //
-// Note: this path INTENTIONALLY does NOT call clearJobInputIfStale.
-// The selected job's jobID can shift between snapshots without any
-// operator action (e.g. a new job inserted at index 0 shoves the
-// previously-cursored row down to index 1 while jobCursor stays
-// pinned to 0). Wiping the draft on that shift would silently
+// Note: this path INTENTIONALLY does NOT call clearSessionInputIfStale.
+// The selected session's sessionID can shift between snapshots without
+// any operator action (e.g. a new session inserted at index 0 shoves
+// the previously-cursored row down to index 1 while sessionCursor
+// stays pinned to 0). Wiping the draft on that shift would silently
 // discard mid-typing text the operator never asked us to touch.
 // The anti-leak guarantee is enforced on the operator-driven
-// explicit cursor move via afterCursorMove(panelJobs), which is
+// explicit cursor move via afterCursorMove(panelSessions), which is
 // the only authored event we want anchoring the clear.
 func (gu *Gui) applyRefreshLocked(r refreshResult) {
 	var (
-		refetchJobID string
-		stopLive     bool
+		refetchSessionID string
+		stopLive         bool
 	)
 	gu.st.withLock(func() {
 		if r.terr == nil {
@@ -259,69 +229,69 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 				gu.st.taskCursor = clampCursor(gu.st.taskCursor, len(gu.st.tasks))
 			}
 		}
-		if r.jerr == nil {
-			// Detect transitions for the currently-selected job
-			// BEFORE we swap the jobs slice. Two effects:
+		if r.serr == nil {
+			// Detect transitions for the currently-selected session
+			// BEFORE we swap the sessions slice. Two effects:
 			//
-			//   running→terminal (same job, status moved): zero the
+			//   running→terminal (same session, status moved): zero the
 			//     transcript loadedAt so the next archive load picks
 			//     up final-flushed events.
-			//   focused == panelJobInput, post-swap selected job not
-			//     live: revert focus to panelJobs so the layout-pass
-			//     SetCurrentView lands on a real view. This branch
-			//     fires whether the SAME job went terminal under the
-			//     operator, OR the cursor's jobID drifted to a
-			//     different (terminal) job because the jobs slice
-			//     reshuffled (e.g. a new queued job lands at index 0,
-			//     pushing the previously-cursored row down). Both
-			//     paths would otherwise leave the caret in
+			//   focused == panelSessionInput, post-swap selected session
+			//     not live: revert focus to panelSessions so the
+			//     layout-pass SetCurrentView lands on a real view. This
+			//     branch fires whether the SAME session went terminal
+			//     under the operator, OR the cursor's sessionID drifted
+			//     to a different (terminal) session because the sessions
+			//     slice reshuffled (e.g. a new queued session lands at
+			//     index 0, pushing the previously-cursored row down).
+			//     Both paths would otherwise leave the caret in
 			//     phantom-focus on a deleted view.
-			prevJob, hadPrev := gu.st.selectedJob()
-			oldJobID := ""
+			prevSession, hadPrev := gu.st.selectedSession()
+			oldSessionID := ""
 			if hadPrev {
-				oldJobID = prevJob.JobID
+				oldSessionID = prevSession.ID
 			}
-			gu.st.jobs = applyJobSearch(r.jobs, r.jobsSearch)
-			if idx, ok := findIndexByKey(gu.st.jobs, oldJobID, func(j datasource.Job) string { return j.JobID }); ok {
-				gu.st.jobCursor = idx
+			gu.st.sessions = applySessionSearch(r.sessions, r.sessionsSearch)
+			if idx, ok := findIndexByKey(gu.st.sessions, oldSessionID, func(s datasource.Session) string { return s.ID }); ok {
+				gu.st.sessionCursor = idx
 			} else {
-				gu.st.jobCursor = clampCursor(gu.st.jobCursor, len(gu.st.jobs))
+				gu.st.sessionCursor = clampCursor(gu.st.sessionCursor, len(gu.st.sessions))
 			}
-			gu.st.taskJobIdx = r.taskJobIdx
-			if cur, ok := gu.st.selectedJob(); ok {
-				if hadPrev && cur.JobID == prevJob.JobID {
-					wasRunning := runstore.RunStatus(prevJob.Status) == runstore.StatusRunning
+			gu.st.taskSessionIdx = r.taskSessionIdx
+			if cur, ok := gu.st.selectedSession(); ok {
+				if hadPrev && cur.ID == prevSession.ID {
+					wasRunning := runstore.RunStatus(prevSession.Status) == runstore.StatusRunning
 					isRunning := runstore.RunStatus(cur.Status) == runstore.StatusRunning
 					if wasRunning && !isRunning {
-						if te, ok := gu.st.jobTranscript[cur.JobID]; ok {
+						if te, ok := gu.st.sessionTranscript[cur.ID]; ok {
 							te.loadedAt = time.Time{}
 						}
-						refetchJobID = cur.JobID
+						refetchSessionID = cur.ID
 					}
 				}
 				// General phantom-focus guard: any time the operator
-				// is in the input but the (post-swap) selected job
-				// is no longer live, revert to panelJobs. Covers
-				// both same-job running→terminal AND reshuffle to
-				// a different non-live job.
-				if gu.st.focused == panelJobInput && !isJobLive(cur) {
-					gu.st.focused = panelJobs
+				// is in the input but the (post-swap) selected session
+				// is no longer live, revert to panelSessions. Covers
+				// both same-session running→terminal AND reshuffle to
+				// a different non-live session.
+				if gu.st.focused == panelSessionInput && !isSessionLive(cur) {
+					gu.st.focused = panelSessions
 				}
-			} else if gu.st.focused == panelJobInput {
-				// Jobs slice emptied / filtered out entirely while
+			} else if gu.st.focused == panelSessionInput {
+				// Sessions slice emptied / filtered out entirely while
 				// the operator was in the input. Same phantom-focus
 				// risk — the input view will be deleted on the next
 				// layout pass.
-				gu.st.focused = panelJobs
+				gu.st.focused = panelSessions
 			}
-			// If the streamed job vanished from the slice (e.g. a
+			// If the streamed session vanished from the slice (e.g. a
 			// filter just removed it), tear down the subscription so
-			// we're not holding an open SSE for a job the operator
+			// we're not holding an open SSE for a session the operator
 			// can't see.
-			if gu.st.jobLiveJobID != "" {
+			if gu.st.sessionLiveSessionID != "" {
 				found := false
-				for i := range gu.st.jobs {
-					if gu.st.jobs[i].JobID == gu.st.jobLiveJobID {
+				for i := range gu.st.sessions {
+					if gu.st.sessions[i].ID == gu.st.sessionLiveSessionID {
 						found = true
 						break
 					}
@@ -332,12 +302,12 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 			}
 		}
 		if r.werr == nil {
-			oldWfID := ""
+			oldWfName := "" // renamed
 			if w, ok := gu.st.selectedWorkflow(); ok {
-				oldWfID = w.ID
+				oldWfName = w.Name // v2 workflows use Name as key, not ID
 			}
 			gu.st.workflows = applyWfSearch(r.visibleWorkflows, r.workflowSearch)
-			if idx, ok := findIndexByKey(gu.st.workflows, oldWfID, func(w datasource.Workflow) string { return w.ID }); ok {
+			if idx, ok := findIndexByKey(gu.st.workflows, oldWfName, func(w datasource.Workflow) string { return w.Name }); ok {
 				gu.st.workflowCursor = idx
 			} else {
 				gu.st.workflowCursor = clampCursor(gu.st.workflowCursor, len(gu.st.workflows))
@@ -362,18 +332,15 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 			evictCacheIfNeeded(gu.st.comments, r.selectedTaskID, commentsCacheMax)
 			gu.st.comments[r.selectedTaskID] = r.selectedComments
 		}
-		if r.selectedTaskID != "" && !r.hasSignalsErr && r.selectedSignals != nil {
-			evictCacheIfNeeded(gu.st.signals, r.selectedTaskID, commentsCacheMax)
-			gu.st.signals[r.selectedTaskID] = r.selectedSignals
-		}
+		// NOTE: signals cache removed in v2
 	})
 	if stopLive {
-		gu.stopJobLive()
+		gu.stopSessionLive() // renamed from stopJobLive
 	}
-	if refetchJobID != "" && gu.g != nil {
-		jobID := refetchJobID
+	if refetchSessionID != "" && gu.g != nil {
+		sessionID := refetchSessionID
 		gu.g.OnWorker(func(_ gocui.Task) error {
-			gu.loadJobArchive(jobID)
+			gu.loadSessionArchive(sessionID) // renamed from loadJobArchive
 			return nil
 		})
 	}
@@ -433,16 +400,13 @@ func clampCursor(cur, n int) int {
 // string and writes them into the task filter. Anything that doesn't
 // match a known facet is left in the trailing free-text search.
 //
-// Supported facets:
+// Supported facets (v2):
 //
-//	p:<n>            priority
 //	status:<status>  task status
-//	wf:<name>        workflow name (resolved to wf-id via wfByName)
-//	agent:<name>     matches BOTH author_id == name and
-//	                 current_step.agent == name (broadest sense)
+//	wf:<name>        workflow name (matched directly)
 //
 // Free text is matched as a substring against id + title.
-func applyFacetFilter(f *datasource.TaskFilter, expr string, wfByName map[string]string) {
+func applyFacetFilter(f *datasource.TaskFilter, expr string) {
 	tokens := strings.Fields(expr)
 	var free []string
 	for _, tok := range tokens {
@@ -452,24 +416,13 @@ func applyFacetFilter(f *datasource.TaskFilter, expr string, wfByName map[string
 		}
 		k, v, _ := strings.Cut(tok, ":")
 		switch strings.ToLower(k) {
-		case "p":
-			var p int
-			if _, err := fmt.Sscanf(v, "%d", &p); err == nil {
-				f.Priority = &p
-			}
 		case "status":
 			f.Statuses = []store.Status{store.Status(v)}
 		case "wf":
-			if id, ok := wfByName[strings.ToLower(v)]; ok {
-				f.WorkflowID = id
-			} else {
-				// Unknown name → impossible match. Use a sentinel so the
-				// caller's WHERE clause filters everything out instead of
-				// silently ignoring the chip.
-				f.WorkflowID = "\x00" + v
-			}
-		case "agent":
-			f.AgentName = v
+			// v2 uses workflow names directly
+			f.WorkflowName = v
+		// v2 dropped the priority + agent facets (no priority field; agents
+		// are code, no per-task author).
 		default:
 			free = append(free, tok)
 		}
@@ -530,16 +483,16 @@ func applyTaskSearch(in []datasource.Task, expr string) []datasource.Task {
 	return out
 }
 
-// filterJobsByTaskID returns the subset of jobs whose TaskID matches
+// filterSessionsByTaskID returns the subset of sessions whose TaskID matches
 // id. Used by fetchRefresh to apply scope.TaskID client-side after
 // the server-side fetch dropped that filter (so the Tasks-panel
-// marker index can see ALL tasks' jobs, not just the scoped one's).
+// marker index can see ALL tasks' sessions, not just the scoped one's).
 // Allocates a fresh slice so the caller's input isn't aliased.
-func filterJobsByTaskID(in []datasource.Job, id string) []datasource.Job {
+func filterSessionsByTaskID(in []datasource.Session, id string) []datasource.Session {
 	if id == "" {
 		return in
 	}
-	out := make([]datasource.Job, 0, len(in))
+	out := make([]datasource.Session, 0, len(in))
 	for i := range in {
 		if in[i].TaskID == id {
 			out = append(out, in[i])
@@ -548,16 +501,33 @@ func filterJobsByTaskID(in []datasource.Job, id string) []datasource.Job {
 	return out
 }
 
-func applyJobSearch(in []datasource.Job, expr string) []datasource.Job {
+// filterSessionsByWorkflow keeps only sessions whose .Workflow matches
+// wf. Used to scope the Sessions panel under a workflow-only scope
+// (session.list has no server-side workflow filter). An empty wf
+// returns the input unchanged.
+func filterSessionsByWorkflow(in []datasource.Session, wf string) []datasource.Session {
+	if wf == "" {
+		return in
+	}
+	out := make([]datasource.Session, 0, len(in))
+	for i := range in {
+		if in[i].Workflow == wf {
+			out = append(out, in[i])
+		}
+	}
+	return out
+}
+
+func applySessionSearch(in []datasource.Session, expr string) []datasource.Session {
 	needle := strings.ToLower(strings.TrimSpace(expr))
 	if needle == "" {
 		return in
 	}
-	out := make([]datasource.Job, 0, len(in))
-	for _, j := range in {
-		hay := strings.ToLower(j.JobID + " " + j.Status + " " + j.WorkflowName + " " + j.StepName)
+	out := make([]datasource.Session, 0, len(in))
+	for _, s := range in {
+		hay := strings.ToLower(s.ID + " " + string(s.Status) + " " + s.Workflow + " " + s.Step)
 		if strings.Contains(hay, needle) {
-			out = append(out, j)
+			out = append(out, s)
 		}
 	}
 	return out

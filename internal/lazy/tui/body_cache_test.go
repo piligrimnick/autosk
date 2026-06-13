@@ -6,7 +6,6 @@ import (
 
 	"github.com/jesseduffield/gocui"
 
-	"autosk/internal/daemon/api"
 	"autosk/internal/lazy/datasource"
 )
 
@@ -265,7 +264,7 @@ func TestWriteView_ReportsChangedFlag(t *testing.T) {
 // TestWriteView_Cache_InvalidatedByLayoutDeleteView is the
 // integration-style counterpart to the recreate test: drive the real
 // layout function through a transition that adds + removes a view
-// (winJobInput, which only exists when the selected job is running)
+// (winSessionInput, which only exists when the selected session is running)
 // and verify writeView still works on the panel that was torn down.
 // The bug we're guarding against is the regression where layout
 // drops the view but forgets to drop the cache entry — in which case
@@ -275,66 +274,64 @@ func TestWriteView_Cache_InvalidatedByLayoutDeleteView(t *testing.T) {
 	gu := newHeadlessGui(t, 120, 40)
 	gu.ds = &refreshFakeDS{}
 
-	// Step 1: dashboard with no running job — winJobInput must NOT
+	// Step 1: dashboard with no running session — winSessionInput must NOT
 	// be allocated.
 	if err := gu.layout(gu.g); err != nil {
 		t.Fatalf("layout dashboard #1: %v", err)
 	}
-	if _, err := gu.g.View(winJobInput); err == nil {
-		t.Fatalf("layout without running job should not create winJobInput")
+	if _, err := gu.g.View(winSessionInput); err == nil {
+		t.Fatalf("layout without running session should not create winSessionInput")
 	}
 
-	// Step 2: seed a running job and re-layout — winJobInput appears.
+	// Step 2: seed a running session and re-layout — winSessionInput appears.
 	gu.st.withLock(func() {
-		gu.st.jobs = []datasource.Job{{JobResponse: api.JobResponse{JobID: "j-1", Status: "running", Streaming: true}}}
-		gu.st.jobCursor = 0
-		gu.st.focused = panelJobs
+		gu.st.sessions = []datasource.Session{{ID: "s-1", Status: "running"}}
+		gu.st.sessionCursor = 0
+		gu.st.focused = panelSessions
 	})
 	if err := gu.layout(gu.g); err != nil {
 		t.Fatalf("layout dashboard #2: %v", err)
 	}
-	if _, err := gu.g.View(winJobInput); err != nil {
-		t.Fatalf("layout should have created winJobInput for running job: %v", err)
+	if _, err := gu.g.View(winSessionInput); err != nil {
+		t.Fatalf("layout should have created winSessionInput for running session: %v", err)
 	}
 
-	// Step 3: flip job to terminal — winJobInput must be deleted on
+	// Step 3: flip session to terminal — winSessionInput must be deleted on
 	// the next layout pass AND the body cache for that view must be
 	// invalidated so a future re-creation doesn't get short-circuited.
-	// The input view is gated on isJobLive (non-terminal status);
+	// The input view is gated on isSessionLive (non-terminal status);
 	// flipping Status alone is sufficient.
 	gu.st.withLock(func() {
-		gu.st.jobs[0].Status = "done"
-		gu.st.jobs[0].Streaming = false
+		gu.st.sessions[0].Status = "done"
 	})
 	if err := gu.layout(gu.g); err != nil {
 		t.Fatalf("layout dashboard #3: %v", err)
 	}
-	if _, err := gu.g.View(winJobInput); err == nil {
-		t.Fatalf("layout should have deleted winJobInput for terminal job")
+	if _, err := gu.g.View(winSessionInput); err == nil {
+		t.Fatalf("layout should have deleted winSessionInput for terminal session")
 	}
 
-	// Step 4: flip back to running — winJobInput must come back
+	// Step 4: flip back to running — winSessionInput must come back
 	// populated (not stuck blank from a stale body-cache entry).
 	gu.st.withLock(func() {
-		gu.st.jobs[0].Status = "running"
-		gu.st.jobs[0].Streaming = true
+		gu.st.sessions[0].Status = "running"
 	})
 	if err := gu.layout(gu.g); err != nil {
 		t.Fatalf("layout dashboard #4: %v", err)
 	}
-	v, err := gu.g.View(winJobInput)
+	v, err := gu.g.View(winSessionInput)
 	if err != nil {
-		t.Fatalf("layout dashboard #4 should have re-created winJobInput: %v", err)
+		t.Fatalf("layout dashboard #4 should have re-created winSessionInput: %v", err)
 	}
-	// jobInput buffer can be empty (no typed text yet); the assertion
+	// sessionInput buffer can be empty (no typed text yet); the assertion
 	// is that writeView wasn't skipped due to stale cache. We force
-	// a non-empty buffer by seeding st.jobInput and laying out once
+	// a non-empty buffer by seeding st.sessionInput and laying out once
 	// more.
-	gu.st.withLock(func() { gu.st.jobInput = "typed text" })
+	gu.st.withLock(func() { gu.st.sessionInput = "typed text" })
 	if err := gu.layout(gu.g); err != nil {
 		t.Fatalf("layout dashboard #5: %v", err)
 	}
 	if !strings.Contains(v.Buffer(), "typed text") {
-		t.Errorf("winJobInput body missing after re-creation: %q", v.Buffer())
+		t.Errorf("winSessionInput body missing after re-creation: %q", v.Buffer())
 	}
 }

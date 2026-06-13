@@ -7,18 +7,15 @@ import (
 	"time"
 
 	"autosk/internal/daemon/rpcclient"
+	"autosk/internal/daemon/runstore"
 	"autosk/internal/store"
 )
 
-// lazySource tags every write so the daemon reproduces lazy's dolt_commit
-// dialect + behaviour (plan §7.5).
-const lazySource = "lazy"
-
-// RPC is the Datasource backed by the autoskd JSON-RPC client (plan §7.5: the
+// RPC is the Datasource backed by the autoskd JSON-RPC client (proto-v2: the
 // single RPC-client Datasource impl). Reads AND writes route to the daemon over
-// the UDS (auto-spawning it on first use); every write carries the `lazy`
-// source discriminator so the daemon reproduces lazy's dolt_commit dialect +
-// behaviour. Streaming (`StreamLive`) lands with the Phase 2 job.subscribe tail.
+// the UDS (auto-spawning it on first use); every request carries the {cwd}
+// project selector only (v2 dropped the cli|lazy source discriminator and the
+// dolt commits it drove). Live transcript tailing lands via session.subscribe.
 type RPC struct {
 	cli *rpcclient.Client
 }
@@ -55,33 +52,28 @@ func (r *RPC) GetTask(ctx context.Context, id string) (Task, error) {
 	return mapTask(t), nil
 }
 
-func (r *RPC) Jobs(ctx context.Context, f JobFilter) ([]Job, error) {
-	raw, err := r.cli.Jobs(ctx, rpcclient.JobListFilter{
-		TaskID:     f.TaskID,
-		WorkflowID: f.WorkflowID,
-		Statuses:   f.Statuses,
-		Limit:      f.Limit,
-	})
+func (r *RPC) Sessions(ctx context.Context, taskID string) ([]Session, error) {
+	raw, err := r.cli.Sessions(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Job, 0, len(raw))
-	for _, j := range raw {
-		out = append(out, mapJob(j))
+	out := make([]Session, 0, len(raw))
+	for _, s := range raw {
+		out = append(out, mapSession(s))
 	}
 	return out, nil
 }
 
-func (r *RPC) GetJob(ctx context.Context, id string) (Job, error) {
-	j, err := r.cli.GetJob(ctx, id)
+func (r *RPC) GetSession(ctx context.Context, id string) (Session, error) {
+	s, err := r.cli.GetSession(ctx, id)
 	if err != nil {
-		return Job{}, err
+		return Session{}, err
 	}
-	return mapJob(j), nil
+	return mapSession(s), nil
 }
 
-func (r *RPC) Workflows(ctx context.Context, includeSynthetic bool) ([]Workflow, error) {
-	raw, err := r.cli.Workflows(ctx, includeSynthetic)
+func (r *RPC) Workflows(ctx context.Context) ([]Workflow, error) {
+	raw, err := r.cli.Workflows(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -99,12 +91,7 @@ func (r *RPC) Agents(ctx context.Context) ([]Agent, error) {
 	}
 	out := make([]Agent, 0, len(raw))
 	for _, a := range raw {
-		out = append(out, Agent{
-			ID: a.ID, Name: a.Name, IsHuman: a.IsHuman, Source: a.Source,
-			Version: a.Version, Model: a.Model, Thinking: a.Thinking,
-			ExtraArgs: a.ExtraArgs, PiSkills: a.PiSkills, PiExt: a.PiExt,
-			TasksOwned: a.TasksOwned,
-		})
+		out = append(out, Agent{Name: a.Name})
 	}
 	return out, nil
 }
@@ -117,34 +104,14 @@ func (r *RPC) Comments(ctx context.Context, taskID string) ([]Comment, error) {
 	out := make([]Comment, 0, len(raw))
 	for _, c := range raw {
 		out = append(out, Comment{
-			ID: c.ID, TaskID: c.TaskID, AuthorID: c.AuthorID,
-			AuthorName: c.AuthorName, Text: c.Text, CreatedAt: c.CreatedAt,
+			ID: c.ID, Author: c.Author, Text: c.Text,
+			CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 		})
 	}
 	return out, nil
 }
 
-func (r *RPC) Signals(ctx context.Context, jobID string) ([]Signal, error) {
-	raw, err := r.cli.SignalsForJob(ctx, jobID)
-	if err != nil {
-		return nil, err
-	}
-	return mapSignals(raw), nil
-}
-
-func (r *RPC) SignalsForTask(ctx context.Context, taskID string) ([]Signal, error) {
-	raw, err := r.cli.SignalsForTask(ctx, taskID)
-	if err != nil {
-		return nil, err
-	}
-	return mapSignals(raw), nil
-}
-
-func (r *RPC) Messages(ctx context.Context, jobID string, full bool, limit int) ([]MessageEvent, error) {
-	// MessageEvent is an alias for api.MessageEvent — the client returns it
-	// directly, no mapping needed.
-	return r.cli.Messages(ctx, jobID, full, limit)
-}
+// NOTE: Signals and Messages removed in v2
 
 func (r *RPC) Healthz(ctx context.Context) (Health, error) {
 	h, err := r.cli.Healthz(ctx)
@@ -168,17 +135,32 @@ func (r *RPC) Healthz(ctx context.Context) (Health, error) {
 	}, nil
 }
 
-// Reconnect is a no-op: the RPC datasource holds no doltlite connection to
-// refresh (the daemon owns the file). Cross-process GC freshness is the
+// Reconnect is a no-op: the RPC datasource holds no store connection to
+// refresh (the daemon owns the project store). Store freshness is the
 // daemon's concern.
 func (r *RPC) Reconnect(ctx context.Context) error { return nil }
 
-// StreamLive opens a job.subscribe tail over the daemon's persistent
-// connection and adapts the job-event frames to the TUI's LiveEvent shape
-// (mirrors the old SSE Live.StreamLive: attach=true, full replay). The caller
-// must Close the returned handle.
-func (r *RPC) StreamLive(ctx context.Context, jobID string) (*LiveHandle, error) {
-	stream, err := r.cli.JobSubscribe(ctx, jobID, rpcclient.SubscribeOptions{Attach: true, Full: true})
+// SessionTranscript fetches a session's full archived transcript (every line)
+// and adapts each pi-format line to a LiveEvent, oldest first. Used by the
+// Detail pane's archive load for both running (initial snapshot) and terminal
+// (no SSE) sessions.
+func (r *RPC) SessionTranscript(ctx context.Context, sessionID string) ([]LiveEvent, error) {
+	res, err := r.cli.Transcript(ctx, sessionID, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]LiveEvent, 0, len(res.Entries))
+	for i, line := range res.Entries {
+		out = append(out, LiveEvent{Kind: "message", Line: line, LineNum: i + 1})
+	}
+	return out, nil
+}
+
+// StreamSession opens a session.subscribe tail over the daemon's persistent
+// connection and adapts the session-event frames to the TUI's LiveEvent shape.
+// The caller must Close the returned handle.
+func (r *RPC) StreamSession(ctx context.Context, sessionID string) (*LiveHandle, error) {
+	stream, err := r.cli.SessionSubscribe(ctx, sessionID, 0) // 0 = from start
 	if err != nil {
 		return nil, err
 	}
@@ -186,23 +168,23 @@ func (r *RPC) StreamLive(ctx context.Context, jobID string) (*LiveHandle, error)
 	go func() {
 		defer close(ch)
 		for ev := range stream.Events() {
-			out := LiveEvent{EventID: int(ev.EventID)}
+			out := LiveEvent{LineNum: ev.Line}
 			terminal := false
 			switch ev.Kind {
 			case "message":
 				out.Kind = "message"
 				if ev.Event != nil {
-					out.Message = *ev.Event
+					out.Line = *ev.Event
 				}
 			case "status":
 				out.Kind = "status"
-				if ev.Job != nil {
-					out.Status = *ev.Job
+				if ev.Session != nil {
+					out.Session = *ev.Session
 				}
 			case "done":
 				out.Kind = "done"
-				if ev.Job != nil {
-					out.Status = *ev.Job
+				if ev.Session != nil {
+					out.Session = *ev.Session
 				}
 				terminal = true
 			case "error":
@@ -217,15 +199,6 @@ func (r *RPC) StreamLive(ctx context.Context, jobID string) (*LiveHandle, error)
 				return
 			}
 			if terminal {
-				// The daemon emits exactly one terminal `done` and then keeps the
-				// shared connection open for further requests — it never EOFs the
-				// tail. Without an explicit teardown here the readLoop would park
-				// on Decode forever and the conn + goroutines + daemon
-				// subscription would leak (restores the old SSE close-on-done
-				// parity). The full transcript was already replayed (Full:true)
-				// before this frame, so nothing is lost. Closing the stream closes
-				// `ch` (via the deferred close above), so pumpLiveLoop exits via
-				// its `!ok` branch.
 				_ = stream.Close()
 				return
 			}
@@ -266,127 +239,82 @@ func (r *RPC) Watch(ctx context.Context) (*WatchHandle, error) {
 
 // ---- writes (Phase 3) -----------------------------------------------------
 
-func (r *RPC) CreateTask(ctx context.Context, title, description string, priority int) (string, error) {
-	p := priority
-	t, err := r.cli.CreateTask(ctx, rpcclient.TaskCreateParams{
-		Source: lazySource, Title: title, Description: description, Priority: &p,
-	})
+func (r *RPC) CreateTask(ctx context.Context, title, description string) (string, error) {
+	var blockedBy []string // empty slice for v2
+	t, err := r.cli.CreateTask(ctx, title, description, blockedBy)
 	if err != nil {
 		return "", err
 	}
 	return t.ID, nil
 }
 
-func (r *RPC) UpdateStatus(ctx context.Context, id string, status store.Status) error {
-	_, err := r.cli.SetStatus(ctx, id, string(status))
+func (r *RPC) TaskDone(ctx context.Context, id string) error {
+	_, err := r.cli.TaskDone(ctx, id)
 	return err
 }
 
-func (r *RPC) UpdatePriority(ctx context.Context, id string, p int) error {
-	_, err := r.cli.SetPriority(ctx, id, p)
+func (r *RPC) TaskCancel(ctx context.Context, id string) error {
+	_, err := r.cli.TaskCancel(ctx, id)
 	return err
 }
 
-func (r *RPC) UpdateTitleDescription(ctx context.Context, id, title, description string) error {
-	_, err := r.cli.SetTitleDescription(ctx, id, title, description)
+func (r *RPC) TaskReopen(ctx context.Context, id string) error {
+	_, err := r.cli.TaskReopen(ctx, id)
 	return err
 }
 
-func (r *RPC) Enroll(ctx context.Context, id, workflow, stepName string) error {
-	_, _, err := r.cli.Enroll(ctx, lazySource, id, workflow, "", stepName, "")
+func (r *RPC) UpdateTask(ctx context.Context, id string, title, description *string) error {
+	_, err := r.cli.UpdateTask(ctx, id, title, description)
+	return err
+}
+
+func (r *RPC) EnrollWorkflow(ctx context.Context, id, workflow string) error {
+	_, err := r.cli.EnrollWorkflow(ctx, id, workflow)
+	return err
+}
+
+func (r *RPC) EnrollAgent(ctx context.Context, id, agent string) error {
+	_, err := r.cli.EnrollAgent(ctx, id, agent)
 	return err
 }
 
 func (r *RPC) Resume(ctx context.Context, id, toStep string) error {
-	_, err := r.cli.Resume(ctx, lazySource, id, toStep)
+	var target *rpcclient.StepTarget
+	if toStep != "" {
+		target = &rpcclient.StepTarget{Step: toStep}
+	}
+	_, err := r.cli.Resume(ctx, id, target)
 	return err
 }
 
 func (r *RPC) Block(ctx context.Context, id, blocker string) error {
-	return r.cli.Block(ctx, lazySource, id, []string{blocker})
+	_, err := r.cli.Block(ctx, id, blocker)
+	return err
 }
 
 func (r *RPC) Unblock(ctx context.Context, id, blocker string) error {
-	return r.cli.Unblock(ctx, lazySource, id, []string{blocker})
+	_, err := r.cli.Unblock(ctx, id, blocker)
+	return err
 }
 
 func (r *RPC) AddComment(ctx context.Context, taskID, text string) error {
-	_, err := r.cli.AddComment(ctx, lazySource, taskID, os.Getenv("AUTOSK_AGENT"), text)
+	_, err := r.cli.AddComment(ctx, taskID, os.Getenv("AUTOSK_AGENT"), text)
 	return err
 }
 
-func (r *RPC) SetMetadata(ctx context.Context, id string, m map[string]any) error {
-	var v any = m
-	if m == nil {
-		v = map[string]any{}
-	}
-	_, err := r.cli.MetadataSet(ctx, lazySource, id, "", v, true)
-	return err
+// NOTE: SetMetadata removed in v2
+
+// NOTE: workflow/agent writes removed in v2 - workflows are read-only
+
+func (r *RPC) AbortSession(ctx context.Context, id string) error {
+	return r.cli.SessionAbort(ctx, id)
 }
 
-func (r *RPC) CreateWorkflow(ctx context.Context, jsonOrPath string) (string, error) {
-	// Lazy passes a file path (mirrors Offline.CreateWorkflow → ParseFile).
-	// noInstall=true: Go-lazy's Offline.CreateWorkflow calls ws.Create(.., false)
-	// directly and never auto-installs missing scoped agents, so a workflow
-	// referencing an uninstalled agent must fail validation (no surprise npm
-	// side effects from the TUI). The CLI path keeps its own --no-install gate.
-	return r.cli.WorkflowCreate(ctx, lazySource, jsonOrPath, "", true)
+func (r *RPC) SessionInput(ctx context.Context, id, message, kind string) error {
+	return r.cli.SessionInput(ctx, id, message, kind)
 }
 
-func (r *RPC) DeleteWorkflow(ctx context.Context, name string) error {
-	return r.cli.WorkflowDelete(ctx, lazySource, name)
-}
-
-func (r *RPC) UpdateWorkflowIsolation(ctx context.Context, name, mode string, force bool) (UpdateIsolationReport, error) {
-	// Thread lazySource so the daemon commits the `lazy: workflow update …`
-	// dialect; surface the partial report even on error (Go-lazy returns
-	// `(out, err)` so the TUI can render the rollback/leftover diagnostics).
-	rep, err := r.cli.WorkflowUpdateIsolation(ctx, lazySource, name, mode, force, false)
-	return mapIsolationReport(rep), err
-}
-
-func (r *RPC) InstallAgent(ctx context.Context, name, version string) error {
-	_, err := r.cli.AgentInstall(ctx, name, version, "")
-	return err
-}
-
-func (r *RPC) UninstallAgent(ctx context.Context, name string) error {
-	return r.cli.AgentUninstall(ctx, name, false)
-}
-
-func (r *RPC) CancelJob(ctx context.Context, jobID string) error {
-	_, err := r.cli.CancelJob(ctx, jobID)
-	return err
-}
-
-func (r *RPC) SendInput(ctx context.Context, jobID, message, behavior string) (string, error) {
-	return r.cli.SendInput(ctx, jobID, message, behavior)
-}
-
-func (r *RPC) AbortJob(ctx context.Context, jobID string) error {
-	return r.cli.AbortJob(ctx, jobID)
-}
-
-func mapIsolationReport(rep rpcclient.UpdateIsolationReport) UpdateIsolationReport {
-	out := UpdateIsolationReport{
-		Workflow:         rep.Workflow,
-		From:             rep.From,
-		To:               rep.To,
-		Noop:             rep.Noop,
-		NonTerminalTasks: rep.NonTerminalTasks,
-		FailedTask:       rep.FailedTask,
-	}
-	for _, e := range rep.EnsuredTasks {
-		out.EnsuredTasks = append(out.EnsuredTasks, EnsureRecord{TaskID: e.TaskID, Path: e.Path, Branch: e.Branch, Existing: e.Existing})
-	}
-	for _, l := range rep.LeftoverWorktrees {
-		out.LeftoverWorktrees = append(out.LeftoverWorktrees, LeftoverWorktree{TaskID: l.TaskID, Path: l.Path})
-	}
-	for _, e := range rep.RolledBackEnsures {
-		out.RolledBackEnsures = append(out.RolledBackEnsures, EnsureRecord{TaskID: e.TaskID, Path: e.Path, Branch: e.Branch, Existing: e.Existing})
-	}
-	return out
-}
+// NOTE: mapIsolationReport removed - v2 workflows are read-only
 
 // ---- mapping helpers ------------------------------------------------------
 
@@ -399,28 +327,25 @@ func mapTaskFilter(f TaskFilter) rpcclient.TaskListFilter {
 		}
 	}
 	return rpcclient.TaskListFilter{
-		Statuses:      statuses,
-		Priority:      f.Priority,
-		WorkflowID:    f.WorkflowID,
-		AgentName:     f.AgentName,
-		AuthorName:    f.AuthorName,
-		StepAgentName: f.StepAgentName,
-		Search:        f.Search,
+		Statuses: statuses,
+		Workflow: f.WorkflowName,
+		Step:     f.StepName,
+		Blocked:  f.Blocked,
 	}
 }
 
 func mapTask(t rpcclient.Task) Task {
 	return Task{
 		ID: t.ID, Title: t.Title, Description: t.Description,
-		Status: store.Status(t.Status), Priority: t.Priority,
-		AuthorID: t.AuthorID, AuthorName: t.AuthorName,
-		WorkflowID: t.WorkflowID, WorkflowName: t.WorkflowName,
-		CurrentStepID: t.CurrentStepID, StepName: t.StepName, AgentName: t.AgentName,
+		Status:       store.Status(t.Status),
+		WorkflowName: t.Workflow, // v2 field name
+		StepName:     t.Step,     // v2 field name
 		Blocked:      t.Blocked,
 		BlockedBy:    mapRefs(t.BlockedBy),
 		Blocks:       mapRefs(t.Blocks),
-		CommentCount: t.CommentCount, Metadata: t.Metadata,
-		CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
+		CommentCount: t.CommentCount,
+		CreatedAt:    t.CreatedAt,
+		UpdatedAt:    t.UpdatedAt,
 	}
 }
 
@@ -435,46 +360,44 @@ func mapRefs(in []rpcclient.TaskRef) []TaskRef {
 	return out
 }
 
-func mapJob(j rpcclient.Job) Job {
-	return Job{
-		JobResponse:  j.JobResponse,
-		WorkflowName: j.WorkflowName,
-		StepName:     j.StepName,
-		AgentName:    j.AgentName,
+func mapSession(s rpcclient.Session) Session {
+	return Session{
+		ID:        s.ID,
+		TaskID:    s.TaskID,
+		Workflow:  s.Workflow,
+		Step:      s.Step,
+		Agent:     s.Agent,
+		Status:    runstore.RunStatus(s.Status),
+		Error:     s.Error,
+		StartedAt: s.StartedAt,
+		EndedAt:   s.EndedAt,
 	}
 }
 
-func mapWorkflow(w rpcclient.Workflow) Workflow {
+func mapWorkflow(w rpcclient.WorkflowInfo) Workflow {
 	out := Workflow{
-		ID: w.ID, Name: w.Name, Description: w.Description,
-		IsSynthetic: w.IsSynthetic, FirstStep: w.FirstStep,
-		TaskCount: w.TaskCount, Isolation: w.Isolation,
-		NonTerminalTaskCount: w.NonTerminalTaskCount,
+		Name:        w.Name,
+		Description: w.Description,
+		FirstStep:   w.FirstStep,
+		Isolation:   w.Isolation,
 	}
 	for _, s := range w.Steps {
+		targets := make([]string, 0, len(s.Targets))
+		for _, t := range s.Targets {
+			if t.Step != "" {
+				targets = append(targets, t.Step)
+			} else if t.Status != "" {
+				targets = append(targets, t.Status)
+			}
+		}
 		out.Steps = append(out.Steps, WorkflowStep{
-			ID: s.ID, Name: s.Name, AgentName: s.AgentName,
-			NextSteps: s.NextSteps, NextStatus: s.NextStatus, TaskCount: s.TaskCount,
-		})
-	}
-	for _, nt := range w.NonTerminalTasks {
-		out.NonTerminalTasks = append(out.NonTerminalTasks, NonTerminalTaskRef{
-			ID: nt.ID, Status: store.Status(nt.Status), StepName: nt.StepName,
+			Name:      s.Name,
+			AgentName: s.Agent,
+			Human:     s.Human,
+			Targets:   targets,
 		})
 	}
 	return out
 }
 
-func mapSignals(in []rpcclient.Signal) []Signal {
-	out := make([]Signal, 0, len(in))
-	for _, s := range in {
-		out = append(out, Signal{
-			TransitionID: s.TransitionID, TaskID: s.TaskID, JobID: s.JobID,
-			StepID: s.StepID, StepName: s.StepName,
-			WorkflowID: s.WorkflowID, WorkflowName: s.WorkflowName,
-			Target: s.Target, AgentID: s.AgentID, AgentName: s.AgentName,
-			CreatedAt: s.CreatedAt,
-		})
-	}
-	return out
-}
+// NOTE: mapSignals removed - v2 has no signals

@@ -11,17 +11,6 @@ import (
 	"golang.org/x/term"
 )
 
-// EnvAutoInitSkipBootstrap, when set to a non-empty value, suppresses
-// the workflow bootstrap step that openStore would otherwise run after
-// auto-creating .autosk/db.
-//
-// Explicit `autosk init` is NOT affected by this env — it has its own
-// --skip-bootstrap flag. The env exists so test helpers and scripted
-// pipelines that rely on the silent non-TTY auto-init path can opt
-// out of the npm-touching bootstrap step without authoring a workflow
-// file.
-const EnvAutoInitSkipBootstrap = "AUTOSK_AUTOINIT_SKIP_BOOTSTRAP"
-
 // EnvAutoInitAssumeYes, when set to a non-empty value, suppresses the
 // interactive y/n prompt and proceeds as if the user answered "y".
 // Intended for automation that happens to run with a TTY attached
@@ -54,16 +43,16 @@ func shouldPromptForAutoInit() bool {
 	return isInteractiveFn()
 }
 
-// promptCreateDB renders the y/n prompt on stderr and reads one line
+// promptCreateProject renders the y/n prompt on stderr and reads one line
 // of input. Empty / "y" / "yes" → true. "n" / "no" → false. Anything
 // else loops with a short "answer y or n" hint. The bufio.Reader is
 // created fresh per call so callers do not need to worry about
 // residual buffering across re-prompts.
-func promptCreateDB(cwd string) (bool, error) {
-	fmt.Fprintf(os.Stderr, "No autosk database found at or above %s.\n", cwd)
+func promptCreateProject(cwd string) (bool, error) {
+	fmt.Fprintf(os.Stderr, "No autosk project found at or above %s.\n", cwd)
 	br := bufio.NewReader(confirmReader)
 	for {
-		fmt.Fprintf(os.Stderr, "Create a new autosk database in %s/.autosk/db? [Y/n] ", cwd)
+		fmt.Fprintf(os.Stderr, "Create a new autosk project in %s/.autosk? [Y/n] ", cwd)
 		line, err := br.ReadString('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
 			return false, err

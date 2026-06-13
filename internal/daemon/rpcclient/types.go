@@ -2,220 +2,73 @@ package rpcclient
 
 import (
 	"context"
-	"encoding/json"
-	"time"
 
 	"autosk/internal/daemon/api"
 )
 
-// The structs below mirror autosk-proto::wire (the single source of truth for
-// the JSON-RPC result shapes). Field tags match the Rust serde output; RFC3339
-// timestamps decode straight into time.Time.
+// The proto-v2 view types are canonically defined in internal/daemon/api
+// (mirroring daemon/sdk/src/{types,transcript,proto}.ts). These aliases let
+// callers keep referring to rpcclient.<Type> while the wire shapes live in one
+// place.
+type (
+	Task               = api.TaskView
+	TaskRef            = api.TaskRef
+	Comment            = api.Comment
+	Session            = api.SessionMeta
+	WorkflowInfo       = api.WorkflowInfo
+	WorkflowStepInfo   = api.WorkflowStepInfo
+	StepTarget         = api.StepTarget
+	Agent              = api.AgentInfo
+	Health             = api.Health
+	HealthProject      = api.HealthProject
+	Version            = api.VersionInfo
+	ProjectInfo        = api.ProjectInfo
+	ProjectDiagnostics = api.ProjectDiagnostics
+	TranscriptLine     = api.TranscriptLine
+	TranscriptResult   = api.SessionTranscriptResult
+)
 
-// Task is the enriched task view (autosk-proto::wire::TaskView).
-type Task struct {
-	ID            string         `json:"id"`
-	Title         string         `json:"title"`
-	Description   string         `json:"description"`
-	Status        string         `json:"status"`
-	Priority      int            `json:"priority"`
-	AuthorID      string         `json:"author_id"`
-	AuthorName    string         `json:"author_name"`
-	WorkflowID    string         `json:"workflow_id"`
-	WorkflowName  string         `json:"workflow_name"`
-	CurrentStepID string         `json:"current_step_id"`
-	StepName      string         `json:"step_name"`
-	AgentID       string         `json:"agent_id"`
-	AgentName     string         `json:"agent_name"`
-	Blocked       bool           `json:"blocked"`
-	BlockedBy     []TaskRef      `json:"blocked_by"`
-	Blocks        []TaskRef      `json:"blocks"`
-	CommentCount  int            `json:"comment_count"`
-	Metadata      map[string]any `json:"metadata"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-}
-
-// TaskRef is a lightweight related-task reference.
-type TaskRef struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-}
-
-// Job mirrors api.JobResponse (same JSON tags) plus the derived label fields.
-type Job struct {
-	api.JobResponse
-	WorkflowName string `json:"workflow_name"`
-	StepName     string `json:"step_name"`
-	AgentName    string `json:"agent_name"`
-}
-
-// Workflow mirrors autosk-proto::wire::Workflow. The superset view serves both
-// the lazy datasource (first_step name + next_steps/next_status splits) and the
-// CLI `workflow show`/`create` renderers (first_step_id, created_at, per-step
-// agent_id/agent_params/transitions).
-type Workflow struct {
-	ID                   string               `json:"id"`
-	Name                 string               `json:"name"`
-	Description          string               `json:"description"`
-	IsSynthetic          bool                 `json:"is_synthetic"`
-	FirstStep            string               `json:"first_step"`
-	FirstStepID          string               `json:"first_step_id"`
-	Steps                []WorkflowStep       `json:"steps"`
-	TaskCount            int                  `json:"task_count"`
-	Isolation            string               `json:"isolation"`
-	NonTerminalTaskCount int                  `json:"non_terminal_task_count"`
-	NonTerminalTasks     []NonTerminalTaskRef `json:"non_terminal_tasks"`
-	CreatedAt            time.Time            `json:"created_at"`
-}
-
-// WorkflowStep mirrors autosk-proto::wire::WorkflowStep.
-type WorkflowStep struct {
-	ID          string               `json:"id"`
-	Name        string               `json:"name"`
-	AgentID     string               `json:"agent_id"`
-	AgentName   string               `json:"agent_name"`
-	NextSteps   []string             `json:"next_steps"`
-	NextStatus  []string             `json:"next_status"`
-	TaskCount   int                  `json:"task_count"`
-	MaxVisits   int                  `json:"max_visits"`
-	AgentParams json.RawMessage      `json:"agent_params,omitempty"`
-	Transitions []WorkflowTransition `json:"transitions,omitempty"`
-}
-
-// WorkflowTransition mirrors autosk-proto::wire::WorkflowTransition.
-type WorkflowTransition struct {
-	ID           int64  `json:"id"`
-	NextStepID   string `json:"next_step_id"`
-	NextStepName string `json:"next_step_name"`
-	TaskStatus   string `json:"task_status"`
-	PromptRule   string `json:"prompt_rule"`
-}
-
-// NonTerminalTaskRef mirrors autosk-proto::wire::NonTerminalTaskRef.
-type NonTerminalTaskRef struct {
-	ID       string `json:"id"`
-	Status   string `json:"status"`
-	StepName string `json:"step_name"`
-}
-
-// Agent mirrors autosk-proto::wire::Agent.
-type Agent struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	IsHuman    bool      `json:"is_human"`
-	Source     string    `json:"source"`
-	Version    string    `json:"version"`
-	Model      string    `json:"model"`
-	Thinking   string    `json:"thinking"`
-	ExtraArgs  []string  `json:"extra_args"`
-	PiSkills   []string  `json:"pi_skills"`
-	PiExt      []string  `json:"pi_ext"`
-	TasksOwned int       `json:"tasks_owned"`
-	CreatedAt  time.Time `json:"created_at"`
-}
-
-// Comment mirrors autosk-proto::wire::Comment.
-type Comment struct {
-	ID         int64     `json:"id"`
-	TaskID     string    `json:"task_id"`
-	AuthorID   string    `json:"author_id"`
-	AuthorName string    `json:"author_name"`
-	Text       string    `json:"text"`
-	CreatedAt  time.Time `json:"created_at"`
-}
-
-// Signal mirrors autosk-proto::wire::Signal.
-type Signal struct {
-	TransitionID int64     `json:"transition_id"`
-	TaskID       string    `json:"task_id"`
-	JobID        string    `json:"job_id"`
-	StepID       string    `json:"step_id"`
-	StepName     string    `json:"step_name"`
-	WorkflowID   string    `json:"workflow_id"`
-	WorkflowName string    `json:"workflow_name"`
-	Target       string    `json:"target"`
-	AgentID      string    `json:"agent_id"`
-	AgentName    string    `json:"agent_name"`
-	CreatedAt    time.Time `json:"created_at"`
-}
-
-// Health mirrors autosk-proto::wire::Health (= api.HealthResponse shape).
-type Health struct {
-	OK          bool            `json:"ok"`
-	Workers     int             `json:"workers"`
-	Queued      int             `json:"queued"`
-	Running     int             `json:"running"`
-	DBPath      string          `json:"db_path"`
-	ProjectRoot string          `json:"project_root"`
-	Projects    []HealthProject `json:"projects"`
-}
-
-// HealthProject mirrors autosk-proto::wire::HealthProject.
-type HealthProject struct {
-	Root     string    `json:"root"`
-	DBPath   string    `json:"db_path"`
-	Queued   int       `json:"queued"`
-	Running  int       `json:"running"`
-	OpenedAt time.Time `json:"opened_at"`
-}
-
-// Version mirrors autosk-proto::wire::VersionInfo.
-type Version struct {
-	Version string `json:"version"`
-	Commit  string `json:"commit"`
-}
-
-// TaskListFilter narrows Tasks. A nil Statuses sends no status filter (server
-// default = open statuses); a non-nil empty slice means "all statuses".
+// TaskListFilter narrows Tasks. A nil Statuses sends no status filter (daemon
+// default = open statuses); a non-nil empty slice means "all statuses". v2 has
+// no priority/author/search/limit filters.
 type TaskListFilter struct {
-	Statuses      []string
-	Priority      *int
-	WorkflowID    string
-	AgentName     string
-	AuthorName    string
-	StepAgentName string
-	Search        string
+	Statuses []string
+	Workflow string
+	Step     string
+	Blocked  *bool
 }
 
-// JobListFilter narrows Jobs.
-type JobListFilter struct {
-	TaskID     string
-	WorkflowID string
-	Statuses   []string
-	Limit      int
-}
-
-// ---- typed read methods (plan §5) -----------------------------------------
+// ---- typed read methods ---------------------------------------------------
 
 // Version returns the daemon's version/commit.
 func (c *Client) Version(ctx context.Context) (Version, error) {
 	var out Version
-	err := c.call(ctx, "version", nil, &out)
+	err := c.call(ctx, "meta.version", nil, &out)
 	return out, err
 }
 
-// Healthz returns the daemon's health for this client's project selector.
+// Healthz returns the daemon's cross-project aggregate health.
 func (c *Client) Healthz(ctx context.Context) (Health, error) {
 	var out Health
-	err := c.call(ctx, "healthz", c.selector(nil), &out)
+	err := c.call(ctx, "meta.healthz", nil, &out)
 	return out, err
 }
 
 // Tasks lists tasks matching the filter.
 func (c *Client) Tasks(ctx context.Context, f TaskListFilter) ([]Task, error) {
-	extra := map[string]any{}
+	filter := map[string]any{}
 	if f.Statuses != nil {
-		extra["statuses"] = f.Statuses
+		filter["status"] = f.Statuses
 	}
-	if f.Priority != nil {
-		extra["priority"] = *f.Priority
+	putStr(filter, "workflow", f.Workflow)
+	putStr(filter, "step", f.Step)
+	if f.Blocked != nil {
+		filter["blocked"] = *f.Blocked
 	}
-	putStr(extra, "workflow_id", f.WorkflowID)
-	putStr(extra, "agent_name", f.AgentName)
-	putStr(extra, "author_name", f.AuthorName)
-	putStr(extra, "step_agent_name", f.StepAgentName)
-	putStr(extra, "search", f.Search)
+	extra := map[string]any{}
+	if len(filter) > 0 {
+		extra["filter"] = filter
+	}
 	var out []Task
 	err := c.call(ctx, "task.list", c.selector(extra), &out)
 	return out, err
@@ -228,102 +81,77 @@ func (c *Client) GetTask(ctx context.Context, id string) (Task, error) {
 	return out, err
 }
 
-// Ready returns the ready set (status='new', no open blocker).
-func (c *Client) Ready(ctx context.Context, limit int) ([]Task, error) {
-	var out []Task
-	err := c.call(ctx, "task.ready", c.selector(map[string]any{"limit": limit}), &out)
-	return out, err
-}
-
 // Comments returns a task's thread, oldest first.
 func (c *Client) Comments(ctx context.Context, taskID string) ([]Comment, error) {
 	var out []Comment
-	err := c.call(ctx, "comment.list", c.selector(map[string]any{"task_id": taskID}), &out)
+	err := c.call(ctx, "task.comment.list", c.selector(map[string]any{"task_id": taskID}), &out)
 	return out, err
 }
 
-// Workflows lists workflows (+ steps); includeSynthetic surfaces single:<agent>.
-func (c *Client) Workflows(ctx context.Context, includeSynthetic bool) ([]Workflow, error) {
-	var out []Workflow
-	err := c.call(ctx, "workflow.list", c.selector(map[string]any{"include_synthetic": includeSynthetic}), &out)
+// Workflows lists the project's registered workflows (read-only registry view).
+func (c *Client) Workflows(ctx context.Context) ([]WorkflowInfo, error) {
+	var out []WorkflowInfo
+	err := c.call(ctx, "registry.workflow.list", c.selector(nil), &out)
 	return out, err
 }
 
 // GetWorkflow returns one workflow by name.
-func (c *Client) GetWorkflow(ctx context.Context, name string) (Workflow, error) {
-	var out Workflow
-	err := c.call(ctx, "workflow.get", c.selector(map[string]any{"name": name}), &out)
+func (c *Client) GetWorkflow(ctx context.Context, name string) (WorkflowInfo, error) {
+	var out WorkflowInfo
+	err := c.call(ctx, "registry.workflow.get", c.selector(map[string]any{"name": name}), &out)
 	return out, err
 }
 
-// Agents lists agents + tasks-owned counts.
+// Agents lists the project's registered agents.
 func (c *Client) Agents(ctx context.Context) ([]Agent, error) {
 	var out []Agent
-	err := c.call(ctx, "agent.list", c.selector(nil), &out)
+	err := c.call(ctx, "registry.agent.list", c.selector(nil), &out)
 	return out, err
 }
 
-// Jobs lists daemon_runs decorated with workflow/step/agent labels.
-func (c *Client) Jobs(ctx context.Context, f JobListFilter) ([]Job, error) {
+// Sessions lists a task's sessions (taskID empty → every session in the
+// project), newest-id last.
+func (c *Client) Sessions(ctx context.Context, taskID string) ([]Session, error) {
 	extra := map[string]any{}
-	putStr(extra, "task_id", f.TaskID)
-	putStr(extra, "workflow_id", f.WorkflowID)
-	if len(f.Statuses) > 0 {
-		extra["statuses"] = f.Statuses
+	putStr(extra, "task_id", taskID)
+	var out []Session
+	err := c.call(ctx, "session.list", c.selector(extra), &out)
+	return out, err
+}
+
+// GetSession returns one session's metadata.
+func (c *Client) GetSession(ctx context.Context, id string) (Session, error) {
+	var out Session
+	err := c.call(ctx, "session.get", c.selector(map[string]any{"id": id}), &out)
+	return out, err
+}
+
+// Transcript returns a slice of a session's pi-format transcript starting at
+// fromLine (1-based; 0 → from the start), up to limit lines (0 → no limit).
+func (c *Client) Transcript(ctx context.Context, id string, fromLine, limit int) (TranscriptResult, error) {
+	extra := map[string]any{"id": id}
+	if fromLine > 0 {
+		extra["from_line"] = fromLine
 	}
-	if f.Limit > 0 {
-		extra["limit"] = f.Limit
-	}
-	var out []Job
-	err := c.call(ctx, "job.list", c.selector(extra), &out)
-	return out, err
-}
-
-// GetJob returns one decorated job.
-func (c *Client) GetJob(ctx context.Context, id string) (Job, error) {
-	var out Job
-	err := c.call(ctx, "job.get", c.selector(map[string]any{"id": id}), &out)
-	return out, err
-}
-
-// CancelJob cancels a running or queued job (SIGTERM→grace→SIGKILL for a live
-// run; mark cancelled when only queued) and returns the decorated job.
-func (c *Client) CancelJob(ctx context.Context, jobID string) (Job, error) {
-	var out Job
-	err := c.call(ctx, "job.cancel", c.selector(map[string]any{"job_id": jobID}), &out)
-	return out, err
-}
-
-// HealthzAll returns the cross-project aggregate health (every loaded project),
-// independent of this client's project selector.
-func (c *Client) HealthzAll(ctx context.Context) (Health, error) {
-	var out Health
-	err := c.call(ctx, "healthz", map[string]any{"all": true}, &out)
-	return out, err
-}
-
-// Messages returns a job's archived transcript events.
-func (c *Client) Messages(ctx context.Context, jobID string, full bool, limit int) ([]api.MessageEvent, error) {
-	extra := map[string]any{"job_id": jobID, "full": full}
 	if limit > 0 {
 		extra["limit"] = limit
 	}
-	var out []api.MessageEvent
-	err := c.call(ctx, "job.messages", c.selector(extra), &out)
+	var out TranscriptResult
+	err := c.call(ctx, "session.transcript", c.selector(extra), &out)
 	return out, err
 }
 
-// SignalsForTask returns every step_signals row for a task, newest first.
-func (c *Client) SignalsForTask(ctx context.Context, taskID string) ([]Signal, error) {
-	var out []Signal
-	err := c.call(ctx, "signal.forTask", c.selector(map[string]any{"task_id": taskID}), &out)
+// Projects lists every project in the daemon's registry (~/.autosk/projects.json).
+func (c *Client) Projects(ctx context.Context) ([]ProjectInfo, error) {
+	var out []ProjectInfo
+	err := c.call(ctx, "project.list", nil, &out)
 	return out, err
 }
 
-// SignalsForJob returns step_signals rows for one run, newest first.
-func (c *Client) SignalsForJob(ctx context.Context, jobID string) ([]Signal, error) {
-	var out []Signal
-	err := c.call(ctx, "signal.forJob", c.selector(map[string]any{"job_id": jobID}), &out)
+// Diagnostics returns the project's extension load errors.
+func (c *Client) Diagnostics(ctx context.Context) (ProjectDiagnostics, error) {
+	var out ProjectDiagnostics
+	err := c.call(ctx, "project.diagnostics", c.selector(nil), &out)
 	return out, err
 }
 

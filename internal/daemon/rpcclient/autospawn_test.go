@@ -20,41 +20,19 @@ func findAutoskd(t *testing.T) string {
 	if b := os.Getenv("AUTOSKD_BIN"); b != "" {
 		return b
 	}
-	root := repoRoot(t)
-	cand := filepath.Join(root, "target", "debug", "autoskd")
-	if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
-		return cand
-	}
-	t.Skip("autoskd binary not found (build `cargo build -p autoskd` or set AUTOSKD_BIN)")
+	t.Skip("autoskd binary not found (run `make build-autoskd` or set AUTOSKD_BIN)")
 	return ""
 }
 
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatalf("repo root (go.mod) not found")
-		}
-		dir = parent
-	}
-}
-
-// seedProject creates a fresh v12 project via `autoskd init` and returns its
-// root, isolating the daemon's registry under a temp HOME + a temp socket. It
-// registers best-effort teardown that kills the auto-spawned daemon.
-func seedProject(t *testing.T, bin string) (proj, sock string) {
+// seedProject creates a fresh v2 project (an .autosk/ skeleton the daemon
+// resolves by walk-up) and returns its root, isolating the daemon's registry
+// under a temp HOME + a temp socket. It registers best-effort teardown that
+// kills the auto-spawned daemon.
+func seedProject(t *testing.T, _ string) (proj, sock string) {
 	t.Helper()
 	tmp := t.TempDir()
 	proj = filepath.Join(tmp, "proj")
-	if err := os.MkdirAll(proj, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(proj, ".autosk", "tasks"), 0o755); err != nil {
 		t.Fatalf("mkdir proj: %v", err)
 	}
 	home := filepath.Join(tmp, "home")
@@ -76,11 +54,6 @@ func seedProject(t *testing.T, bin string) (proj, sock string) {
 		// its unique --sock cmdline.
 		_ = exec.Command("pkill", "-f", "autoskd serve --sock "+sock).Run()
 	})
-
-	out, err := exec.Command(bin, "init", proj).CombinedOutput()
-	if err != nil {
-		t.Fatalf("autoskd init: %v\n%s", err, out)
-	}
 	return proj, sock
 }
 
@@ -95,19 +68,9 @@ func TestAutoSpawn_ReadSucceeds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	// No daemon is running yet — this call must spawn it and succeed.
-	agents, err := cli.Agents(ctx)
-	if err != nil {
-		t.Fatalf("agents (auto-spawn): %v", err)
-	}
-	var hasHuman bool
-	for _, a := range agents {
-		if a.Name == "human" && a.IsHuman {
-			hasHuman = true
-		}
-	}
-	if !hasHuman {
-		t.Errorf("expected seeded human agent, got %+v", agents)
+	// No daemon is running yet — this read call must spawn it and succeed.
+	if _, err := cli.Tasks(ctx, TaskListFilter{}); err != nil {
+		t.Fatalf("tasks (auto-spawn): %v", err)
 	}
 
 	// Liveness probe also answers once the daemon is up.
@@ -141,7 +104,7 @@ func TestAutoSpawn_ConcurrentFirstCallersDoNotDeadlock(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			_, errs[idx] = cli.Agents(ctx)
+			_, errs[idx] = cli.Tasks(ctx, TaskListFilter{})
 		}(i)
 	}
 	wg.Wait()

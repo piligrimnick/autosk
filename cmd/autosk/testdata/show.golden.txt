@@ -1,14 +1,12 @@
-[ask-a1b2c3]: Wire up doltlite store
+[ask-a1b2c3]: Wire up the file store
 status:        work
-priority:      1
-workflow:      -
-current_step:  -
-current_agent: -
-author:        -
+workflow:      feature-dev
+step:          dev
 blocked:       no
 blocked_by:    -
 blocks:        ask-3c4d5e
+comments:      0
 created_at:    2026-05-13 13:00:00
 updated_at:    2026-05-13 14:42:13
 description:
-  Implement Open/Close/Migrate and the smoke test.
+  Implement the task store and the smoke test.

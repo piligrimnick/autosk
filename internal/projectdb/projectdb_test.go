@@ -9,111 +9,53 @@ import (
 	"autosk/internal/projectdb"
 )
 
-func TestResolve_Override(t *testing.T) {
-	got, err := projectdb.Resolve(t.TempDir(), "/explicit/path")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "/explicit/path" {
-		t.Fatalf("want override, got %q", got)
-	}
-}
-
-func TestResolve_Env(t *testing.T) {
-	t.Setenv(projectdb.EnvDB, "/from/env")
-	got, err := projectdb.Resolve(t.TempDir(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "/from/env" {
-		t.Fatalf("want env path, got %q", got)
-	}
-}
-
-func TestResolve_WalkUp(t *testing.T) {
+func TestResolveRoot_WalkUp(t *testing.T) {
 	root := t.TempDir()
 	deep := filepath.Join(root, "a", "b", "c")
 	if err := os.MkdirAll(deep, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dbDir := filepath.Join(root, ".autosk")
-	if err := os.Mkdir(dbDir, 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(root, ".autosk"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dbPath := filepath.Join(dbDir, "db")
-	if err := os.WriteFile(dbPath, []byte("touch"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv(projectdb.EnvDB, "")
 
-	got, err := projectdb.Resolve(deep, "")
+	got, err := projectdb.ResolveRoot(deep)
 	if err != nil {
 		t.Fatalf("walk-up failed: %v", err)
 	}
-	if got != dbPath {
-		t.Fatalf("want %q, got %q", dbPath, got)
+	if got != root {
+		t.Fatalf("want %q, got %q", root, got)
 	}
 }
 
-func TestResolve_NotFound(t *testing.T) {
-	t.Setenv(projectdb.EnvDB, "")
-	_, err := projectdb.Resolve(t.TempDir(), "")
+func TestResolveRoot_AtRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".autosk"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := projectdb.ResolveRoot(root)
+	if err != nil {
+		t.Fatalf("resolve at root failed: %v", err)
+	}
+	if got != root {
+		t.Fatalf("want %q, got %q", root, got)
+	}
+}
+
+func TestResolveRoot_NotFound(t *testing.T) {
+	_, err := projectdb.ResolveRoot(t.TempDir())
 	if !errors.Is(err, projectdb.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
 
-func TestResolveOrInit_Creates(t *testing.T) {
+func TestResolveRoot_FileNotDir(t *testing.T) {
+	// A regular file named .autosk must NOT be treated as a project marker.
 	root := t.TempDir()
-	t.Setenv(projectdb.EnvDB, "")
-	t.Setenv(projectdb.EnvNoAutoInit, "")
-
-	path, created, err := projectdb.ResolveOrInit(root, "")
-	if err != nil {
+	if err := os.WriteFile(filepath.Join(root, ".autosk"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if !created {
-		t.Fatal("want created=true on empty dir")
-	}
-	wantDir := filepath.Join(root, ".autosk")
-	if filepath.Dir(path) != wantDir {
-		t.Fatalf("want %s/db, got %s", wantDir, path)
-	}
-	if _, err := os.Stat(wantDir); err != nil {
-		t.Fatalf("dir not created: %v", err)
-	}
-}
-
-func TestResolveOrInit_RespectsNoAutoInit(t *testing.T) {
-	t.Setenv(projectdb.EnvDB, "")
-	t.Setenv(projectdb.EnvNoAutoInit, "1")
-	_, _, err := projectdb.ResolveOrInit(t.TempDir(), "")
-	if !errors.Is(err, projectdb.ErrAutoInitDisabled) {
-		t.Fatalf("want ErrAutoInitDisabled, got %v", err)
-	}
-}
-
-func TestResolveOrInit_DiscoveryWins(t *testing.T) {
-	root := t.TempDir()
-	dbDir := filepath.Join(root, ".autosk")
-	if err := os.Mkdir(dbDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	dbPath := filepath.Join(dbDir, "db")
-	if err := os.WriteFile(dbPath, []byte(""), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv(projectdb.EnvDB, "")
-	t.Setenv(projectdb.EnvNoAutoInit, "1") // would fail if AutoInit triggered
-
-	got, created, err := projectdb.ResolveOrInit(root, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if created {
-		t.Fatal("did not expect AutoInit")
-	}
-	if got != dbPath {
-		t.Fatalf("want %q, got %q", dbPath, got)
+	if _, err := projectdb.ResolveRoot(root); !errors.Is(err, projectdb.ErrNotFound) {
+		t.Fatalf("want ErrNotFound for a non-dir marker, got %v", err)
 	}
 }

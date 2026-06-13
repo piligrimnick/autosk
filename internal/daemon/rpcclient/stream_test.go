@@ -14,9 +14,9 @@ import (
 
 // streamServer is a line-delimited JSON-RPC server that, unlike fakeServer,
 // holds the connection open after the first request so it can model the
-// persistent job.subscribe transport (subscribe ack → a tail of `job-event`
-// notifications). It records every inbound request line so a test can assert
-// the client sent job.unsubscribe on Close.
+// persistent session.subscribe transport (subscribe ack → a tail of
+// `session-event` notifications). It records every inbound request line so a
+// test can assert the client sent session.unsubscribe on Close.
 type streamServer struct {
 	sock string
 	mu   sync.Mutex
@@ -78,7 +78,7 @@ func (s *streamServer) serve(conn net.Conn, onSubscribe func(enc *json.Encoder, 
 		subID = uint64(v)
 	}
 	onSubscribe(enc, subID)
-	// Drain (and record) any further requests — notably the job.unsubscribe
+	// Drain (and record) any further requests — notably the session.unsubscribe
 	// that Close() writes — until the client drops the connection.
 	for {
 		line, err := r.ReadBytes('\n')
@@ -110,12 +110,12 @@ func (s *streamServer) sawMethod(method string) bool {
 	return false
 }
 
-func jobEventFrame(kind, jobID string, eventID int, payload map[string]any) map[string]any {
-	params := map[string]any{"kind": kind, "job_id": jobID, "event_id": eventID}
+func sessionEventFrame(kind, sessionID string, line int, payload map[string]any) map[string]any {
+	params := map[string]any{"kind": kind, "session_id": sessionID, "line": line}
 	for k, v := range payload {
 		params[k] = v
 	}
-	return map[string]any{"method": "job-event", "params": params}
+	return map[string]any{"method": "session-event", "params": params}
 }
 
 func mustClient(t *testing.T, sock string) *Client {
@@ -127,40 +127,42 @@ func mustClient(t *testing.T, sock string) *Client {
 	return cli
 }
 
-// TestJobSubscribe_DemuxOrder asserts the readLoop forwards `job-event`
+// TestSessionSubscribe_DemuxOrder asserts the readLoop forwards `session-event`
 // notifications onto the channel in order (ignoring the subscribe ack) and that
-// Close() is idempotent and emits job.unsubscribe.
-func TestJobSubscribe_DemuxOrder(t *testing.T) {
+// Close() is idempotent and emits session.unsubscribe.
+func TestSessionSubscribe_DemuxOrder(t *testing.T) {
 	srv := newStreamServer(t, func(enc *json.Encoder, subID uint64) {
 		// Subscribe ack (a plain response) — readLoop must ignore it.
 		_ = enc.Encode(map[string]any{"id": subID, "result": map[string]any{"ok": true}})
 		// Two message frames, a status, then a terminal done.
-		_ = enc.Encode(jobEventFrame("message", "job-1", 1, map[string]any{
-			"event": map[string]any{"kind": "assistant", "text": "hello"}}))
-		_ = enc.Encode(jobEventFrame("message", "job-1", 2, map[string]any{
-			"event": map[string]any{"kind": "assistant", "text": "world"}}))
-		_ = enc.Encode(jobEventFrame("status", "job-1", 0, map[string]any{
-			"job": map[string]any{"job_id": "job-1", "status": "running"}}))
-		_ = enc.Encode(jobEventFrame("done", "job-1", 0, map[string]any{
-			"job": map[string]any{"job_id": "job-1", "status": "done"}}))
+		_ = enc.Encode(sessionEventFrame("message", "se-1", 1, map[string]any{
+			"event": map[string]any{"type": "message", "message": map[string]any{
+				"role": "assistant", "content": []map[string]any{{"type": "text", "text": "hello"}}}}}))
+		_ = enc.Encode(sessionEventFrame("message", "se-1", 2, map[string]any{
+			"event": map[string]any{"type": "message", "message": map[string]any{
+				"role": "assistant", "content": []map[string]any{{"type": "text", "text": "world"}}}}}))
+		_ = enc.Encode(sessionEventFrame("status", "se-1", 0, map[string]any{
+			"session": map[string]any{"id": "se-1", "status": "running"}}))
+		_ = enc.Encode(sessionEventFrame("done", "se-1", 0, map[string]any{
+			"session": map[string]any{"id": "se-1", "status": "done"}}))
 	})
 	cli := mustClient(t, srv.sock)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	stream, err := cli.JobSubscribe(ctx, "job-1", SubscribeOptions{Attach: true, Full: true})
+	stream, err := cli.SessionSubscribe(ctx, "se-1", 0)
 	if err != nil {
-		t.Fatalf("JobSubscribe: %v", err)
+		t.Fatalf("SessionSubscribe: %v", err)
 	}
 
 	want := []struct {
-		kind    string
-		eventID int64
-		text    string
-		status  string
+		kind   string
+		line   int
+		text   string
+		status string
 	}{
-		{kind: "message", eventID: 1, text: "hello"},
-		{kind: "message", eventID: 2, text: "world"},
+		{kind: "message", line: 1, text: "hello"},
+		{kind: "message", line: 2, text: "world"},
 		{kind: "status", status: "running"},
 		{kind: "done", status: "done"},
 	}
@@ -170,29 +172,29 @@ func TestJobSubscribe_DemuxOrder(t *testing.T) {
 			if ev.Kind != w.kind {
 				t.Fatalf("event %d kind = %q, want %q", i, ev.Kind, w.kind)
 			}
-			if w.eventID != 0 && ev.EventID != w.eventID {
-				t.Errorf("event %d id = %d, want %d", i, ev.EventID, w.eventID)
+			if w.line != 0 && ev.Line != w.line {
+				t.Errorf("event %d line = %d, want %d", i, ev.Line, w.line)
 			}
-			if w.text != "" && (ev.Event == nil || ev.Event.Text != w.text) {
+			if w.text != "" && (ev.Event == nil || ev.Event.Message == nil || ev.Event.Message.Text() != w.text) {
 				t.Errorf("event %d text = %+v, want %q", i, ev.Event, w.text)
 			}
-			if w.status != "" && (ev.Job == nil || ev.Job.Status != w.status) {
-				t.Errorf("event %d job = %+v, want status %q", i, ev.Job, w.status)
+			if w.status != "" && (ev.Session == nil || string(ev.Session.Status) != w.status) {
+				t.Errorf("event %d session = %+v, want status %q", i, ev.Session, w.status)
 			}
 		case <-time.After(2 * time.Second):
 			t.Fatalf("timed out waiting for event %d (%s)", i, w.kind)
 		}
 	}
 
-	// Close is idempotent and must emit job.unsubscribe to the server.
+	// Close is idempotent and must emit session.unsubscribe to the server.
 	if err := stream.Close(); err != nil {
 		t.Errorf("Close: %v", err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Errorf("second Close: %v", err)
 	}
-	waitFor(t, 2*time.Second, func() bool { return srv.sawMethod("job.unsubscribe") },
-		"server never received job.unsubscribe after Close")
+	waitFor(t, 2*time.Second, func() bool { return srv.sawMethod("session.unsubscribe") },
+		"server never received session.unsubscribe after Close")
 }
 
 // TestJobSubscribe_SubscribeError asserts an error response to the subscribe
@@ -206,7 +208,7 @@ func TestJobSubscribe_DemuxOrder(t *testing.T) {
 // even without the fix. With a non-expiring ctx the ONLY path that releases the
 // connection is readLoop's deferred Close — exactly the code under test. The
 // deferred cancel() reaps anything still parked if an assertion fails.
-func TestJobSubscribe_SubscribeError(t *testing.T) {
+func TestSessionSubscribe_SubscribeError(t *testing.T) {
 	srv := newStreamServer(t, func(enc *json.Encoder, subID uint64) {
 		_ = enc.Encode(map[string]any{"id": subID, "error": map[string]any{
 			"code": CodeNotFound, "message": "no such job"}})
@@ -215,9 +217,9 @@ func TestJobSubscribe_SubscribeError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	stream, err := cli.JobSubscribe(ctx, "ghost", SubscribeOptions{})
+	stream, err := cli.SessionSubscribe(ctx, "ghost", 0)
 	if err != nil {
-		t.Fatalf("JobSubscribe: %v", err)
+		t.Fatalf("SessionSubscribe: %v", err)
 	}
 	select {
 	case ev, ok := <-stream.Events():

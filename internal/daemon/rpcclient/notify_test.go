@@ -20,10 +20,11 @@ func TestSubscribe_ForwardsNotifications(t *testing.T) {
 		// Subscribe ack (a plain response) — readLoop must ignore it.
 		_ = enc.Encode(map[string]any{"id": subID, "result": map[string]any{"subscribed": true}})
 		_ = enc.Encode(noteFrame("task-changed", map[string]any{
-			"root": "/repo", "db_path": "/repo/.autosk/db"}))
-		_ = enc.Encode(noteFrame("project-changed", map[string]any{}))
+			"root": "/repo", "task": map[string]any{"id": "ask-1"}}))
+		_ = enc.Encode(noteFrame("project-changed", map[string]any{
+			"project": map[string]any{"root": "/repo", "name": "repo"}}))
 		_ = enc.Encode(noteFrame("task-changed", map[string]any{
-			"root": "/repo", "db_path": "/repo/.autosk/db"}))
+			"root": "/repo", "task": map[string]any{"id": "ask-2"}}))
 	})
 	cli := mustClient(t, srv.sock)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -62,7 +63,7 @@ func TestSubscribe_ForwardsNotifications(t *testing.T) {
 // (readLoop's deferred Close) so the server observes the client dropping its
 // end. The context is long-lived (WithCancel, never expires) so the teardown is
 // driven solely by the error response, not by ctx expiry — mirroring
-// TestJobSubscribe_SubscribeError.
+// TestSessionSubscribe_SubscribeError.
 func TestSubscribe_SelfReapsOnError(t *testing.T) {
 	srv := newStreamServer(t, func(enc *json.Encoder, subID uint64) {
 		_ = enc.Encode(map[string]any{"id": subID, "error": map[string]any{

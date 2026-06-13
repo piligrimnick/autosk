@@ -32,8 +32,6 @@ func TestRenderStatusBar_NoDoubleSpaces(t *testing.T) {
 			s.health.Daemon = "ok"
 			s.scope.TaskID = "ask-aaaaaa"
 			s.scope.WorkflowName = "feature-dev"
-			s.scope.Agent = "dev"
-			s.scope.AgentRel = agentRelAuthor
 		}},
 		{"daemon_down", func(s *state) {
 			s.health.Daemon = "down"
@@ -114,9 +112,11 @@ func TestRenderOptionsStrip_FocusedPanelEntries(t *testing.T) {
 		wantContain []string
 	}{
 		{"tasks", winTasks, []string{"new", "edit", "done"}},
-		{"jobs", winJobs, []string{"kill"}},
-		{"workflows", winWorkflows, []string{"new", "delete", "iso"}},
-		{"agents", winAgents, []string{"install", "uninstall"}},
+		{"sessions", winSessions, []string{"abort"}},
+		// Workflows + Agents are READ-ONLY in v2: no panel write verbs, only
+		// the global bindings appear in the strip.
+		{"workflows", winWorkflows, []string{"quit", "help"}},
+		{"agents", winAgents, []string{"quit", "help"}},
 		{"detail", winDetail, []string{"help", "quit"}},
 	}
 	for _, c := range cases {
@@ -218,7 +218,7 @@ func TestRenderOptionsStrip_WidthWithinBudget(t *testing.T) {
 	specs := gu.bindingSpecs()
 	// Compute the widest first entry across focused panels so we
 	// know the unavoidable lower bound when truncation kicks in.
-	focuses := []string{winTasks, winJobs, winWorkflows, winAgents, winDetail}
+	focuses := []string{winTasks, winSessions, winWorkflows, winAgents, winDetail}
 	for _, focus := range focuses {
 		for w := 30; w <= 120; w += 5 {
 			out := renderOptionsStrip(specs, focus, w)

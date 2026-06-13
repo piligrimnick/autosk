@@ -115,13 +115,21 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<StartD
   daemon.onShutdownRequested(() => void shutdown());
   daemon.start();
 
+  // Attach the connection handler BEFORE the socket starts accepting: a
+  // net.Server drops "connection" events emitted before a listener exists, so
+  // listening first would silently strand any client that connects in the gap
+  // (concurrent first-callers hung on a request the daemon never read).
   server.serve(unix.server, { isTcp: false, requireAuth: false });
+  await unix.listen();
 
   let tcpAddress: { host: string; port: number } | undefined;
   if (opts.tcp) {
     const host = opts.tcp.host ?? "127.0.0.1";
     try {
       const listener = net.createServer();
+      tcpListener = listener;
+      // Same ordering rule as the UDS above: wire the handler, then listen.
+      server.serve(listener, { isTcp: true, requireAuth: true });
       await new Promise<void>((resolve, reject) => {
         const onError = (e: unknown) => reject(e);
         listener.once("error", onError);
@@ -130,11 +138,9 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<StartD
           resolve();
         });
       });
-      tcpListener = listener;
       const addr = listener.address();
       tcpAddress =
         addr && typeof addr === "object" ? { host: addr.address, port: addr.port } : { host, port: opts.tcp.port };
-      server.serve(listener, { isTcp: true, requireAuth: true });
       logger.info(`autoskd: TCP listening on ${tcpAddress.host}:${tcpAddress.port} (token auth)`);
     } catch (e) {
       // A TCP bind failure (e.g. port in use) is non-fatal: the UDS is already

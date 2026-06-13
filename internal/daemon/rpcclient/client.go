@@ -1,13 +1,15 @@
-// Package rpcclient is the Go JSON-RPC client for autoskd (plan §4.1, §7.8).
+// Package rpcclient is the Go JSON-RPC client for autoskd (proto-v2, plan §4).
 //
-// autoskd is the Rust daemon that owns .autosk/db; the Go CLI and lazy TUI talk
-// to it over a single line-delimited JSON-RPC surface on a unix-domain socket.
-// This package is the transport (one JSON object per line) plus the
-// language-server-style auto-spawn connector: a caller that finds no daemon
-// transparently spawns autoskd and waits for it to come up (see connector.go).
+// autoskd is the Bun/TypeScript daemon that owns .autosk/ (tasks, sessions,
+// extensions on disk — no database); the Go CLI and lazy TUI talk to it over a
+// single line-delimited JSON-RPC surface on a unix-domain socket. This package
+// is the transport (one JSON object per line) plus the language-server-style
+// auto-spawn connector: a caller that finds no daemon transparently spawns
+// autoskd and waits for it to come up (see connector.go).
 //
-// Phase 1 exposes the READ surface (the methods the read-only lazy datasource
-// needs). Writes, live job.subscribe tailing and TCP/auth land in later phases.
+// Every project-scoped request carries the {cwd} selector only (v2 dropped
+// db_path + the cli|lazy source discriminator). The daemon resolves {cwd} to a
+// project by walking up to the nearest .autosk/ directory.
 package rpcclient
 
 import (
@@ -26,11 +28,8 @@ import (
 type Options struct {
 	// Sock is the daemon UDS path. Empty → $AUTOSK_SOCK → ~/.autosk/daemon.sock.
 	Sock string
-	// Cwd is the project root carried in every request's selector. Empty →
-	// os.Getwd().
+	// Cwd is the project selector carried in every request. Empty → os.Getwd().
 	Cwd string
-	// DBOverride is forwarded as the db_path selector when non-empty.
-	DBOverride string
 	// AutoskdBin overrides autoskd binary resolution for auto-spawn (else
 	// $AUTOSKD_BIN, then alongside the calling binary, then PATH).
 	AutoskdBin string
@@ -38,11 +37,10 @@ type Options struct {
 	NoAutoSpawn bool
 }
 
-// Client is a JSON-RPC client bound to one project selector (cwd/db).
+// Client is a JSON-RPC client bound to one project selector (cwd).
 type Client struct {
 	conn *Connector
 	cwd  string
-	db   string
 	id   atomic.Uint64
 }
 
@@ -59,7 +57,6 @@ func New(opts Options) (*Client, error) {
 	return &Client{
 		conn: &Connector{sock: sock, bin: opts.AutoskdBin, noSpawn: opts.NoAutoSpawn},
 		cwd:  cwd,
-		db:   opts.DBOverride,
 	}, nil
 }
 
@@ -96,15 +93,15 @@ func (e *RPCError) Error() string {
 	return fmt.Sprintf("autoskd rpc error %d: %s", e.Code, e.Message)
 }
 
-// Error codes mirrored from autosk-proto::rpc::error_codes.
+// Error codes mirrored from daemon/sdk/src/proto.ts ErrorCodes.
 const (
 	CodeMethodNotFound  = -32601
+	CodeInvalidParams   = -32602
 	CodeProjectNotFound = 1001
 	CodeInvalidProject  = 1002
 	CodeNotFound        = 1003
-	// CodeConflict marks a retryable "exists but not ready / not applicable"
-	// condition (terminal run, or a queued run whose live runner has not
-	// spawned yet). Mirrors the daemon's former HTTP 409.
+	// CodeConflict marks a retryable "exists but not in a state that accepts the
+	// request now" condition (e.g. a live session, or an absent steer hook).
 	CodeConflict = 1004
 )
 
@@ -140,15 +137,12 @@ func (c *Client) call(ctx context.Context, method string, params map[string]any,
 	return nil
 }
 
-// selector returns a params map carrying the project selector, merged with any
-// method-specific extras.
+// selector returns a params map carrying the {cwd} project selector, merged
+// with any method-specific extras. v2 carries no db_path / source.
 func (c *Client) selector(extra map[string]any) map[string]any {
-	p := make(map[string]any, len(extra)+2)
+	p := make(map[string]any, len(extra)+1)
 	if c.cwd != "" {
 		p["cwd"] = c.cwd
-	}
-	if c.db != "" {
-		p["db_path"] = c.db
 	}
 	for k, v := range extra {
 		p[k] = v

@@ -108,6 +108,62 @@ describe("single-instance bind", () => {
     await (result as DaemonRuntime).shutdown();
   });
 
+  test("concurrent cross-process spawns never double-bind the socket", async () => {
+    // Regression for the empty-lock-file race: several SEPARATE daemon
+    // processes (distinct pids) racing to claim the same socket at once used to
+    // be able to misread a live holder's still-empty lock as stale and bind a
+    // second listener at the same path, stranding clients that connected to the
+    // orphaned listener (their requests hung forever). The in-process
+    // concurrent test above can't catch this (both racers share process.pid).
+    const n = 4;
+    const procs = Array.from({ length: n }, (_, i) =>
+      Bun.spawn({
+        cmd: ["bun", INDEX_TS],
+        env: {
+          ...process.env,
+          HOME: join(dir, `cc-home${i}`),
+          AUTOSK_SOCK: socketPath,
+          AUTOSK_IDLE_SECS: "0",
+        },
+        stdout: "ignore",
+        stderr: "ignore",
+      }),
+    );
+    try {
+      await waitForSocket(socketPath);
+      // Fire many concurrent clients; with the double-bind bug at least one
+      // would connect to the stranded listener and never get a reply.
+      const results = await Promise.all(
+        Array.from({ length: 12 }, async () => {
+          const client = await RpcClient.connect(socketPath);
+          try {
+            const v = await Promise.race([
+              client.call<{ version: string }>("meta.version", null),
+              new Promise<never>((_, rej) => setTimeout(() => rej(new Error("meta.version timed out")), 5000)),
+            ]);
+            return typeof v.version === "string";
+          } finally {
+            client.close();
+          }
+        }),
+      );
+      expect(results.every(Boolean)).toBe(true);
+      // Exactly the losers (n-1) exit 0 on their own; the winner keeps serving.
+      let exited = 0;
+      for (const p of procs) {
+        const code = await Promise.race([
+          p.exited,
+          new Promise<number | null>((r) => setTimeout(() => r(null), 1500)),
+        ]);
+        if (code === 0) exited++;
+      }
+      expect(exited).toBe(n - 1);
+    } finally {
+      for (const p of procs) p.kill();
+      await Promise.all(procs.map((p) => p.exited));
+    }
+  }, 30_000);
+
   test("the binary exits 0 when a live daemon already owns the socket", async () => {
     const home1 = join(dir, "bin-home1");
     const home2 = join(dir, "bin-home2");

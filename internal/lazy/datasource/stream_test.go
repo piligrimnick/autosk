@@ -14,8 +14,8 @@ import (
 	"autosk/internal/daemon/rpcclient"
 )
 
-// streamDaemon is a persistent line-delimited JSON-RPC server for job.subscribe:
-// it answers the subscribe with an ack, writes a tail of `job-event`
+// streamDaemon is a persistent line-delimited JSON-RPC server for session.subscribe:
+// it answers the subscribe with an ack, writes a tail of `session-event`
 // notifications, then keeps the connection open (mirroring autoskd, which never
 // EOFs the tail on `done`). Returns an RPC datasource wired to it and a `gone`
 // channel that closes when a served connection's read loop exits — i.e. when the
@@ -79,32 +79,32 @@ func streamDaemon(t *testing.T, frames []map[string]any) (*RPC, <-chan struct{})
 }
 
 func notifyFrame(kind string, payload map[string]any) map[string]any {
-	params := map[string]any{"kind": kind, "job_id": "job-1"}
+	params := map[string]any{"kind": kind, "session_id": "session-1"}
 	for k, v := range payload {
 		params[k] = v
 	}
-	return map[string]any{"method": "job-event", "params": params}
+	return map[string]any{"method": "session-event", "params": params}
 }
 
-// TestStreamLive_MapsAndTearsDownOnDone asserts StreamLive maps each job-event
+// TestStreamSession_MapsAndTearsDownOnDone asserts StreamSession maps each session-event
 // frame to the right LiveEvent AND that the handle's channel CLOSES on the
 // terminal `done` frame (the daemon keeps the socket open, so without the
 // close-on-done teardown the channel would never close — a goroutine + fd leak).
-func TestStreamLive_MapsAndTearsDownOnDone(t *testing.T) {
+func TestStreamSession_MapsAndTearsDownOnDone(t *testing.T) {
 	ds, _ := streamDaemon(t, []map[string]any{
 		notifyFrame("message", map[string]any{
-			"event_id": 7, "event": map[string]any{"kind": "assistant", "text": "hello"}}),
+			"line": 7, "event": map[string]any{"type": "message", "message": map[string]any{"role": "assistant", "content": "hello"}}}),
 		notifyFrame("status", map[string]any{
-			"job": map[string]any{"job_id": "job-1", "status": "running"}}),
+			"session": map[string]any{"id": "session-1", "status": "running"}}),
 		notifyFrame("done", map[string]any{
-			"job": map[string]any{"job_id": "job-1", "status": "done"}}),
+			"session": map[string]any{"id": "session-1", "status": "done"}}),
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	h, err := ds.StreamLive(ctx, "job-1")
+	h, err := ds.StreamSession(ctx, "session-1")
 	if err != nil {
-		t.Fatalf("StreamLive: %v", err)
+		t.Fatalf("StreamSession: %v", err)
 	}
 	defer h.Close()
 
@@ -119,45 +119,45 @@ func TestStreamLive_MapsAndTearsDownOnDone(t *testing.T) {
 			}
 			got = append(got, ev)
 		case <-time.After(2 * time.Second):
-			t.Fatal("StreamLive did not tear down on `done` (channel never closed) — leak")
+			t.Fatal("StreamSession did not tear down on `done` (channel never closed) — leak")
 		}
 	}
 
 	if len(got) != 3 {
 		t.Fatalf("got %d events, want 3: %+v", len(got), got)
 	}
-	if got[0].Kind != "message" || got[0].EventID != 7 || got[0].Message.Text != "hello" {
-		t.Errorf("event 0 = %+v, want message/7/hello", got[0])
+	if got[0].Kind != "message" || got[0].LineNum != 7 {
+		t.Errorf("event 0 = %+v, want message/7", got[0])
 	}
-	if got[1].Kind != "status" || got[1].Status.Status != "running" {
-		t.Errorf("event 1 = %+v, want status/running", got[1])
+	if got[1].Kind != "status" {
+		t.Errorf("event 1 = %+v, want status", got[1])
 	}
-	if got[2].Kind != "done" || got[2].Status.Status != "done" {
-		t.Errorf("event 2 = %+v, want done/done", got[2])
+	if got[2].Kind != "done" {
+		t.Errorf("event 2 = %+v, want done", got[2])
 	}
 }
 
-// TestStreamLive_ReleasesConnOnDone asserts that the terminal `done` frame does
+// TestStreamSession_ReleasesConnOnDone asserts that the terminal `done` frame does
 // not just close the LiveEvent channel but actually RELEASES the underlying
 // connection: the streamDaemon keeps its socket open, so the server only sees
-// the client drop its end if StreamLive's close-on-done teardown ran
-// (StreamLive → JobStream.Close → conn.Close). The context is long-lived
+// the client drop its end if StreamSession's close-on-done teardown ran
+// (StreamSession → SessionStream.Close → conn.Close). The context is long-lived
 // (WithCancel, never expires) so the teardown is driven solely by the terminal
 // frame, not by ctx expiry — without the close-on-done the connection +
 // goroutines leak past `done`.
-func TestStreamLive_ReleasesConnOnDone(t *testing.T) {
+func TestStreamSession_ReleasesConnOnDone(t *testing.T) {
 	ds, gone := streamDaemon(t, []map[string]any{
 		notifyFrame("status", map[string]any{
-			"job": map[string]any{"job_id": "job-1", "status": "running"}}),
+			"session": map[string]any{"id": "session-1", "status": "running"}}),
 		notifyFrame("done", map[string]any{
-			"job": map[string]any{"job_id": "job-1", "status": "done"}}),
+			"session": map[string]any{"id": "session-1", "status": "done"}}),
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h, err := ds.StreamLive(ctx, "job-1")
+	h, err := ds.StreamSession(ctx, "session-1")
 	if err != nil {
-		t.Fatalf("StreamLive: %v", err)
+		t.Fatalf("StreamSession: %v", err)
 	}
 	defer h.Close()
 
@@ -170,7 +170,7 @@ func TestStreamLive_ReleasesConnOnDone(t *testing.T) {
 				continue
 			}
 		case <-deadline:
-			t.Fatal("StreamLive did not close the channel on `done`")
+			t.Fatal("StreamSession did not close the channel on `done`")
 		}
 		break
 	}
@@ -178,22 +178,22 @@ func TestStreamLive_ReleasesConnOnDone(t *testing.T) {
 	select {
 	case <-gone:
 	case <-time.After(2 * time.Second):
-		t.Fatal("StreamLive did not release the connection on `done` (leak)")
+		t.Fatal("StreamSession did not release the connection on `done` (leak)")
 	}
 }
 
-// TestStreamLive_ErrorFrame asserts a job-event error frame maps to a LiveEvent
+// TestStreamSession_ErrorFrame asserts a session-event error frame maps to a LiveEvent
 // with Kind=="error" and a non-nil Err.
-func TestStreamLive_ErrorFrame(t *testing.T) {
+func TestStreamSession_ErrorFrame(t *testing.T) {
 	ds, _ := streamDaemon(t, []map[string]any{
 		notifyFrame("error", map[string]any{"error": "boom"}),
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	h, err := ds.StreamLive(ctx, "job-1")
+	h, err := ds.StreamSession(ctx, "session-1")
 	if err != nil {
-		t.Fatalf("StreamLive: %v", err)
+		t.Fatalf("StreamSession: %v", err)
 	}
 	defer h.Close()
 

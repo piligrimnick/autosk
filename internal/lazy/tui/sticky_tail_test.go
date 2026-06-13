@@ -142,11 +142,11 @@ func TestStickyTail_OverlayAppears_TailStaysVisible(t *testing.T) {
 	}
 
 	// Now create the overlay (winJobInput). Its presence is what
-	// detailEffectiveInnerH() consults to subtract jobInputOverlayH
+	// detailEffectiveInnerH() consults to subtract sessionInputOverlayH
 	// from winDetail's visible region. We don't need real coords —
 	// just the view's existence is the signal.
-	if _, err := gu.g.SetView(winJobInput, 5, 25, 75, 29, 0); err != nil && !isUnknownView(err) {
-		t.Fatalf("SetView jobInput: %v", err)
+	if _, err := gu.g.SetView(winSessionInput, 5, 25, 75, 29, 0); err != nil && !isUnknownView(err) {
+		t.Fatalf("SetView sessionInput: %v", err)
 	}
 
 	// Same body again — writeViewSticky should recognise the user is

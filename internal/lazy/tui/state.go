@@ -9,40 +9,40 @@ import (
 	"autosk/internal/timeformat"
 )
 
-// jobTranscriptCacheMax bounds state.jobTranscript so a long lazy
-// session that visits many jobs doesn't grow it unbounded. ~3MB worst
+// sessionTranscriptCacheMax bounds state.sessionTranscript so a long lazy
+// session that visits many sessions doesn't grow it unbounded. ~3MB worst
 // case at 100KB/entry.
-const jobTranscriptCacheMax = 32
+const sessionTranscriptCacheMax = 32 // renamed from jobTranscriptCacheMax
 
-// jobTranscriptTerminalTTL is the per-entry TTL for terminal jobs:
+// sessionTranscriptTerminalTTL is the per-entry TTL for terminal sessions:
 // after this window the next selection refetches the archive (so
-// late-flushed events appear). Running jobs are kept fresh by SSE
+// late-flushed events appear). Running sessions are kept fresh by SSE
 // alone, no TTL refetch.
-const jobTranscriptTerminalTTL = 30 * time.Second
+const sessionTranscriptTerminalTTL = 30 * time.Second // renamed from jobTranscriptTerminalTTL
 
-// jobLiveDebounce is the keystroke-debounce window before
-// scheduleJobLive actually opens an SSE subscription. j/k-spam across
-// running jobs within this window collapses into one StreamLive call
+// sessionLiveDebounce is the keystroke-debounce window before
+// scheduleSessionLive actually opens an SSE subscription. j/k-spam across
+// running sessions within this window collapses into one StreamSession call
 // against the final-resting cursor row.
-const jobLiveDebounce = 2 * time.Second
+const sessionLiveDebounce = 2 * time.Second // renamed from jobLiveDebounce
 
-// jobLiveBufCap is the soft cap on the per-job live transcript event
+// sessionLiveBufCap is the soft cap on the per-session live transcript event
 // slice. Past this we drop the oldest 25% in one allocation and set
 // te.truncated=true. ~2000 events is roughly an hour of pi traffic.
-const jobLiveBufCap = 2000
+const sessionLiveBufCap = 2000 // renamed from jobLiveBufCap
 
-// jobTranscriptEntry is one entry in state.jobTranscript: the
-// archive + live event slice for a single job, plus per-event
+// sessionTranscriptEntry is one entry in state.sessionTranscript: the
+// archive + live event slice for a single session, plus per-event
 // pre-rendered drawLabeledBox strings, plus the width they were
 // rendered at (so a pane resize triggers a rebuild).
 //
 // touchedAt is the last time this entry was touched via
 // ensureTranscriptEntryLocked (read or write). The LRU eviction
 // scans the cache for the minimum touchedAt to pick a victim.
-type jobTranscriptEntry struct {
-	events        []datasource.MessageEvent // archive + live appends, oldest first
-	renderedBoxes []string                  // pre-rendered drawLabeledBox per event
-	// joinedBody is the per-frame body string renderJobDetail
+type sessionTranscriptEntry struct { // renamed from jobTranscriptEntry
+	events        []datasource.LiveEvent // archive + live appends, oldest first (was MessageEvent)
+	renderedBoxes []string               // pre-rendered drawLabeledBox per event
+	// joinedBody is the per-frame body string renderSessionDetail
 	// concatenates from renderedBoxes — pre-joined as
 	//
 	//	"\n" + boxes[0] + "\n" + "\n" + boxes[1] + "\n" + ...
@@ -53,13 +53,13 @@ type jobTranscriptEntry struct {
 	// session (5000+ events) it was the dominant CPU cost of a
 	// spinner-tick redraw — see ask-beab99 for the benchmark.
 	// joinedDirty is set whenever the boxes slice mutates
-	// (append, truncate, full rebuild); renderJobDetail consults
+	// (append, truncate, full rebuild); renderSessionDetail consults
 	// it AND the renderedWidth / count mismatch as the rebuild
 	// triggers.
 	joinedBody    string
 	joinedDirty   bool
 	renderedWidth int       // contentW used when boxes were built; invalidates on resize
-	loadedAt      time.Time // for TTL on terminal jobs
+	loadedAt      time.Time // for TTL on terminal sessions
 	touchedAt     time.Time // last access; drives LRU eviction
 	truncated     bool      // hit live cap, dropped oldest 25%
 	err           error     // last archive load error (renders as plashka)
@@ -79,28 +79,28 @@ type jobTranscriptEntry struct {
 type panelID int
 
 const (
-	panelTasks panelID = iota
-	panelJobs
+	panelTasks    panelID = iota
+	panelSessions         // renamed from panelJobs
 	panelWorkflows
 	panelAgents
-	panelDetail   // the right detail pane (cursor land for j/k scroll)
-	panelJobInput // synthetic: caret lives in winJobInput
+	panelDetail       // the right detail pane (cursor land for j/k scroll)
+	panelSessionInput // renamed from panelJobInput - synthetic: caret lives in winSessionInput
 )
 
 func (p panelID) String() string {
 	switch p {
 	case panelTasks:
 		return "Tasks"
-	case panelJobs:
-		return "Jobs"
+	case panelSessions:
+		return "Sessions" // renamed from "Jobs"
 	case panelWorkflows:
 		return "Workflows"
 	case panelAgents:
 		return "Agents"
 	case panelDetail:
 		return "Detail"
-	case panelJobInput:
-		return "JobInput"
+	case panelSessionInput:
+		return "SessionInput" // renamed from "JobInput"
 	}
 	return "?"
 }
@@ -109,28 +109,28 @@ func (p panelID) window() string {
 	switch p {
 	case panelTasks:
 		return winTasks
-	case panelJobs:
-		return winJobs
+	case panelSessions:
+		return winSessions // renamed from winJobs
 	case panelWorkflows:
 		return winWorkflows
 	case panelAgents:
 		return winAgents
 	case panelDetail:
 		return winDetail
-	case panelJobInput:
-		return winJobInput
+	case panelSessionInput:
+		return winSessionInput // renamed from winJobInput
 	}
 	return ""
 }
 
-// normalizeForDetail collapses panelJobInput onto panelJobs for
+// normalizeForDetail collapses panelSessionInput onto panelSessions for
 // rendering / row-highlight purposes: the Detail pane above the
-// input still shows Job Detail, and the Jobs panel's row
+// input still shows Session Detail, and the Sessions panel's row
 // highlight stays on while the operator is typing. Identity on
 // every other value.
 func (p panelID) normalizeForDetail() panelID {
-	if p == panelJobInput {
-		return panelJobs
+	if p == panelSessionInput {
+		return panelSessions
 	}
 	return p
 }
@@ -161,13 +161,13 @@ func detailEntityKey(s *state) string {
 		if t, ok := s.selectedTask(); ok {
 			return "task:" + t.ID
 		}
-	case panelJobs:
-		if j, ok := s.selectedJob(); ok {
-			return "job:" + j.JobID
+	case panelSessions:
+		if sess, ok := s.selectedSession(); ok {
+			return "session:" + sess.ID
 		}
 	case panelWorkflows:
 		if w, ok := s.selectedWorkflow(); ok {
-			return "workflow:" + w.ID
+			return "workflow:" + w.Name
 		}
 	case panelAgents:
 		if a, ok := s.selectedAgent(); ok {
@@ -177,54 +177,32 @@ func detailEntityKey(s *state) string {
 	return ""
 }
 
-// detailShowsJob reports whether the Detail pane is currently
-// rendering a job (Job Detail). Used to gate (a) the
-// winJobInput overlay and (b) the writeViewSticky vs writeView
+// detailShowsSession reports whether the Detail pane is currently
+// rendering a session (Session Detail). Used to gate (a) the
+// winSessionInput overlay and (b) the writeViewSticky vs writeView
 // branch in renderViews. Callers must already hold state.mu (R)Lock.
-func detailShowsJob(s *state) bool {
-	return detailDrivingPanel(s) == panelJobs
+func detailShowsSession(s *state) bool {
+	return detailDrivingPanel(s) == panelSessions
 }
 
-// agentRel selects which agent relation an agent-scope chip refers
-// to. Design plan §3.4 forces the Agents-panel Enter popup so the
-// operator picks one explicitly (the relation is ambiguous —
-// author_id and current_step.agent_id are different concepts).
-type agentRel int
-
-const (
-	agentRelNone   agentRel = iota
-	agentRelAuthor          // narrow on tasks.author_id
-	agentRelStep            // narrow on current_step.agent_id
-)
-
-func (r agentRel) String() string {
-	switch r {
-	case agentRelAuthor:
-		return "author"
-	case agentRelStep:
-		return "step"
-	}
-	return ""
-}
+// NOTE: agentRel removed in v2 - no agent scoping
 
 // scope describes the cross-link scope chips active on the dashboard.
 type scope struct {
-	TaskID       string // narrows Jobs
-	WorkflowID   string // narrows Tasks + Jobs
-	WorkflowName string
-	Agent        string   // narrows Tasks (opt-in via Enter)
-	AgentRel     agentRel // which agent relation Agent refers to
+	TaskID       string // narrows Sessions
+	WorkflowName string // narrows Tasks + Sessions (renamed from WorkflowID)
+	// NOTE: Agent and AgentRel removed in v2 - no agent scoping
 }
 
 // IsEmpty reports whether no scope chip is active.
 func (s scope) IsEmpty() bool {
-	return s.TaskID == "" && s.WorkflowID == "" && s.Agent == ""
+	return s.TaskID == "" && s.WorkflowName == ""
 }
 
 // filterState holds the per-panel filter strings (`/`).
 type filterState struct {
 	Tasks     string
-	Jobs      string
+	Sessions  string // renamed from Jobs
 	Workflows string
 	Agents    string
 }
@@ -441,19 +419,19 @@ type state struct {
 	// Data caches. The View() is the source of truth for rendered
 	// content — these are the most recent slice from the datasource so
 	// the cursor positions are stable across re-renders.
-	tasks []datasource.Task
-	jobs  []datasource.Job
-	// taskJobIdx is the per-task job-presence index used by the
+	tasks    []datasource.Task
+	sessions []datasource.Session // renamed from jobs
+	// taskSessionIdx is the per-task session-presence index used by the
 	// Tasks-panel marker column. Always computed from the
-	// TaskID-UNFILTERED jobs read (workflow scope still applies)
+	// TaskID-UNFILTERED sessions read (workflow scope still applies)
 	// so the ">" marker survives when scope.TaskID filters the
-	// Jobs panel down to a single task — otherwise every other row
+	// Sessions panel down to a single task — otherwise every other row
 	// would lose its marker the moment Space was pressed.
-	taskJobIdx     taskJobIndex
+	taskSessionIdx taskSessionIndex // renamed from taskJobIdx
 	workflows      []datasource.Workflow
 	agents         []datasource.Agent
 	taskCursor     int
-	jobCursor      int
+	sessionCursor  int // renamed from jobCursor
 	workflowCursor int
 	agentCursor    int
 
@@ -464,35 +442,35 @@ type state struct {
 	logBuf  []string
 	logHide bool
 
-	// jobTranscript is a per-jobID cache of the transcript shown in
-	// the Detail pane. Bounded at jobTranscriptCacheMax entries via
+	// sessionTranscript is a per-sessionID cache of the transcript shown in
+	// the Detail pane. Bounded at sessionTranscriptCacheMax entries via
 	// LRU eviction: every ensureTranscriptEntryLocked call stamps the
 	// entry's touchedAt, and evictTranscriptIfNeeded picks the
 	// minimum-stamp victim when the cap is hit.
-	jobTranscript map[string]*jobTranscriptEntry
+	sessionTranscript map[string]*sessionTranscriptEntry // renamed from jobTranscript
 
-	// jobLive* hold the single active SSE subscription. Exactly one
-	// job at a time may be streaming into the Detail pane;
-	// switching selection to a different running job cancels the
-	// current handle after the jobLiveDebounce timer expires.
-	jobLiveJobID  string
-	jobLiveHandle *datasource.LiveHandle
-	jobLiveCancel context.CancelFunc
-	jobLiveTimer  *time.Timer // debounce timer; reset on every selection change
+	// sessionLive* hold the single active SSE subscription. Exactly one
+	// session at a time may be streaming into the Detail pane;
+	// switching selection to a different running session cancels the
+	// current handle after the sessionLiveDebounce timer expires.
+	sessionLiveSessionID string                 // renamed from jobLiveJobID
+	sessionLiveHandle    *datasource.LiveHandle // renamed from jobLiveHandle
+	sessionLiveCancel    context.CancelFunc     // renamed from jobLiveCancel
+	sessionLiveTimer     *time.Timer            // renamed from jobLiveTimer
 
-	// jobInput is the cached contents of winJobInput's textarea.
+	// sessionInput is the cached contents of winSessionInput's textarea.
 	// The view's Buffer() is authoritative once the view exists;
 	// this is the model-side snapshot the renderer seeds the view
 	// from on first creation and reads back on dispatch.
 	//
-	// jobInputOwner is the jobID whose draft is currently held in
-	// jobInput. Cursor moves between running jobs detect a mismatch
+	// sessionInputOwner is the sessionID whose draft is currently held in
+	// sessionInput. Cursor moves between running sessions detect a mismatch
 	// (via afterCursorMove / applyRefreshLocked) and clear both
-	// fields so a draft typed for job-A doesn't leak into job-B's
-	// textarea — nor get silently dispatched to the wrong job on
+	// fields so a draft typed for session-A doesn't leak into session-B's
+	// textarea — nor get silently dispatched to the wrong session on
 	// Ctrl-D.
-	jobInput      string
-	jobInputOwner string
+	sessionInput      string // renamed from jobInput
+	sessionInputOwner string // renamed from jobInputOwner
 
 	health datasource.Health
 
@@ -512,11 +490,7 @@ type state struct {
 	// per comment — and refresh.go evicts the LRU task on overflow.
 	comments map[string][]datasource.Comment
 
-	// signals is a per-task signals cache: "tail of last open
-	// kickback chain" per design plan §4 for the Tasks-detail widget.
-	// Hydrated by refreshAll on cursor change. Same bounding rule as
-	// the comments cache.
-	signals map[string][]datasource.Signal
+	// NOTE: signals removed in v2
 }
 
 // commentsCacheMax bounds state.comments so a long lazy session
@@ -530,13 +504,12 @@ func newState() *state {
 		// detailFocus mirrors focused initially — if the user presses
 		// '0' before navigating anywhere, renderDetail still has a
 		// sensible side panel to consult.
-		detailFocus:   panelTasks,
-		view:          StateDashboard,
-		logBuf:        []string{"lazy started"},
-		health:        datasource.Health{Daemon: "down"},
-		comments:      map[string][]datasource.Comment{},
-		signals:       map[string][]datasource.Signal{},
-		jobTranscript: map[string]*jobTranscriptEntry{},
+		detailFocus:       panelTasks,
+		view:              StateDashboard,
+		logBuf:            []string{"lazy started"},
+		health:            datasource.Health{Daemon: "down"},
+		comments:          map[string][]datasource.Comment{},
+		sessionTranscript: map[string]*sessionTranscriptEntry{}, // renamed
 	}
 }
 
@@ -578,11 +551,11 @@ func (s *state) selectedTask() (datasource.Task, bool) {
 	return s.tasks[s.taskCursor], true
 }
 
-func (s *state) selectedJob() (datasource.Job, bool) {
-	if len(s.jobs) == 0 || s.jobCursor < 0 || s.jobCursor >= len(s.jobs) {
-		return datasource.Job{}, false
+func (s *state) selectedSession() (datasource.Session, bool) {
+	if len(s.sessions) == 0 || s.sessionCursor < 0 || s.sessionCursor >= len(s.sessions) {
+		return datasource.Session{}, false
 	}
-	return s.jobs[s.jobCursor], true
+	return s.sessions[s.sessionCursor], true
 }
 
 func (s *state) selectedWorkflow() (datasource.Workflow, bool) {
@@ -611,20 +584,10 @@ func (s *state) selectedTaskLocked() (datasource.Task, bool) {
 	defer s.mu.RUnlock()
 	return s.selectedTask()
 }
-func (s *state) selectedJobLocked() (datasource.Job, bool) {
+func (s *state) selectedSessionLocked() (datasource.Session, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.selectedJob()
-}
-func (s *state) selectedWorkflowLocked() (datasource.Workflow, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.selectedWorkflow()
-}
-func (s *state) selectedAgentLocked() (datasource.Agent, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.selectedAgent()
+	return s.selectedSession()
 }
 
 // appendLog adds a one-line entry to the command log. The stamp is

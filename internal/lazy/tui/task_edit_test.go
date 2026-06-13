@@ -9,8 +9,8 @@ import (
 	"autosk/internal/lazy/datasource"
 )
 
-// fakeEditDS is a refreshFakeDS extension that records every
-// UpdateTitleDescription call so the test can assert the args.
+// fakeEditDS is a refreshFakeDS extension that records every UpdateTask call so
+// the test can assert the args.
 type fakeEditDS struct {
 	refreshFakeDS
 	gotID, gotTitle, gotDesc string
@@ -18,9 +18,15 @@ type fakeEditDS struct {
 	err                      error
 }
 
-func (f *fakeEditDS) UpdateTitleDescription(_ context.Context, id, title, desc string) error {
+func (f *fakeEditDS) UpdateTask(_ context.Context, id string, title, desc *string) error {
 	f.calls++
-	f.gotID, f.gotTitle, f.gotDesc = id, title, desc
+	f.gotID = id
+	if title != nil {
+		f.gotTitle = *title
+	}
+	if desc != nil {
+		f.gotDesc = *desc
+	}
 	return f.err
 }
 

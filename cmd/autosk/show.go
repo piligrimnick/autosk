@@ -8,7 +8,6 @@ import (
 
 	"autosk/internal/daemon/rpcclient"
 	"autosk/internal/render"
-	"autosk/internal/worktree"
 )
 
 func newShowCmd() *cobra.Command {
@@ -28,46 +27,10 @@ func newShowCmd() *cobra.Command {
 				}
 				return err
 			}
-
-			// blocked / blocked_by / blocks + derived names arrive on the
-			// wire (the daemon computes those joins).
-			opts := []render.Option{wireBlockedOpt(w)}
-			opts = append(opts, wireNameOpts(w)...)
-
-			// Worktree block + step_visits summary need the workflow's
-			// isolation + step graph; fetch it once when the task is in a
-			// workflow. Best-effort: a lookup failure degrades to bare ids,
-			// matching the old store-side behaviour.
-			var visitsSummary string
-			if w.WorkflowID != "" && w.WorkflowName != "" {
-				if wf, werr := cl.GetWorkflow(cmd.Context(), w.WorkflowName); werr == nil {
-					// Surface the deterministic worktree block when the
-					// workflow opts into isolation. Path / branch are pure
-					// functions of (root, taskID); presence is stat'd here.
-					if wf.Isolation == "worktree" {
-						if root, perr := projectRootFromCwd(); perr == nil {
-							if path, pErr := worktree.PathFor(root, w.ID); pErr == nil {
-								wj := render.WorktreeJSON{
-									Path:   path,
-									Branch: worktree.BranchFor(w.ID),
-								}
-								if _, statErr := os.Stat(path); statErr == nil {
-									wj.Exists = true
-								}
-								opts = append(opts, render.WithWorktree(&wj))
-							}
-						}
-					}
-					// Inline step_visits so humans see why a parked task
-					// is stuck on a step. JSON output carries the raw map
-					// under `metadata` instead.
-					if len(w.Metadata) > 0 {
-						visitsSummary = wireVisitsSummary(wf, w.Metadata)
-					}
-				}
-			}
-			opts = append(opts, render.WithMetadata(w.Metadata, visitsSummary))
-
+			// The wire view carries workflow/step names + derived
+			// blocked/blocked_by/blocks/comment_count; render directly (a read
+			// verb prints regardless of --quiet).
+			opts := []render.Option{wireBlockedOpt(w), render.WithCommentCount(w.CommentCount)}
 			t := taskFromWire(w)
 			if flagJSON {
 				return render.TaskJSONTo(os.Stdout, t, opts...)

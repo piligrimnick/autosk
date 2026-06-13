@@ -60,16 +60,15 @@ func TestClient_VersionAndSelector(t *testing.T) {
 	var gotCwd string
 	sock := fakeServer(t, func(method string, params map[string]any) (any, *RPCError) {
 		switch method {
-		case "version":
+		case "meta.version":
 			return map[string]any{"version": "0.1.0-phase1", "commit": "abc"}, nil
 		case "task.list":
 			gotCwd, _ = params["cwd"].(string)
 			return []map[string]any{{
 				"id": "ask-000001", "title": "t", "description": "", "status": "new",
-				"priority": 2, "author_id": "", "author_name": "", "workflow_id": "",
-				"workflow_name": "", "current_step_id": "", "step_name": "", "agent_name": "",
+				"workflow": nil, "step": nil,
 				"blocked": false, "blocked_by": []any{}, "blocks": []any{}, "comment_count": 0,
-				"metadata": nil, "created_at": "2023-11-14T22:15:00Z", "updated_at": "2023-11-14T22:15:00Z",
+				"created_at": "2023-11-14T22:15:00Z", "updated_at": "2023-11-14T22:15:00Z",
 			}}, nil
 		default:
 			return nil, &RPCError{Code: CodeMethodNotFound, Message: "unknown"}
@@ -108,7 +107,7 @@ func TestClient_VersionAndSelector(t *testing.T) {
 
 func TestClient_ErrorDecoding(t *testing.T) {
 	sock := fakeServer(t, func(method string, params map[string]any) (any, *RPCError) {
-		return nil, &RPCError{Code: CodeProjectNotFound, Message: "no .autosk/db"}
+		return nil, &RPCError{Code: CodeProjectNotFound, Message: "no .autosk/ project"}
 	})
 	cli, err := New(Options{Sock: sock, Cwd: "/repo", NoAutoSpawn: true})
 	if err != nil {

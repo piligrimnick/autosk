@@ -34,10 +34,10 @@ func newLazyCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "lazy",
-		Short: "Interactive TUI for tasks, jobs, workflows, and agents",
+		Short: "Interactive TUI for tasks, sessions, workflows, and agents",
 		Long: "lazy is a lazygit-style terminal dashboard for the autosk world.\n" +
-			"Tasks, Jobs, Workflows, and Agents in one process; selecting a job\n" +
-			"renders its transcript (live + archive) directly in the Detail pane.\n" +
+			"Tasks, Sessions, Workflows, and Agents in one process; selecting a\n" +
+			"session renders its transcript (live + archive) in the Detail pane.\n" +
 			"On the first run of a new release, lazy opens a modal showing the\n" +
 			"embedded CHANGELOG.md; press ctrl+w to re-open it manually, or pass\n" +
 			"--no-changelog to suppress the auto-popup.",

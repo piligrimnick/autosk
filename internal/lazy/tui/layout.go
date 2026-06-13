@@ -50,45 +50,45 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 	// concurrent g.Update closures + worker-side mutations (jobdetail
 	// SSE pump) would otherwise race against these reads under -race.
 	var (
-		focusedWin   string
-		focusedSide  string
-		logHidden    bool
-		showJobInput bool
+		focusedWin       string
+		focusedSide      string
+		logHidden        bool
+		showSessionInput bool
 	)
 	gu.st.withRLock(func() {
 		focusedWin = gu.st.focused.window()
 		// focusedSide drives the side-stack accordion (which side
-		// panel grows). When the caret is in winJobInput we still
-		// want the Jobs column to be the wide one above, so
-		// normalize panelJobInput → winJobs for that calculation.
+		// panel grows). When the caret is in winSessionInput we still
+		// want the Sessions column to be the wide one above, so
+		// normalize panelSessionInput → winSessions for that calculation.
 		focusedSide = gu.st.focused.normalizeForDetail().window()
 		logHidden = gu.st.logHide
-		// showJobInput is gated on two conditions:
+		// showSessionInput is gated on two conditions:
 		//
-		//   1. The Detail pane is currently showing a job
-		//      (detailShowsJob: focused panel — or detailFocus when
-		//      focused == panelDetail — normalises to panelJobs).
+		//   1. The Detail pane is currently showing a session
+		//      (detailShowsSession: focused panel — or detailFocus when
+		//      focused == panelDetail — normalises to panelSessions).
 		//      Without this gate the input would appear whenever the
-		//      Jobs panel's cursor happens to point at a live job
+		//      Sessions panel's cursor happens to point at a live session
 		//      EVEN IF the Detail pane is showing a task / workflow /
 		//      agent. The input only makes sense as an attachment to
-		//      the Job Detail body above it.
+		//      the Session Detail body above it.
 		//
-		//   2. The selected job is non-terminal (isJobLive, true for
+		//   2. The selected session is non-terminal (isSessionLive, true for
 		//      queued or running). The view's lifecycle matches the
-		//      job's lifecycle — allocated once when the job becomes
+		//      session's lifecycle — allocated once when the session becomes
 		//      non-terminal, destroyed once when it terminates — so
-		//      the view is never recreated mid-job and drafts can
+		//      the view is never recreated mid-session and drafts can
 		//      never be lost to gocui's NewView clearing the
 		//      TextArea on creation.
 		//
 		// Once both gates pass, the input stays pinned even when the
 		// operator focuses the Detail pane to read the transcript
-		// above (panelDetail with detailFocus==panelJobs still
+		// above (panelDetail with detailFocus==panelSessions still
 		// satisfies condition 1).
-		if detailShowsJob(gu.st) {
-			if j, ok := gu.st.selectedJob(); ok && isJobLive(j) {
-				showJobInput = true
+		if detailShowsSession(gu.st) {
+			if s, ok := gu.st.selectedSession(); ok && isSessionLive(s) {
+				showSessionInput = true
 			}
 		}
 	})
@@ -101,21 +101,21 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 	}
 	dims := arrange(args)
 
-	// Overlay winJobInput INSIDE winDetail's coordinates when the
-	// selected job is live. Detail's rounded frame surrounds both the
+	// Overlay winSessionInput INSIDE winDetail's coordinates when the
+	// selected session is live. Detail's rounded frame surrounds both the
 	// transcript and the input box visually — the input has its own
 	// rounded frame inset by 1 cell from detail's frame on left/right
 	// and 1 cell above detail's bottom frame. The overlay's height is
-	// fixed at jobInputOverlayH rows (frame top + 2 content + frame
+	// fixed at sessionInputOverlayH rows (frame top + 2 content + frame
 	// bottom). Sticky-tail and scroll handlers consult
 	// detailEffectiveInnerH() so the visible region clamps to the rows
 	// above the overlay.
-	if showJobInput {
+	if showSessionInput {
 		if detail, ok := dims[winDetail]; ok {
 			overlay := boxlayout.Dimensions{
 				X0: detail.X0 + 1,
 				X1: detail.X1 - 1,
-				Y0: detail.Y1 - jobInputOverlayH,
+				Y0: detail.Y1 - sessionInputOverlayH,
 				Y1: detail.Y1 - 1,
 			}
 			// Only add the overlay when there's enough room:
@@ -128,13 +128,13 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 			if overlay.X1-overlay.X0 >= 4 &&
 				overlay.Y1-overlay.Y0 >= 1 &&
 				overlay.Y0 >= detail.Y0+2 {
-				dims[winJobInput] = overlay
+				dims[winSessionInput] = overlay
 			}
 		}
 	}
 
 	// Garbage-collect any dashboard window that doesn't appear in the
-	// current arrangement (e.g. winJobInput when the selected job is
+	// current arrangement (e.g. winSessionInput when the selected session is
 	// terminal). We only delete views that are NOT in the current
 	// arrangement so we don't churn through a delete+create on every
 	// flush (gocui doesn't react gracefully to that — a
@@ -159,9 +159,9 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 	// Create views for the active arrangement. Iterate in a fixed
 	// order so the initial creation pass produces a deterministic
 	// view stack — gocui renders views in creation order, and the
-	// overlay winJobInput must be created AFTER winDetail so it
+	// overlay winSessionInput must be created AFTER winDetail so it
 	// draws ON TOP of detail's bottom rows. allDashboardWindows
-	// already lists winDetail before winJobInput, and the status
+	// already lists winDetail before winSessionInput, and the status
 	// bar comes last.
 	visitOrder := append([]string(nil), allDashboardWindows...)
 	visitOrder = append(visitOrder, winStatusBar, winOptionsStrip)
@@ -227,8 +227,8 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 		focusAttr := theme.Active().Focus.Gocui()
 		mutedAttr := theme.Active().Muted.Gocui()
 		switch win {
-		case winJobInput:
-			// winJobInput is overlaid INSIDE winDetail's frame; its own
+		case winSessionInput:
+			// winSessionInput is overlaid INSIDE winDetail's frame; its own
 			// frame + title stay muted (gray) at all times so it reads
 			// as chrome that belongs to the detail pane rather than a
 			// standalone panel competing for the operator's attention.
@@ -244,7 +244,7 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 				v.TitleColor = gocui.ColorDefault
 			}
 		}
-		if win == winJobInput {
+		if win == winSessionInput {
 			v.Editable = true
 			v.Editor = gocui.EditorFunc(gu.liveEditor)
 		}

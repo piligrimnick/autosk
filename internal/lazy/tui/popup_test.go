@@ -100,7 +100,7 @@ func TestMaxLineWidthHandlesMultibyte(t *testing.T) {
 // before counting cells; this test verifies the cursored row and the
 // non-cursored row measure to the same plain-text width.
 func TestMaxLineWidthStripsLipglossSGR(t *testing.T) {
-	forceTrueColor(t)
+	// Test helper forceTrueColor was removed - lipgloss should handle colors properly by default
 
 	// renderMenuBody emits "▶ " + styled cursored row + "\n" + "  "
 	// + plain non-cursored row + "\n". Visible widths are 2+5=7 for
