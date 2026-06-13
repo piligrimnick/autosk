@@ -79,6 +79,17 @@ export class Store {
   private opened = false;
 
   /**
+   * Task-change subscribers (P5 notification fan-out). The daemon registers one
+   * listener per project and maps `(root, id)` onto the wire `task-changed`
+   * notification. Fires for EVERY task mutation through this store AND for
+   * watcher/reconcile-detected EXTERNAL edits — so it is the single, complete
+   * source of `task-changed`. (Engine-driven mutations also go through this
+   * store, so the daemon ignores the engine's own `EngineEvent` task-changed to
+   * avoid emitting each change twice.)
+   */
+  private readonly changeListeners = new Set<(id: string) => void>();
+
+  /**
    * Last-warned signature per persistently-corrupt `task.json`, so a broken idle
    * file warns once per signature change rather than once per reconcile (M2) — a
    * polling `task.list` must not spin the daemon log on a file the operator has
@@ -106,6 +117,32 @@ export class Store {
   /** Project root (parent of `.autosk/`). */
   get root(): string {
     return this.paths.root;
+  }
+
+  /**
+   * Subscribes to task changes (P5). The listener receives the changed task id;
+   * it is fired AFTER the per-task lock is released (so the listener may re-read
+   * the task without deadlocking) and only for changes that are observable to a
+   * client (a mutation, or an accepted/rejected external edit that bumped the
+   * cached signature). Returns an unsubscribe fn.
+   */
+  onTaskChange(listener: (id: string) => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  /** Fires the task-change listeners (errors isolated). No-op without listeners. */
+  private notifyTaskChange(id: string): void {
+    if (this.changeListeners.size === 0) return;
+    for (const fn of this.changeListeners) {
+      try {
+        fn(id);
+      } catch (e) {
+        this.logger.warn(
+          `onTaskChange listener threw for ${id}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
   }
 
   // -- lifecycle -----------------------------------------------------------
@@ -173,7 +210,24 @@ export class Store {
 
   /** Reconciles one task (acquires the per-task lock). */
   async reconcileTask(id: string): Promise<void> {
+    await this.reconcileWithNotify(id);
+  }
+
+  /**
+   * Reconciles one task under its lock, then fires {@link notifyTaskChange} if
+   * the cached signature changed (an accepted/rejected external edit, a new
+   * external task, or a deletion). The signature probe is skipped entirely when
+   * there are no listeners (the store's pre-P5 hot path). Firing happens OUTSIDE
+   * the lock so a listener may re-read the task without deadlocking.
+   */
+  private async reconcileWithNotify(id: string): Promise<void> {
+    if (this.changeListeners.size === 0) {
+      await this.locks.run(id, () => this.reconcileLocked(id));
+      return;
+    }
+    const before = this.tasks.peekSig(id);
     await this.locks.run(id, () => this.reconcileLocked(id));
+    if (this.tasks.peekSig(id) !== before) this.notifyTaskChange(id);
   }
 
   /**
@@ -185,7 +239,7 @@ export class Store {
    */
   private async safeReconcile(id: string): Promise<void> {
     try {
-      await this.locks.run(id, () => this.reconcileLocked(id));
+      await this.reconcileWithNotify(id);
     } catch (e) {
       this.logger.error(`reconcile ${id}: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -364,6 +418,7 @@ export class Store {
       };
       await this.tasks.writeTask(task);
     });
+    this.notifyTaskChange(id);
     return this.taskView(id);
   }
 
@@ -373,6 +428,7 @@ export class Store {
       if (patch.title !== undefined) t.title = patch.title;
       if (patch.description !== undefined) t.description = patch.description;
     });
+    this.notifyTaskChange(id);
     return this.taskView(id);
   }
 
@@ -390,6 +446,7 @@ export class Store {
       t.workflow = pos.workflow;
       t.step = pos.step;
     });
+    this.notifyTaskChange(id);
     return this.taskView(id);
   }
 
@@ -407,6 +464,7 @@ export class Store {
     await this.mutateTask(id, (t) => {
       if (!t.blocked_by.includes(blockerId)) t.blocked_by.push(blockerId);
     });
+    this.notifyTaskChange(id);
     return this.taskView(id);
   }
 
@@ -415,6 +473,7 @@ export class Store {
     await this.mutateTask(id, (t) => {
       t.blocked_by = t.blocked_by.filter((b) => b !== blockerId);
     });
+    this.notifyTaskChange(id);
     return this.taskView(id);
   }
 
@@ -459,7 +518,7 @@ export class Store {
 
   /** Appends a comment to a task. Throws if the task does not exist. */
   async addComment(id: string, input: { author: string; text: string }): Promise<Comment> {
-    return this.locks.run(`${id}::comments`, async () => {
+    const comment = await this.locks.run(`${id}::comments`, async () => {
       // Guard against orphaning a `comments.jsonl` under a dir with no task.json
       // (which `listIdsOnDisk` then skips, hiding the file from every read).
       if (!(await this.taskExists(id))) throw new Error(`task not found: ${id}`);
@@ -479,11 +538,15 @@ export class Store {
       await this.tasks.writeComments(id, comments);
       return comment;
     });
+    // Comment changes bump a task's `comment_count` (part of its view) without
+    // touching `task.json`, so reconcile would miss them — notify explicitly.
+    this.notifyTaskChange(id);
+    return comment;
   }
 
   /** Edits a comment's text (atomic full-file rewrite). Throws if the task is gone. */
   async editComment(id: string, commentId: string, text: string): Promise<Comment | null> {
-    return this.locks.run(`${id}::comments`, async () => {
+    const edited = await this.locks.run(`${id}::comments`, async () => {
       if (!(await this.taskExists(id))) throw new Error(`task not found: ${id}`);
       const comments = await this.tasks.readComments(id);
       const found = comments.find((c) => c.id === commentId);
@@ -493,11 +556,13 @@ export class Store {
       await this.tasks.writeComments(id, comments);
       return found;
     });
+    if (edited) this.notifyTaskChange(id);
+    return edited;
   }
 
   /** Deletes a comment (atomic full-file rewrite). Returns whether it existed. */
   async deleteComment(id: string, commentId: string): Promise<boolean> {
-    return this.locks.run(`${id}::comments`, async () => {
+    const removed = await this.locks.run(`${id}::comments`, async () => {
       if (!(await this.taskExists(id))) throw new Error(`task not found: ${id}`);
       const comments = await this.tasks.readComments(id);
       const next = comments.filter((c) => c.id !== commentId);
@@ -505,6 +570,8 @@ export class Store {
       await this.tasks.writeComments(id, next);
       return true;
     });
+    if (removed) this.notifyTaskChange(id);
+    return removed;
   }
 
   /** Lists a task's comments (in file order). */
