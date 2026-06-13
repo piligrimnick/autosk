@@ -34,8 +34,30 @@ stack (and doltlite) once parity lands; see
   commit → isolation acquire/release), the pi-format transcript writer, the
   `AgentRunContext` (tasks/workflows/log/comment/exec/spawn), steer/followup/abort
   routing, and crash recovery (running/queued sessions → `failed: daemon_restart`,
-  task → `human`). The engine is RPC-independent — driven purely via the Engine
-  API in tests. The RPC v2 server is still to come (P5).
+  task → `human`); the engine is RPC-independent — driven purely via the Engine
+  API in tests. P5 landed the **JSON-RPC v2 server** (`src/rpc/`) — JSON-lines
+  over UDS (default `~/.autosk/daemon.sock`, `$AUTOSK_SOCK`; parent dir `0700` /
+  socket `0600`) plus an opt-in TCP transport with token auth
+  (`~/.autosk/daemon-token`, `$AUTOSK_TOKEN_FILE`); single-instance via an atomic
+  pidfile lock (`<sock>.lock`, dead-pid reclaim — Bun's `node:net` silently
+  rebinds a unix path, so there is no `EADDRINUSE` to race on); a handler table
+  whose key set is compile-time-pinned to `RPC_METHODS` (no-drift) and whose
+  returns are bound to each method's `ResultOf<M>`; notification fan-out
+  (`task-changed` from the store seam, `session-event` from the engine,
+  `project-changed` from `ProjectManager`); `session.subscribe` replay-then-tail
+  from `from_line`; idle-shutdown (no live connections + no queued/running
+  sessions + no `status=work` tasks across loaded projects, window via
+  `$AUTOSK_IDLE_SECS`, default 1800s / `0` disables, off in TCP mode); and
+  `EngineError.code` → `RpcError.code` passthrough. The binary's `main()`
+  (`src/index.ts`) parses `--sock` / `--tcp[=HOST:PORT]` / `--workers`, starts the
+  daemon, exits `0` when it loses the single-instance race, and otherwise fails
+  loud-but-clean (exit `1`, one-line `autoskd: <msg>`) on a startup error. Two
+  RPC-layer semantics worth noting (full operator docs land in P9): `task.done` /
+  `task.cancel` / `task.reopen` are administrative overrides that write via the
+  store and do **not** run `workflow.onTransit` (they reject a live session with
+  `CONFLICT`); `project.remove` is lazy — it forgets the project in the registry
+  and emits `project-changed` but leaves an already-open handle running until the
+  next daemon start.
 - **`extensions/pi-agent/`** — `@autosk/pi-agent`: the shipped extension that
   drives `pi --mode rpc` as an autosk agent. Placeholder in P1 (built in P6).
 
