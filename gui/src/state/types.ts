@@ -1,20 +1,20 @@
 // state/types.ts — the normalized store shape + the action union (redesign plan
 // §3, §6). The reducer is slice-composed (reducer.ts): each slice owns a keyed
-// sub-tree (projects / selection / tasks / jobs / sessions / timeline / ui). The
-// event router (store.tsx) maps `job-event` / `task-changed` / `project-changed`
-// into these actions; render flows from this state.
+// sub-tree (projects / selection / tasks / sessions / transcript / ui). The
+// event router (store.tsx) maps `session-event` / `task-changed` /
+// `project-changed` into these actions; render flows from this state.
 
 import type {
-  Agent,
+  AgentInfo,
   AppSettings,
   Comment,
   DaemonStatus,
-  Job,
-  MessageEvent,
+  ProjectDiagnostics,
   ProjectInfo,
-  Signal,
+  SessionMeta,
   TaskView,
-  Workflow,
+  TranscriptLine,
+  WorkflowInfo,
 } from "@/types";
 import type { Selection } from "./selection";
 import { NO_SELECTION } from "./selection";
@@ -26,19 +26,20 @@ export interface ProjectSlice {
   tasks: Record<string, TaskView>;
   /** Task id order (creation/update order as returned by task.list). */
   taskOrder: string[];
-  workflows: Workflow[];
-  agents: Agent[];
+  workflows: WorkflowInfo[];
+  agents: AgentInfo[];
+  /** Extension load errors for this project (project.diagnostics). */
+  diagnostics: ProjectDiagnostics | null;
   tasksLoaded: boolean;
   metaLoaded: boolean;
   loading: boolean;
   error: string | null;
 }
 
-/** Per-task auxiliary data (jobs/comments/signals), keyed by task id. */
+/** Per-task auxiliary data (sessions/comments), keyed by task id. */
 export interface TaskExtras {
-  jobs: Job[];
+  sessions: SessionMeta[];
   comments: Comment[];
-  signals: Signal[];
   loaded: boolean;
 }
 
@@ -71,16 +72,16 @@ export interface AppState {
 
   extrasByTask: Record<string, TaskExtras>;
 
-  /** Normalized job map (so status/done frames update one place). */
-  jobs: Record<string, Job>;
-  /** Per-project session order (job ids, newest first) for the Sessions panel. */
+  /** Normalized session map (so status/done frames update one place). */
+  sessions: Record<string, SessionMeta>;
+  /** Per-project session order (session ids, newest first) for the Sessions panel. */
   sessionOrderByProject: Record<string, string[]>;
-  /** Live transcript per job (ordered, deduped by event_id). */
-  messagesByJob: Record<string, MessageEvent[]>;
-  /** Highest event_id seen per job, for replay-then-tail dedup. */
-  seenEventId: Record<string, number>;
-  /** The job currently subscribed for a live tail (one at a time in v1). */
-  subscribedJob: string | null;
+  /** Live transcript per session (ordered pi-format lines). */
+  transcriptBySession: Record<string, TranscriptLine[]>;
+  /** Highest transcript line number applied per session, for replay-then-tail dedup. */
+  seenLineBySession: Record<string, number>;
+  /** The session currently subscribed for a live tail (one at a time). */
+  subscribedSession: string | null;
 
   /** Overlay modal, the expanded accordion panel, and the sidebar geometry. */
   ui: {
@@ -105,6 +106,7 @@ export function emptyProjectSlice(): ProjectSlice {
     taskOrder: [],
     workflows: [],
     agents: [],
+    diagnostics: null,
     tasksLoaded: false,
     metaLoaded: false,
     loading: false,
@@ -113,7 +115,7 @@ export function emptyProjectSlice(): ProjectSlice {
 }
 
 export function emptyExtras(): TaskExtras {
-  return { jobs: [], comments: [], signals: [], loaded: false };
+  return { sessions: [], comments: [], loaded: false };
 }
 
 export function initialState(): AppState {
@@ -124,11 +126,11 @@ export function initialState(): AppState {
     byProject: {},
     selection: NO_SELECTION,
     extrasByTask: {},
-    jobs: {},
+    sessions: {},
     sessionOrderByProject: {},
-    messagesByJob: {},
-    seenEventId: {},
-    subscribedJob: null,
+    transcriptBySession: {},
+    seenLineBySession: {},
+    subscribedSession: null,
     ui: {
       modal: null,
       sidebarPanel: "tasks",
@@ -160,18 +162,18 @@ export type Action =
   | { type: "project/select"; root: string | null }
   | { type: "project/tasksLoading"; root: string }
   | { type: "project/tasksLoaded"; root: string; tasks: TaskView[] }
-  | { type: "project/metaLoaded"; root: string; workflows: Workflow[]; agents: Agent[] }
+  | { type: "project/metaLoaded"; root: string; workflows: WorkflowInfo[]; agents: AgentInfo[] }
+  | { type: "project/diagnosticsLoaded"; root: string; diagnostics: ProjectDiagnostics }
   | { type: "project/error"; root: string; error: string }
   // selection
   | { type: "selection/set"; selection: Selection }
   // tasks
   | { type: "task/upserted"; root: string; task: TaskView }
   | { type: "task/extrasLoaded"; taskId: string; extras: Omit<TaskExtras, "loaded"> }
-  // sessions / jobs
-  | { type: "sessions/loaded"; root: string; jobs: Job[] }
-  | { type: "jobs/upsertMany"; jobs: Job[] }
-  | { type: "job/upsert"; job: Job }
-  // timeline / streaming
-  | { type: "job/subscribed"; jobId: string | null }
-  | { type: "job/messagesReset"; jobId: string; messages: MessageEvent[] }
-  | { type: "job/messageAppended"; jobId: string; eventId: number; message: MessageEvent };
+  // sessions
+  | { type: "sessions/loaded"; root: string; sessions: SessionMeta[] }
+  | { type: "session/upsert"; session: SessionMeta }
+  // transcript / live tail
+  | { type: "session/subscribed"; sessionId: string | null }
+  | { type: "session/transcriptReset"; sessionId: string; entries: TranscriptLine[]; nextLine: number }
+  | { type: "session/transcriptAppended"; sessionId: string; line: number; entry: TranscriptLine };

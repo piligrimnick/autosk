@@ -1,74 +1,83 @@
 // Unit tests for the pure slice reducer (no browser, no daemon). These cover
 // the correctness-critical logic the whole transcript + sidebar depend on:
-//   * timelineSlice replay-then-tail dedup (the anti-duplication invariant);
+//   * transcriptSlice replay-then-tail dedup (the anti-duplication invariant);
 //   * projectsSlice projects/loaded pruning + slice-retention + auto-select.
 
 import { describe, it, expect } from "vitest";
 import { rootReducer } from "./reducer";
 import { emptyProjectSlice, initialState, type AppState } from "./types";
-import type { Job, MessageEvent, ProjectInfo } from "@/types";
+import type { ProjectInfo, SessionMeta, TranscriptLine } from "@/types";
 
-function msg(text: string): MessageEvent {
-  return { kind: "assistant_text", text };
-}
-
-function project(root: string): ProjectInfo {
-  return { root, db_path: `${root}/.autosk/db`, name: root.split("/").pop() ?? root };
-}
-
-function jobRow(id: string, createdAt: string): Job {
+function entry(id: string, text: string): TranscriptLine {
   return {
-    job_id: id,
-    task_id: "t1",
-    step_id: "s1",
-    status: "running",
-    corrections_used: 0,
-    max_corrections: 0,
-    created_at: createdAt,
-    duration_ms: 0,
-    attach_count: 0,
-    streaming: false,
-    workflow_name: "wf",
-    step_name: "dev",
-    agent_name: "a",
+    type: "message",
+    id,
+    timestamp: "2024-01-01T00:00:00Z",
+    message: { role: "user", content: text, timestamp: 0 },
   };
 }
 
-describe("timelineSlice", () => {
-  it("messagesReset seeds the transcript and clears the seen counter", () => {
-    let s = initialState();
-    // Pre-load a stale seen counter so we can prove the reset clears it.
-    s = rootReducer(s, { type: "job/messageAppended", jobId: "j1", eventId: 5, message: msg("old") });
-    expect(s.seenEventId["j1"]).toBe(5);
+function project(root: string): ProjectInfo {
+  return { root, name: root.split("/").pop() ?? root };
+}
 
-    s = rootReducer(s, { type: "job/messagesReset", jobId: "j1", messages: [msg("a"), msg("b")] });
-    expect(s.messagesByJob["j1"]).toHaveLength(2);
-    expect(s.seenEventId["j1"]).toBe(0);
+function sessionRow(
+  id: string,
+  startedAt: string | null,
+  status: SessionMeta["status"] = "running",
+): SessionMeta {
+  return {
+    id,
+    task_id: "t1",
+    workflow: "wf",
+    step: "dev",
+    agent: "a",
+    status,
+    started_at: startedAt,
+    ended_at: null,
+  };
+}
+
+describe("transcriptSlice", () => {
+  it("transcriptReset seeds the transcript and sets the seen line to nextLine-1", () => {
+    let s = initialState();
+    // Pre-load a stale seen counter so we can prove the reset overrides it.
+    s = rootReducer(s, { type: "session/transcriptAppended", sessionId: "s1", line: 5, entry: entry("e5", "old") });
+    expect(s.seenLineBySession["s1"]).toBe(5);
+
+    s = rootReducer(s, {
+      type: "session/transcriptReset",
+      sessionId: "s1",
+      entries: [entry("a", "a"), entry("b", "b")],
+      nextLine: 3,
+    });
+    expect(s.transcriptBySession["s1"]).toHaveLength(2);
+    expect(s.seenLineBySession["s1"]).toBe(2); // covered up to nextLine - 1
   });
 
-  it("messageAppended dedups replayed frames (eventId <= seen) and tracks the max", () => {
+  it("transcriptAppended dedups replayed lines (line <= seen) and tracks the max", () => {
     let s: AppState = initialState();
     for (const id of [1, 2, 3]) {
-      s = rootReducer(s, { type: "job/messageAppended", jobId: "j1", eventId: id, message: msg(`#${id}`) });
+      s = rootReducer(s, { type: "session/transcriptAppended", sessionId: "s1", line: id, entry: entry(`e${id}`, `#${id}`) });
     }
-    expect(s.messagesByJob["j1"]).toHaveLength(3);
-    expect(s.seenEventId["j1"]).toBe(3);
+    expect(s.transcriptBySession["s1"]).toHaveLength(3);
+    expect(s.seenLineBySession["s1"]).toBe(3);
 
-    // A replayed frame (id 2 <= seen 3) is dropped, leaving state untouched.
+    // A replayed line (2 <= seen 3) is dropped, leaving state untouched.
     const before = s;
-    s = rootReducer(s, { type: "job/messageAppended", jobId: "j1", eventId: 2, message: msg("dup") });
+    s = rootReducer(s, { type: "session/transcriptAppended", sessionId: "s1", line: 2, entry: entry("dup", "dup") });
     expect(s).toBe(before);
-    expect(s.messagesByJob["j1"]).toHaveLength(3);
+    expect(s.transcriptBySession["s1"]).toHaveLength(3);
   });
 
-  it("messageAppended with eventId 0 (live frame, no id) always appends", () => {
+  it("transcriptAppended with line 0 (live frame, no cursor) always appends", () => {
     let s = initialState();
-    s = rootReducer(s, { type: "job/messageAppended", jobId: "j1", eventId: 3, message: msg("#3") });
-    s = rootReducer(s, { type: "job/messageAppended", jobId: "j1", eventId: 0, message: msg("live") });
-    s = rootReducer(s, { type: "job/messageAppended", jobId: "j1", eventId: 0, message: msg("live2") });
-    expect(s.messagesByJob["j1"]).toHaveLength(3);
-    // seen stays at the highest real id seen.
-    expect(s.seenEventId["j1"]).toBe(3);
+    s = rootReducer(s, { type: "session/transcriptAppended", sessionId: "s1", line: 3, entry: entry("e3", "#3") });
+    s = rootReducer(s, { type: "session/transcriptAppended", sessionId: "s1", line: 0, entry: entry("l1", "live") });
+    s = rootReducer(s, { type: "session/transcriptAppended", sessionId: "s1", line: 0, entry: entry("l2", "live2") });
+    expect(s.transcriptBySession["s1"]).toHaveLength(3);
+    // seen stays at the highest real line seen.
+    expect(s.seenLineBySession["s1"]).toBe(3);
   });
 });
 
@@ -128,14 +137,30 @@ describe("selection + sessions slices", () => {
     expect(s.selection).toEqual({ kind: "task", taskId: "t1" });
   });
 
-  it("sessions/loaded fills the session order newest-first and upserts jobs", () => {
-    const a = jobRow("a", "2024-01-01T00:00:00Z");
-    const b = jobRow("b", "2024-01-02T00:00:00Z");
+  it("sessions/loaded fills the session order newest-first and upserts sessions", () => {
+    const a = sessionRow("a", "2024-01-01T00:00:00Z");
+    const b = sessionRow("b", "2024-01-02T00:00:00Z");
     let s: AppState = { ...initialState(), activeProject: "/p" };
-    s = rootReducer(s, { type: "sessions/loaded", root: "/p", jobs: [a, b] });
+    s = rootReducer(s, { type: "sessions/loaded", root: "/p", sessions: [a, b] });
     expect(s.sessionOrderByProject["/p"]).toEqual(["b", "a"]); // newest first
-    expect(s.jobs["a"]).toBeDefined();
-    expect(s.jobs["b"]).toBeDefined();
+    expect(s.sessions["a"]).toBeDefined();
+    expect(s.sessions["b"]).toBeDefined();
+  });
+
+  it("sessions/loaded floats a queued (started_at:null) session to the top and breaks ties by id", () => {
+    // A queued session (started_at:null) just spawned, so it counts as newest
+    // and sorts first; two sessions sharing a started_at fall back to the id
+    // tiebreak (descending) so the order is deterministic (a raw Date.parse
+    // comparator would yield NaN and leave the order unstable). This locks the
+    // null-safe key shared by the reducer and store.tsx's subscribeTaskLive.
+    const queued = sessionRow("q", null, "queued");
+    const m1 = sessionRow("m1", "2024-01-01T00:00:00Z");
+    const m2 = sessionRow("m2", "2024-01-01T00:00:00Z");
+    let s: AppState = { ...initialState(), activeProject: "/p" };
+    s = rootReducer(s, { type: "sessions/loaded", root: "/p", sessions: [m1, queued, m2] });
+    // queued (null → newest) first; the equal-timestamp pair tiebreaks by id
+    // descending (m2 before m1), regardless of input order.
+    expect(s.sessionOrderByProject["/p"]).toEqual(["q", "m2", "m1"]);
   });
 
   it("sidebar panel: ui/sidebarPanel sets the active accordion panel", () => {
@@ -147,7 +172,7 @@ describe("selection + sessions slices", () => {
 
   it("sidebar panel: selecting an entity auto-expands the matching panel", () => {
     let s = initialState();
-    s = rootReducer(s, { type: "selection/set", selection: { kind: "session", jobId: "j1" } });
+    s = rootReducer(s, { type: "selection/set", selection: { kind: "session", sessionId: "s1" } });
     expect(s.ui.sidebarPanel).toBe("sessions");
     s = rootReducer(s, { type: "selection/set", selection: { kind: "workflow", name: "wf" } });
     expect(s.ui.sidebarPanel).toBe("workflows");
@@ -202,20 +227,33 @@ describe("selection + sessions slices", () => {
     expect(s.ui.modal).toBe("settings");
   });
 
-  it("job/upsert prepends a new job to the active project's session order, idempotently", () => {
-    const a = jobRow("a", "2024-01-01T00:00:00Z");
+  it("session/upsert prepends a new session to the active project's session order, idempotently", () => {
+    const a = sessionRow("a", "2024-01-01T00:00:00Z");
     let s: AppState = {
       ...initialState(),
       activeProject: "/p",
-      jobs: { a },
+      sessions: { a },
       sessionOrderByProject: { "/p": ["a"] },
     };
-    const c = jobRow("c", "2024-01-03T00:00:00Z");
-    s = rootReducer(s, { type: "job/upsert", job: c });
+    const c = sessionRow("c", "2024-01-03T00:00:00Z");
+    s = rootReducer(s, { type: "session/upsert", session: c });
     expect(s.sessionOrderByProject["/p"]).toEqual(["c", "a"]);
-    // Re-upserting an existing job updates the map but never duplicates the order.
-    s = rootReducer(s, { type: "job/upsert", job: { ...c, status: "done" } });
+    // Re-upserting an existing session updates the map but never duplicates the order.
+    s = rootReducer(s, { type: "session/upsert", session: { ...c, status: "done" } });
     expect(s.sessionOrderByProject["/p"]).toEqual(["c", "a"]);
-    expect(s.jobs["c"].status).toBe("done");
+    expect(s.sessions["c"].status).toBe("done");
+  });
+});
+
+describe("project/diagnosticsLoaded", () => {
+  it("stores the project's extension load errors on its slice", () => {
+    let s: AppState = { ...initialState(), activeProject: "/p" };
+    s = rootReducer(s, {
+      type: "project/diagnosticsLoaded",
+      root: "/p",
+      diagnostics: { root: "/p", extensions: [{ source: "bad-ext", error: "boom" }] },
+    });
+    expect(s.byProject["/p"].diagnostics?.extensions).toHaveLength(1);
+    expect(s.byProject["/p"].diagnostics?.extensions[0].source).toBe("bad-ext");
   });
 });

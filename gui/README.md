@@ -2,15 +2,18 @@
 
 Tauri desktop GUI for [autosk](../README.md), at feature parity with
 `autosk lazy`. The frontend is a React + Vite app; the Tauri (Rust) backend is
-a **pure JSON-RPC client of `autoskd`** — it does not link `autosk-core` or
-doltlite. It talks to the daemon over a Unix-domain socket in **local** mode
-(auto-spawning `autoskd` when absent) or over TCP + token in **remote** mode.
-The frontend is transport-agnostic: only the Rust backend switches.
+a **pure JSON-RPC client of `autoskd`** (the Bun daemon) — it does not link
+`autosk-core` or doltlite. It talks to the daemon over a Unix-domain socket in
+**local** mode (auto-spawning `autoskd` when absent) or over TCP + token in
+**remote** mode. The frontend is transport-agnostic: only the Rust backend
+switches.
 
-> Status: **Phase 4 (v1, lazy parity)** of the Rust-daemon + Tauri-GUI
-> initiative. Canonical plan:
-> [`docs/plans/20260607-Rust-Daemon-Tauri-GUI.md`](../docs/plans/20260607-Rust-Daemon-Tauri-GUI.md)
-> (§6, §9 Phase 4). Final doc/README cutover and CI release gates are Phase 5.
+> Status: **P8 (proto v2)** of the Bun-daemon rewrite — the GUI is cut over to
+> the namespaced proto-v2 JSON-RPC surface (`meta.*` / `project.*` / `task.*` /
+> `task.comment.*` / `registry.*` / `session.*`). Canonical plan:
+> [`docs/plans/20260612-Bun-Daemon-Extensions.md`](../docs/plans/20260612-Bun-Daemon-Extensions.md)
+> (§3.2 sessions/transcript, §4 RPC v2, §6 P8). Bundling `autoskd` as a sidecar
+> and CI release gates remain follow-ups.
 >
 > The desktop UI is a **frameless two-panel workspace** — a left sidebar that
 > stacks Tasks / Sessions / Workflows as a lazygit-style accordion, and a main
@@ -29,9 +32,9 @@ gui/
 │   └── check-ipc-discipline.mjs   # guard: single invoke + single listen site
 ├── src/                        # React frontend (feature-folder layout)
 │   ├── main.tsx, App.tsx       # App mounts the frameless two-panel AppShell
-│   ├── types.ts                # wire types (mirror crates/autosk-proto)
+│   ├── types.ts                # wire types (mirror daemon/sdk/src/{types,proto,transcript})
 │   ├── services/
-│   │   ├── ipc.ts              # the ONLY `invoke` site (typed shim per RPC method)
+│   │   ├── ipc.ts              # the ONLY `invoke` site (typed shim per proto-v2 RPC method)
 │   │   └── events.ts           # the ONLY `listen` site (ref-counted fan-out hub)
 │   ├── state/
 │   │   ├── selection.ts        # entity-selection union (task|session|workflow|none)
@@ -41,12 +44,12 @@ gui/
 │   │   └── types.ts            # AppState shape + action union
 │   ├── features/               # one folder per UI domain
 │   │   ├── layout/             # AppShell, Titlebar, WindowCaptionControls, PanelHeader
-│   │   ├── sessions/           # SessionsPanel, SessionRow
-│   │   ├── center/             # CenterPanel/Header, Composer, Transcript,
+│   │   ├── sessions/           # SessionsPanel, SessionRow (SessionMeta, not jobs)
+│   │   ├── center/             # CenterPanel, Composer, Transcript (pi-format),
 │   │   │                       #   views/ (Session | Task | Workflow | Empty)
 │   │   ├── tasks/              # TasksPanel, TaskRow, TaskRowMenu, NewTaskModal
-│   │   ├── workflows/          # WorkflowsPanel, WorkflowRow, CreateWorkflowModal
-│   │   ├── projects/           # ProjectSwitcher, AddProjectModal
+│   │   ├── workflows/          # WorkflowsPanel, WorkflowRow (read-only)
+│   │   ├── projects/           # ProjectSwitcher (+ diagnostics), AddProjectModal
 │   │   ├── agents/ · settings/ # AgentsModal, SettingsModal
 │   │   └── shared/             # Menu (portal dropdown)
 │   └── components/             # shared primitives: Modal, Markdown, NoticeBar, common
@@ -78,27 +81,37 @@ The design mirrors the CodexMonitor blueprint ("shared core + thin adapters"):
   event name serves N React subscribers.
 - **Transport-agnostic backend.** The Rust `daemon_request` command is the
   local-vs-remote switch (`if remote { tcp.call } else { uds.call }`).
-  `autoskd` JSON-RPC notifications (`job-event`, `task-changed`,
+  `autoskd` JSON-RPC notifications (`session-event`, `task-changed`,
   `project-changed`) are re-emitted verbatim via `app.emit("<same-name>",
   payload)`, so the React layer is oblivious to local-vs-remote. On connect the
-  backend auto-issues `task.subscribe` + `project.subscribe` so change pushes
-  flow without the frontend knowing the transport.
+  backend auto-issues the GLOBAL `project.subscribe` only; in proto v2
+  `task.subscribe` requires `{cwd}` and OPENS that project, so it is
+  per-active-project and front-end-issued (`state/store.tsx`), re-issued after a
+  reconnect (it is per-connection state). Remote mode authenticates with
+  `meta.auth{token}` before any other call.
 - **State engine.** A normalized, slice-composed reducer keyed by
-  project/task/job/session. A single `selection` (task | session | workflow |
+  project/task/session. A single `selection` (task | session | workflow |
   none) drives the polymorphic center; `state/store.tsx` holds the effects layer
   + the event router that maps notifications into reducer actions. The live
-  transcript tail follows either the selected session's job or, when a task is
-  selected, the task's newest running job (one `job.subscribe` at a time).
+  transcript tail follows either the selected session or, when a task is
+  selected, the task's newest running session (one `session.subscribe` at a
+  time); the transcript is the pi-format `session.transcript` / `session-event`
+  line stream, deduped by the transcript line cursor. `task-changed` carries the
+  full `TaskView`, so the router upserts it directly instead of refetching.
 - **UI shell.** A frameless window (macOS `titleBarStyle: Overlay`; Windows
   `decorations:false` + custom caption controls) over a two-panel layout: a
-  left **sidebar** that stacks **Tasks**, **Sessions** (all jobs, animated
+  left **sidebar** that stacks **Tasks**, **Sessions** (all agent runs, animated
   status dots) and **Workflows** as a lazygit-style accordion — the active panel
   grows (3:1 weight) while the others collapse, and selecting an entity
   auto-expands its matching panel — and a **main panel** with the polymorphic
-  entity view (task sheet with comments / session transcript / read-only
-  workflow) plus one entity-aware composer. A titlebar hosts the connection
-  indicator and the Agents/Settings modals; the main-panel header hosts the
-  project switcher (switch / add / init / remove).
+  entity view (task sheet with editable/deletable comments / session transcript /
+  **read-only** workflow definition) plus one entity-aware composer (steer a live
+  session / comment a task). Workflows AND agents are code now (registered by
+  project extensions), so both panels are read-only — there is no create / edit /
+  install / uninstall UI. A titlebar hosts the connection indicator and the
+  Agents/Settings modals; the titlebar project switcher (switch / add / init /
+  remove) also surfaces a ⚠ **diagnostics** badge + list when an extension fails
+  to load (`project.diagnostics`).
 
 Both invariants are enforced by `scripts/check-ipc-discipline.mjs` (run as part
 of `npm run typecheck`) and an eslint `no-restricted-imports` rule, so a stray
@@ -151,7 +164,7 @@ Mode is an app setting (persisted; editable from the in-app **Settings** view):
   already running. Behaves like `autosk lazy`: zero configuration when `autoskd`
   is reachable on `$PATH`.
 - **Remote** — dials a configured `host:port` and authenticates with a token
-  (first request is `auth{token}`). The remote `autoskd` must be running
+  (first request is `meta.auth{token}`). The remote `autoskd` must be running
   explicitly (you cannot auto-spawn a process on another host). Behaviour is
   identical to local because the frontend is transport-agnostic.
 

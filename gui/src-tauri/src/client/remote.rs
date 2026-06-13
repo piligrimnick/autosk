@@ -1,5 +1,5 @@
 //! Remote transport: dial a configured `host:port` running `autoskd --tcp` and
-//! authenticate with the token before any other request (plan §4.1 TCP auth
+//! authenticate with the token before any other request (proto-v2 `meta.auth`
 //! handshake). Behaviour is otherwise identical to local — the frontend never
 //! knows the difference.
 
@@ -11,8 +11,8 @@ use tokio::net::TcpStream;
 
 use super::rpc::{spawn_io, Connection};
 
-/// Connects to a remote daemon and performs the `auth{token}` handshake. The
-/// daemon rejects every other request on a TCP connection until `auth` succeeds.
+/// Connects to a remote daemon and performs the `meta.auth{token}` handshake.
+/// The daemon rejects every other request on a TCP connection until it succeeds.
 pub async fn connect(
     app: AppHandle,
     host: &str,
@@ -33,7 +33,7 @@ pub async fn connect(
     let conn = spawn_io(app, "remote", epoch, active_epoch, reader, writer);
 
     // Authenticate first; the handshake must precede any project-scoped call.
-    conn.call("auth", serde_json::json!({ "token": token }))
+    conn.call("meta.auth", serde_json::json!({ "token": token }))
         .await
         .map_err(|e| format!("auth failed: {e}"))?;
     Ok(conn)

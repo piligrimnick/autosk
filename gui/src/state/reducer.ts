@@ -1,9 +1,9 @@
 // state/reducer.ts — the slice-composed reducer (redesign plan §6.2).
 // `rootReducer` dispatches each action through every slice; each slice owns a
-// keyed sub-tree (ui / projects / selection / tasks / jobs / sessions /
-// timeline) and returns the (possibly) updated state. Slices are pure functions
-// of (state, action). An action may be handled by more than one slice (e.g.
-// `task/extrasLoaded` updates both tasks and the normalized job map).
+// keyed sub-tree (ui / projects / selection / tasks / sessions / transcript)
+// and returns the (possibly) updated state. Slices are pure functions of
+// (state, action). An action may be handled by more than one slice (e.g.
+// `task/extrasLoaded` updates both tasks and the normalized session map).
 
 import type { Action, AppState, ProjectSlice, SidebarPanel } from "./types";
 import { clampSidebarWidth, emptyExtras, emptyProjectSlice } from "./types";
@@ -45,7 +45,7 @@ function uiSlice(state: AppState, action: Action): AppState {
   }
 }
 
-/** Project registry + per-project task/meta loads. */
+/** Project registry + per-project task/meta/diagnostics loads. */
 function projectsSlice(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "projects/loaded": {
@@ -96,6 +96,8 @@ function projectsSlice(state: AppState, action: Action): AppState {
         agents: action.agents,
         metaLoaded: true,
       }));
+    case "project/diagnosticsLoaded":
+      return patchProject(state, action.root, (s) => ({ ...s, diagnostics: action.diagnostics }));
     case "project/error":
       return patchProject(state, action.root, (s) => ({ ...s, loading: false, error: action.error }));
     default:
@@ -152,89 +154,82 @@ function tasksSlice(state: AppState, action: Action): AppState {
   }
 }
 
-/** Normalized job map + the per-project session order (Sessions panel). */
-function jobsSlice(state: AppState, action: Action): AppState {
+/** Normalized session map + the per-project session order (Sessions panel). */
+function sessionsSlice(state: AppState, action: Action): AppState {
   switch (action.type) {
-    case "jobs/upsertMany": {
-      const jobs = { ...state.jobs };
-      for (const j of action.jobs) {
-        jobs[j.job_id] = j;
-      }
-      return { ...state, jobs };
-    }
-    case "job/upsert": {
-      const jobs = { ...state.jobs, [action.job.job_id]: action.job };
+    case "session/upsert": {
+      const sessions = { ...state.sessions, [action.session.id]: action.session };
       // A freshly-spawned run shows up at the top of the active project's
-      // Sessions panel live (the daemon only pushes job-events for the active
-      // project's jobs).
+      // Sessions panel live (the daemon only pushes session-events for the
+      // active project's sessions).
       let sessionOrderByProject = state.sessionOrderByProject;
       const root = state.activeProject;
       if (root) {
         const order = sessionOrderByProject[root] ?? [];
-        if (!order.includes(action.job.job_id)) {
-          sessionOrderByProject = { ...sessionOrderByProject, [root]: [action.job.job_id, ...order] };
+        if (!order.includes(action.session.id)) {
+          sessionOrderByProject = { ...sessionOrderByProject, [root]: [action.session.id, ...order] };
         }
       }
-      return { ...state, jobs, sessionOrderByProject };
+      return { ...state, sessions, sessionOrderByProject };
     }
-    case "task/extrasLoaded": {
-      // Mirror the task's jobs into the normalized map so timeline lookups and
-      // status frames share one source of truth.
-      const jobs = { ...state.jobs };
-      for (const j of action.extras.jobs) {
-        jobs[j.job_id] = j;
-      }
-      return { ...state, jobs };
-    }
-    default:
-      return state;
-  }
-}
-
-/** Per-project session order (job.list snapshot) for the Sessions panel. */
-function sessionsSlice(state: AppState, action: Action): AppState {
-  switch (action.type) {
     case "sessions/loaded": {
-      const jobs = { ...state.jobs };
-      for (const j of action.jobs) {
-        jobs[j.job_id] = j;
+      const sessions = { ...state.sessions };
+      for (const m of action.sessions) {
+        sessions[m.id] = m;
       }
-      const order = action.jobs
+      // Newest first by start time; a queued session (no started_at) just
+      // spawned, so float it to the top, and break ties by id (descending) so
+      // the order is deterministic (a NaN comparator would be unstable).
+      const startMs = (m: { started_at: string | null }) => {
+        const t = m.started_at ? Date.parse(m.started_at) : NaN;
+        return Number.isNaN(t) ? Number.POSITIVE_INFINITY : t;
+      };
+      const order = action.sessions
         .slice()
-        .sort((a, b) => Date.parse(b.created_at || "") - Date.parse(a.created_at || ""))
-        .map((j) => j.job_id);
+        .sort((a, b) => startMs(b) - startMs(a) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+        .map((m) => m.id);
       return {
         ...state,
-        jobs,
+        sessions,
         sessionOrderByProject: { ...state.sessionOrderByProject, [action.root]: order },
       };
     }
+    case "task/extrasLoaded": {
+      // Mirror the task's sessions into the normalized map so transcript
+      // lookups and status frames share one source of truth.
+      const sessions = { ...state.sessions };
+      for (const m of action.extras.sessions) {
+        sessions[m.id] = m;
+      }
+      return { ...state, sessions };
+    }
     default:
       return state;
   }
 }
 
-/** Live transcript tail (keyed by job id), deduped by event_id. */
-function timelineSlice(state: AppState, action: Action): AppState {
+/** Live transcript tail (keyed by session id), deduped by transcript line number. */
+function transcriptSlice(state: AppState, action: Action): AppState {
   switch (action.type) {
-    case "job/subscribed":
-      return { ...state, subscribedJob: action.jobId };
-    case "job/messagesReset":
+    case "session/subscribed":
+      return { ...state, subscribedSession: action.sessionId };
+    case "session/transcriptReset":
       return {
         ...state,
-        messagesByJob: { ...state.messagesByJob, [action.jobId]: action.messages },
-        seenEventId: { ...state.seenEventId, [action.jobId]: 0 },
+        transcriptBySession: { ...state.transcriptBySession, [action.sessionId]: action.entries },
+        // The snapshot covers up to `nextLine - 1`; tail from there.
+        seenLineBySession: { ...state.seenLineBySession, [action.sessionId]: Math.max(0, action.nextLine - 1) },
       };
-    case "job/messageAppended": {
-      const seen = state.seenEventId[action.jobId] ?? 0;
-      if (action.eventId !== 0 && action.eventId <= seen) {
-        return state; // replayed frame already applied
+    case "session/transcriptAppended": {
+      const seen = state.seenLineBySession[action.sessionId] ?? 0;
+      if (action.line !== 0 && action.line <= seen) {
+        return state; // replayed line already applied
       }
-      const cur = state.messagesByJob[action.jobId] ?? [];
+      const cur = state.transcriptBySession[action.sessionId] ?? [];
       return {
         ...state,
-        messagesByJob: { ...state.messagesByJob, [action.jobId]: [...cur, action.message] },
-        seenEventId: { ...state.seenEventId, [action.jobId]: Math.max(seen, action.eventId) },
+        transcriptBySession: { ...state.transcriptBySession, [action.sessionId]: [...cur, action.entry] },
+        seenLineBySession: { ...state.seenLineBySession, [action.sessionId]: Math.max(seen, action.line) },
       };
     }
     default:
@@ -247,9 +242,8 @@ const SLICES = [
   projectsSlice,
   selectionSlice,
   tasksSlice,
-  jobsSlice,
   sessionsSlice,
-  timelineSlice,
+  transcriptSlice,
 ];
 
 /** Compose every slice: each may transform the state for a given action. */

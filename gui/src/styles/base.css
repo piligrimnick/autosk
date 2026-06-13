@@ -20,10 +20,10 @@
   --status-done: #4ade80;
   --status-cancel: #6b7280;
   /* Entity hues, matched 1:1 to lazy-mode (TokyoNight): task=Focus blue,
-   * job=Accent magenta, workflow=Warn yellow, step=PopupBox purple,
+   * session=Accent magenta, workflow=Warn yellow, step=PopupBox purple,
    * agent=Scope cyan. */
   --task-id: #7aa2f7;
-  --job-id: #bb9af7;
+  --session-id: #bb9af7;
   --workflow-name: #e0af68;
   --step-name: #9d7cd8;
   --agent-name: #7dcfff;
@@ -246,18 +246,6 @@ button {
   background: rgba(110, 231, 183, 0.16);
   color: var(--accent-2);
 }
-
-.prio {
-  font-size: 11px;
-  font-weight: 700;
-  padding: 0 4px;
-  border-radius: 4px;
-  color: var(--fg-mute);
-}
-.prio-0 { color: #ff8a8a; }
-.prio-1 { color: var(--warn); }
-.prio-2 { color: var(--fg-dim); }
-.prio-3 { color: var(--fg-mute); }
 
 .run-indicator {
   color: var(--ok);

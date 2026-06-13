@@ -93,11 +93,19 @@
 .agents-actions {
   margin-bottom: 12px;
 }
-.agents-install {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px;
-  margin-bottom: 12px;
+/* Read-only agent registry list (agents are code now; no install UI). */
+.agent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.agent-row {
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(51, 58, 69, 0.5);
+  font-size: 13px;
 }
 .agent-table {
   width: 100%;

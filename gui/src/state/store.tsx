@@ -1,10 +1,17 @@
 // state/store.tsx — the React store: useReducer + an effects layer (async IPC
 // calls that dispatch results) + the event router (redesign plan §6.3). The
-// event router (subscribeJobEvents / subscribeTaskChanged / subscribeProjectChanged)
-// maps daemon pushes into reducer actions and refreshes. Selection is the
-// unified entity model (task | session | workflow | none); the live transcript
-// tail follows either the selected session's job or, when a task is selected,
-// the task's newest running job (one subscription at a time in v1).
+// event router (subscribeSessionEvents / subscribeTaskChanged /
+// subscribeProjectChanged) maps daemon pushes into reducer actions and
+// refreshes. Selection is the unified entity model (task | session | workflow |
+// none); the live transcript tail follows either the selected session or, when
+// a task is selected, the task's newest running session (one subscription at a
+// time).
+//
+// Proto-v2 note: `task.subscribe` now REQUIRES `{cwd}` and OPENS that project,
+// so the Rust connect-time auto-subscribe was dropped. The front end issues
+// `task.subscribe` when a project becomes active (and re-issues it after a
+// reconnect, since it is per-connection state); `project.subscribe` stays
+// global and is still auto-issued by the Rust backend on connect.
 
 import {
   createContext,
@@ -18,11 +25,11 @@ import {
 import * as ipc from "@/services/ipc";
 import {
   subscribeDaemonStatus,
-  subscribeJobEvents,
   subscribeProjectChanged,
+  subscribeSessionEvents,
   subscribeTaskChanged,
 } from "@/services/events";
-import type { Job } from "@/types";
+import type { SessionMeta } from "@/types";
 import { rootReducer } from "./reducer";
 import {
   type Action,
@@ -32,7 +39,7 @@ import {
   clampSidebarWidth,
   initialState,
 } from "./types";
-import { NO_SELECTION, selectedSessionJobId, selectedTaskId } from "./selection";
+import { NO_SELECTION, selectedSessionId, selectedTaskId } from "./selection";
 import { loadUiScale, saveUiScale } from "@/features/layout/utils/uiScale";
 
 // localStorage keys for the sidebar geometry (layout-only UI state; not part of
@@ -67,11 +74,12 @@ interface Effects {
   refreshTasks(root?: string): Promise<void>;
   refreshSessions(root?: string): Promise<void>;
   refreshMeta(root?: string): Promise<void>;
+  refreshDiagnostics(root?: string): Promise<void>;
   selectTask(id: string | null): Promise<void>;
-  selectSession(jobId: string | null): Promise<void>;
+  selectSession(sessionId: string | null): Promise<void>;
   selectWorkflow(name: string | null): void;
   clearSelection(): void;
-  refreshTask(taskId: string, forceJobId?: string): Promise<void>;
+  refreshTask(taskId: string): Promise<void>;
   setSidebarPanel(panel: SidebarPanel): void;
   toggleSidebar(): void;
   setSidebarWidth(width: number): void;
@@ -100,9 +108,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  // The job currently subscribed for a live tail, tracked outside React so the
-  // cleanup path can unsubscribe the right job.
-  const subRef = useRef<{ cwd: string; jobId: string } | null>(null);
+  // The session currently subscribed for a live tail, tracked outside React so
+  // the cleanup path can unsubscribe the right session.
+  const subRef = useRef<{ cwd: string; sessionId: string } | null>(null);
 
   const effects = useMemo<Effects>(() => {
     const cwdOf = () => stateRef.current.activeProject ?? "";
@@ -111,70 +119,75 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const prev = subRef.current;
       if (!prev) return;
       try {
-        await ipc.jobUnsubscribe(prev.cwd, prev.jobId);
+        await ipc.sessionUnsubscribe(prev.cwd, prev.sessionId);
       } catch {
         /* ignore */
       }
       subRef.current = null;
-      dispatch({ type: "job/subscribed", jobId: null });
+      dispatch({ type: "session/subscribed", sessionId: null });
     }
 
-    // Reset a job's transcript and replay-then-tail it via subscribe. Tears
-    // down any previous subscription first (one live tail at a time in v1).
-    async function subscribeToJob(cwd: string, jobId: string) {
-      if (subRef.current?.jobId === jobId) return;
+    // Reset a session's transcript and replay-then-tail it via subscribe. Tears
+    // down any previous subscription first (one live tail at a time). The
+    // daemon replays from line 1 as `session-event` message frames, then tails.
+    async function subscribeToSession(cwd: string, sessionId: string) {
+      if (subRef.current?.sessionId === sessionId) return;
       await teardownLiveTail();
-      dispatch({ type: "job/messagesReset", jobId, messages: [] });
+      dispatch({ type: "session/transcriptReset", sessionId, entries: [], nextLine: 1 });
       try {
-        await ipc.jobSubscribe(cwd, jobId, { attach: true, full: true });
-        subRef.current = { cwd, jobId };
-        dispatch({ type: "job/subscribed", jobId });
+        await ipc.sessionSubscribe(cwd, sessionId, 1);
+        subRef.current = { cwd, sessionId };
+        dispatch({ type: "session/subscribed", sessionId });
       } catch {
-        /* a not-ready runner just means no live frames yet */
+        /* a not-ready session just means no live frames yet */
       }
     }
 
-    // Load a terminal job's transcript once (immutable snapshot).
-    async function snapshotJob(cwd: string, jobId: string) {
-      if (stateRef.current.messagesByJob[jobId] !== undefined) return;
+    // Load a terminal session's transcript once (immutable snapshot).
+    async function snapshotSession(cwd: string, sessionId: string) {
+      if (stateRef.current.transcriptBySession[sessionId] !== undefined) return;
       try {
-        const msgs = await ipc.jobMessages(cwd, jobId, true, 0);
-        dispatch({ type: "job/messagesReset", jobId, messages: msgs });
+        const { entries, next_line } = await ipc.sessionTranscript(cwd, sessionId, 1);
+        dispatch({ type: "session/transcriptReset", sessionId, entries, nextLine: next_line });
       } catch {
         /* best-effort; an unreadable transcript is non-fatal */
       }
     }
 
-    async function loadTaskMessages(cwd: string, jobs: Job[], forceJobId?: string) {
-      // Terminal jobs: snapshot via job.messages. Running job: live tail below.
-      // Terminal-job transcripts are immutable, so load each at most once and
-      // skip it on subsequent task-changed refreshes. `forceJobId` reloads
-      // exactly the job that just finished (the `done` job-event).
-      const have = stateRef.current.messagesByJob;
-      for (const job of jobs) {
-        if (job.status === "running" || job.status === "queued") continue;
-        if (job.job_id !== forceJobId && have[job.job_id] !== undefined) continue;
-        try {
-          const msgs = await ipc.jobMessages(cwd, job.job_id, true, 0);
-          dispatch({ type: "job/messagesReset", jobId: job.job_id, messages: msgs });
-        } catch {
-          /* best-effort */
-        }
+    async function loadTaskTranscripts(cwd: string, sessions: SessionMeta[]) {
+      // Terminal sessions: snapshot via session.transcript (immutable, so load
+      // each at most once and skip on later refreshes). The running session is
+      // live-tailed below; its tail is already complete by the time it goes
+      // terminal — the daemon flushes the terminal entries (autosk:transit /
+      // autosk:session_end) as numbered `message` frames BEFORE the `done`
+      // frame — so a just-finished session needs no reload here.
+      const have = stateRef.current.transcriptBySession;
+      for (const session of sessions) {
+        if (session.status === "running" || session.status === "queued") continue;
+        if (have[session.id] !== undefined) continue;
+        await snapshotSession(cwd, session.id);
       }
     }
 
-    // When a TASK is selected, tail its newest running/queued job (if any).
-    async function subscribeTaskLive(cwd: string, jobs: Job[]) {
-      const liveJobs = jobs
-        .filter((j) => j.status === "running" || j.status === "queued")
+    // When a TASK is selected, tail its newest running/queued session (if any).
+    async function subscribeTaskLive(cwd: string, sessions: SessionMeta[]) {
+      // A queued session has started_at=null; treat null as newest (just
+      // spawned) and break ties by id so the tailed session is deterministic
+      // (a raw Date.parse("") comparator yields NaN and an unstable order).
+      const startMs = (m: SessionMeta) => {
+        const t = m.started_at ? Date.parse(m.started_at) : NaN;
+        return Number.isNaN(t) ? Number.POSITIVE_INFINITY : t;
+      };
+      const liveSessions = sessions
+        .filter((m) => m.status === "running" || m.status === "queued")
         .slice()
-        .sort((a, b) => Date.parse(a.created_at || "") - Date.parse(b.created_at || ""));
-      const live = liveJobs.length > 0 ? liveJobs[liveJobs.length - 1] : null;
+        .sort((a, b) => startMs(a) - startMs(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      const live = liveSessions.length > 0 ? liveSessions[liveSessions.length - 1] : null;
       if (!live) {
         await teardownLiveTail();
         return;
       }
-      await subscribeToJob(cwd, live.job_id);
+      await subscribeToSession(cwd, live.id);
     }
 
     const eff: Effects = {
@@ -193,7 +206,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         // Just load the registry. The reducer auto-selects the first project
         // (projects/loaded), which the `activeProject` effect below picks up to
-        // load its tasks + sessions + meta.
+        // load its tasks + sessions + meta + diagnostics.
         await eff.refreshProjects();
       },
 
@@ -208,8 +221,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       async selectProject(root) {
         // Record the selection only; the `activeProject` effect loads tasks +
-        // sessions + meta (covers explicit selection AND the reducer's
-        // auto-select on launch / after a registry change, with no double-load).
+        // sessions + meta + diagnostics (covers explicit selection AND the
+        // reducer's auto-select on launch / after a registry change, with no
+        // double-load) and manages this project's task.subscribe.
         await teardownLiveTail();
         dispatch({ type: "project/select", root });
       },
@@ -219,16 +233,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (!cwd) return;
         dispatch({ type: "project/tasksLoading", root: cwd });
         try {
-          const tasks = await ipc.taskList(cwd, { statuses: ["new", "work", "human", "done", "cancel"] });
+          const tasks = await ipc.taskList(cwd, {});
           dispatch({ type: "project/tasksLoaded", root: cwd, tasks });
-          // Load the project's live jobs so the Sessions panel and the live
-          // composer can reflect running/streaming runs.
-          try {
-            const live = await ipc.jobList(cwd, { statuses: ["running", "queued"] });
-            dispatch({ type: "jobs/upsertMany", jobs: live });
-          } catch {
-            /* live runs are best-effort */
-          }
         } catch (err) {
           dispatch({ type: "project/error", root: cwd, error: String((err as Error).message ?? err) });
         }
@@ -238,8 +244,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const cwd = root ?? cwdOf();
         if (!cwd) return;
         try {
-          const jobs = await ipc.jobList(cwd, {});
-          dispatch({ type: "sessions/loaded", root: cwd, jobs });
+          const sessions = await ipc.sessionList(cwd);
+          dispatch({ type: "sessions/loaded", root: cwd, sessions });
         } catch {
           /* sessions list is best-effort */
         }
@@ -249,13 +255,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const cwd = root ?? cwdOf();
         if (!cwd) return;
         try {
-          const [workflows, agents] = await Promise.all([
-            ipc.workflowList(cwd, false),
-            ipc.agentList(cwd),
-          ]);
+          const [workflows, agents] = await Promise.all([ipc.workflowList(cwd), ipc.agentList(cwd)]);
           dispatch({ type: "project/metaLoaded", root: cwd, workflows, agents });
         } catch {
           /* meta is non-fatal */
+        }
+      },
+
+      async refreshDiagnostics(root) {
+        const cwd = root ?? cwdOf();
+        if (!cwd) return;
+        try {
+          const diagnostics = await ipc.projectDiagnostics(cwd);
+          dispatch({ type: "project/diagnosticsLoaded", root: cwd, diagnostics });
+        } catch {
+          /* diagnostics are non-fatal */
         }
       },
 
@@ -268,26 +282,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
       },
 
-      async selectSession(jobId) {
-        dispatch({ type: "selection/set", selection: jobId ? { kind: "session", jobId } : NO_SELECTION });
-        if (!jobId) {
+      async selectSession(sessionId) {
+        dispatch({ type: "selection/set", selection: sessionId ? { kind: "session", sessionId } : NO_SELECTION });
+        if (!sessionId) {
           await teardownLiveTail();
           return;
         }
         const cwd = cwdOf();
         if (!cwd) return;
-        const job = stateRef.current.jobs[jobId];
-        if (job && (job.status === "running" || job.status === "queued")) {
-          await subscribeToJob(cwd, jobId);
+        const session = stateRef.current.sessions[sessionId];
+        if (session && (session.status === "running" || session.status === "queued")) {
+          await subscribeToSession(cwd, sessionId);
         } else {
           await teardownLiveTail();
-          await snapshotJob(cwd, jobId);
+          await snapshotSession(cwd, sessionId);
         }
       },
 
       selectWorkflow(name) {
-        // Selecting a workflow leaves any live session tail running is wrong —
-        // drop it so the (one-at-a-time) subscription isn't orphaned.
+        // Selecting a workflow must not leave a live session tail orphaned —
+        // drop it so the (one-at-a-time) subscription isn't dangling.
         void teardownLiveTail();
         dispatch({ type: "selection/set", selection: name ? { kind: "workflow", name } : NO_SELECTION });
       },
@@ -297,23 +311,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "selection/set", selection: NO_SELECTION });
       },
 
-      async refreshTask(taskId, forceJobId) {
+      async refreshTask(taskId) {
         const cwd = cwdOf();
         if (!cwd) return;
         try {
-          const [task, jobs, comments, signals] = await Promise.all([
+          const [task, sessions, comments] = await Promise.all([
             ipc.taskGet(cwd, taskId),
-            ipc.jobList(cwd, { task_id: taskId }),
+            ipc.sessionList(cwd, taskId),
             ipc.commentList(cwd, taskId),
-            ipc.signalsForTask(cwd, taskId),
           ]);
           dispatch({ type: "task/upserted", root: cwd, task });
-          dispatch({ type: "task/extrasLoaded", taskId, extras: { jobs, comments, signals } });
-          await loadTaskMessages(cwd, jobs, forceJobId);
+          dispatch({ type: "task/extrasLoaded", taskId, extras: { sessions, comments } });
+          await loadTaskTranscripts(cwd, sessions);
           // Only drive the task's live tail while a task is the active
           // selection (a selected session owns the subscription otherwise).
           if (selectedTaskId(stateRef.current.selection) === taskId) {
-            await subscribeTaskLive(cwd, jobs);
+            await subscribeTaskLive(cwd, sessions);
           }
         } catch (err) {
           dispatch({ type: "notice/set", notice: { kind: "error", text: String((err as Error).message ?? err) } });
@@ -345,11 +358,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
 
       resetLiveTail() {
-        // `job.subscribe` is per-connection daemon state; on a connection-
+        // `session.subscribe` is per-connection daemon state; on a connection-
         // generation change the marker is stale. Clear it so the next refresh
         // re-subscribes on the NEW connection.
         subRef.current = null;
-        dispatch({ type: "job/subscribed", jobId: null });
+        dispatch({ type: "session/subscribed", sessionId: null });
       },
 
       async reconnect() {
@@ -364,9 +377,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             await eff.refreshProjects();
             const cur = stateRef.current;
             if (cur.activeProject) {
+              // task.subscribe is per-connection state and the Rust connect no
+              // longer auto-issues it — re-subscribe the active project here.
+              void ipc.taskSubscribe(cur.activeProject).catch(() => {});
               await eff.refreshTasks(cur.activeProject);
               await eff.refreshSessions(cur.activeProject);
               await eff.refreshMeta(cur.activeProject);
+              await eff.refreshDiagnostics(cur.activeProject);
             }
             await resyncSelection(cur);
           }
@@ -383,9 +400,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         await eff.refreshTask(taskId);
         return;
       }
-      const jobId = selectedSessionJobId(cur.selection);
-      if (jobId) {
-        await eff.selectSession(jobId);
+      const sessionId = selectedSessionId(cur.selection);
+      if (sessionId) {
+        await eff.selectSession(sessionId);
       }
     }
 
@@ -400,73 +417,81 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "daemon/status", status });
         if (wasConnected === status.connected) return;
         // The connection generation changed (spontaneous daemon restart / socket
-        // drop). `job.subscribe` is per-connection state, so any live tail is
+        // drop). `session.subscribe` is per-connection state, so any live tail is
         // bound to a dead connection: reset the marker so the next refresh
         // re-subscribes on the new connection.
         effects.resetLiveTail();
         if (status.connected) {
           const cur = stateRef.current;
           if (cur.activeProject) {
+            // Re-open this project's task-change push on the NEW connection
+            // (per-connection; the Rust connect no longer auto-subscribes).
+            void ipc.taskSubscribe(cur.activeProject).catch(() => {});
             void effects.refreshTasks(cur.activeProject);
             void effects.refreshSessions(cur.activeProject);
             void effects.refreshMeta(cur.activeProject);
+            void effects.refreshDiagnostics(cur.activeProject);
           }
           const taskId = selectedTaskId(cur.selection);
-          const jobId = selectedSessionJobId(cur.selection);
+          const sessionId = selectedSessionId(cur.selection);
           if (taskId) void effects.refreshTask(taskId);
-          else if (jobId) void effects.selectSession(jobId);
+          else if (sessionId) void effects.selectSession(sessionId);
         }
       }),
 
       subscribeProjectChanged(() => {
         void effects.refreshProjects();
         const cwd = stateRef.current.activeProject;
-        if (cwd) void effects.refreshMeta(cwd);
+        if (cwd) {
+          void effects.refreshMeta(cwd);
+          void effects.refreshDiagnostics(cwd);
+        }
       }),
 
       subscribeTaskChanged((evt) => {
         const cur = stateRef.current;
-        if (evt.root && evt.root === cur.activeProject) {
-          void effects.refreshTasks(cur.activeProject);
-          void effects.refreshSessions(cur.activeProject);
-          const taskId = selectedTaskId(cur.selection);
-          if (taskId) void effects.refreshTask(taskId);
-        }
+        if (!evt.root || evt.root !== cur.activeProject) return;
+        // The push carries the full TaskView, so upsert it directly instead of
+        // refetching the whole list.
+        dispatch({ type: "task/upserted", root: evt.root, task: evt.task });
+        // A task change may reflect a new/advanced session — refresh the panel.
+        void effects.refreshSessions(cur.activeProject);
+        const taskId = selectedTaskId(cur.selection);
+        if (taskId && taskId === evt.task.id) void effects.refreshTask(taskId);
       }),
 
-      subscribeJobEvents((evt) => {
+      subscribeSessionEvents((evt) => {
         switch (evt.kind) {
           case "message":
             if (evt.event) {
               dispatch({
-                type: "job/messageAppended",
-                jobId: evt.job_id,
-                eventId: evt.event_id ?? 0,
-                message: evt.event,
+                type: "session/transcriptAppended",
+                sessionId: evt.session_id,
+                line: evt.line ?? 0,
+                entry: evt.event,
               });
             }
             break;
           case "status":
           case "done":
-            if (evt.job) {
-              dispatch({ type: "job/upsert", job: evt.job });
+            if (evt.session) {
+              dispatch({ type: "session/upsert", session: evt.session });
             }
             if (evt.kind === "done") {
-              const cur = stateRef.current;
-              const taskId = selectedTaskId(cur.selection);
               // A finished run may have advanced the workflow — refresh the
-              // selected task (forcing one final reload of the just-finished
-              // job's now-immutable transcript). If the finished job is the
-              // selected session, re-snapshot it directly.
-              if (taskId) {
-                void effects.refreshTask(taskId, evt.job_id);
-              } else if (selectedSessionJobId(cur.selection) === evt.job_id) {
-                void effects.selectSession(evt.job_id);
-              }
+              // selected task. The live tail already holds the just-finished
+              // session's complete (immutable) transcript, so no transcript
+              // reload is needed (the `done` frame trails the terminal entries).
+              // When the finished session is itself the selection, its now-dead
+              // live tail is left as-is; it self-heals on the next selection
+              // (teardownLiveTail runs at the head of the next subscribe, and
+              // selectSession's terminal branch tears it down on re-select).
+              const taskId = selectedTaskId(stateRef.current.selection);
+              if (taskId) void effects.refreshTask(taskId);
             }
             break;
           case "error":
-            dispatch({ type: "notice/set", notice: { kind: "error", text: evt.error ?? "job error" } });
+            dispatch({ type: "notice/set", notice: { kind: "error", text: evt.error ?? "session error" } });
             break;
         }
       }),
@@ -476,15 +501,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
   }, [effects]);
 
-  // Load a project's tasks + sessions + meta whenever it becomes the active
-  // project. Covers BOTH an explicit user selection and the reducer's
-  // auto-select of the first project on launch (and after a registry change).
+  // Load a project's tasks + sessions + meta + diagnostics whenever it becomes
+  // the active project, and open/close its task-change subscription. Covers BOTH
+  // an explicit user selection and the reducer's auto-select of the first
+  // project on launch (and after a registry change).
   useEffect(() => {
     const root = state.activeProject;
     if (!root) return;
+    // Front-end-issued task.subscribe (v2 requires {cwd} + opens the project).
+    void ipc.taskSubscribe(root).catch(() => {});
     void effects.refreshTasks(root);
     void effects.refreshSessions(root);
     void effects.refreshMeta(root);
+    void effects.refreshDiagnostics(root);
+    return () => {
+      void ipc.taskUnsubscribe(root).catch(() => {});
+    };
   }, [state.activeProject, effects]);
 
   // Bootstrap once on mount. `effects` is stable (useMemo []), so the empty

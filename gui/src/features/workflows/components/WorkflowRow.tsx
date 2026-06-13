@@ -1,14 +1,14 @@
 // WorkflowRow — one workflow in the Workflows panel (redesign plan §8.6).
-// `[wt]` marks a non-synthetic worktree-isolated workflow; synthetic rows never
-// carry it. Click selects the workflow (center → read-only definition).
+// Workflows are read-only code projections now; `[wt]` marks a worktree-isolated
+// workflow. Click selects the workflow (center → read-only definition).
 
 import { useStore } from "@/state/store";
-import type { Workflow } from "@/types";
+import type { WorkflowInfo } from "@/types";
 
-export function WorkflowRow({ workflow }: { workflow: Workflow }) {
+export function WorkflowRow({ workflow }: { workflow: WorkflowInfo }) {
   const { state, effects } = useStore();
   const selected = state.selection.kind === "workflow" && state.selection.name === workflow.name;
-  const wt = !workflow.is_synthetic && workflow.isolation === "worktree";
+  const wt = workflow.isolation === "worktree";
 
   return (
     <li

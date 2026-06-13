@@ -3,29 +3,32 @@
 // typed shim here; the rest of the app calls these functions and never touches
 // `invoke` directly (enforced by scripts/check-ipc-discipline.mjs + eslint).
 //
-// All project-scoped methods carry a selector `{ cwd }` (mirroring the old
-// `X-Autosk-Cwd` header). The Rust command `daemon_request` is transport-
-// agnostic: it dials the local UDS daemon or the remote TCP daemon depending on
-// the app's backend mode, so this file is identical for local and remote.
+// Proto v2 (daemon/sdk/src/proto.ts): namespaced method names (meta.* /
+// project.* / task.* / task.comment.* / registry.* / session.*), a `{ cwd }`
+// selector on every project-scoped method (no database-path selector, no
+// write-source discriminator), and RFC3339 UTC on the wire. The `daemon_request`
+// Rust command is transport-agnostic (dials the local UDS daemon or the remote
+// TCP daemon by backend mode), so this file is identical for both.
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  Agent,
+  AgentInfo,
   AppSettings,
   Comment,
   DaemonStatus,
   Health,
-  Job,
-  MessageEvent,
+  ProjectDiagnostics,
   ProjectInfo,
-  Signal,
+  SessionMeta,
+  StepTarget,
+  TaskFilter,
   TaskView,
-  UpdateIsolationReport,
+  TranscriptLine,
   VersionInfo,
-  Workflow,
+  WorkflowInfo,
 } from "@/types";
 
-/** Structured error surfaced from autoskd (mirror of autosk-proto ErrorObject). */
+/** Structured error surfaced from autoskd (mirror of proto-v2 RpcError). */
 export class DaemonError extends Error {
   code: number;
   details?: unknown;
@@ -37,9 +40,10 @@ export class DaemonError extends Error {
   }
 }
 
-// Mirror of autosk-proto::rpc::error_codes (the subset the UI branches on).
+// Mirror of proto-v2 ErrorCodes (the subset the UI branches on).
 export const ErrorCode = {
   MethodNotFound: -32601,
+  InvalidParams: -32602,
   ProjectNotFound: 1001,
   InvalidProject: 1002,
   NotFound: 1003,
@@ -82,7 +86,7 @@ export function normalizeError(err: unknown): Error {
     }
   }
   if (typeof err === "string") {
-    // Try to parse a JSON-encoded ErrorObject the Rust command may stringify.
+    // Try to parse a JSON-encoded RpcError the Rust command may stringify.
     try {
       const parsed = JSON.parse(err);
       if (parsed && typeof parsed.code === "number") {
@@ -123,11 +127,11 @@ export function getDaemonStatus(): Promise<DaemonStatus> {
 // ---- meta ----------------------------------------------------------------
 
 export function version(): Promise<VersionInfo> {
-  return daemonRequest<VersionInfo>("version");
+  return daemonRequest<VersionInfo>("meta.version");
 }
 
-export function healthz(cwd?: string, all = false): Promise<Health> {
-  return daemonRequest<Health>("healthz", all ? { all: true } : sel(cwd ?? ""));
+export function healthz(): Promise<Health> {
+  return daemonRequest<Health>("meta.healthz");
 }
 
 // ---- project -------------------------------------------------------------
@@ -136,43 +140,36 @@ export function projectList(): Promise<ProjectInfo[]> {
   return daemonRequest<ProjectInfo[]>("project.list");
 }
 
-export function projectAdd(cwd: string): Promise<ProjectInfo> {
-  return daemonRequest<ProjectInfo>("project.add", sel(cwd));
+export function projectAdd(cwd: string, name?: string): Promise<ProjectInfo> {
+  return daemonRequest<ProjectInfo>("project.add", sel(cwd, name ? { name } : {}));
 }
 
-export function projectRemove(root: string): Promise<{ removed: boolean }> {
-  return daemonRequest("project.remove", { root });
+export function projectRemove(root: string): Promise<{ ok: boolean }> {
+  // The selector for project.remove IS the project root (cwd).
+  return daemonRequest("project.remove", sel(root));
 }
 
-export function projectInit(
-  cwd: string,
-  skipBootstrap = false,
-): Promise<{ root: string; db_path: string; schema_version: number; bootstrapped: boolean }> {
-  return daemonRequest("project.init", sel(cwd, { skip_bootstrap: skipBootstrap }));
+/**
+ * Lay the `.autosk/` skeleton for a directory and register it. The daemon's
+ * `project.init` already calls `project.add` internally (daemon.ts), so the
+ * project surfaces in `project.list` without a separate add call.
+ */
+export function projectInit(cwd: string): Promise<ProjectInfo> {
+  return daemonRequest<ProjectInfo>("project.init", sel(cwd));
+}
+
+export function projectDiagnostics(cwd: string): Promise<ProjectDiagnostics> {
+  return daemonRequest<ProjectDiagnostics>("project.diagnostics", sel(cwd));
 }
 
 // ---- task (reads) --------------------------------------------------------
 
-export interface TaskFilter {
-  statuses?: string[];
-  priority?: number;
-  workflow_id?: string;
-  agent_name?: string;
-  author_name?: string;
-  step_agent_name?: string;
-  search?: string;
-}
-
 export function taskList(cwd: string, filter: TaskFilter = {}): Promise<TaskView[]> {
-  return daemonRequest<TaskView[]>("task.list", sel(cwd, filter as Record<string, unknown>));
+  return daemonRequest<TaskView[]>("task.list", sel(cwd, { filter }));
 }
 
 export function taskGet(cwd: string, id: string): Promise<TaskView> {
   return daemonRequest<TaskView>("task.get", sel(cwd, { id }));
-}
-
-export function taskReady(cwd: string, limit = 0): Promise<TaskView[]> {
-  return daemonRequest<TaskView[]>("task.ready", sel(cwd, { limit }));
 }
 
 // ---- task (writes) -------------------------------------------------------
@@ -180,41 +177,19 @@ export function taskReady(cwd: string, limit = 0): Promise<TaskView[]> {
 export interface CreateTaskArgs {
   title: string;
   description?: string;
-  priority?: number;
-  blocks?: string[];
   blocked_by?: string[];
-  workflow?: string;
-  agent?: string;
-  step?: string;
 }
 
 export function taskCreate(cwd: string, args: CreateTaskArgs): Promise<TaskView> {
-  return daemonRequest<TaskView>("task.create", sel(cwd, { source: "gui", ...args }));
+  return daemonRequest<TaskView>("task.create", sel(cwd, { ...args }));
 }
 
 export function taskUpdate(
   cwd: string,
   id: string,
-  patch: { title?: string; description?: string; priority?: number; status?: string },
+  patch: { title?: string; description?: string },
 ): Promise<TaskView> {
   return daemonRequest<TaskView>("task.update", sel(cwd, { id, ...patch }));
-}
-
-export function taskSetStatus(cwd: string, id: string, status: string): Promise<TaskView> {
-  return daemonRequest<TaskView>("task.setStatus", sel(cwd, { id, status }));
-}
-
-export function taskSetTitleDescription(
-  cwd: string,
-  id: string,
-  title: string,
-  description: string,
-): Promise<TaskView> {
-  return daemonRequest<TaskView>("task.setTitleDescription", sel(cwd, { id, title, description }));
-}
-
-export function taskSetPriority(cwd: string, id: string, priority: number): Promise<TaskView> {
-  return daemonRequest<TaskView>("task.setPriority", sel(cwd, { id, priority }));
 }
 
 export function taskDone(cwd: string, id: string): Promise<TaskView> {
@@ -229,165 +204,119 @@ export function taskReopen(cwd: string, id: string): Promise<TaskView> {
   return daemonRequest<TaskView>("task.reopen", sel(cwd, { id }));
 }
 
+/** Enroll into a named workflow XOR materialise a single-step agent run. */
 export function taskEnroll(
   cwd: string,
   id: string,
-  args: { workflow?: string; agent?: string; step?: string; base_ref?: string },
-): Promise<TaskView & { base_ref_ignored?: boolean }> {
-  return daemonRequest("task.enroll", sel(cwd, { id, source: "gui", ...args }));
+  target: { workflow: string } | { agent: string },
+): Promise<TaskView> {
+  return daemonRequest<TaskView>("task.enroll", sel(cwd, { id, ...target }));
 }
 
-export function taskResume(cwd: string, id: string, toStep = ""): Promise<TaskView> {
-  return daemonRequest<TaskView>("task.resume", sel(cwd, { id, to_step: toStep, source: "gui" }));
+/** Resume a parked (`human`) task, optionally to a specific step/status target. */
+export function taskResume(cwd: string, id: string, to?: StepTarget): Promise<TaskView> {
+  return daemonRequest<TaskView>("task.resume", sel(cwd, to ? { id, to } : { id }));
 }
 
-export function taskBlock(cwd: string, id: string, blockers: string[]): Promise<{ ok: boolean }> {
-  return daemonRequest("task.block", sel(cwd, { id, blockers, source: "gui" }));
+export function taskBlock(cwd: string, id: string, blockedBy: string): Promise<TaskView> {
+  return daemonRequest<TaskView>("task.block", sel(cwd, { id, blocked_by: blockedBy }));
 }
 
-export function taskUnblock(cwd: string, id: string, blockers: string[]): Promise<{ ok: boolean }> {
-  return daemonRequest("task.unblock", sel(cwd, { id, blockers, source: "gui" }));
+export function taskUnblock(cwd: string, id: string, blockedBy: string): Promise<TaskView> {
+  return daemonRequest<TaskView>("task.unblock", sel(cwd, { id, blocked_by: blockedBy }));
 }
 
-export function taskSetMetadata(
-  cwd: string,
-  id: string,
-  metadata: Record<string, unknown>,
-): Promise<{ task: TaskView; changed: boolean }> {
-  // replace_all wholesale-replaces the metadata object (lazy "M" hotkey parity).
-  return daemonRequest("task.metadata.set", sel(cwd, { id, value: metadata, replace_all: true, source: "gui" }));
+/** Open this project's task-change push for the live connection (front-end issued). */
+export function taskSubscribe(cwd: string): Promise<{ ok: boolean }> {
+  return daemonRequest("task.subscribe", sel(cwd));
+}
+
+export function taskUnsubscribe(cwd: string): Promise<{ ok: boolean }> {
+  return daemonRequest("task.unsubscribe", sel(cwd));
 }
 
 // ---- comments ------------------------------------------------------------
 
 export function commentList(cwd: string, taskId: string): Promise<Comment[]> {
-  return daemonRequest<Comment[]>("comment.list", sel(cwd, { task_id: taskId }));
+  return daemonRequest<Comment[]>("task.comment.list", sel(cwd, { task_id: taskId }));
 }
 
 export function commentAdd(cwd: string, taskId: string, text: string): Promise<Comment> {
-  return daemonRequest<Comment>("comment.add", sel(cwd, { task_id: taskId, text, source: "gui" }));
+  return daemonRequest<Comment>("task.comment.add", sel(cwd, { task_id: taskId, text }));
 }
 
-// ---- workflows -----------------------------------------------------------
-
-export function workflowList(cwd: string, includeSynthetic = false): Promise<Workflow[]> {
-  return daemonRequest<Workflow[]>("workflow.list", sel(cwd, { include_synthetic: includeSynthetic }));
+export function commentEdit(cwd: string, taskId: string, commentId: string, text: string): Promise<Comment> {
+  return daemonRequest<Comment>("task.comment.edit", sel(cwd, { task_id: taskId, comment_id: commentId, text }));
 }
 
-export function workflowGet(cwd: string, name: string): Promise<Workflow> {
-  return daemonRequest<Workflow>("workflow.get", sel(cwd, { name }));
+export function commentDelete(cwd: string, taskId: string, commentId: string): Promise<{ ok: boolean }> {
+  return daemonRequest("task.comment.delete", sel(cwd, { task_id: taskId, comment_id: commentId }));
 }
 
-export function workflowCreate(cwd: string, json: string, noInstall = false): Promise<{ name: string }> {
-  return daemonRequest("workflow.create", sel(cwd, { json, no_install: noInstall, source: "gui" }));
+// ---- registry (workflows + agents are code; read-only) -------------------
+
+export function workflowList(cwd: string): Promise<WorkflowInfo[]> {
+  return daemonRequest<WorkflowInfo[]>("registry.workflow.list", sel(cwd));
 }
 
-export function workflowDelete(cwd: string, name: string): Promise<{ ok: boolean }> {
-  return daemonRequest("workflow.delete", sel(cwd, { name, source: "gui" }));
+export function workflowGet(cwd: string, name: string): Promise<WorkflowInfo> {
+  return daemonRequest<WorkflowInfo>("registry.workflow.get", sel(cwd, { name }));
 }
 
-export function workflowUpdateIsolation(
+export function agentList(cwd: string): Promise<AgentInfo[]> {
+  return daemonRequest<AgentInfo[]>("registry.agent.list", sel(cwd));
+}
+
+// ---- sessions ------------------------------------------------------------
+
+export function sessionList(cwd: string, taskId?: string): Promise<SessionMeta[]> {
+  return daemonRequest<SessionMeta[]>("session.list", sel(cwd, taskId ? { task_id: taskId } : {}));
+}
+
+export function sessionGet(cwd: string, id: string): Promise<SessionMeta> {
+  return daemonRequest<SessionMeta>("session.get", sel(cwd, { id }));
+}
+
+export interface SessionTranscriptResult {
+  entries: TranscriptLine[];
+  next_line: number;
+}
+
+export function sessionTranscript(
   cwd: string,
-  name: string,
-  mode: string,
-  force = false,
-  dryRun = false,
-): Promise<UpdateIsolationReport> {
-  return daemonRequest("workflow.updateIsolation", sel(cwd, { name, mode, force, dry_run: dryRun, source: "gui" }));
-}
-
-// ---- agents --------------------------------------------------------------
-
-export function agentList(cwd: string): Promise<Agent[]> {
-  return daemonRequest<Agent[]>("agent.list", sel(cwd));
-}
-
-export function agentInstall(cwd: string, name: string, version = "", spec = ""): Promise<Agent> {
-  return daemonRequest<Agent>("agent.install", sel(cwd, { name, version, spec }));
-}
-
-export function agentUninstall(cwd: string, name: string, force = false): Promise<{ ok: boolean }> {
-  return daemonRequest("agent.uninstall", sel(cwd, { name, force }));
-}
-
-// ---- jobs ----------------------------------------------------------------
-
-export interface JobFilter {
-  task_id?: string;
-  workflow_id?: string;
-  statuses?: string[];
-  limit?: number;
-}
-
-export function jobList(cwd: string, filter: JobFilter = {}): Promise<Job[]> {
-  return daemonRequest<Job[]>("job.list", sel(cwd, filter as Record<string, unknown>));
-}
-
-export function jobGet(cwd: string, id: string): Promise<Job> {
-  return daemonRequest<Job>("job.get", sel(cwd, { id }));
-}
-
-export function jobMessages(cwd: string, jobId: string, full = true, limit = 0): Promise<MessageEvent[]> {
-  return daemonRequest<MessageEvent[]>("job.messages", sel(cwd, { job_id: jobId, full, limit }));
-}
-
-export function jobCancel(cwd: string, jobId: string): Promise<Job> {
-  return daemonRequest<Job>("job.cancel", sel(cwd, { job_id: jobId }));
-}
-
-export function jobInput(
-  cwd: string,
-  jobId: string,
-  message: string,
-  behavior: "" | "steer" | "follow_up" = "",
-): Promise<{ job_id: string; dispatched: string }> {
-  return daemonRequest("job.input", sel(cwd, { job_id: jobId, message, streaming_behavior: behavior }));
-}
-
-export function jobAbort(cwd: string, jobId: string): Promise<{ job_id: string; ok: boolean }> {
-  return daemonRequest("job.abort", sel(cwd, { job_id: jobId }));
-}
-
-export interface SubscribeArgs {
-  attach?: boolean;
-  full?: boolean;
-  limit?: number;
-  from_event_id?: number;
+  id: string,
+  fromLine?: number,
+  limit?: number,
+): Promise<SessionTranscriptResult> {
+  const extra: Record<string, unknown> = { id };
+  if (fromLine !== undefined) extra.from_line = fromLine;
+  if (limit !== undefined) extra.limit = limit;
+  return daemonRequest<SessionTranscriptResult>("session.transcript", sel(cwd, extra));
 }
 
 /**
- * Begin a live transcript tail for a job. The daemon pushes `job-event`
- * notifications on the persistent connection; the Rust backend re-emits them as
- * a Tauri `job-event` which the events.ts hub fans out. Returns once subscribed.
+ * Begin a live transcript tail. The daemon replays from `fromLine` (default 1)
+ * as `session-event` `message` frames on the persistent connection, then tails;
+ * the Rust backend re-emits them as a Tauri `session-event` which the events.ts
+ * hub fans out. Returns once subscribed.
  */
-export function jobSubscribe(cwd: string, jobId: string, args: SubscribeArgs = {}): Promise<unknown> {
-  return daemonRequest("job.subscribe", sel(cwd, { job_id: jobId, ...args }));
+export function sessionSubscribe(cwd: string, id: string, fromLine?: number): Promise<{ ok: boolean }> {
+  return daemonRequest("session.subscribe", sel(cwd, fromLine !== undefined ? { id, from_line: fromLine } : { id }));
 }
 
-export function jobUnsubscribe(cwd: string, jobId: string): Promise<unknown> {
-  return daemonRequest("job.unsubscribe", sel(cwd, { job_id: jobId }));
+export function sessionUnsubscribe(cwd: string, id: string): Promise<{ ok: boolean }> {
+  return daemonRequest("session.unsubscribe", sel(cwd, { id }));
 }
 
-// ---- signals -------------------------------------------------------------
-
-export function signalsForTask(cwd: string, taskId: string): Promise<Signal[]> {
-  return daemonRequest<Signal[]>("signal.forTask", sel(cwd, { task_id: taskId }));
+export function sessionInput(
+  cwd: string,
+  id: string,
+  message: string,
+  kind: "steer" | "followup",
+): Promise<{ ok: boolean }> {
+  return daemonRequest("session.input", sel(cwd, { id, message, kind }));
 }
 
-export function signalsForJob(cwd: string, jobId: string): Promise<Signal[]> {
-  return daemonRequest<Signal[]>("signal.forJob", sel(cwd, { job_id: jobId }));
-}
-
-// ---- step / sql / maint --------------------------------------------------
-
-export function stepNext(cwd: string, id: string, to: string): Promise<Record<string, unknown>> {
-  return daemonRequest("step.next", sel(cwd, { id, to }));
-}
-
-export function sqlQuery(cwd: string, query: string): Promise<{ columns: string[]; rows: unknown[][] }> {
-  return daemonRequest("sql.query", sel(cwd, { query }));
-}
-
-export function sqlExec(cwd: string, query: string): Promise<{ rows_affected: number }> {
-  return daemonRequest("sql.exec", sel(cwd, { query }));
+export function sessionAbort(cwd: string, id: string): Promise<{ ok: boolean }> {
+  return daemonRequest("session.abort", sel(cwd, { id }));
 }

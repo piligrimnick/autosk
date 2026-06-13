@@ -11,16 +11,12 @@ const STATUS_LABEL: Record<string, string> = {
   queued: "queued",
   running: "running",
   failed: "failed",
+  aborted: "aborted",
 };
 
 export function StatusBadge({ status, className }: { status: string; className?: string }) {
   const cls = `badge badge-${status}${className ? ` ${className}` : ""}`;
   return <span className={cls}>{STATUS_LABEL[status] ?? status}</span>;
-}
-
-export function PriorityDot({ priority }: { priority: number }) {
-  const label = ["P0", "P1", "P2", "P3"][priority] ?? `P${priority}`;
-  return <span className={`prio prio-${priority}`} title={`priority ${priority}`}>{label}</span>;
 }
 
 /** Format an RFC3339 UTC timestamp into the operator's local time. */
@@ -59,14 +55,14 @@ function humanDuration(ms: number): string {
   return `${Math.floor(h / 24)}d`;
 }
 
-/** jobWorkTime — mirrors internal/lazy `jobWorkTime`: how long pi actually
- * worked on a job. queued (no started_at) → "—"; finished → finished−started;
- * running → now−started. */
-export function jobWorkTime(job: { started_at?: string | null; finished_at?: string | null }): string {
-  if (!job.started_at) return "\u2014";
-  const start = new Date(job.started_at).getTime();
+/** sessionWorkTime — mirrors the lazy-mode session work-time column: how long
+ * pi actually worked on a session. queued (no started_at) → "—"; ended →
+ * ended−started; running → now−started. */
+export function sessionWorkTime(session: { started_at?: string | null; ended_at?: string | null }): string {
+  if (!session.started_at) return "\u2014";
+  const start = new Date(session.started_at).getTime();
   if (Number.isNaN(start)) return "\u2014";
-  const endTs = job.finished_at ? new Date(job.finished_at).getTime() : Date.now();
+  const endTs = session.ended_at ? new Date(session.ended_at).getTime() : Date.now();
   const end = Number.isNaN(endTs) ? Date.now() : endTs;
   return humanDuration(end - start);
 }

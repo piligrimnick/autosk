@@ -16,7 +16,7 @@ import { useStore } from "@/state/store";
 import * as ipc from "@/services/ipc";
 import { activeSlice } from "@/state/selectors";
 import { Modal } from "@/components/Modal";
-import type { TaskView, Workflow } from "@/types";
+import type { TaskView, WorkflowInfo } from "@/types";
 
 /** The Enroll button + its modal. Rendered in the task header; hidden while the
  *  task is enrolled (status `work`), where enroll would conflict. */
@@ -37,18 +37,13 @@ export function EnrollButton({ task }: { task: TaskView }) {
 function EnrollModal({ task, onClose }: { task: TaskView; onClose: () => void }) {
   const { state, effects } = useStore();
   const cwd = state.activeProject ?? "";
-  const workflows = useMemo<Workflow[]>(
-    () => activeSlice(state).workflows.filter((w) => !w.is_synthetic),
-    [state],
-  );
+  const workflows = useMemo<WorkflowInfo[]>(() => activeSlice(state).workflows, [state]);
 
-  // Seed the cursor on the task's current workflow + step (else the first one).
+  // Seed the cursor on the task's current workflow (else the first one).
   const initialWf = useMemo(() => {
-    const byId = workflows.findIndex((w) => w.id === task.workflow_id);
-    if (byId >= 0) return byId;
-    const byName = workflows.findIndex((w) => w.name === task.workflow_name);
+    const byName = workflows.findIndex((w) => w.name === task.workflow);
     return byName >= 0 ? byName : 0;
-  }, [workflows, task.workflow_id, task.workflow_name]);
+  }, [workflows, task.workflow]);
 
   const [wfIdx, setWfIdx] = useState(initialWf);
   const [stepIdx, setStepIdx] = useState(0);
@@ -62,8 +57,8 @@ function EnrollModal({ task, onClose }: { task: TaskView; onClose: () => void })
   // Seed the step cursor to the current step whenever the workflow under the
   // cursor is the task's current workflow; otherwise land on the first step.
   useEffect(() => {
-    if (wf && wf.name === task.workflow_name && task.step_name) {
-      const i = steps.findIndex((s) => s.name === task.step_name);
+    if (wf && wf.name === task.workflow && task.step) {
+      const i = steps.findIndex((s) => s.name === task.step);
       setStepIdx(i >= 0 ? i : 0);
     } else {
       setStepIdx(0);
@@ -74,7 +69,7 @@ function EnrollModal({ task, onClose }: { task: TaskView; onClose: () => void })
     boxRef.current?.focus();
   }, []);
 
-  const sameWf = !!task.workflow_name && wf?.name === task.workflow_name;
+  const sameWf = !!task.workflow && wf?.name === task.workflow;
   const isResume = task.status === "human" && sameWf;
   const confirmLabel = isResume ? "Resume" : "Enroll";
 
@@ -84,9 +79,11 @@ function EnrollModal({ task, onClose }: { task: TaskView; onClose: () => void })
     setBusy(true);
     try {
       if (isResume) {
-        await ipc.taskResume(cwd, task.id, stepName === task.step_name ? "" : stepName);
+        // Resume continues the run; jump to the chosen step only if it differs.
+        await ipc.taskResume(cwd, task.id, stepName && stepName !== task.step ? { step: stepName } : undefined);
       } else {
-        await ipc.taskEnroll(cwd, task.id, { workflow: wf.name, step: stepName || undefined });
+        // Enroll always starts at the workflow's first step (no step arg in v2).
+        await ipc.taskEnroll(cwd, task.id, { workflow: wf.name });
       }
       await effects.refreshTask(task.id);
       await effects.refreshTasks();
@@ -96,7 +93,7 @@ function EnrollModal({ task, onClose }: { task: TaskView; onClose: () => void })
     } finally {
       setBusy(false);
     }
-  }, [wf, busy, steps, stepIdx, isResume, cwd, task.id, task.step_name, effects, onClose]);
+  }, [wf, busy, steps, stepIdx, isResume, cwd, task.id, task.step, effects, onClose]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
@@ -142,7 +139,7 @@ function EnrollModal({ task, onClose }: { task: TaskView; onClose: () => void })
             <div className="enroll-list">
               {workflows.map((w, i) => (
                 <button
-                  key={w.id}
+                  key={w.name}
                   className={`enroll-item ${i === wfIdx ? "sel" : ""}`}
                   onClick={() => {
                     setWfIdx(i);
@@ -160,7 +157,7 @@ function EnrollModal({ task, onClose }: { task: TaskView; onClose: () => void })
             <div className="enroll-list">
               {steps.map((s, i) => (
                 <button
-                  key={s.id}
+                  key={s.name}
                   className={`enroll-item ${i === stepIdx ? "sel" : ""}`}
                   onClick={() => {
                     setStepIdx(i);

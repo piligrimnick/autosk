@@ -1,5 +1,5 @@
 // SessionsPanel — a sidebar accordion panel: a flat list of all the active
-// project's sessions (jobs), newest first. Cross-linking to tasks is deferred.
+// project's sessions, newest first. Cross-linking to tasks is deferred.
 // Clicking the header (or a row) expands this panel and collapses the others.
 
 import { useStore } from "@/state/store";
@@ -15,8 +15,8 @@ export function SessionsPanel() {
   const hasProject = Boolean(state.activeProject);
   const active = state.ui.sidebarPanel === "sessions";
   // Tick once a second while any session is still running so the work-time
-  // column counts up live (a finished/queued row has a fixed value).
-  const hasLive = sessions.some((j) => Boolean(j.started_at) && !j.finished_at);
+  // column counts up live (an ended/queued row has a fixed value).
+  const hasLive = sessions.some((m) => Boolean(m.started_at) && !m.ended_at);
   useSecondTick(hasLive);
 
   return (
@@ -40,8 +40,8 @@ export function SessionsPanel() {
           <EmptyState title="No sessions" hint="Runs appear here as tasks execute." />
         ) : (
           <ul className="session-list">
-            {sessions.map((job) => (
-              <SessionRow key={job.job_id} job={job} />
+            {sessions.map((session) => (
+              <SessionRow key={session.id} session={session} />
             ))}
           </ul>
         )}

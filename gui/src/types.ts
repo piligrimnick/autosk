@@ -1,232 +1,393 @@
-// Wire-projection types — TypeScript mirrors of the serde structs in
-// `crates/autosk-proto/src/wire.rs`. These are the JSON shapes autoskd returns
-// over JSON-RPC. Field names are snake_case to match the wire exactly (the Rust
-// side serialises with default serde naming). RFC3339 UTC for all timestamps
-// (the machine-wire-format rule from AGENTS.md — the frontend renders local).
+// Wire-projection types — TypeScript mirrors of the proto-v2 SDK in
+// `daemon/sdk/src/{types,proto,transcript,workflow}.ts`. These are the JSON
+// shapes `autoskd` returns over JSON-RPC. Field names are snake_case to match
+// the wire exactly; RFC3339 UTC for all timestamps (the machine-wire-format
+// rule from AGENTS.md — the frontend renders local). The pi-format transcript
+// types (message content blocks, engine `autosk:*` customs) stay camelCase, as
+// they are piped through verbatim from pi's session format.
 //
-// Keep this file in lockstep with autosk-proto/src/wire.rs. The protocol golden
-// tests (plan §8.2) guard the Rust side; this file is the client mirror.
+// Keep this file in lockstep with `daemon/sdk/src`. The Go client mirror lives
+// in `internal/daemon/api` (P7) — cross-check against it. The v1 source
+// (`crates/autosk-proto`) is retired in P9 and is NOT mirrored here.
 
-/** A lightweight reference to a related task (`wire::TaskRef`). */
+// ---------------------------------------------------------------------------
+// Task domain (sdk/types.ts §3.1).
+// ---------------------------------------------------------------------------
+
+/** The five-status task enum. */
+export type TaskStatus = "new" | "work" | "human" | "done" | "cancel";
+
+/** A lightweight reference to a related task (dependency edges). */
 export interface TaskRef {
   id: string;
-  status: string;
+  status: TaskStatus;
 }
 
-/** `task.get` / `task.list` / `task.ready` element (`wire::TaskView`). */
+/**
+ * The enriched task view. v2 drops the old ranking / authorship / free-form
+ * key-value fields; `workflow` / `step` are `null` until the task is enrolled.
+ * `blocked` and `blocks` are derived server-side.
+ */
 export interface TaskView {
   id: string;
   title: string;
   description: string;
-  status: string;
-  priority: number;
-  author_id: string;
-  author_name: string;
-  workflow_id: string;
-  workflow_name: string;
-  current_step_id: string;
-  step_name: string;
-  agent_id: string;
-  agent_name: string;
+  status: TaskStatus;
+  workflow: string | null;
+  step: string | null;
   blocked: boolean;
   blocked_by: TaskRef[];
   blocks: TaskRef[];
   comment_count: number;
-  metadata: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }
 
-/** `job.get` / `job.list` element (`wire::Job`). */
-export interface Job {
-  job_id: string;
-  task_id: string;
-  step_id: string;
-  status: string;
-  transition_id?: number | null;
-  pi_session_id?: string;
-  session_path?: string;
-  pid?: number | null;
-  exit_code?: number | null;
-  error?: string;
-  corrections_used: number;
-  max_corrections: number;
-  created_at: string;
-  started_at?: string | null;
-  finished_at?: string | null;
-  duration_ms: number;
-  attach_count: number;
-  streaming: boolean;
-  workflow_name: string;
-  step_name: string;
-  agent_name: string;
-}
-
-/** One outgoing `step_transitions` row (`wire::WorkflowTransition`). */
-export interface WorkflowTransition {
-  id: number;
-  next_step_id?: string;
-  next_step_name?: string;
-  task_status?: string;
-  prompt_rule: string;
-}
-
-/** One row of a workflow's step graph (`wire::WorkflowStep`). */
-export interface WorkflowStep {
-  id: string;
-  name: string;
-  agent_id: string;
-  agent_name: string;
-  next_steps: string[];
-  next_status: string[];
-  task_count: number;
-  max_visits: number;
-  agent_params?: Record<string, unknown> | null;
-  transitions?: WorkflowTransition[];
-}
-
-/** One non-terminal task referencing a workflow (`wire::NonTerminalTaskRef`). */
-export interface NonTerminalTaskRef {
-  id: string;
-  status: string;
-  step_name: string;
-}
-
-/** `workflow.list` / `workflow.get` element (`wire::Workflow`). */
-export interface Workflow {
-  id: string;
-  name: string;
-  description: string;
-  is_synthetic: boolean;
-  first_step: string;
-  first_step_id: string;
-  steps: WorkflowStep[];
-  task_count: number;
-  isolation: string;
-  non_terminal_task_count: number;
-  non_terminal_tasks: NonTerminalTaskRef[];
-  created_at: string;
-}
-
-/** `agent.list` element (`wire::Agent`). */
-export interface Agent {
-  id: string;
-  name: string;
-  is_human: boolean;
-  source: string;
-  version: string;
-  model: string;
-  thinking: string;
-  extra_args: string[];
-  pi_skills: string[];
-  pi_ext: string[];
-  tasks_owned: number;
-  created_at: string;
-}
-
-/** `comment.list` element (`wire::Comment`). */
+/** One comment on a task. Editable/deletable (not strictly append-only). */
 export interface Comment {
-  id: number;
-  task_id: string;
-  author_id: string;
-  author_name: string;
+  id: string;
+  author: string;
   text: string;
   created_at: string;
+  updated_at: string;
 }
 
-/** `signal.forTask` / `signal.forJob` element (`wire::Signal`). */
-export interface Signal {
-  transition_id: number;
+/** Filter for `task.list`. */
+export interface TaskFilter {
+  status?: TaskStatus | TaskStatus[];
+  workflow?: string;
+  step?: string;
+  blocked?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Session domain (sdk/types.ts §3.2). Replaces the v1 run record.
+// ---------------------------------------------------------------------------
+
+/** Session lifecycle status. */
+export type SessionStatus = "queued" | "running" | "done" | "failed" | "aborted";
+
+/** Session record (`./.autosk/sessions/<id>.json`). */
+export interface SessionMeta {
+  id: string;
   task_id: string;
-  job_id: string;
-  step_id: string;
-  step_name: string;
-  workflow_id: string;
-  workflow_name: string;
-  target: string;
-  agent_id: string;
-  agent_name: string;
-  created_at: string;
+  workflow: string;
+  step: string;
+  agent: string;
+  status: SessionStatus;
+  error?: string;
+  started_at: string | null;
+  ended_at: string | null;
 }
 
-/** `job.messages` element (`wire::MessageEvent`). */
-export interface MessageEvent {
-  kind: string;
-  ts?: string | null;
-  text?: string;
-  name?: string;
-  input?: unknown;
-  is_error?: boolean;
-  raw?: unknown;
+// ---------------------------------------------------------------------------
+// Registry domain (sdk/types.ts §4). Workflows/agents are code, not data.
+// ---------------------------------------------------------------------------
+
+/**
+ * The target of a transition: a sibling step within the same workflow, or a
+ * terminal/park status.
+ */
+export type StepTarget = { step: string } | { status: "done" | "cancel" | "human" };
+
+/** One step of a workflow as rendered from code for `registry.workflow.*`. */
+export interface WorkflowStepInfo {
+  name: string;
+  /** Agent name from the registry, or `null` for a human-owned step. */
+  agent: string | null;
+  /** `true` for a human-owned step the engine parks at and never schedules. */
+  human: boolean;
+  /** Conservative declared target set (a superset). */
+  targets: StepTarget[];
 }
 
-/** `healthz` per-project row (`wire::HealthProject`). */
+/** A workflow rendered from code (`registry.workflow.get`). Read-only projection. */
+export interface WorkflowInfo {
+  name: string;
+  description?: string;
+  /** snake_case on the wire (the `WorkflowDefinition.firstStep` projection). */
+  first_step: string;
+  steps: WorkflowStepInfo[];
+  /** Isolation provider tag; `"none"` when the workflow has no provider. */
+  isolation: string;
+}
+
+/** An agent rendered from code (`registry.agent.list`). */
+export interface AgentInfo {
+  name: string;
+}
+
+// ---------------------------------------------------------------------------
+// pi-format transcript entries (sdk/transcript.ts §3.2).
+// ---------------------------------------------------------------------------
+
+export interface TextContent {
+  type: "text";
+  text: string;
+  textSignature?: string;
+}
+
+export interface ThinkingContent {
+  type: "thinking";
+  thinking: string;
+  thinkingSignature?: string;
+  redacted?: boolean;
+}
+
+export interface ImageContent {
+  type: "image";
+  /** base64-encoded image data. */
+  data: string;
+  /** e.g. `"image/png"`. */
+  mimeType: string;
+}
+
+export interface ToolCall {
+  type: "toolCall";
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  thoughtSignature?: string;
+}
+
+/** A block of message content. */
+export type ContentBlock = TextContent | ThinkingContent | ImageContent | ToolCall;
+
+/** Token usage + cost accounting attached to assistant messages. */
+export interface Usage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+}
+
+export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+
+export interface UserMessage {
+  role: "user";
+  content: string | (TextContent | ImageContent)[];
+  /** Unix timestamp in milliseconds. */
+  timestamp: number;
+}
+
+export interface AssistantMessage {
+  role: "assistant";
+  content: (TextContent | ThinkingContent | ToolCall)[];
+  api?: string;
+  provider: string;
+  model: string;
+  usage: Usage;
+  stopReason: StopReason;
+  errorMessage?: string;
+  /** Unix timestamp in milliseconds. */
+  timestamp: number;
+}
+
+export interface ToolResultMessage {
+  role: "toolResult";
+  toolCallId: string;
+  toolName: string;
+  content: (TextContent | ImageContent)[];
+  details?: unknown;
+  isError: boolean;
+  /** Unix timestamp in milliseconds. */
+  timestamp: number;
+}
+
+/** A pi message, written via `ctx.log.message(...)`. */
+export type TranscriptMessage = UserMessage | AssistantMessage | ToolResultMessage;
+
+/** Line 1 of a transcript: pi's `SessionHeader` with autosk fields added. */
+export interface SessionHeader {
+  type: "session";
+  version: 1;
+  id: string;
+  task_id: string;
+  workflow: string;
+  step: string;
+  agent: string;
+  /** RFC3339 UTC. */
+  timestamp: string;
+  cwd: string;
+}
+
+/** Base for every non-header entry (pi's `SessionEntryBase` minus `parentId`). */
+export interface TranscriptEntryBase {
+  type: string;
+  /** 8-char hex id. */
+  id: string;
+  /** RFC3339 UTC. */
+  timestamp: string;
+}
+
+/** A pi message-schema entry (`ctx.log.message`). */
+export interface MessageEntry extends TranscriptEntryBase {
+  type: "message";
+  message: TranscriptMessage;
+}
+
+/** A generic custom entry (`ctx.log.custom`) — the agent logging channel. */
+export interface CustomEntry<T = unknown> extends TranscriptEntryBase {
+  type: "custom";
+  customType: string;
+  data?: T;
+}
+
+/** The structural custom types the engine emits itself. */
+export const AUTOSK_CUSTOM_TYPES = [
+  "autosk:transit",
+  "autosk:steer",
+  "autosk:error",
+  "autosk:session_end",
+] as const;
+
+export type AutoskCustomType = (typeof AUTOSK_CUSTOM_TYPES)[number];
+
+/** `autosk:transit` payload — one committed transition. */
+export interface TransitData {
+  to: StepTarget;
+  from?: { workflow: string; step: string };
+}
+
+/** `autosk:steer` payload — a steer/followup message injected into a live session. */
+export interface SteerData {
+  kind: "steer" | "followup";
+  message: string;
+}
+
+/** `autosk:error` payload — an error surfaced during the session. */
+export interface ErrorData {
+  error: string;
+  message?: string;
+}
+
+/** `autosk:session_end` payload — the session's terminal status. */
+export interface SessionEndData {
+  status: "done" | "failed" | "aborted";
+  error?: string;
+}
+
+export interface TransitEntry extends TranscriptEntryBase {
+  type: "custom";
+  customType: "autosk:transit";
+  data: TransitData;
+}
+
+export interface SteerEntry extends TranscriptEntryBase {
+  type: "custom";
+  customType: "autosk:steer";
+  data: SteerData;
+}
+
+export interface ErrorEntry extends TranscriptEntryBase {
+  type: "custom";
+  customType: "autosk:error";
+  data: ErrorData;
+}
+
+export interface SessionEndEntry extends TranscriptEntryBase {
+  type: "custom";
+  customType: "autosk:session_end";
+  data: SessionEndData;
+}
+
+/** The union of engine structural entries. */
+export type EngineEntry = TransitEntry | SteerEntry | ErrorEntry | SessionEndEntry;
+
+/** Any non-header transcript entry. */
+export type TranscriptEntry = MessageEntry | CustomEntry | EngineEntry;
+
+/** Any line of a transcript file. */
+export type TranscriptLine = SessionHeader | TranscriptEntry;
+
+/** Type guard: is `s` one of the engine's structural custom types? */
+export function isAutoskCustomType(s: string): s is AutoskCustomType {
+  return (AUTOSK_CUSTOM_TYPES as readonly string[]).includes(s);
+}
+
+// ---------------------------------------------------------------------------
+// Project / meta (sdk/proto.ts §4).
+// ---------------------------------------------------------------------------
+
+/** A project in the persisted registry. v2 carries no database path — there is no DB. */
+export interface ProjectInfo {
+  root: string;
+  name: string;
+}
+
+/** One extension load error surfaced via `project.diagnostics` (§3.6). */
+export interface ExtensionLoadError {
+  /** Path or npm package name of the offending extension. */
+  source: string;
+  error: string;
+}
+
+/** `project.diagnostics` result. */
+export interface ProjectDiagnostics {
+  root: string;
+  extensions: ExtensionLoadError[];
+}
+
+/** `meta.healthz` per-project row. */
 export interface HealthProject {
   root: string;
-  db_path: string;
   queued: number;
   running: number;
   opened_at: string;
 }
 
-/** `healthz` result (`wire::Health`). */
+/** `meta.healthz` result. */
 export interface Health {
   ok: boolean;
   workers: number;
   queued: number;
   running: number;
-  db_path?: string;
-  project_root?: string;
-  projects?: HealthProject[];
+  projects: HealthProject[];
 }
 
-/** `version` result (`wire::VersionInfo`). */
+/** `meta.version` result. */
 export interface VersionInfo {
   version: string;
   commit: string;
 }
 
-/** One `job-event` notification payload (`wire::JobEvent`). */
-export interface JobEvent {
-  kind: "message" | "status" | "done" | "error";
-  job_id: string;
-  event_id?: number;
-  event?: MessageEvent | null;
-  job?: Job | null;
-  error?: string;
-}
+// ---------------------------------------------------------------------------
+// Notification payloads (sdk/proto.ts §4).
+// ---------------------------------------------------------------------------
 
-/** `project.list` / `project.add` element (`wire::ProjectInfo`). */
-export interface ProjectInfo {
+/** `task-changed` payload — carries the full TaskView (no refetch needed). */
+export interface TaskChangedParams {
+  /** The project root the task belongs to. */
   root: string;
-  db_path: string;
-  name: string;
+  task: TaskView;
 }
 
-/** `workflow.updateIsolation` result (`wire::UpdateIsolationReport`). */
-export interface UpdateIsolationReport {
-  workflow: string;
-  from: string;
-  to: string;
-  noop: boolean;
-  dry_run: boolean;
-  non_terminal_tasks?: string[];
-  ensured_tasks?: EnsureRecord[];
-  leftover_worktrees?: LeftoverWorktree[];
-  rolled_back_ensures?: EnsureRecord[];
-  failed_task?: string;
+/** `project-changed` payload. */
+export interface ProjectChangedParams {
+  project: ProjectInfo;
 }
 
-export interface EnsureRecord {
-  task_id: string;
-  path: string;
-  branch: string;
-  existing: boolean;
-}
-
-export interface LeftoverWorktree {
-  task_id: string;
-  path: string;
+/** `session-event` payload. `kind` mirrors the v1 SSE frames. */
+export interface SessionEventParams {
+  root: string;
+  session_id: string;
+  kind: "message" | "status" | "done" | "error";
+  /** Present on `message` (a single transcript line) — also used for replay. */
+  event?: TranscriptLine;
+  /** Present on `status` / `done` (the decorated session meta). */
+  session?: SessionMeta;
+  /** Present on `error`. */
+  error?: string;
+  /** Monotonic replay cursor (the line number of `event`). */
+  line?: number;
 }
 
 // ---- frontend-only types --------------------------------------------------
@@ -248,19 +409,6 @@ export interface DaemonStatus {
   error?: string | null;
 }
 
-/** `task-changed` notification payload. */
-export interface TaskChangedEvent {
-  root: string;
-  db_path: string;
-}
-
-/** The selector carried by every project-scoped RPC call. */
-export interface Selector {
-  cwd?: string;
-  db_path?: string;
-}
-
-/** Reserved-status set helpers (mirror store.Status). */
+/** Reserved-status set helpers. */
 export const OPEN_STATUSES = ["new", "work", "human"] as const;
 export const TERMINAL_STATUSES = ["done", "cancel"] as const;
-export type TaskStatus = "new" | "work" | "human" | "done" | "cancel";

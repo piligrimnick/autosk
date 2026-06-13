@@ -75,3 +75,26 @@
   background: #3a2626;
   color: #ff8a8a;
 }
+/* project.diagnostics — one extension load error in the project switcher menu. */
+.menu-diagnostic {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 10px;
+  max-width: 320px;
+}
+.menu-diagnostic-source {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--warn);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu-diagnostic-error {
+  font-size: 11px;
+  color: var(--fg-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

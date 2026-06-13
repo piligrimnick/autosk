@@ -200,8 +200,8 @@ fn classify_line(line: &str) -> Inbound {
 }
 
 /// Routes one inbound line: a notification is re-emitted under the same name so
-/// the events.ts hub fans it out (job-event / task-changed / project-changed); a
-/// response resolves the pending oneshot.
+/// the events.ts hub fans it out (session-event / task-changed /
+/// project-changed); a response resolves the pending oneshot.
 async fn dispatch_line(app: &AppHandle, pending: &Arc<Mutex<PendingMap>>, line: &str) {
     match classify_line(line) {
         Inbound::Notification { method, params } => {
@@ -267,10 +267,10 @@ mod tests {
 
     #[test]
     fn classify_notification() {
-        match classify_line(r#"{"method":"job-event","params":{"job_id":"j1"}}"#) {
+        match classify_line(r#"{"method":"session-event","params":{"session_id":"s1"}}"#) {
             Inbound::Notification { method, params } => {
-                assert_eq!(method, "job-event");
-                assert_eq!(params["job_id"], "j1");
+                assert_eq!(method, "session-event");
+                assert_eq!(params["session_id"], "s1");
             }
             other => panic!("expected notification, got {other:?}"),
         }

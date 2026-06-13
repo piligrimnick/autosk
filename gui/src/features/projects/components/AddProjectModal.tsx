@@ -60,8 +60,8 @@ export function AddProjectModal({ onClose }: { onClose: () => void }) {
         />
       </label>
       <p className="hint">
-        "Add existing" registers a directory that already has <code>.autosk/db</code>. "Init new" runs migrations
-        + bootstrap, then registers it.
+        "Add existing" registers a directory that already has an <code>.autosk/</code> directory. "Init new" lays
+        the <code>.autosk/</code> skeleton, then registers it.
       </p>
       {err && <div className="form-error">{err}</div>}
     </Modal>

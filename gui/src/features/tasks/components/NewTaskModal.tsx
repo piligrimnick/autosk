@@ -13,7 +13,6 @@ export function NewTaskModal({ cwd, onClose }: { cwd: string; onClose: () => voi
   const slice = activeSlice(state);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [priority, setPriority] = useState(2);
   const [workflow, setWorkflow] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -26,12 +25,11 @@ export function NewTaskModal({ cwd, onClose }: { cwd: string; onClose: () => voi
     setBusy(true);
     setErr(null);
     try {
-      const created = await ipc.taskCreate(cwd, {
-        title: title.trim(),
-        description,
-        priority,
-        workflow: workflow || undefined,
-      });
+      // v2 `task.create` takes no workflow; create first, then enroll if asked.
+      const created = await ipc.taskCreate(cwd, { title: title.trim(), description });
+      if (workflow) {
+        await ipc.taskEnroll(cwd, created.id, { workflow });
+      }
       await effects.refreshTasks(cwd);
       await effects.selectTask(created.id);
       onClose();
@@ -60,29 +58,17 @@ export function NewTaskModal({ cwd, onClose }: { cwd: string; onClose: () => voi
         <span className="field-label">Description</span>
         <textarea className="textarea" rows={6} value={description} onChange={(e) => setDescription(e.target.value)} />
       </label>
-      <div className="field-row">
-        <label className="field">
-          <span className="field-label">Priority</span>
-          <select className="select" value={priority} onChange={(e) => setPriority(Number(e.target.value))}>
-            {[0, 1, 2, 3].map((p) => (
-              <option key={p} value={p}>
-                P{p}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span className="field-label">Enroll (optional)</span>
-          <select className="select" value={workflow} onChange={(e) => setWorkflow(e.target.value)}>
-            <option value="">(none — create as new)</option>
-            {slice.workflows.map((w) => (
-              <option key={w.id} value={w.name}>
-                {w.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+      <label className="field">
+        <span className="field-label">Enroll (optional)</span>
+        <select className="select" value={workflow} onChange={(e) => setWorkflow(e.target.value)}>
+          <option value="">(none — create as new)</option>
+          {slice.workflows.map((w) => (
+            <option key={w.name} value={w.name}>
+              {w.name}
+            </option>
+          ))}
+        </select>
+      </label>
       {err && <div className="form-error">{err}</div>}
     </Modal>
   );

@@ -60,9 +60,11 @@ pub(crate) async fn ensure_connection(
         }
     };
 
-    // Opt into the server's change pushes for this connection so task-changed /
-    // project-changed flow without the frontend knowing the transport (plan §5).
-    let _ = conn.call("task.subscribe", serde_json::json!({})).await;
+    // Opt into the GLOBAL project-changed push for this connection so registry
+    // changes flow without the frontend knowing the transport (proto v2:
+    // project.subscribe ignores params and needs no open project). task.subscribe
+    // is NOT issued here: in v2 it REQUIRES `{cwd}` and OPENS that project, so it
+    // is per-active-project and front-end-issued (store.tsx).
     let _ = conn.call("project.subscribe", serde_json::json!({})).await;
 
     // Mark this generation active BEFORE emitting `true`: from here on any

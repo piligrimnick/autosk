@@ -1,13 +1,14 @@
 // TaskView — the center body when a task is selected (redesign plan §8.3,
-// decision #3): the lazy-style task sheet — id/status/priority/blocked header,
-// title, description (markdown), and the comments thread (markdown, oldest →
-// newest). Transcripts live in the Session view; the comment box is the
-// composer at the bottom of the center panel. The ⋯ button at the right edge
-// of the header row pops the same task-actions menu as right-clicking the
-// task's row in the Tasks panel (useTaskRowMenu).
+// decision #3): the lazy-style task sheet — id/status/workflow:step/blocked
+// header, title, description (markdown), and the comments thread (markdown,
+// oldest → newest, editable/deletable). Transcripts live in the Session view;
+// the comment box is the composer at the bottom of the center panel. The ⋯
+// button at the right edge of the header row pops the same task-actions menu as
+// right-clicking the task's row in the Tasks panel (useTaskRowMenu).
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/state/store";
+import * as ipc from "@/services/ipc";
 import { activeTask } from "@/state/selectors";
 import { EmptyState, StatusBadge, localTime } from "@/components/common";
 import { Markdown } from "@/components/Markdown";
@@ -38,26 +39,18 @@ export function TaskView() {
           <StatusBadge status={task.status} />
           <span className="meta-sep">·</span>
           <span className="task-view-id">{task.id}</span>
-          <span className="meta-sep">·</span>
-          <span className="task-view-prio">P{task.priority}</span>
-          {task.workflow_name && (
+          {task.workflow && (
             <>
               <span className="meta-sep">·</span>
               <span className="task-view-wfstep">
-                <span className="task-view-wf">{task.workflow_name}</span>
-                {task.step_name && (
+                <span className="task-view-wf">{task.workflow}</span>
+                {task.step && (
                   <>
                     <span className="task-view-step-sep">:</span>
-                    <span className="task-view-step">{task.step_name}</span>
+                    <span className="task-view-step">{task.step}</span>
                   </>
                 )}
               </span>
-            </>
-          )}
-          {task.agent_name && (
-            <>
-              <span className="meta-sep">·</span>
-              <span className="task-view-agent">{task.agent_name}</span>
             </>
           )}
           {task.blocked && (
@@ -87,7 +80,7 @@ export function TaskView() {
           {comments.length === 0 ? (
             <div className="task-comments-empty">No comments yet.</div>
           ) : (
-            comments.map((c) => <CommentItem key={c.id} comment={c} />)
+            comments.map((c) => <CommentItem key={c.id} task={task} comment={c} />)
           )}
         </div>
         <div ref={bottomRef} />
@@ -115,15 +108,80 @@ function TaskMenuButton({ task }: { task: TaskData }) {
   );
 }
 
-function CommentItem({ comment }: { comment: Comment }) {
+function CommentItem({ task, comment }: { task: TaskData; comment: Comment }) {
+  const { state, effects } = useStore();
+  const cwd = state.activeProject ?? "";
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(comment.text);
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    if (!text.trim()) return;
+    setBusy(true);
+    try {
+      await ipc.commentEdit(cwd, task.id, comment.id, text);
+      setEditing(false);
+      await effects.refreshTask(task.id);
+    } catch (err) {
+      effects.setNotice({ kind: "error", text: String((err as Error).message ?? err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!confirm("Delete this comment?")) return;
+    setBusy(true);
+    try {
+      await ipc.commentDelete(cwd, task.id, comment.id);
+      await effects.refreshTask(task.id);
+    } catch (err) {
+      effects.setNotice({ kind: "error", text: String((err as Error).message ?? err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="comment">
       <div className="comment-meta">
-        <span className="comment-author">{comment.author_name || comment.author_id}</span>
+        <span className="comment-author">{comment.author}</span>
         <span className="comment-time">{localTime(comment.created_at)}</span>
+        <span className="comment-actions">
+          {editing ? (
+            <>
+              <button className="btn-ghost" disabled={busy} onClick={() => void save()}>
+                save
+              </button>
+              <button
+                className="btn-ghost"
+                disabled={busy}
+                onClick={() => {
+                  setText(comment.text);
+                  setEditing(false);
+                }}
+              >
+                cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="btn-ghost" disabled={busy} onClick={() => setEditing(true)}>
+                edit
+              </button>
+              <button className="btn-ghost" disabled={busy} onClick={() => void remove()}>
+                delete
+              </button>
+            </>
+          )}
+        </span>
       </div>
       <div className="comment-body">
-        <Markdown text={comment.text} />
+        {editing ? (
+          <textarea className="textarea mono" rows={4} value={text} onChange={(e) => setText(e.target.value)} />
+        ) : (
+          <Markdown text={comment.text} />
+        )}
       </div>
     </div>
   );

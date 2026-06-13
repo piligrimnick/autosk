@@ -1,10 +1,10 @@
-/* Sessions panel — a lazy-mode-style Jobs list. Each row is two lines:
- *   line 1: <STATUS chip>  <job-id>  ……  <task-id>
+/* Sessions panel — a lazy-mode-style sessions list. Each row is two lines:
+ *   line 1: <STATUS chip>  <session-id>  ……  <task-id>
  *   line 2: <work-time>     <workflow-name>:<step-name>
- * The status chip and work-time share a fixed-width left gutter so the job-id
- * and workflow:step align in the column to their right, with the task-id
- * magnetised to the right edge of line 1.
- * Entity colours match lazy-mode (see base.css --job-id/--task-id/… tokens).
+ * The status chip and work-time share a fixed-width left gutter so the
+ * session-id and workflow:step align in the column to their right, with the
+ * task-id magnetised to the right edge of line 1.
+ * Entity colours match lazy-mode (see base.css --session-id/--task-id/… tokens).
  * The status chip pulse reuses the global `pulse` keyframe from base.css. */
 
 .session-list {
@@ -18,7 +18,7 @@
 .session-row {
   /* width of the left gutter column shared by the status chip (line 1) and
    * the work-time (line 2); sized to fit the widest status label (RUNNING)
-   * so the job-id / workflow:step column to its right lines up across rows. */
+   * so the session-id / workflow:step column to its right lines up across rows. */
   --session-gutter: 68px;
   display: flex;
   flex-direction: column;
@@ -36,7 +36,7 @@
   border-color: var(--border);
 }
 
-/* line 1: <STATUS chip>  <job-id>  ………  <task-id> */
+/* line 1: <STATUS chip>  <session-id>  ………  <task-id> */
 .session-row-top {
   display: flex;
   align-items: center;
@@ -59,9 +59,9 @@
 .session-gutter .badge {
   flex-shrink: 0;
 }
-.session-job-id {
+.session-id {
   flex: 0 0 auto;
-  color: var(--job-id);
+  color: var(--session-id);
   white-space: nowrap;
 }
 .session-task-id {
@@ -76,9 +76,6 @@
 /* running chip keeps a subtle pulse */
 .session-gutter .badge.is-live {
   animation: pulse 1.4s ease-in-out infinite;
-}
-.session-gutter .badge.is-live.is-streaming {
-  animation-duration: 1s;
 }
 
 /* line 2: <work-time>  <workflow-name>:<step-name> */

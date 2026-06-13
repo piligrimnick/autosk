@@ -4,9 +4,9 @@
 // built from a plain entry list so that when the native menu plugin is
 // unavailable (iOS/Android — "plugin menu not found") the SAME entries render
 // as an in-app popover at the same position instead. Status flips
-// (done/cancel/reopen) and unblock fire IPC directly; Edit / Metadata / Add
-// blocker open the co-located React modals (enroll/resume/comment live in the
-// center composer, so they are not duplicated here). Returns the row's
+// (done/cancel/reopen) and unblock fire IPC directly; Edit / Add blocker open
+// the co-located React modals (enroll/resume/comment live in the center
+// composer, so they are not duplicated here). Returns the row's
 // `onContextMenu` handler plus the modal tree to render — the modals are
 // portaled to <body>, so their clicks never bubble to the row's select handler.
 
@@ -33,13 +33,16 @@ export function useTaskRowMenu(task: TaskView): {
 } {
   const { state, effects } = useStore();
   const cwd = state.activeProject ?? "";
-  const [modal, setModal] = useState<"edit" | "metadata" | "block" | null>(null);
+  const [modal, setModal] = useState<"edit" | "block" | null>(null);
 
   const run = useCallback(
     async (fn: () => Promise<unknown>) => {
       try {
         await fn();
         await effects.refreshTasks();
+        // refreshTasks no longer pulls sessions; a status flip (e.g. cancel may
+        // abort a running session) can move them, so refresh the panel too.
+        await effects.refreshSessions();
         await effects.refreshTask(task.id);
       } catch (err) {
         effects.setNotice({ kind: "error", text: String((err as Error).message ?? err) });
@@ -65,12 +68,11 @@ export function useTaskRowMenu(task: TaskView): {
     }
     entries.push({ kind: "separator" });
     entries.push({ kind: "item", text: "Edit…", action: () => setModal("edit") });
-    entries.push({ kind: "item", text: "Metadata…", action: () => setModal("metadata") });
     entries.push({ kind: "item", text: "Add blocker…", action: () => setModal("block") });
     if (task.blocked_by.length > 0) {
       entries.push({ kind: "separator" });
       for (const b of task.blocked_by) {
-        entries.push({ kind: "item", text: `Unblock ${b.id}`, action: () => void run(() => ipc.taskUnblock(cwd, task.id, [b.id])) });
+        entries.push({ kind: "item", text: `Unblock ${b.id}`, action: () => void run(() => ipc.taskUnblock(cwd, task.id, b.id)) });
       }
     }
     return entries;
@@ -111,7 +113,6 @@ export function useTaskRowMenu(task: TaskView): {
           <>
             {popover && <FallbackMenu {...popover} onClose={() => setPopover(null)} />}
             {modal === "edit" && <EditTaskModal task={task} cwd={cwd} onClose={() => setModal(null)} />}
-            {modal === "metadata" && <MetadataModal task={task} cwd={cwd} onClose={() => setModal(null)} />}
             {modal === "block" && <BlockModal task={task} cwd={cwd} onClose={() => setModal(null)} />}
           </>,
           document.body,
@@ -184,14 +185,13 @@ function EditTaskModal({ task, cwd, onClose }: { task: TaskView; cwd: string; on
   const refresh = useRefresh(task.id);
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
-  const [priority, setPriority] = useState(task.priority);
   const [busy, setBusy] = useState(false);
 
   const save = async () => {
     if (!title.trim()) return;
     setBusy(true);
     try {
-      await ipc.taskUpdate(cwd, task.id, { title, description, priority });
+      await ipc.taskUpdate(cwd, task.id, { title, description });
       await refresh();
       onClose();
     } catch (err) {
@@ -219,60 +219,6 @@ function EditTaskModal({ task, cwd, onClose }: { task: TaskView; cwd: string; on
         <span className="field-label">Description</span>
         <textarea className="textarea" rows={8} value={description} onChange={(e) => setDescription(e.target.value)} />
       </label>
-      <label className="field">
-        <span className="field-label">Priority</span>
-        <select className="select" value={priority} onChange={(e) => setPriority(Number(e.target.value))}>
-          {[0, 1, 2, 3].map((p) => (
-            <option key={p} value={p}>
-              P{p}
-            </option>
-          ))}
-        </select>
-      </label>
-    </Modal>
-  );
-}
-
-function MetadataModal({ task, cwd, onClose }: { task: TaskView; cwd: string; onClose: () => void }) {
-  const refresh = useRefresh(task.id);
-  const [text, setText] = useState(JSON.stringify(task.metadata ?? {}, null, 2));
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const save = async () => {
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(text || "{}");
-    } catch {
-      setErr("Invalid JSON.");
-      return;
-    }
-    setBusy(true);
-    setErr(null);
-    try {
-      await ipc.taskSetMetadata(cwd, task.id, parsed);
-      await refresh();
-      onClose();
-    } catch (e) {
-      setErr(String((e as Error).message ?? e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal
-      title={`Metadata · ${task.id}`}
-      onClose={onClose}
-      footer={
-        <button className="btn btn-primary" disabled={busy} onClick={() => void save()}>
-          Replace metadata
-        </button>
-      }
-    >
-      <p className="hint">Wholesale-replaces the task's metadata JSON (mirrors lazy's "M" hotkey).</p>
-      <textarea className="textarea mono" rows={14} value={text} onChange={(e) => setText(e.target.value)} />
-      {err && <div className="form-error">{err}</div>}
     </Modal>
   );
 }
@@ -288,7 +234,7 @@ function BlockModal({ task, cwd, onClose }: { task: TaskView; cwd: string; onClo
     if (!id) return;
     setBusy(true);
     try {
-      await ipc.taskBlock(cwd, task.id, [id]);
+      await ipc.taskBlock(cwd, task.id, id);
       await refresh();
       onClose();
     } catch (err) {

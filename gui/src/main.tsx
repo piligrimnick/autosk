@@ -12,7 +12,7 @@ import "./styles/tasks.css";
 import "./styles/workflows.css";
 import "./styles/layout.css";
 import "./styles/sidebar.css";
-import "./styles/timeline.css";
+import "./styles/transcript.css";
 import "./styles/composer.css";
 import "./styles/panel.css";
 import "./styles/views.css";

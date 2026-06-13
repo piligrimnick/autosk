@@ -1,14 +1,14 @@
 // Composer — the input pinned at the bottom of the center panel. Mode is
 // resolved by `composerMode(state)`:
-//   steer   → running/queued session selected → steer the agent (the abort /
-//             cancel job controls live in the session header, not here)
+//   steer   → running/queued session selected → steer the agent (the abort
+//             control lives in the session header, not here)
 //   comment → a task selected (any status) → add a comment; enroll / resume /
 //             reopen moved to the Enroll button in the task header
 //   none    → nothing renders (also covers a terminal, read-only session)
 
 import { useStore } from "@/state/store";
 import * as ipc from "@/services/ipc";
-import { activeTask, composerMode, selectedSessionJob } from "@/state/selectors";
+import { activeTask, composerMode, selectedSession } from "@/state/selectors";
 import { ComposerInput } from "./ComposerInput";
 
 export function Composer() {
@@ -33,11 +33,11 @@ function useCwd() {
 function SteerComposer() {
   const { state, effects } = useStore();
   const cwd = useCwd();
-  const job = selectedSessionJob(state)!;
+  const session = selectedSession(state)!;
 
   const send = async (text: string) => {
     try {
-      await ipc.jobInput(cwd, job.job_id, text, "steer");
+      await ipc.sessionInput(cwd, session.id, text, "steer");
     } catch (err) {
       effects.setNotice({ kind: "error", text: String((err as Error).message ?? err) });
     }

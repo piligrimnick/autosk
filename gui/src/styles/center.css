@@ -35,15 +35,15 @@
   flex-wrap: wrap;
   font-size: 13px;
 }
-/* job-id leads (after the status chip) in its entity hue; task-id is
+/* session-id leads (after the status chip) in its entity hue; task-id is
  * magnetised to the right edge of the header row. */
-.session-view-job-id {
+.session-view-id {
   font-family: var(--mono);
-  color: var(--job-id);
+  color: var(--session-id);
   white-space: nowrap;
 }
-/* Right cluster of the session header: the live job controls (abort / cancel)
- * sit just before the task id, the whole group magnetised to the right edge. */
+/* Right cluster of the session header: the live session controls (abort) sit
+ * just before the task id, the whole group magnetised to the right edge. */
 .session-view-right {
   margin-left: auto;
   display: inline-flex;
@@ -129,9 +129,6 @@
   color: var(--task-id);
   white-space: nowrap;
 }
-.task-view-prio {
-  color: var(--fg-mute);
-}
 .task-view-wfstep {
   min-width: 0;
   white-space: nowrap;
@@ -186,7 +183,8 @@
 }
 .comment-meta {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
   font-size: 12px;
   color: var(--fg-mute);
   margin-bottom: 4px;
@@ -194,4 +192,16 @@
 .comment-author {
   font-weight: 600;
   color: var(--warn);
+}
+.comment-time {
+  margin-right: auto;
+}
+.comment-actions {
+  display: inline-flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.comment:hover .comment-actions {
+  opacity: 1;
 }

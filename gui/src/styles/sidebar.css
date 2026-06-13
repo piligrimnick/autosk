@@ -86,7 +86,7 @@
 /* One single-line row: DONE  ask-xxxxxx  Title…  ⛔ — the status chip LEADS the
  * row (left edge), then the id, then the title which flex-grows and
  * ellipsis-truncates so the optional blocked flag stays pinned to the right
- * edge. Priority is intentionally not rendered here. */
+ * edge. No ranking widget is rendered here. */
 .task-item {
   display: flex;
   align-items: center;

@@ -14,11 +14,15 @@ export function ProjectSwitcher() {
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const [adding, setAdding] = useState(false);
   const activeName = state.projects.find((p) => p.root === state.activeProject)?.name ?? "No project";
+  // Extension load errors for the active project (project.diagnostics).
+  const extErrors = state.activeProject
+    ? state.byProject[state.activeProject]?.diagnostics?.extensions ?? []
+    : [];
   const close = () => setAnchor(null);
 
   const remove = async (root: string, name: string) => {
     close();
-    if (!confirm(`Remove ${name} from the registry? (the project's .autosk/db is left untouched)`)) return;
+    if (!confirm(`Remove ${name} from the registry? (the project's .autosk/ directory is left untouched)`)) return;
     try {
       await ipc.projectRemove(root);
       await effects.refreshProjects();
@@ -35,6 +39,14 @@ export function ProjectSwitcher() {
         onClick={(e) => setAnchor(e.currentTarget.getBoundingClientRect())}
       >
         <span className="project-switcher-name">{activeName}</span>
+        {extErrors.length > 0 && (
+          <span
+            className="project-switcher-warn"
+            title={`${extErrors.length} extension load error(s)`}
+          >
+            ⚠
+          </span>
+        )}
         <span className="project-switcher-caret">▾</span>
       </button>
 
@@ -58,6 +70,18 @@ export function ProjectSwitcher() {
               </button>
             </div>
           ))
+        )}
+        {extErrors.length > 0 && (
+          <>
+            <MenuDivider />
+            <MenuLabel>Extension load errors</MenuLabel>
+            {extErrors.map((e, i) => (
+              <div className="menu-diagnostic" key={`${e.source}:${i}`} title={e.error}>
+                <span className="menu-diagnostic-source">{e.source}</span>
+                <span className="menu-diagnostic-error">{e.error}</span>
+              </div>
+            ))}
+          </>
         )}
         <MenuDivider />
         <MenuItem onClick={() => { close(); setAdding(true); }}>Add / init project…</MenuItem>

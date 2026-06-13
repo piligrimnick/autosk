@@ -9,7 +9,7 @@
 // sole `listen` site by scripts/check-ipc-discipline.mjs + eslint.
 
 import { listen } from "@tauri-apps/api/event";
-import type { DaemonStatus, JobEvent, TaskChangedEvent } from "@/types";
+import type { DaemonStatus, SessionEventParams, TaskChangedParams } from "@/types";
 
 export type Unsubscribe = () => void;
 type Listener<T> = (payload: T) => void;
@@ -79,22 +79,22 @@ function createEventHub<T>(eventName: string) {
 }
 
 // One hub per autoskd notification re-emitted by the Rust backend.
-const jobEventHub = createEventHub<JobEvent>("job-event");
-const taskChangedHub = createEventHub<TaskChangedEvent>("task-changed");
+const sessionEventHub = createEventHub<SessionEventParams>("session-event");
+const taskChangedHub = createEventHub<TaskChangedParams>("task-changed");
 const projectChangedHub = createEventHub<Record<string, never>>("project-changed");
 const daemonStatusHub = createEventHub<DaemonStatus>("daemon-status");
 
-/** Live transcript / status / done / error frames for any running job. */
-export function subscribeJobEvents(
-  onEvent: (event: JobEvent) => void,
+/** Live transcript / status / done / error frames for any running session. */
+export function subscribeSessionEvents(
+  onEvent: (event: SessionEventParams) => void,
   options?: SubscriptionOptions,
 ): Unsubscribe {
-  return jobEventHub.subscribe(onEvent, options);
+  return sessionEventHub.subscribe(onEvent, options);
 }
 
-/** A project's task/job state changed — re-fetch the affected project. */
+/** A project's task state changed — carries the full TaskView for a direct upsert. */
 export function subscribeTaskChanged(
-  onEvent: (event: TaskChangedEvent) => void,
+  onEvent: (event: TaskChangedParams) => void,
   options?: SubscriptionOptions,
 ): Unsubscribe {
   return taskChangedHub.subscribe(onEvent, options);

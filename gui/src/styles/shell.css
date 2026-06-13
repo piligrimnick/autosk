@@ -253,6 +253,12 @@ body.is-resizing {
   font-size: 11px;
   flex-shrink: 0;
 }
+/* Extension-load-error indicator on the project switcher (project.diagnostics). */
+.project-switcher-warn {
+  color: var(--warn);
+  font-size: 12px;
+  flex-shrink: 0;
+}
 .panel-body {
   flex: 1;
   min-height: 0;
