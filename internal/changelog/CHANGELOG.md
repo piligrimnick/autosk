@@ -195,6 +195,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (by id, descending) by default — previously oldest-first — so the `autosk lazy`
   Sessions panel and the CLI render the most recent run at the top without any
   client-side re-sort.
+- **transcript / task auto-scroll:** the desktop GUI no longer yanks the center
+  panel to the bottom on every update regardless of where you were reading. The
+  GUI now matches the `autosk lazy` TUI: selecting a session in the Sessions
+  panel anchors its transcript at the newest line, opening a task starts from the
+  top (title/description), and new lines/comments only auto-scroll into view when
+  you are already parked at the bottom. The TUI task detail gained the same
+  tail-when-at-bottom behaviour (it previously never followed new comments).
 
 ## [0.1.6] — 2026-06-08
 

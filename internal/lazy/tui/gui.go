@@ -617,24 +617,28 @@ func (gu *Gui) renderViews() {
 		gu.writeView(winAgents, "[4] Agents", agBody)
 		gu.applyRowHighlight(winAgents, agHdr, gu.st.agentCursor, len(gu.st.agents), focused == panelAgents)
 
-		// Detail pane: writeViewSticky's bottom-anchor behaviour is
-		// the right policy ONLY for the live session transcript — it auto-
-		// tails new events as they arrive. For Task / Workflow / Agent
-		// detail the same policy would wrongly scroll past the title /
-		// description on the very first render (the first frame's
-		// prevLines==0 path always fires sticky), so use a plain
-		// writeView for those branches.
+		// Detail pane: both the live session transcript and the task /
+		// workflow / agent detail tail new content when the operator is
+		// parked at the bottom (writeViewSticky / writeViewTailing). They
+		// differ only on the FIRST frame of a newly-rendered entity:
+		//   - session transcript (writeViewSticky) opens at the bottom so
+		//     switching to a session in the Sessions panel snaps to the
+		//     newest line and live events are immediately visible;
+		//   - task / workflow / agent detail (writeViewTailing) opens at the
+		//     top so the title / description shows first, not the tail of
+		//     the comment thread. A new comment still tails into view, but
+		//     only when the operator was already at the end.
 		//
 		// When the entity rendered into the pane changes between
 		// frames (cursor moves to a different task, focus flips from
 		// Tasks to Sessions, etc.), clear winDetail's buffer + reset its
 		// origin to (0,0) so the new entity starts from its natural
-		// anchor: top for non-session, bottom for session (writeViewSticky
-		// snaps to bottom because prevLines is now 0). Clearing the
-		// buffer also matters for the sticky-tail computation:
-		// without it, leftover lines from the previous entity would
-		// fail the "at bottom" predicate and the new session's transcript
-		// would land at the top instead of tailing the latest events.
+		// anchor: top for non-session, bottom for session (both decided by
+		// the first-frame prevLines==0 path). Clearing the buffer also
+		// matters for the sticky-tail computation: without it, leftover
+		// lines from the previous entity would fail the "at bottom"
+		// predicate and the new session's transcript would land at the top
+		// instead of tailing the latest events.
 		curDetailKey := detailEntityKey(gu.st)
 		isSessionDetail := detailShowsSession(gu.st)
 		if curDetailKey != gu.lastDetailKey {
@@ -649,7 +653,7 @@ func (gu *Gui) renderViews() {
 		if isSessionDetail {
 			gu.writeViewSticky(winDetail, "[0] Detail", detailBody)
 		} else {
-			gu.writeView(winDetail, "[0] Detail", detailBody)
+			gu.writeViewTailing(winDetail, "[0] Detail", detailBody, false)
 		}
 		gu.writeView(winLog, "log", renderCommandLog(gu.st.logBuf, gu.st.flash))
 		gu.writeView(winStatusBar, "", renderStatusBar(gu.st, gu.opts.ProjectRoot))
@@ -1185,14 +1189,27 @@ func viewBufferLineCount(v *gocui.View) int {
 	return strings.Count(buf, "\n") + 1
 }
 
-// writeViewSticky is writeView + a sticky-tail behaviour: if the
-// view was scrolled to the bottom BEFORE the new body landed (or the
-// view was empty / freshly created), the viewport origin is moved
-// after the write so the tail stays visible. If the user had scrolled
-// up, the origin is left alone so wheel/PgUp positions are preserved
-// across live-event appends and 2s refresh ticks.
+// writeViewSticky / writeViewTailing is writeView + a sticky-tail
+// behaviour: if the view was scrolled to the bottom BEFORE the new
+// body landed, the viewport origin is moved after the write so the
+// tail stays visible. If the user had scrolled up, the origin is left
+// alone so wheel/PgUp positions are preserved across live-event
+// appends and 2s refresh ticks.
 //
-// Used by winDetail only. Tasks / Jobs / Workflows / Agents already
+// anchorBottomOnFirstFrame controls the very first frame (the empty /
+// freshly-cleared buffer, prevLines==0) — i.e. the moment a new entity
+// is rendered into the pane:
+//
+//   - true  (writeViewSticky): land at the bottom. This is the session
+//     transcript: switching to a session in the Sessions panel snaps to
+//     the newest line so live events are immediately visible.
+//   - false (writeViewTailing): leave the origin at the top. This is the
+//     task / workflow / agent detail: opening a task shows its title /
+//     description first, NOT the tail of the comment thread. Subsequent
+//     frames still tail the bottom when the user is parked there, so a
+//     new comment auto-scrolls into view only if they were at the end.
+//
+// Used by winDetail only. Jobs / Workflows / Agents lists already
 // manage their origin via the cursor-highlight loop, and applying
 // sticky-tail there would break the wheel-scroll-keeps-its-place
 // affordance.
@@ -1212,6 +1229,10 @@ func viewBufferLineCount(v *gocui.View) int {
 // Using the full inner height for the threshold preserves the
 // at-bottom anchor across the overlay-appears transition.
 func (gu *Gui) writeViewSticky(name, title, body string) {
+	gu.writeViewTailing(name, title, body, true)
+}
+
+func (gu *Gui) writeViewTailing(name, title, body string, anchorBottomOnFirstFrame bool) {
 	v, err := gu.g.View(name)
 	if err != nil || v == nil {
 		return
@@ -1238,13 +1259,20 @@ func (gu *Gui) writeViewSticky(name, title, body string) {
 	} else {
 		prevLines = viewBufferLineCount(v)
 	}
-	// First frame OR user is at (or past) the bottom → sticky.
-	// `oy + fullH >= prevLines` is true exactly when the visible
-	// region [oy, oy+fullH) already covers the last line index
-	// (prevLines-1). Using prevLines as a true line count (rather
-	// than the off-by-one newline count) is required for both this
-	// predicate AND the post-write target below.
-	beforeSticky := prevLines == 0 || oy+fullH >= prevLines
+	// First frame → honour anchorBottomOnFirstFrame (bottom for the
+	// session transcript, top for task/workflow/agent detail). On any
+	// later frame, sticky only when the user is at (or past) the
+	// bottom. `oy + fullH >= prevLines` is true exactly when the
+	// visible region [oy, oy+fullH) already covers the last line index
+	// (prevLines-1). Using prevLines as a true line count (rather than
+	// the off-by-one newline count) is required for both this predicate
+	// AND the post-write target below.
+	var beforeSticky bool
+	if prevLines == 0 {
+		beforeSticky = anchorBottomOnFirstFrame
+	} else {
+		beforeSticky = oy+fullH >= prevLines
+	}
 
 	gu.writeView(name, title, body)
 

@@ -8,11 +8,17 @@ import * as ipc from "@/services/ipc";
 import { selectedSession } from "@/state/selectors";
 import { EmptyState, StatusBadge } from "@/components/common";
 import { Transcript } from "../components/Transcript";
+import { useStickToBottom } from "../useStickToBottom";
 import type { SessionMeta } from "@/types";
 
 export function SessionView() {
   const { state } = useStore();
   const session = selectedSession(state);
+  // Switching to a session anchors the transcript at the newest line; while it
+  // stays selected, new live events tail the bottom only when the operator is
+  // already there (useStickToBottom). Hook runs unconditionally (before the
+  // early return) to keep hook order stable.
+  const { containerRef, onScroll } = useStickToBottom({ resetKey: session?.id ?? null });
   if (!session) {
     return <EmptyState title="Session not found" hint="It may have been removed." />;
   }
@@ -46,7 +52,7 @@ export function SessionView() {
           </span>
         </div>
       </div>
-      <div className="session-view-transcript">
+      <div className="session-view-transcript" ref={containerRef} onScroll={onScroll}>
         {lines.length === 0 ? (
           <EmptyState title="No transcript yet" hint="Waiting for the agent to produce output." />
         ) : (
