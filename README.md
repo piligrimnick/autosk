@@ -134,7 +134,11 @@ iPad, see [docs/gui-release.md](docs/gui-release.md).
    id=$(autosk create "Fix the flaky test" --json | jq -r .id)
    autosk enroll "$id" --workflow my-flow
    ```
-   See [docs/extensions.md](docs/extensions.md) for the extension contract and
+   To pull in a published or local extension package instead, use
+   `autosk install npm:@scope/pkg` (or `autosk install ./my-ext`); add
+   `-l/--local` to scope it to the current project, and `autosk install list` /
+   `autosk install remove` to inspect or drop entries. See
+   [docs/extensions.md](docs/extensions.md) for the extension contract and
    [docs/workflows.md](docs/workflows.md) for full workflows.
 
 ## How it works

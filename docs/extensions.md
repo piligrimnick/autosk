@@ -62,9 +62,13 @@ them in **precedence order** (highest first):
 
 1. **project-local** — `./.autosk/extensions/`
 2. **global** — `~/.autosk/extensions/`
-3. **npm packages** listed under `"extensions"` in `settings.json` (project
-   `./.autosk/settings.json` first, then global `~/.autosk/settings.json`),
-   installed under `~/.autosk/packages/node_modules/`
+3. **settings packages** listed under `"extensions"` in `settings.json` (project
+   `./.autosk/settings.json` first, then global `~/.autosk/settings.json`). Each
+   entry is either an `npm:<spec>` package — resolved under the **same scope's**
+   packages prefix (project settings → `<root>/.autosk/packages/node_modules/`,
+   global settings → `~/.autosk/packages/node_modules/`) — or an absolute local
+   path resolved in place. Dedup within this source is npm by **name** / local by
+   **path**, project beating global.
 
 There is **no daemon-bundled source**: the reference `@autosk/feature-dev`
 workflow is an ordinary npm package that the daemon **provisions on first run**
@@ -84,12 +88,87 @@ is last, **any project-local or global extension that registers a workflow/agent
 of the same name overrides an npm one** — e.g. drop your own `feature-dev` into
 `.autosk/extensions/` to replace the provisioned reference workflow.
 
-A `settings.json` simply lists package names:
+Each `settings.json#extensions` entry is one of **two** explicit forms — an
+`npm:<spec>` package (the `<spec>` may include an `@version`) or an absolute
+local path to a `.ts`/`.js` file or a directory:
 
 ```jsonc
 // ~/.autosk/settings.json  (or ./.autosk/settings.json)
-{ "extensions": ["@me/autosk-flows", "@acme/review-bot"] }
+{
+  "extensions": [
+    "npm:@autosk/feature-dev",
+    "npm:@acme/review-bot@1.4.0",
+    "/Users/me/work/my-ext"
+  ]
+}
 ```
+
+A relative path in a `settings.json` entry resolves against that file's
+`.autosk/` directory; the stored form is absolute. An entry that is **neither**
+`npm:`-prefixed nor a path (a bare `review-bot`) is **invalid** — there is no
+implicit bare-name → npm form: it is recorded as a `project.diagnostics` entry
+and shown as `kind:invalid` by [`autosk install list`](#installing-extensions).
+Prefer managing this file with [`autosk install`](#installing-extensions) over
+editing it by hand.
+
+## Installing extensions
+
+Manage `settings.json#extensions` with the `autosk install` command group rather
+than hand-editing the file (modeled on [pi](https://pi.dev)'s package
+management). A **source** is always explicit — either an `npm:`-prefixed package
+spec or a local path; there is no implicit bare-name → npm form.
+
+```bash
+# npm package — installed into the scope's packages prefix
+autosk install npm:@acme/review-bot
+autosk install npm:@acme/review-bot@1.4.0   # pin a version
+
+# local directory or a single .ts/.js file — referenced in place, never copied
+autosk install ./my-ext
+autosk install ~/work/autosk-flows
+autosk install /abs/path/to/ext.ts
+
+autosk install list                          # both scopes: kind + resolved
+autosk install remove npm:@acme/review-bot   # drop the entry (matches any version)
+```
+
+- **Sources.** An `npm:<spec>` source `npm install`s the package (the `<spec>`
+  may carry an `@version`) into the scope's packages prefix and records
+  `npm:<spec>` in `settings.json`. A local path (`/abs`, `./rel`, `../rel`,
+  `~/path`) is resolved to an **absolute** path, checked to exist, and recorded
+  as-is — the file/dir is loaded in place, never copied. Anything else (a bare
+  `review-bot`) is rejected with an error.
+- **Scope — global by default, `-l/--local` for the project.** A bare install is
+  **global**: the package lands in `~/.autosk/packages/` and the entry in
+  `~/.autosk/settings.json`. Pass **`-l/--local`** to target the current project
+  instead — npm packages install into `<project>/.autosk/packages/` and the entry
+  goes into `<project>/.autosk/settings.json`. A `-l` install requires a project
+  at the cwd; a global install does not.
+- **`install list`.** Shows both scopes' entries with their `kind`
+  (`npm` / `local` / `invalid`) and a `resolved` flag — whether the entry
+  actually resolves to a loadable extension *right now* (an installed npm
+  package, or an existing local path that declares an extension). A local source
+  is only checked for existence at install time, so a path that exists but
+  declares no loadable extension still records the entry and then shows
+  `resolved:false` here. `--json` returns the structured form.
+- **`install remove`.** Drops the matching entry from the scope's
+  `settings.json` — npm matches by **name** (any version), local by absolute
+  **path**. It does **not** uninstall the package from `node_modules` (like pi);
+  only the settings entry goes. Because `remove` takes a valid source, an
+  `invalid` entry that `install list` flags must be cleared by hand-editing
+  `settings.json`.
+- **Always runs.** An explicit `autosk install` is **not** gated by
+  `AUTOSK_NO_AUTO_INSTALL` — that switch only disables the automatic
+  [first-run bootstrap](#first-run-bootstrap) and
+  [reconcile](#auto-install-reconcile-every-start).
+
+**When it takes effect — no hot-reload.** A project's registry is built once,
+when the project is first opened, and cached for the daemon's lifetime (see
+[The live-code hazard](#the-live-code-hazard)). A freshly-installed package or
+local path is therefore picked up only on the **next daemon start / first
+project open** — there is deliberately no in-process hot-reload (it would risk
+active sessions and the engine). The `install` commands print a hint to restart
+the daemon (or reopen the project).
 
 ## No trust model
 
@@ -108,7 +187,8 @@ recorded, and the rest of the registry stays usable:
 - the factory throws (e.g. a stale extension calling the removed `registerAgent`);
 - it registers a name that collides with an already-registered one;
 - a workflow step is neither an inline agent (`onRun`) nor a `statusStep`;
-- a `settings.json` package is listed but not installed / declares no extension.
+- a `settings.json` entry is listed but not installed / declares no extension, or
+  is neither `npm:`-prefixed nor a path (an invalid entry).
 
 Each failure becomes a load diagnostic tagged with the offending source (a path,
 or an npm package name). Surface them with:
@@ -136,8 +216,8 @@ the absence of `~/.autosk/settings.json` — the daemon provisions the default
 extensions itself on startup: it shells out to `npm` to install
 `@autosk/feature-dev` (which pulls `@autosk/pi-agent` / `@autosk/worktree` /
 `@autosk/sdk` transitively) into `~/.autosk/packages/`, then writes
-`~/.autosk/settings.json` listing `@autosk/feature-dev`. Every project then
-discovers `feature-dev` through the npm-packages source above.
+`~/.autosk/settings.json` listing the explicit `npm:@autosk/feature-dev` entry.
+Every project then discovers `feature-dev` through the npm-packages source above.
 
 - `settings.json` **is** the "already initialised" marker: once it exists the
   bootstrap is a no-op, so an operator who manages extensions by hand (or is
@@ -151,16 +231,18 @@ discovers `feature-dev` through the npm-packages source above.
 
 The first-run bootstrap only fires when `settings.json` is **absent**. To keep a
 hand-edited config in sync, the daemon also runs a **reconcile** pass that
-installs any package listed under `"extensions"` that is not yet present under
-`~/.autosk/packages/node_modules/`. So after you add a package name to a
-`settings.json` by hand, the next daemon start (re)spawns and installs it for you
-— no manual `npm install` step.
+installs any `npm:` package listed under `"extensions"` that is not yet present
+under the scope's `packages/node_modules/` prefix (local-path entries are skipped
+— they load in place). So after you add an `npm:` entry to a `settings.json` by
+hand — or `autosk install` records one — the next daemon start (re)spawns and
+installs it for you, no manual `npm install` step.
 
 - **What runs when.** The **global** `~/.autosk/settings.json` is reconciled once
   per daemon start; each project's **project-local** `./.autosk/settings.json` is
-  reconciled the first time that project is opened (its packages install into the
-  same global `~/.autosk/packages/` prefix). Both happen after the socket is
-  accepting, so auto-spawn readiness is never blocked by an install.
+  reconciled the first time that project is opened (its `npm:` packages install
+  into the **project's own** `<root>/.autosk/packages/` prefix — the same place
+  the loader resolves project-settings packages from). Both happen after the
+  socket is accepting, so auto-spawn readiness is never blocked by an install.
 - **Missing only.** Only packages whose `node_modules/<name>` directory is absent
   are installed; already-installed packages are left untouched (no upgrade), so a
   fully-provisioned environment never hits the network. A failed install is

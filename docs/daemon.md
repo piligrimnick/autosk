@@ -29,7 +29,7 @@ plain files the daemon writes atomically (tmp + rename):
   sessions/<session-id>.json  # session meta (one agent run for one step)
   sessions/<session-id>.jsonl # the session transcript (pi-format; see "Sessions" below)
   extensions/                 # (optional) project-local extensions: workflows + agents as code
-  settings.json               # (optional) npm extension packages to load
+  settings.json               # (optional) extension entries to load (npm:<spec> or a local path)
 ```
 
 Because tasks are files, you can read or hand-edit them. The daemon picks up
