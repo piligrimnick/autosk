@@ -12,6 +12,8 @@ Record every remark as a separate comment with specifics: file, line/function, w
 
 If there are substantive remarks the developer must address, send the task back to `dev`. If the review found no blocking issues, send the task to `docs`.
 
+Use autosk_comment tool to write accessible comments.
+
 ## Available transitions
 
 When the review is done, call the `autosk_transit` tool exactly once with `to` set to one of:

@@ -61,6 +61,8 @@ Only when item-by-item validation passed, the CHANGELOG entry is in place (or ex
 
 If release-hygiene work itself fails for a reason you cannot fix in one step (e.g. `git` binary missing, repository state corrupted, `CHANGELOG.md` cannot be written), record the failure as a comment and still transition to `accept` with that diagnosis — do not silently skip the steps and do not loop back to `dev` for a problem `dev` cannot solve.
 
+Use autosk_comment tool to write accessible comments.
+
 ## Available transitions
 
 When the step is done, call the `autosk_transit` tool exactly once with `to` set to one of:

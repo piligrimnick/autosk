@@ -13,6 +13,8 @@ If updates are needed, make them directly in the repository as minimal focused c
 
 You do NOT reopen the discussion about the code itself — that is the job of `review`. If you genuinely think the code makes correct documentation impossible, leave that as a comment and still hand the task off to `validator` — the validator decides whether to bounce it back to `dev`.
 
+Use autosk_comment tool to write accessible comments.
+
 ## Available transitions
 
 When the step is done, call the `autosk_transit` tool exactly once with `to` set to:

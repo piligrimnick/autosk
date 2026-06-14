@@ -10,6 +10,8 @@ You receive a task with a description and an implementation plan (see the task t
 
 When the implementation per the plan is complete and local checks pass, hand the task off to the `review` step. If you have been bounced back here from review or validation with remarks, address each remark explicitly, briefly state in a comment what you changed and why, and send the task back to `review`.
 
+Use autosk_comment tool to write accessible comments.
+
 ## Available transitions
 
 When the step is done, call the `autosk_transit` tool exactly once with `to` set to:
