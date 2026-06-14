@@ -32,8 +32,8 @@ registers those agents — there is no separate agent registration.
   rejected (via `ctx.visits("dev")`), so a task that keeps failing review/
   validation parks for a human instead of looping forever.
 
-The role prompts live under [`prompts/`](./prompts) and are seeded into each pi
-agent as its `firstMessageFile`.
+The role prompts live under [`prompts/`](./prompts) as `.md` files; the workflow
+reads each one and seeds it into the corresponding pi agent as its `firstMessage`.
 
 ## Discovery — how every project gets it
 

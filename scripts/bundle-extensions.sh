@@ -15,7 +15,7 @@
 # Produces <out-ext-dir>/feature-dev/ :
 #   src/index.js                 bundled (deps inlined) — the discoverable entry
 #   src/pi-transit-extension.ts  copied verbatim (loaded by pi, NOT the daemon)
-#   prompts/*.md                 role prompts (resolved relative to src/index.js)
+#   prompts/*.md                 role prompts (read at load relative to src/index.js)
 #   package.json                 { autosk.extensions: ["./src/index.js"] }
 #
 # Requires `bun` on PATH (build time only).

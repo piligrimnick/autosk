@@ -14,6 +14,7 @@
  * per-project files, while a project/global extension of the same name wins.
  */
 
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -35,9 +36,9 @@ import { worktreeIsolation } from "@autosk/worktree";
  */
 export const DEV_VISIT_CAP = 5;
 
-/** Absolute path to a role prompt file (shipped under `prompts/`). */
-function promptPath(role: string): string {
-  return fileURLToPath(new URL(`../prompts/${role}.md`, import.meta.url));
+/** Reads a role prompt (shipped under `prompts/`) to seed the agent's first message. */
+function readPrompt(role: string): string {
+  return readFileSync(fileURLToPath(new URL(`../prompts/${role}.md`, import.meta.url)), "utf8");
 }
 
 /** Options for {@link featureDevWorkflow} (tests inject a test isolation double). */
@@ -61,10 +62,10 @@ export function featureDevWorkflow(opts: FeatureDevWorkflowOptions = {}): Workfl
     steps: {
       // Agents are inline: the step key (dev/review/docs/validator) IS the
       // agent name, and registering the workflow registers these agents.
-      dev: piAgent({ firstMessageFile: promptPath("dev") }),
-      review: piAgent({ thinking: "xhigh", firstMessageFile: promptPath("review") }),
-      docs: piAgent({ firstMessageFile: promptPath("docs") }),
-      validator: piAgent({ firstMessageFile: promptPath("validator") }),
+      dev: piAgent({ firstMessage: readPrompt("dev") }),
+      review: piAgent({ thinking: "xhigh", firstMessage: readPrompt("review") }),
+      docs: piAgent({ firstMessage: readPrompt("docs") }),
+      validator: piAgent({ firstMessage: readPrompt("validator") }),
       accept: statusStep("human"),
     },
     onTransit(ctx: TransitContext, to: StepTarget): void {
