@@ -40,7 +40,12 @@ A `piAgent({...})` is an inline **step value**: the step key is the agent name
 On each `onRun` the agent:
 
 1. spawns `pi --mode rpc` (with the role's `model` / `thinking` / extra args)
-   and **injects a pi extension** that registers an `autosk_transit` tool;
+   and **injects a pi extension** that registers an `autosk_transit` tool. The
+   spawn env also carries `AUTOSK_CWD` (the canonical project root, from
+   `ctx.projectRoot`) and `AUTOSK_AGENT` (the step name), so any `autosk` CLI
+   the agent runs — directly, or via the `@autosk/pi-tools` `autosk_task` /
+   `autosk_comment` tools — targets the task's own project and attributes
+   comments to the step, even when the run is in a throwaway worktree;
 2. seeds pi with the rendered step prompt (role first-message + task context +
    the available transitions + "call `autosk_transit`");
 3. mirrors pi's session entries (messages / custom) into the autosk transcript
@@ -84,6 +89,17 @@ real transition (and any rejection fed back as a correction) is driven by the
 autosk daemon, which observes the call on pi's RPC event stream. That file is
 loaded by **pi's** toolchain, not the daemon, so it is excluded from this
 package's `tsc` typecheck.
+
+## Project resolution under isolation
+
+Under worktree isolation the agent runs in `~/.autosk/worktrees/<slug>/<task>`,
+which contains no `.autosk/`. The daemon sets **`AUTOSK_CWD`** (= `ctx.projectRoot`)
+in the spawned pi's environment; the `autosk` CLI honors it as the project
+selector, so task/comment calls resolve the original project instead of walking
+up from the worktree. The structured task/comment tools live in the separate,
+pi-installed [`@autosk/pi-tools`](https://www.npmjs.com/package/@autosk/pi-tools)
+extension (not injected here) — workflow transitions stay on the in-process
+`autosk_transit` channel.
 
 ## Exports
 

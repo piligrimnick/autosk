@@ -92,6 +92,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both — so auto-spawn works on a clean machine with no global `bun`. The
   `@autosk/*` extension packages are published to npm via
   `scripts/publish-extensions.sh` (ask-305572, ask-e36027).
+- **`@autosk/pi-tools` (new pi extension):** the agent-facing autosk management
+  tools — `autosk_task` (create / update / show / list) and `autosk_comment`
+  (add / list) — shipped as a standalone, npm-publishable pi extension over the
+  `autosk --json` CLI. Install it in pi (`~/.pi/agent/settings.json`) to give an
+  interactive or workflow agent a structured task/comment surface. It ships no
+  transition tool: a workflow step still records its transition through the
+  in-process `autosk_transit` channel.
+- **`AUTOSK_CWD` project-selector override:** the `autosk` CLI now honors
+  `$AUTOSK_CWD` as the project root for every verb (falling back to the working
+  directory). `@autosk/pi-agent` sets it — to the canonical project root, also
+  exposed to agents as `ctx.projectRoot` — when it spawns a workflow agent, so
+  `autosk` calls from inside a **worktree-isolated** run (the tools above, or a
+  bare `autosk` in a shell) resolve the task's own project instead of walking up
+  from the throwaway worktree to the wrong (or no) `.autosk/`.
 
 ### Changed
 - **`@autosk/feature-dev`:** the shipped reference workflow's `validator` step

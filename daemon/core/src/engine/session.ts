@@ -437,6 +437,10 @@ export class SessionRuntime {
     return {
       session: { id: this.id },
       cwd: this.cwd,
+      // The canonical project root, independent of any acquired isolation handle
+      // (`this.cwd` may be a worktree); lets the agent point `autosk` at the real
+      // project regardless of where it runs.
+      projectRoot: this.project.root,
       signal: this.controller.signal,
       tasks: buildTasksApi(store, this.taskId),
       workflows: buildWorkflowsApi(this.project.registry, this.wf, this.step),

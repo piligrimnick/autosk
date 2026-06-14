@@ -7,7 +7,10 @@
 import { describe, expect, test } from "bun:test";
 import type { ChildHandle, Comment, StepTarget, TaskView } from "@autosk/sdk";
 
+import type { AgentRunContext } from "@autosk/sdk";
+
 import {
+  autoskEnv,
   buildInputCommand,
   buildPiCommand,
   isStateMismatch,
@@ -76,6 +79,17 @@ describe("buildPiCommand", () => {
       if (prev === undefined) delete process.env.AUTOSK_PI_BIN;
       else process.env.AUTOSK_PI_BIN = prev;
     }
+  });
+});
+
+describe("autoskEnv — project selector + comment authorship for the spawned pi", () => {
+  test("maps the canonical project root to AUTOSK_CWD and the step to AUTOSK_AGENT", () => {
+    const ctx = {
+      projectRoot: "/repo/project",
+      cwd: "/home/.autosk/worktrees/slug/ask-1", // worktree under isolation
+      workflows: { current: { workflow: "feature-dev", step: "review", targets: [] } },
+    } as unknown as AgentRunContext;
+    expect(autoskEnv(ctx)).toEqual({ AUTOSK_CWD: "/repo/project", AUTOSK_AGENT: "review" });
   });
 });
 

@@ -147,7 +147,8 @@ no pi knowledge — pi-based agents are an extension on top of `ctx.spawn` +
 ```ts
 interface AgentRunContext {
   session: { id: string };
-  cwd: string;                        // project root, or the isolation handle's path
+  cwd: string;                        // run dir: project root, or the isolation handle's path
+  projectRoot: string;                // canonical project root (`.autosk/`), regardless of isolation
   signal: AbortSignal;                // fired on abort / daemon shutdown
 
   tasks: TasksAPI;                    // live task access (current/get/list/comments)
@@ -169,6 +170,13 @@ interface AgentRunContext {
   entry, `log.custom(type, data)` for the generic logging channel.
 - **`exec`** / **`spawn`** run child processes; `spawn` is how the pi-agent
   extension drives `pi --mode rpc` over JSON-lines stdio.
+- **`cwd` vs `projectRoot`:** `cwd` is where the agent runs — under worktree
+  isolation a throwaway worktree with no `.autosk/`. `projectRoot` always points
+  at the original project. `@autosk/pi-agent` passes it to the spawned pi as
+  `AUTOSK_CWD`, which the `autosk` CLI honors as its project selector, so any
+  `autosk` call the agent makes (e.g. the `@autosk/pi-tools` `autosk_task` /
+  `autosk_comment` tools) targets the task's own project rather than walking up
+  from the worktree.
 - **`onSteer`** / **`onFollowup`** receive a `session.input` message on a live
   session; **`onAbort`** runs on `session.abort`. All are optional.
 

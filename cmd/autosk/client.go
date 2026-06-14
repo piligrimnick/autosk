@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"autosk/internal/daemon/rpcclient"
@@ -14,6 +15,27 @@ import (
 // envAgentName names the agent invoking the CLI (default "human"). Used as the
 // default comment author.
 const envAgentName = "AUTOSK_AGENT"
+
+// envProjectCwd overrides the project-selector working directory. A workflow
+// agent runs in an isolated worktree (which contains no `.autosk/`); the daemon
+// sets AUTOSK_CWD to the real project root in the spawned agent's environment so
+// every `autosk` CLI call it makes — directly or through a pi tool — targets the
+// right project instead of walking up from the worktree to the wrong (or no)
+// `.autosk/`.
+const envProjectCwd = "AUTOSK_CWD"
+
+// callerCwd returns the working directory used as the daemon's {cwd} project
+// selector: $AUTOSK_CWD when set (resolved to absolute), else os.Getwd().
+func callerCwd() (string, error) {
+	if v := strings.TrimSpace(os.Getenv(envProjectCwd)); v != "" {
+		abs, err := filepath.Abs(v)
+		if err != nil {
+			return "", fmt.Errorf("resolve %s: %w", envProjectCwd, err)
+		}
+		return abs, nil
+	}
+	return os.Getwd()
+}
 
 // callerAgentName returns the name of the agent the CLI is running as.
 func callerAgentName() string {
@@ -25,10 +47,14 @@ func callerAgentName() string {
 }
 
 // cliClient builds an autoskd JSON-RPC client for a CLI verb: socket from
-// $AUTOSK_SOCK (or the default), cwd from the process working directory.
-// autoskd is auto-spawned on first use by the connector.
+// $AUTOSK_SOCK (or the default), cwd from $AUTOSK_CWD or the process working
+// directory. autoskd is auto-spawned on first use by the connector.
 func cliClient() (*rpcclient.Client, error) {
-	return rpcclient.New(rpcclient.Options{})
+	cwd, err := callerCwd()
+	if err != nil {
+		return nil, err
+	}
+	return rpcclient.New(rpcclient.Options{Cwd: cwd})
 }
 
 // ensureProject prepares the project before a verb's RPC. A discoverable
@@ -38,7 +64,7 @@ func cliClient() (*rpcclient.Client, error) {
 // project.init on the daemon (which lays down the .autosk/ skeleton and
 // registers the project — no DB, no seeding; feature-dev ships bundled).
 func ensureProject(ctx context.Context, cl *rpcclient.Client, writeOK bool) error {
-	cwd, err := os.Getwd()
+	cwd, err := callerCwd()
 	if err != nil {
 		return err
 	}

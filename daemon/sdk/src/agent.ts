@@ -104,8 +104,16 @@ export interface TranscriptAPI {
 /** The context the engine hands `onRun` / `onSteer` / `onFollowup` / `onAbort` (plan §3.4). */
 export interface AgentRunContext {
   session: { id: string };
-  /** Project root, or the isolation handle's path. */
+  /** The run directory: the project root, or — under isolation — the handle's path. */
   cwd: string;
+  /**
+   * The canonical project root (the directory containing `.autosk/`), regardless
+   * of isolation. Unlike {@link cwd} — which becomes the worktree path when the
+   * workflow runs under isolation — this always points at the original project.
+   * An agent uses it to make out-of-process `autosk` invocations target the right
+   * project (e.g. via the `AUTOSK_CWD` env knob) even when it runs in a worktree.
+   */
+  projectRoot: string;
   /** Fired on abort / daemon shutdown. */
   signal: AbortSignal;
 

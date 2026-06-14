@@ -91,7 +91,12 @@ export function piAgent(opts: PiAgentOptions = {}): AgentDefinition {
   return {
     async onRun(ctx: AgentRunContext): Promise<void> {
       const cmd = buildPiCommand(opts);
-      const child = ctx.spawn(cmd, { cwd: ctx.cwd });
+      // Spawn pi in the run directory (the worktree under isolation), but tell any
+      // `autosk` CLI it invokes — directly or via a pi tool like @autosk/pi-tools'
+      // autosk_comment/autosk_task — which project to target (AUTOSK_CWD) and who
+      // to attribute comments to (AUTOSK_AGENT). Without AUTOSK_CWD an `autosk`
+      // call from inside a worktree walks up to the wrong (or no) `.autosk/`.
+      const child = ctx.spawn(cmd, { cwd: ctx.cwd, env: autoskEnv(ctx) });
       const driver = new PiDriver(child, {
         onMessage: (m) => ctx.log.message(m),
         onCustom: (t, d) => ctx.log.custom(t, d),
@@ -199,6 +204,19 @@ async function resolveFirstMessage(opts: PiAgentOptions): Promise<string> {
   if (opts.firstMessage !== undefined) return opts.firstMessage;
   if (opts.firstMessageFile) return readFile(opts.firstMessageFile, "utf8");
   return "";
+}
+
+/**
+ * The autosk env handed to the spawned pi so any `autosk` CLI it runs resolves
+ * the ORIGINAL project (not the worktree it runs in) and attributes comments to
+ * the running step. `ctx.spawn` merges this over `process.env`, so PATH/HOME and
+ * the rest are preserved.
+ */
+export function autoskEnv(ctx: AgentRunContext): Record<string, string> {
+  return {
+    AUTOSK_CWD: ctx.projectRoot,
+    AUTOSK_AGENT: ctx.workflows.current.step,
+  };
 }
 
 /** Builds the `pi --mode rpc …` argv (v1 `buildPiExtraArgs` + the daemon flags). */

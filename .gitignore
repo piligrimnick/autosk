@@ -10,6 +10,8 @@
 # Bun daemon workspace build output / installed deps.
 /daemon/node_modules/
 /daemon/**/node_modules/
+/pi-tools/node_modules/
+/pi-tools/**/node_modules/
 
 # autosk's own task dir (don't commit during dev)
 /.autosk/
