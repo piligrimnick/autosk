@@ -66,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `./.autosk/settings.json` on first open. Only **missing** packages install
   (no upgrade); set **`AUTOSK_NO_AUTO_INSTALL`** to disable all automatic
   installs (first-run bootstrap included).
+- **`autosk install` (extension management):** new `autosk install <source>`,
+  `autosk install list`, and `autosk install remove <source>` verbs to manage
+  `settings.json#extensions`, with `-l/--local` for project scope; a source is
+  `npm:<spec>[@version]` (installed into the scope's packages dir) or a local
+  path (`/abs`, `./rel`, `../rel`, `~/path`, referenced in place) (ask-6dfc43).
 - **sessions:** one agent run for one step is a **session** with a pi-format
   transcript (`sessions/<id>.jsonl`: a header, pi `message` entries with text /
   thinking / `toolCall` / image content blocks, and the engine's structural
