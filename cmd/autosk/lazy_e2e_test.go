@@ -15,7 +15,7 @@ import (
 )
 
 // fakeDS is a self-contained in-memory Datasource the smoke test drives
-// directly so we don't need a daemon (or a doltlite store). It serves a fixed
+// directly so we don't need a daemon (or any store). It serves a fixed
 // task set for reads and treats every other verb as an inert success — enough
 // to exercise tui.Run's layout + Tasks-panel render path end-to-end.
 type fakeDS struct {
@@ -74,7 +74,7 @@ var _ datasource.Datasource = (*fakeDS)(nil)
 // TestLazy_SmokeDashboardLaunch verifies the TUI starts, the layout
 // fires, and the seeded task appears in the Tasks panel.
 //
-// We drive an in-memory fakeDS (no doltlite store at all) seeded with a
+// We drive an in-memory fakeDS (no store at all) seeded with a
 // single task and zero jobs; `dir` is used only as the ProjectRoot. We run
 // the TUI in a goroutine via the headless simulation screen, give it a
 // moment to lay out, then inject 'q' to quit and assert the buffer of the

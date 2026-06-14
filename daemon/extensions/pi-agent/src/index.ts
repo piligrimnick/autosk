@@ -1,7 +1,7 @@
 /**
  * `@autosk/pi-agent` — drive `pi --mode rpc` as an autoskd v2 agent (plan §3.4).
  *
- * Ports v1's "standard branch" (`crates/autosk-core/src/{pi,executor}.rs`):
+ * Ports v1's "standard branch" (the retired Rust daemon's pi + executor):
  * spawn `pi --mode rpc` with the role's model/thinking/first-message, drive it
  * over JSON-Lines stdio via {@link PiDriver}, mirror pi session entries into the
  * autosk transcript 1:1, and reimplement the kickback/corrections loop as this

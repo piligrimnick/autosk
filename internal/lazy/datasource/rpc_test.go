@@ -14,9 +14,9 @@ import (
 )
 
 // fakeDaemon is a minimal line-delimited JSON-RPC server returning canned
-// autosk-proto wire shapes, so the RPC datasource's wire→datasource mapping
-// (the exact path `autosk lazy --rpc` renders through) is exercised in plain Go
-// CI without the autoskd binary.
+// proto-v2 wire shapes, so the RPC datasource's wire→datasource mapping (the
+// exact path `autosk lazy` renders through) is exercised in plain Go CI without
+// the autoskd binary.
 func fakeDaemon(t *testing.T, results map[string]any) *RPC {
 	t.Helper()
 	dir := t.TempDir()

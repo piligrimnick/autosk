@@ -7,14 +7,11 @@
 /autosk
 /autoskd
 
-# Rust (autosk-core / autoskd / autosk-proto workspace) build output.
-# Cargo.lock IS committed (the workspace ships binaries).
-/target/
+# Bun daemon workspace build output / installed deps.
+/daemon/node_modules/
+/daemon/**/node_modules/
 
-# auto-fetched libdoltlite cache (see scripts/fetch-doltlite.sh)
-/.doltlite/
-
-# autosk's own task DB (don't commit during dev)
+# autosk's own task dir (don't commit during dev)
 /.autosk/
 
 # Local scratch

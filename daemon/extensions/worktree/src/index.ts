@@ -1,8 +1,8 @@
 /**
  * `@autosk/worktree` — the shipped `worktreeIsolation()` provider (plan §3.5).
  *
- * Ports v1's per-task git worktree isolation (`crates/autosk-core/src/worktree.rs`,
- * `internal/worktree`) onto the v2 {@link IsolationProvider} contract. The
+ * Ports v1's per-task git worktree isolation onto the v2
+ * {@link IsolationProvider} contract. The
  * engine (`daemon/core/src/engine/session.ts`) calls `acquire` before scheduling
  * an isolated session and `release` on every transition; FAILURES ARE WRAPPED BY
  * THE ENGINE (`acquire` throw → `isolation_acquire_failed: <msg>`, happy-path

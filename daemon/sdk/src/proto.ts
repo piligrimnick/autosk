@@ -7,8 +7,8 @@
  * (`gui/src-tauri`) clients mirror in P7/P8.
  *
  * WIRE-FIELD CASING: every field that crosses the wire is **snake_case**,
- * uniformly — matching the v1 contract (`crates/autosk-proto`,
- * `internal/daemon/api` use `task_id`/`created_at`/… with no rename) and the
+ * uniformly — matching the v1 contract (the Go `internal/daemon/api` view
+ * types use `task_id`/`created_at`/… with no rename) and the
  * v2 view types in `./types.ts`. The plan §4 sketch wrote a few session
  * params in camelCase (`taskId`, `fromLine`); they are normalised here
  * (`task_id`, `from_line`) so the three mirrored codebases never carry
@@ -66,7 +66,7 @@ export interface RpcNotification {
 }
 
 /**
- * JSON-RPC error codes (mirrors v1 `autosk-proto::rpc::error_codes`). The
+ * JSON-RPC error codes (mirrors the v1 JSON-RPC error-code set). The
  * reserved range is kept for protocol failures; the `1xxx` range carries the
  * domain errors the Go side maps to 4xx.
  */

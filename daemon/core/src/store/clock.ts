@@ -2,8 +2,8 @@
  * Injectable wall-clock for the file store (plan §3.7(2)).
  *
  * On-disk timestamps are RFC3339 UTC with whole-second precision
- * (`YYYY-MM-DDTHH:MM:SSZ`) — the v1 contract (`time.Unix(u, 0).UTC()`,
- * `crates/autosk-core/src/timefmt.rs`) and the format the design doc spells out
+ * (`YYYY-MM-DDTHH:MM:SSZ`) — the v1 contract (`time.Unix(u, 0).UTC()`) and the
+ * format the design doc spells out
  * (`docs/plans/20260612-Bun-Daemon-Extensions.md` §3.1). Sub-second precision is
  * deliberately dropped so the wire/disk shape stays byte-stable across runtimes.
  *

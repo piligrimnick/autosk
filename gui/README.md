@@ -2,8 +2,8 @@
 
 Tauri desktop GUI for [autosk](../README.md), at feature parity with
 `autosk lazy`. The frontend is a React + Vite app; the Tauri (Rust) backend is
-a **pure JSON-RPC client of `autoskd`** (the Bun daemon) — it does not link
-`autosk-core` or doltlite. It talks to the daemon over a Unix-domain socket in
+a **pure JSON-RPC client of `autoskd`** (the Bun daemon) — it links no storage
+engine of its own. It talks to the daemon over a Unix-domain socket in
 **local** mode (auto-spawning `autoskd` when absent) or over TCP + token in
 **remote** mode. The frontend is transport-agnostic: only the Rust backend
 switches.
@@ -53,8 +53,8 @@ gui/
 │   │   ├── agents/ · settings/ # AgentsModal, SettingsModal
 │   │   └── shared/             # Menu (portal dropdown)
 │   └── components/             # shared primitives: Modal, Markdown, NoticeBar, common
-└── src-tauri/                  # Tauri (Rust) backend — STANDALONE cargo crate,
-    │                           # excluded from the root workspace (doltlite-free)
+└── src-tauri/                  # Tauri (Rust) backend — a self-contained
+    │                           # cargo crate (no root cargo workspace)
     ├── tauri.conf.json
     └── src/
         ├── lib.rs, main.rs     # command registry + setup(): frameless decorations (Windows)
@@ -152,9 +152,9 @@ cargo check
 cargo test
 ```
 
-`gui/src-tauri` is a standalone cargo crate, excluded from the root workspace
-(see the root `Cargo.toml` `exclude` list), so these commands are independent of
-the daemon's doltlite fetch + link.
+`gui/src-tauri` is a self-contained cargo crate (there is no root cargo
+workspace — the daemon is Bun/TypeScript), so these commands are independent of
+the rest of the repo.
 
 ## Local vs remote mode
 

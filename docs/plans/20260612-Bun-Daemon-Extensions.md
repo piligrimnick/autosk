@@ -1,6 +1,6 @@
 # autoskd v2 — Bun/TypeScript daemon, extension-driven workflows, file-based tasks
 
-Status: draft / discussion
+Status: implemented (P1–P9 landed; the Bun daemon replaces the Rust stack)
 Date: 2026-06-12
 
 ## 1. Goals

@@ -7,8 +7,8 @@
 // they are piped through verbatim from pi's session format.
 //
 // Keep this file in lockstep with `daemon/sdk/src`. The Go client mirror lives
-// in `internal/daemon/api` (P7) — cross-check against it. The v1 source
-// (`crates/autosk-proto`) is retired in P9 and is NOT mirrored here.
+// in `internal/daemon/api` (P7) — cross-check against it. The v1 Rust wire
+// crate has been retired (P9) and is NOT mirrored here.
 
 // ---------------------------------------------------------------------------
 // Task domain (sdk/types.ts §3.1).

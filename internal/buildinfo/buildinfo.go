@@ -10,5 +10,6 @@ var Commit = "unknown"
 
 // Backend names the storage backend the binary talks to. The Go binary
 // is a pure JSON-RPC client and links no storage engine itself;
-// persistence is owned by the Rust daemon (autoskd), which links doltlite.
+// persistence is owned by the autoskd daemon, which stores tasks,
+// comments, and sessions as files under each project's `.autosk/`.
 var Backend = "autoskd"

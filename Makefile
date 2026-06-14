@@ -20,11 +20,17 @@ PKG      := ./cmd/autosk
 DAEMON_DIR          := $(CURDIR)/daemon
 DAEMON_ENTRY        := $(DAEMON_DIR)/core/src/index.ts
 AUTOSKD_BIN         := $(BIN_DIR)/autoskd
-# The daemon-bundled extensions (feature-dev + pi-agent roles) live under
-# daemon/extensions/. The compiled binary cannot resolve them from its baked
-# import.meta.url, so the test/install targets point $AUTOSK_BUNDLED_EXTENSIONS
-# at the source tree (where their node_modules also resolve).
-BUNDLED_EXTENSIONS  := $(DAEMON_DIR)/extensions
+# The daemon-bundled extensions (the feature-dev reference workflow + its
+# pi-agent roles) are compiled into a self-contained tree under $(BIN_DIR)/
+# extensions by scripts/bundle-extensions.sh (each extension's @autosk/* deps
+# are inlined, because a `bun build --compile` binary cannot resolve an on-disk
+# extension's bare imports). The test/install targets point
+# $AUTOSK_BUNDLED_EXTENSIONS at that built tree.
+BUNDLED_EXTENSIONS  := $(BIN_DIR)/extensions
+# Where `make install` drops the bundled extensions: <gobin>/../libexec/autosk/
+# extensions, which the installed autoskd discovers relative to its own path
+# (defaultBundledDir(), no env needed).
+LIBEXEC_EXTENSIONS  := $(abspath $(GOBIN_DIR)/../libexec/autosk/extensions)
 
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -45,28 +51,32 @@ endif
 
 all: build
 
-## build: compile bin/autosk (CGO-free; no doltlite)
+## build: compile bin/autosk (CGO-free; pure JSON-RPC client of autoskd)
 build:
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BIN) $(PKG)
 
-## build-autoskd: compile the Bun daemon into bin/autoskd (verb tests need it)
+## build-autoskd: compile the Bun daemon into bin/autoskd + bundle its extensions
 build-autoskd:
 	@mkdir -p $(BIN_DIR)
 	cd $(DAEMON_DIR) && $(BUN) install --frozen-lockfile >/dev/null 2>&1 || (cd $(DAEMON_DIR) && $(BUN) install)
 	cd $(DAEMON_DIR) && $(BUN) build --compile $(DAEMON_ENTRY) --outfile $(CURDIR)/$(AUTOSKD_BIN)
+	BUN=$(BUN) scripts/bundle-extensions.sh $(CURDIR)/$(BUNDLED_EXTENSIONS)
 
 ## install: install autosk + autoskd into $$GOBIN (or $$GOPATH/bin)
 install: install-autoskd
 	$(GO) install -ldflags "$(LDFLAGS)" $(PKG)
 	@echo "installed: $(GOBIN_DIR)/$(BIN_NAME)"
 
-## install-autoskd: compile the Bun daemon and install it alongside autosk
+## install-autoskd: compile the Bun daemon and install it (+ bundled extensions)
 install-autoskd: build-autoskd
 	@mkdir -p "$(GOBIN_DIR)"
 	@install -m 0755 "$(CURDIR)/$(AUTOSKD_BIN)" "$(GOBIN_DIR)/autoskd"
 	@echo "installed: $(GOBIN_DIR)/autoskd"
-	@echo "note: set AUTOSK_BUNDLED_EXTENSIONS=$(BUNDLED_EXTENSIONS) for the bundled feature-dev workflow"
+	@rm -rf "$(LIBEXEC_EXTENSIONS)"
+	@mkdir -p "$(LIBEXEC_EXTENSIONS)"
+	@cp -R "$(CURDIR)/$(BUNDLED_EXTENSIONS)/." "$(LIBEXEC_EXTENSIONS)/"
+	@echo "installed: $(LIBEXEC_EXTENSIONS) (autoskd discovers feature-dev here automatically)"
 
 ## uninstall: remove autosk + autoskd from $$GOBIN (or $$GOPATH/bin)
 uninstall:
@@ -77,6 +87,9 @@ uninstall:
 			echo "not installed: $(GOBIN_DIR)/$$b"; \
 		fi; \
 	done
+	@if [ -d "$(LIBEXEC_EXTENSIONS)" ]; then \
+		rm -rf "$(LIBEXEC_EXTENSIONS)" && echo "removed: $(LIBEXEC_EXTENSIONS)"; \
+	fi
 
 ## test: run all tests (compiles autoskd first; the verb tests auto-spawn it)
 test: build-autoskd

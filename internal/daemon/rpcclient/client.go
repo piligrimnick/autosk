@@ -66,7 +66,7 @@ func (c *Client) Sock() string { return c.conn.sock }
 // Cwd returns the project root carried in every request's selector.
 func (c *Client) Cwd() string { return c.cwd }
 
-// rpcRequest / rpcResponse mirror autosk-proto's envelope.
+// rpcRequest / rpcResponse mirror the proto-v2 JSON-RPC envelope.
 type rpcRequest struct {
 	ID     uint64 `json:"id"`
 	Method string `json:"method"`
@@ -79,7 +79,7 @@ type rpcResponse struct {
 	Error  *RPCError       `json:"error,omitempty"`
 }
 
-// RPCError is a structured daemon error (mirrors autosk-proto ErrorObject).
+// RPCError is a structured daemon error (mirrors the proto-v2 RpcError).
 type RPCError struct {
 	Code    int            `json:"code"`
 	Message string         `json:"message"`

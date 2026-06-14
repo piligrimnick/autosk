@@ -88,7 +88,7 @@ describe("proto-v2 notification manifest", () => {
 });
 
 describe("proto-v2 error codes", () => {
-  test("mirror v1 autosk-proto error_codes", () => {
+  test("mirror the v1 JSON-RPC error_codes", () => {
     expect(ErrorCodes.PARSE_ERROR).toBe(-32700);
     expect(ErrorCodes.INVALID_REQUEST).toBe(-32600);
     expect(ErrorCodes.METHOD_NOT_FOUND).toBe(-32601);

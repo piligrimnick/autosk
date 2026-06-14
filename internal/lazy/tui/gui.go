@@ -85,9 +85,9 @@ type Gui struct {
 	// lastFetchNS is the wall-clock duration of the most recent
 	// fetchRefresh, in nanoseconds. The tick loop reads it to decide
 	// how long to wait before the next refresh — if the datasource is
-	// slow (e.g. doltlite's chunk-store WAL has grown and every query
-	// pays a hundreds-of-milliseconds replay cost) we back off so the
-	// dashboard never pegs a core trying to keep up. Reset to 0 on
+	// slow (e.g. the daemon is busy and every request pays a
+	// hundreds-of-milliseconds round-trip) we back off so the dashboard
+	// never pegs a core trying to keep up. Reset to 0 on
 	// scheduleRefresh from a user action so the next tick reverts to
 	// the base cadence promptly when the slowdown clears.
 	lastFetchNS atomic.Int64
@@ -157,9 +157,9 @@ type bodyCacheEntry struct {
 // finish in well under half the budget, double it when reads exceed
 // half the budget, and cap at maxAdaptiveDelay so a wedged datasource
 // doesn't stall the dashboard for minutes. The thresholds are picked
-// so a healthy DB stays at the base 2s while a doltlite store mid-WAL
-// stretch (each refresh ~500ms-3s) settles at 4-30s instead of
-// firing back-to-back ticks and saturating a core.
+// so a healthy daemon stays at the base 2s while a slow stretch (each
+// refresh ~500ms-3s) settles at 4-30s instead of firing back-to-back
+// ticks and saturating a core.
 func adaptiveDelay(base, elapsed time.Duration) time.Duration {
 	if base <= 0 {
 		base = 2 * time.Second
@@ -182,10 +182,10 @@ func adaptiveDelay(base, elapsed time.Duration) time.Duration {
 }
 
 // maxAdaptiveDelay caps the adaptive ticker. 30s is long enough that a
-// truly-wedged datasource (e.g. doltlite re-replaying a multi-MB WAL
-// on every query) doesn't burn cycles, short enough that the operator
-// still sees the dashboard reanimate within human-impatience range
-// once compaction kicks in.
+// truly-wedged datasource (e.g. an overloaded daemon that takes
+// seconds per request) doesn't burn cycles, short enough that the
+// operator still sees the dashboard reanimate within human-impatience
+// range once the slowdown clears.
 const maxAdaptiveDelay = 30 * time.Second
 
 // Run constructs the gui, opens the alt-screen, and blocks on the

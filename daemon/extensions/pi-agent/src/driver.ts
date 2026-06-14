@@ -1,6 +1,6 @@
 /**
- * `pi --mode rpc` wire driver — the v2 TypeScript port of `internal/daemon/pi`
- * (`crates/autosk-core/src/pi.rs`).
+ * `pi --mode rpc` wire driver — the v2 TypeScript port of v1's `pi --mode rpc`
+ * driver.
  *
  * Drives a spawned `pi --mode rpc` child over JSON-Lines stdio via the engine's
  * {@link ChildHandle} (`ctx.spawn`). It:

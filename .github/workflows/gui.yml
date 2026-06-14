@@ -1,17 +1,17 @@
 name: GUI CI
 
-# Builds + checks the Tauri desktop GUI (gui/) on every PR — the third release
-# artifact alongside the Go binary (ci.yml) and the Rust workspace (rust.yml).
+# Builds + checks the Tauri desktop GUI (gui/) on every PR — the GUI release
+# artifact alongside the Go `autosk` binary + the Bun `autoskd` daemon (ci.yml).
 #
 # Two layers run here:
 #   * Front end (gui/) — `npm ci`, typecheck (which also runs the
 #     check-ipc-discipline.mjs guard: one `invoke` site, one `listen` site),
 #     the production Vite build, and the vitest unit suite.
 #   * Backend (gui/src-tauri/) — `cargo check`. The Tauri backend is a pure
-#     JSON-RPC client of autoskd and a STANDALONE cargo crate (excluded from the
-#     root workspace), so it links no doltlite and needs no doltlite fetch — but
-#     `cargo check` still runs tauri-build's build script, which probes the
-#     system webkit2gtk/gtk dev libs on Linux (installed below).
+#     JSON-RPC client of autoskd and a self-contained cargo crate (there is no
+#     root cargo workspace — the daemon is Bun/TypeScript), so it links no
+#     storage engine — but `cargo check` still runs tauri-build's build script,
+#     which probes the system webkit2gtk/gtk dev libs on Linux (installed below).
 #
 # This is intentionally headless: `npm run tauri:dev/build` need a display + the
 # full webkit bundle, so end-to-end runtime behaviour is validated to the
@@ -88,8 +88,8 @@ jobs:
         working-directory: gui
         run: npm run test
 
-      # The Tauri (Rust) backend. Standalone crate → independent of the daemon's
-      # doltlite fetch/link.
+      # The Tauri (Rust) backend. Self-contained crate → independent of the
+      # rest of the repo (the daemon is Bun/TypeScript, not Rust).
       - name: cargo check (src-tauri)
         working-directory: gui/src-tauri
         run: cargo check

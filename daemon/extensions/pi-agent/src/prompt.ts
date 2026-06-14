@@ -1,6 +1,6 @@
 /**
  * Prompt rendering for the pi-agent (the v2 port of v1's `RenderPrompt` /
- * `CorrectiveMessage`, `crates/autosk-core/src/executor.rs`).
+ * `CorrectiveMessage` executor prompts).
  *
  * The v2 transit channel is the `autosk_transit` tool, so the prompts instruct
  * the model to call that tool (instead of v1's `autosk step next` CLI). The

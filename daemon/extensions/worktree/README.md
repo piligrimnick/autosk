@@ -1,9 +1,8 @@
 # @autosk/worktree
 
 The shipped **isolation provider** for autoskd v2: per-task **git worktree**
-isolation, attachable to any workflow. It ports v1's worktree behaviour
-(`internal/worktree` / `crates/autosk-core/src/worktree.rs`) onto the v2
-[`IsolationProvider`](../../sdk/src/workflow.ts) contract (design
+isolation, attachable to any workflow. It ports v1's worktree behaviour onto
+the v2 [`IsolationProvider`](../../sdk/src/workflow.ts) contract (design
 `docs/plans/20260612-Bun-Daemon-Extensions.md` §3.5).
 
 ## Usage

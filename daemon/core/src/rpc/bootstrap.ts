@@ -10,7 +10,9 @@
  * without killing the test process.
  */
 
+import { existsSync } from "node:fs";
 import net from "node:net";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Engine, type EngineOptions } from "../engine/index.ts";
@@ -154,15 +156,36 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<StartD
 }
 
 /**
- * The daemon-bundled extensions directory: `$AUTOSK_BUNDLED_EXTENSIONS`, else the
- * repo's `daemon/extensions/` resolved relative to this module. A non-existent
- * path is harmless (discovery yields nothing); the env override covers the
- * compiled-binary case (P7) where the source-tree path no longer exists.
+ * The daemon-bundled extensions directory, resolved in priority order:
+ *
+ *  1. `$AUTOSK_BUNDLED_EXTENSIONS` (explicit override; used by `make test` /
+ *     `make install` and any custom packaging).
+ *  2. the repo's `daemon/extensions/` resolved relative to this module — present
+ *     when running from source (`bun`/`make test`); absent in a compiled binary,
+ *     whose `import.meta.url` points inside the embedded FS.
+ *  3. paths relative to the real on-disk binary (`process.execPath`) — this is
+ *     the zero-config packaged-install case (`bun build --compile`): the
+ *     extensions tree ships next to `autoskd`. Brew installs it to
+ *     `<prefix>/libexec/autosk/extensions`; a flat install keeps `extensions/`
+ *     beside the binary.
+ *
+ * A non-existent result is harmless (discovery yields nothing and the daemon
+ * still serves — `feature-dev` just isn't bundled).
  */
 function defaultBundledDir(): string {
   const override = process.env.AUTOSK_BUNDLED_EXTENSIONS;
   if (override && override.trim() !== "") return override;
-  return fileURLToPath(new URL("../../../extensions", import.meta.url));
+
+  const sourceDir = fileURLToPath(new URL("../../../extensions", import.meta.url));
+  if (existsSync(sourceDir)) return sourceDir;
+
+  const execDir = path.dirname(process.execPath);
+  for (const rel of ["../libexec/autosk/extensions", "../share/autosk/extensions", "extensions"]) {
+    const cand = path.resolve(execDir, rel);
+    if (existsSync(cand)) return cand;
+  }
+
+  return sourceDir;
 }
 
 /** Resolves the configured token: explicit override, else the token file (or `null`). */

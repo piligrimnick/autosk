@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * `stub-pi` — a test stand-in for `pi --mode rpc` (the v2 analogue of v1's
- * `crates/autosk-core/src/bin/fakepi.rs`). It speaks the JSON-Lines RPC subset
+ * `fakepi` test stub). It speaks the JSON-Lines RPC subset
  * the {@link PiDriver} relies on. The pi CLI flags (`--mode rpc -e … --model …`)
  * are ignored.
  *

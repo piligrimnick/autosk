@@ -20,8 +20,8 @@ import (
 // Behaviour:
 //
 //   - Renders entirely from autoskd over JSON-RPC (plan §7.5: the single
-//     RPC-client Datasource). autoskd owns .autosk/db; the Go binary opens no
-//     local doltlite store. autoskd is auto-spawned by the connector on first
+//     RPC-client Datasource). autoskd owns the project's `.autosk/` store; the
+//     Go binary opens no local store. autoskd is auto-spawned by the connector on first
 //     request (and runs migrations/bootstrap via project.init on a fresh dir).
 //   - Reads, writes, and the live job transcript tail all route to the daemon
 //     over the UDS. Panels refresh on the daemon's task-changed/project-changed
@@ -56,7 +56,7 @@ func newLazyCmd() *cobra.Command {
 // runLazyRPC runs the TUI against the autoskd-backed datasource (reads +
 // writes + the live transcript tail + the task-changed/project-changed push).
 // autoskd is auto-spawned by the connector on first request; the Go binary
-// opens no local doltlite store.
+// opens no local store.
 func runLazyRPC(ctx context.Context, sock string, refresh time.Duration, noChangelog bool) error {
 	cwd, err := getCwd()
 	if err != nil {
