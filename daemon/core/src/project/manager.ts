@@ -15,15 +15,26 @@
  * mutates `~/.autosk/projects.json`.
  */
 
-import type { ProjectInfo } from "@autosk/sdk";
+import type {
+  ExtensionInstallResult,
+  ExtensionListResult,
+  ExtensionRemoveResult,
+  ProjectInfo,
+} from "@autosk/sdk";
 
 import { join } from "node:path";
 
 import {
   ensureGlobalBootstrap,
   ensureExtensionsInstalled,
+  installExtension,
+  listExtensionEntries,
   loadProjectRegistry,
+  parseInstallSource,
+  removeExtensionFromSettings,
+  settingsEntryFor,
   validateInFlightTasks,
+  type BootstrapInstaller,
   type BootstrapOptions,
   type ExtensionEnv,
   type ExtensionRegistry,
@@ -115,14 +126,14 @@ export class ProjectManager {
     const bootstrap = this.bootstrapConfig;
     if (!bootstrap) return Promise.resolve();
     this.bootstrapOnce ??= (async () => {
-      const home = this.extensionsEnv.home ?? process.env.HOME ?? "";
+      const home = this.homeDir();
       if (!home) return;
       await ensureGlobalBootstrap({ home, logger: this.logger, ...bootstrap });
-      // Reconcile the GLOBAL settings.json on every start: install any package
-      // listed under `extensions` that is not yet present (e.g. an operator
-      // hand-edited settings.json to add one). Only missing packages install.
+      // Reconcile the GLOBAL settings.json on every start: install any npm
+      // package listed under `extensions` that is not yet present (e.g. an
+      // operator hand-edited settings.json to add one). Only missing install.
       await ensureExtensionsInstalled({
-        home,
+        packagesDir: join(home, AUTOSK_DIR, "packages"),
         settingsPaths: [join(home, AUTOSK_DIR, "settings.json")],
         npmBin: bootstrap.npmBin,
         install: bootstrap.install,
@@ -130,6 +141,16 @@ export class ProjectManager {
       });
     })();
     return this.bootstrapOnce;
+  }
+
+  /** The global home dir (`<home>/.autosk/…`); empty when unresolvable. */
+  private homeDir(): string {
+    return this.extensionsEnv.home ?? process.env.HOME ?? "";
+  }
+
+  /** npm binary + installer override for explicit/reconcile installs (from bootstrap config). */
+  private installerConfig(): { npmBin?: string; install?: BootstrapInstaller } {
+    return { npmBin: this.bootstrapConfig?.npmBin, install: this.bootstrapConfig?.install };
   }
 
   /**
@@ -142,12 +163,13 @@ export class ProjectManager {
   private async reconcileProjectExtensions(root: string): Promise<void> {
     const bootstrap = this.bootstrapConfig;
     if (!bootstrap) return;
-    const home = this.extensionsEnv.home ?? process.env.HOME ?? "";
-    if (!home) return;
-    const packagesDir = join(home, AUTOSK_DIR, "packages");
+    // A project's listed npm extensions install into the PROJECT's own packages
+    // dir (consistent with the loader, which resolves project-settings npm under
+    // `<root>/.autosk/packages`). Serialised per packages dir.
+    const packagesDir = join(root, AUTOSK_DIR, "packages");
     await this.installLocks.run(packagesDir, () =>
       ensureExtensionsInstalled({
-        home,
+        packagesDir,
         settingsPaths: [join(root, AUTOSK_DIR, "settings.json")],
         npmBin: bootstrap.npmBin,
         install: bootstrap.install,
@@ -263,5 +285,85 @@ export class ProjectManager {
   /** Creates a `.autosk/` skeleton (does not register — see {@link addProject}). */
   initProject(dir: string): Promise<ProjectInfo> {
     return initProject(dir);
+  }
+
+  // -- extension management (autosk install) -------------------------------
+
+  /**
+   * Installs an extension into a scope. `local` → the project resolved from
+   * `cwd` (its `<root>/.autosk/{packages,settings.json}`); else the global home
+   * (`<home>/.autosk/{packages,settings.json}`). An explicit install always runs
+   * — it is NOT gated by `AUTOSK_NO_AUTO_INSTALL`. No hot-reload: the new package
+   * is picked up on the next daemon start / first project open.
+   */
+  async installExtension(cwd: string, source: string, local: boolean): Promise<ExtensionInstallResult> {
+    const scopeDirs = await this.scopeDirs(cwd, local);
+    const parsed = parseInstallSource(source, { cwd, home: this.homeDir() });
+    const { npmBin, install } = this.installerConfig();
+    const { installed, entry } = await this.installLocks.run(scopeDirs.packagesDir, () =>
+      installExtension({
+        source: parsed,
+        packagesDir: scopeDirs.packagesDir,
+        settingsPath: scopeDirs.settingsPath,
+        npmBin,
+        install,
+        logger: this.logger,
+      }),
+    );
+    return { scope: scopeDirs.scope, source: entry, settings_path: scopeDirs.settingsPath, installed };
+  }
+
+  /**
+   * Removes an extension entry from a scope's `settings.json` (match by name for
+   * npm, by path for local — any version). node_modules is left untouched.
+   */
+  async removeExtension(cwd: string, source: string, local: boolean): Promise<ExtensionRemoveResult> {
+    const scopeDirs = await this.scopeDirs(cwd, local);
+    const parsed = parseInstallSource(source, { cwd, home: this.homeDir() });
+    // Serialise under the same per-scope lock as installExtension so concurrent
+    // settings writers (install + remove, two removes) cannot lose an update on
+    // the non-atomic read-modify-write of settings.json.
+    const { removed, entries } = await this.installLocks.run(scopeDirs.packagesDir, async () =>
+      removeExtensionFromSettings({ source: parsed, settingsPath: scopeDirs.settingsPath }),
+    );
+    // Report what was ACTUALLY removed (npm matches by name, so the stored entry
+    // may pin a different version than the argument); when nothing matched, echo
+    // the canonical entry form of the parsed source.
+    const reported = entries[0] ?? settingsEntryFor(parsed);
+    return { scope: scopeDirs.scope, source: reported, settings_path: scopeDirs.settingsPath, removed };
+  }
+
+  /**
+   * Lists the global + project settings entries (classified, with a `resolved`
+   * flag). Tolerant of a `cwd` outside any project — it then lists global only.
+   */
+  async listExtensions(cwd: string): Promise<ExtensionListResult> {
+    let projectRoot: string | undefined;
+    try {
+      projectRoot = await resolveProjectRoot(cwd);
+    } catch {
+      projectRoot = undefined; // no project at cwd → global scope only
+    }
+    return { entries: listExtensionEntries({ projectRoot, home: this.homeDir() }) };
+  }
+
+  /**
+   * Resolves the scope's packages dir + settings path. `local` requires a
+   * project at `cwd` (resolveProjectRoot throws PROJECT_NOT_FOUND otherwise);
+   * global uses `<home>/.autosk`.
+   */
+  private async scopeDirs(
+    cwd: string,
+    local: boolean,
+  ): Promise<{ scope: "global" | "project"; packagesDir: string; settingsPath: string }> {
+    if (local) {
+      const root = await resolveProjectRoot(cwd);
+      const autoskDir = join(root, AUTOSK_DIR);
+      return { scope: "project", packagesDir: join(autoskDir, "packages"), settingsPath: join(autoskDir, "settings.json") };
+    }
+    const home = this.homeDir();
+    if (!home) throw new Error("cannot resolve home directory for a global extension install");
+    const autoskDir = join(home, AUTOSK_DIR);
+    return { scope: "global", packagesDir: join(autoskDir, "packages"), settingsPath: join(autoskDir, "settings.json") };
   }
 }

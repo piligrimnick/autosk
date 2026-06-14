@@ -512,6 +512,22 @@ export class Daemon {
         return info;
       },
 
+      // ---- extension management (autosk install) -------------------------
+      // A GLOBAL install does NOT require an open project (only `cwd`, used to
+      // resolve a relative local path); `-l/--local` requires a project at cwd.
+      "extension.install": async (params) => {
+        const o = asObj(params);
+        return this.projectManager.installExtension(reqCwd(o), reqString(o, "source"), optBool(o, "local") ?? false);
+      },
+      "extension.remove": async (params) => {
+        const o = asObj(params);
+        return this.projectManager.removeExtension(reqCwd(o), reqString(o, "source"), optBool(o, "local") ?? false);
+      },
+      "extension.list": async (params) => {
+        const o = asObj(params);
+        return this.projectManager.listExtensions(reqCwd(o));
+      },
+
       // ---- session -------------------------------------------------------
       "session.list": async (params) => {
         const o = asObj(params);
@@ -683,6 +699,13 @@ function optString(o: Record<string, unknown>, field: string): string | undefine
 function reqCwd(o: Record<string, unknown>): string {
   const v = o.cwd;
   if (typeof v !== "string") throw new RpcError(ErrorCodes.INVALID_PARAMS, "cwd must be a string");
+  return v;
+}
+
+function optBool(o: Record<string, unknown>, field: string): boolean | undefined {
+  const v = o[field];
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "boolean") throw new RpcError(ErrorCodes.INVALID_PARAMS, `${field} must be a boolean`);
   return v;
 }
 

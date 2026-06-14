@@ -203,6 +203,50 @@ export interface WorkflowGetParams extends ProjectSelector {
   name: string;
 }
 
+// ---- extension management params / results --------------------------------
+
+/** Install an extension (`npm:<spec>` or a local path). `local` → project scope. */
+export interface ExtensionInstallParams extends ProjectSelector {
+  source: string;
+  /** Install into the project (`<root>/.autosk/`) instead of globally. */
+  local?: boolean;
+}
+/** Remove an extension entry from `settings.json`. `local` → project scope. */
+export interface ExtensionRemoveParams extends ProjectSelector {
+  source: string;
+  local?: boolean;
+}
+export interface ExtensionInstallResult {
+  scope: "global" | "project";
+  /** The canonical `settings.json` entry written (`npm:<spec>` | `<abs-path>`). */
+  source: string;
+  /** The `settings.json` the entry was written to. */
+  settings_path: string;
+  /** Whether an npm install ran (false for a local-path source). */
+  installed: boolean;
+}
+export interface ExtensionRemoveResult {
+  scope: "global" | "project";
+  /** The entry actually removed (npm matches by name, so its version may differ
+   * from the argument); when nothing matched, the canonical entry form. */
+  source: string;
+  settings_path: string;
+  /** Whether a matching entry was removed. */
+  removed: boolean;
+}
+/** One classified `settings.json#extensions` entry (`extension.list`). */
+export interface ExtensionEntryInfo {
+  /** The raw entry (`npm:<spec>` | `<abs-path>` | unrecognised). */
+  source: string;
+  scope: "global" | "project";
+  kind: "npm" | "local" | "invalid";
+  /** Whether it resolves to a loadable extension right now. */
+  resolved: boolean;
+}
+export interface ExtensionListResult {
+  entries: ExtensionEntryInfo[];
+}
+
 // ---- session domain params ------------------------------------------------
 
 export interface SessionListParams extends ProjectSelector {
@@ -279,6 +323,11 @@ export interface RpcMethodMap {
   "registry.workflow.list": { params: ProjectSelector; result: WorkflowInfo[] };
   "registry.workflow.get": { params: WorkflowGetParams; result: WorkflowInfo };
 
+  // extension management (autosk install)
+  "extension.install": { params: ExtensionInstallParams; result: ExtensionInstallResult };
+  "extension.list": { params: ProjectSelector; result: ExtensionListResult };
+  "extension.remove": { params: ExtensionRemoveParams; result: ExtensionRemoveResult };
+
   // session
   "session.list": { params: SessionListParams; result: SessionMeta[] };
   "session.get": { params: SessionGetParams; result: SessionMeta };
@@ -336,6 +385,9 @@ export const RPC_METHODS = [
   "task.unsubscribe",
   "registry.workflow.list",
   "registry.workflow.get",
+  "extension.install",
+  "extension.list",
+  "extension.remove",
   "session.list",
   "session.get",
   "session.transcript",

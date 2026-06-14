@@ -12,6 +12,7 @@
 import { ErrorCodes, type RpcError as RpcErrorPayload } from "@autosk/sdk";
 
 import { EngineError } from "../engine/types.ts";
+import { InvalidExtensionSourceError } from "../extensions/source.ts";
 import { InvalidProjectError, ProjectNotFoundError } from "../project/resolve.ts";
 
 /** A typed error a handler can throw to control the wire `code`/`message`/`details`. */
@@ -41,6 +42,9 @@ export function toRpcError(e: unknown): RpcErrorPayload {
   }
   if (e instanceof InvalidProjectError) {
     return { code: ErrorCodes.INVALID_PROJECT, message: e.message };
+  }
+  if (e instanceof InvalidExtensionSourceError) {
+    return { code: ErrorCodes.INVALID_PARAMS, message: e.message };
   }
   return { code: ErrorCodes.INTERNAL_ERROR, message: e instanceof Error ? e.message : String(e) };
 }

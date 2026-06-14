@@ -51,6 +51,10 @@ const PLAN_SECTION_4_METHODS = [
   // registry
   "registry.workflow.list",
   "registry.workflow.get",
+  // extension management (autosk install)
+  "extension.install",
+  "extension.list",
+  "extension.remove",
   // session
   "session.list",
   "session.get",
@@ -80,7 +84,7 @@ describe("proto-v2 method manifest", () => {
   });
 
   test("every method is namespaced under a known domain", () => {
-    const domains = new Set(["meta", "project", "task", "registry", "session"]);
+    const domains = new Set(["meta", "project", "task", "registry", "extension", "session"]);
     for (const method of RPC_METHODS) {
       expect(domains.has(method.split(".")[0]!)).toBe(true);
     }

@@ -12,11 +12,40 @@ export {
   discoverDir,
   resolveExtensionEntries,
   resolvePackageEntries,
+  resolveLocalPath,
   readAutoskExtensionPaths,
+  isExtensionFile,
   type ExtensionEntry,
   type PackageResolution,
 } from "./discovery.ts";
-export { readSettingsExtensions } from "./settings.ts";
+export {
+  readSettingsExtensions,
+  upsertExtensionEntry,
+  removeExtensionEntry,
+} from "./settings.ts";
+export {
+  parseInstallSource,
+  classifySettingsEntry,
+  npmName,
+  isLocalPathSpec,
+  settingsEntryFor,
+  sameSource,
+  InvalidExtensionSourceError,
+  type ExtensionSource,
+  type ClassifiedEntry,
+  type SourceContext,
+  type SettingsContext,
+} from "./source.ts";
+export {
+  installExtension,
+  removeExtensionFromSettings,
+  listExtensionEntries,
+  type InstallExtensionOptions,
+  type InstallExtensionResult,
+  type RemoveExtensionOptions,
+  type ExtensionEntryInfo,
+  type ListExtensionsOptions,
+} from "./install.ts";
 export {
   loadProjectRegistry,
   resolveProjectEntries,
@@ -31,6 +60,8 @@ export {
 export {
   ensureGlobalBootstrap,
   ensureExtensionsInstalled,
+  ensurePackagesManifest,
+  npmInstaller,
   autoInstallDisabled,
   DEFAULT_BOOTSTRAP_PACKAGES,
   DEFAULT_BOOTSTRAP_EXTENSIONS,

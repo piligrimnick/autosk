@@ -25,11 +25,12 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { AUTOSK_DIR } from "../store/paths.ts";
 import { consoleLogger, type Logger } from "../store/logger.ts";
 import { readSettingsExtensions } from "./settings.ts";
+import { classifySettingsEntry } from "./source.ts";
 
 /**
  * Whether automatic npm installs are disabled via `AUTOSK_NO_AUTO_INSTALL`.
@@ -54,11 +55,13 @@ export function autoInstallDisabled(): boolean {
 export const DEFAULT_BOOTSTRAP_PACKAGES = ["@autosk/feature-dev"] as const;
 
 /**
- * Package names written to `settings.json#extensions` (the ones LOADED as
- * extensions). Only `feature-dev` registers a workflow; `pi-agent` is a library
- * its steps import, so it is installed (transitively) but not listed here.
+ * Entries written to `settings.json#extensions` (the ones LOADED as extensions).
+ * Uses the explicit `npm:` source form so first-run settings match what
+ * `autosk install` writes. Only `feature-dev` registers a workflow; `pi-agent`
+ * is a library its steps import, so it is installed (transitively) but not
+ * listed here.
  */
-export const DEFAULT_BOOTSTRAP_EXTENSIONS = ["@autosk/feature-dev"] as const;
+export const DEFAULT_BOOTSTRAP_EXTENSIONS = ["npm:@autosk/feature-dev"] as const;
 
 /** The actual installer; overridable in tests so the suite never hits npm. */
 export type BootstrapInstaller = (args: {
@@ -88,9 +91,9 @@ export interface BootstrapResult {
 
 /** Options for the per-start {@link ensureExtensionsInstalled} reconcile. */
 export interface ReconcileOptions {
-  /** Home dir whose `<home>/.autosk/packages` is the install prefix. */
-  home: string;
-  /** `settings.json` paths to read `extensions` package names from (missing files ignored). */
+  /** Packages prefix the listed npm extensions install into (`<scope>/.autosk/packages`). */
+  packagesDir: string;
+  /** `settings.json` paths to read `extensions` from (missing files ignored). */
   settingsPaths: string[];
   /** `npm` binary (default `$AUTOSK_NPM_BIN` or `npm`). */
   npmBin?: string;
@@ -159,49 +162,57 @@ export async function ensureGlobalBootstrap(opts: BootstrapOptions): Promise<Boo
 }
 
 /**
- * Per-start reconcile: install any package listed under `extensions` in the
- * given `settings.json` files that is NOT yet present under
- * `~/.autosk/packages/node_modules/`. Only the **missing** packages are
- * installed — already-installed ones are left untouched (no upgrade), so a
- * fully-provisioned environment never hits the network.
+ * Per-start reconcile: install any `npm:` package listed under `extensions` in
+ * the given `settings.json` files that is NOT yet present under
+ * `<packagesDir>/node_modules/`. Only the **missing** packages are installed —
+ * already-installed ones are left untouched (no upgrade), so a fully-provisioned
+ * environment never hits the network. Local-path entries are skipped (they
+ * resolve in place); unrecognised entries are skipped (the loader diagnoses them).
  *
- * Used on two seams: the global `~/.autosk/settings.json` at daemon start, and
- * each project's `./.autosk/settings.json` on first project open. Never throws —
- * a failed install is logged and the listed-but-missing package simply stays a
- * `project.diagnostics` entry until the next start retries.
+ * Used on two seams: the global `~/.autosk/settings.json` at daemon start (with
+ * `packagesDir = ~/.autosk/packages`), and each project's `./.autosk/settings.json`
+ * on first project open (with `packagesDir = <root>/.autosk/packages`). Never
+ * throws — a failed install is logged and the listed-but-missing package simply
+ * stays a `project.diagnostics` entry until the next start retries.
  */
 export async function ensureExtensionsInstalled(opts: ReconcileOptions): Promise<ReconcileResult> {
   const logger = opts.logger ?? consoleLogger;
   if (autoInstallDisabled()) return { status: "skipped" };
 
-  const packagesDir = join(opts.home, AUTOSK_DIR, "packages");
+  const packagesDir = opts.packagesDir;
   const nodeModules = join(packagesDir, "node_modules");
+  const home = process.env.HOME ?? "";
 
-  // Union of every listed package name across the given settings files, in
-  // first-seen order (a missing/corrupt settings file contributes nothing).
-  const names: string[] = [];
+  // Union of every listed npm package across the given settings files, in
+  // first-seen order, keyed by name (a missing/corrupt settings file contributes
+  // nothing; local + unrecognised entries are skipped here).
+  const wanted: { name: string; spec: string }[] = [];
   const seen = new Set<string>();
   for (const settingsPath of opts.settingsPaths) {
-    for (const name of readSettingsExtensions(settingsPath)) {
-      if (seen.has(name)) continue;
-      seen.add(name);
-      names.push(name);
+    const baseDir = dirname(settingsPath);
+    for (const entry of readSettingsExtensions(settingsPath)) {
+      const classified = classifySettingsEntry(entry, { baseDir, home });
+      if (classified.kind !== "npm") continue;
+      if (seen.has(classified.name)) continue;
+      seen.add(classified.name);
+      wanted.push({ name: classified.name, spec: classified.spec });
     }
   }
-  if (names.length === 0) return { status: "noop" };
+  if (wanted.length === 0) return { status: "noop" };
 
   // A package is "installed" iff its node_modules dir exists (the same check the
   // discovery loader uses to decide a package resolves vs. raises a diagnostic).
-  const missing = names.filter((name) => !existsSync(join(nodeModules, name)));
+  const missing = wanted.filter((w) => !existsSync(join(nodeModules, w.name)));
   if (missing.length === 0) return { status: "noop" };
 
   const install = opts.install ?? npmInstaller(opts.npmBin, logger);
-  logger.info(`autoskd: installing missing extension package(s): ${missing.join(", ")} into ${packagesDir}`);
+  const names = missing.map((m) => m.name);
+  logger.info(`autoskd: installing missing extension package(s): ${names.join(", ")} into ${packagesDir}`);
   try {
     mkdirSync(packagesDir, { recursive: true });
     ensurePackagesManifest(packagesDir);
 
-    const res = await install({ packagesDir, packages: missing });
+    const res = await install({ packagesDir, packages: missing.map((m) => m.spec) });
     if (!res.ok) {
       logger.error(
         `autoskd: extension install failed (${res.error ?? "unknown error"}) — ` +
@@ -209,8 +220,8 @@ export async function ensureExtensionsInstalled(opts: ReconcileOptions): Promise
       );
       return { status: "failed", error: res.error, installed: [] };
     }
-    logger.info(`autoskd: installed missing extension package(s): ${missing.join(", ")}`);
-    return { status: "installed", installed: missing };
+    logger.info(`autoskd: installed missing extension package(s): ${names.join(", ")}`);
+    return { status: "installed", installed: names };
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
     logger.error(`autoskd: extension reconcile error: ${error}`);
@@ -219,7 +230,7 @@ export async function ensureExtensionsInstalled(opts: ReconcileOptions): Promise
 }
 
 /** Writes a minimal npm manifest so `npm install` has a project to save into. */
-function ensurePackagesManifest(packagesDir: string): void {
+export function ensurePackagesManifest(packagesDir: string): void {
   const manifest = join(packagesDir, "package.json");
   if (existsSync(manifest)) return;
   writeFileSync(
@@ -235,7 +246,7 @@ function writeSettings(settingsPath: string, extensions: string[]): void {
 }
 
 /** The default installer: `npm install <packages…>` inside the packages prefix. */
-function npmInstaller(npmBin: string | undefined, logger: Logger): BootstrapInstaller {
+export function npmInstaller(npmBin: string | undefined, logger: Logger): BootstrapInstaller {
   const bin = npmBin ?? process.env.AUTOSK_NPM_BIN ?? "npm";
   return ({ packagesDir, packages }) =>
     new Promise((resolve) => {

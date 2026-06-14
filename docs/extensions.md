@@ -152,9 +152,10 @@ autosk install remove npm:@acme/review-bot   # drop the entry (matches any versi
   declares no loadable extension still records the entry and then shows
   `resolved:false` here. `--json` returns the structured form.
 - **`install remove`.** Drops the matching entry from the scope's
-  `settings.json` — npm matches by **name** (any version), local by absolute
-  **path**. It does **not** uninstall the package from `node_modules` (like pi);
-  only the settings entry goes. Because `remove` takes a valid source, an
+  `settings.json` (global by default, `-l/--local` for the current project) —
+  npm matches by **name** (any version), local by absolute **path**. It does
+  **not** uninstall the package from `node_modules` (like pi); only the settings
+  entry goes. Because `remove` takes a valid source, an
   `invalid` entry that `install list` flags must be cleared by hand-editing
   `settings.json`.
 - **Always runs.** An explicit `autosk install` is **not** gated by
