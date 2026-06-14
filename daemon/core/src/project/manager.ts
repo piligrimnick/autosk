@@ -17,8 +17,11 @@
 
 import type { ProjectInfo } from "@autosk/sdk";
 
+import { join } from "node:path";
+
 import {
   ensureGlobalBootstrap,
+  ensureExtensionsInstalled,
   loadProjectRegistry,
   validateInFlightTasks,
   type BootstrapOptions,
@@ -28,6 +31,7 @@ import {
 import { systemClock, type Clock } from "../store/clock.ts";
 import { KeyedMutex } from "../store/lock.ts";
 import { consoleLogger, type Logger } from "../store/logger.ts";
+import { AUTOSK_DIR } from "../store/paths.ts";
 import { Store, type StoreOptions } from "../store/store.ts";
 import { initProject } from "./init.ts";
 import { ProjectRegistry } from "./registry.ts";
@@ -84,6 +88,11 @@ export class ProjectManager {
 
   private projects = new Map<string, ProjectHandle>();
   private openLocks = new KeyedMutex();
+  /**
+   * Serialises `npm install` runs into the shared `~/.autosk/packages/` prefix
+   * (keyed by that dir) so two projects opening concurrently never race a reconcile.
+   */
+  private installLocks = new KeyedMutex();
   /** Single-flight first-run bootstrap; resolved once per daemon process. */
   private bootstrapOnce: Promise<void> | null = null;
 
@@ -103,13 +112,48 @@ export class ProjectManager {
    * daemon start so it is usually done by the time a project opens. Never throws.
    */
   ensureBootstrap(): Promise<void> {
-    if (!this.bootstrapConfig) return Promise.resolve();
+    const bootstrap = this.bootstrapConfig;
+    if (!bootstrap) return Promise.resolve();
     this.bootstrapOnce ??= (async () => {
       const home = this.extensionsEnv.home ?? process.env.HOME ?? "";
       if (!home) return;
-      await ensureGlobalBootstrap({ home, logger: this.logger, ...this.bootstrapConfig });
+      await ensureGlobalBootstrap({ home, logger: this.logger, ...bootstrap });
+      // Reconcile the GLOBAL settings.json on every start: install any package
+      // listed under `extensions` that is not yet present (e.g. an operator
+      // hand-edited settings.json to add one). Only missing packages install.
+      await ensureExtensionsInstalled({
+        home,
+        settingsPaths: [join(home, AUTOSK_DIR, "settings.json")],
+        npmBin: bootstrap.npmBin,
+        install: bootstrap.install,
+        logger: this.logger,
+      });
     })();
     return this.bootstrapOnce;
+  }
+
+  /**
+   * Reconciles a project's `./.autosk/settings.json` packages on first open:
+   * installs any listed-but-missing npm extension into the shared
+   * `~/.autosk/packages/` prefix (the global settings are already reconciled by
+   * {@link ensureBootstrap} at daemon start). Gated on bootstrap being enabled,
+   * so tests with no `bootstrap` config never hit npm. Never throws.
+   */
+  private async reconcileProjectExtensions(root: string): Promise<void> {
+    const bootstrap = this.bootstrapConfig;
+    if (!bootstrap) return;
+    const home = this.extensionsEnv.home ?? process.env.HOME ?? "";
+    if (!home) return;
+    const packagesDir = join(home, AUTOSK_DIR, "packages");
+    await this.installLocks.run(packagesDir, () =>
+      ensureExtensionsInstalled({
+        home,
+        settingsPaths: [join(root, AUTOSK_DIR, "settings.json")],
+        npmBin: bootstrap.npmBin,
+        install: bootstrap.install,
+        logger: this.logger,
+      }),
+    );
   }
 
   // -- resolution / lazy open ----------------------------------------------
@@ -130,6 +174,9 @@ export class ProjectManager {
     return this.openLocks.run(root, async () => {
       const again = this.projects.get(root);
       if (again) return again;
+      // Install any project-local settings.json extension that is listed but
+      // not yet present, before the registry is built so it is discoverable.
+      await this.reconcileProjectExtensions(root);
       const store = new Store(root, this.storeOpts);
       await store.open();
       try {

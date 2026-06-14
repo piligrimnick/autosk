@@ -147,6 +147,31 @@ discovers `feature-dev` through the npm-packages source above.
   access. A failed install is **logged, never fatal** — the daemon keeps serving
   and leaves `settings.json` absent so the next start retries.
 
+## Auto-install reconcile (every start)
+
+The first-run bootstrap only fires when `settings.json` is **absent**. To keep a
+hand-edited config in sync, the daemon also runs a **reconcile** pass that
+installs any package listed under `"extensions"` that is not yet present under
+`~/.autosk/packages/node_modules/`. So after you add a package name to a
+`settings.json` by hand, the next daemon start (re)spawns and installs it for you
+— no manual `npm install` step.
+
+- **What runs when.** The **global** `~/.autosk/settings.json` is reconciled once
+  per daemon start; each project's **project-local** `./.autosk/settings.json` is
+  reconciled the first time that project is opened (its packages install into the
+  same global `~/.autosk/packages/` prefix). Both happen after the socket is
+  accepting, so auto-spawn readiness is never blocked by an install.
+- **Missing only.** Only packages whose `node_modules/<name>` directory is absent
+  are installed; already-installed packages are left untouched (no upgrade), so a
+  fully-provisioned environment never hits the network. A failed install is
+  logged, never fatal — the listed-but-missing package simply stays a
+  `project.diagnostics` entry until the next start retries.
+- **Opt out.** Set **`AUTOSK_NO_AUTO_INSTALL`** (to any value other than
+  empty / `0` / `false`) to disable **all** automatic installs — the first-run
+  bootstrap *and* the reconcile both become no-ops, leaving any listed-but-missing
+  package as a diagnostic only. This is the escape hatch for air-gapped or
+  hand-managed environments that provision `~/.autosk/packages/` themselves.
+
 ## The default extensions
 
 These are the npm packages the first-run bootstrap provisions (and the building

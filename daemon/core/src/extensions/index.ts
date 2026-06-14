@@ -30,9 +30,13 @@ export {
 } from "./hazard.ts";
 export {
   ensureGlobalBootstrap,
+  ensureExtensionsInstalled,
+  autoInstallDisabled,
   DEFAULT_BOOTSTRAP_PACKAGES,
   DEFAULT_BOOTSTRAP_EXTENSIONS,
   type BootstrapOptions,
   type BootstrapInstaller,
   type BootstrapResult,
+  type ReconcileOptions,
+  type ReconcileResult,
 } from "./bootstrap.ts";

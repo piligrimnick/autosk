@@ -60,6 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no per-project files. `settings.json`'s presence is the "already initialised"
   marker (provide your own to opt out); the install needs `npm` on `PATH`
   (`$AUTOSK_NPM_BIN`) + network and is logged-but-never-fatal on failure.
+- **auto-install reconcile:** on every start the daemon also installs any package
+  listed in `settings.json#extensions` that is not yet present — the global
+  `~/.autosk/settings.json` once per start, each project's
+  `./.autosk/settings.json` on first open. Only **missing** packages install
+  (no upgrade); set **`AUTOSK_NO_AUTO_INSTALL`** to disable all automatic
+  installs (first-run bootstrap included).
 - **sessions:** one agent run for one step is a **session** with a pi-format
   transcript (`sessions/<id>.jsonl`: a header, pi `message` entries with text /
   thinking / `toolCall` / image content blocks, and the engine's structural

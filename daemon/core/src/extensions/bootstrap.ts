@@ -29,6 +29,22 @@ import { join } from "node:path";
 
 import { AUTOSK_DIR } from "../store/paths.ts";
 import { consoleLogger, type Logger } from "../store/logger.ts";
+import { readSettingsExtensions } from "./settings.ts";
+
+/**
+ * Whether automatic npm installs are disabled via `AUTOSK_NO_AUTO_INSTALL`.
+ *
+ * When set to a truthy value (anything other than empty / `0` / `false`) the
+ * daemon performs NO network installs at all: the first-run bootstrap and the
+ * per-start reconcile both turn into no-ops, leaving listed-but-missing packages
+ * as `project.diagnostics` only. This is the escape hatch for air-gapped or
+ * hand-managed environments that want to provision `~/.autosk/packages/`
+ * themselves.
+ */
+export function autoInstallDisabled(): boolean {
+  const v = process.env.AUTOSK_NO_AUTO_INSTALL;
+  return v != null && v !== "" && v !== "0" && v.toLowerCase() !== "false";
+}
 
 /**
  * npm install specifiers provisioned on first run. Installing `@autosk/feature-dev`
@@ -70,6 +86,30 @@ export interface BootstrapResult {
   error?: string;
 }
 
+/** Options for the per-start {@link ensureExtensionsInstalled} reconcile. */
+export interface ReconcileOptions {
+  /** Home dir whose `<home>/.autosk/packages` is the install prefix. */
+  home: string;
+  /** `settings.json` paths to read `extensions` package names from (missing files ignored). */
+  settingsPaths: string[];
+  /** `npm` binary (default `$AUTOSK_NPM_BIN` or `npm`). */
+  npmBin?: string;
+  logger?: Logger;
+  /** Override the install step (tests). Default: shell out to `npm`. */
+  install?: BootstrapInstaller;
+}
+
+export interface ReconcileResult {
+  /**
+   * `skipped` (opted out via `AUTOSK_NO_AUTO_INSTALL`), `noop` (nothing listed /
+   * nothing missing), `installed` (success), or `failed`.
+   */
+  status: "skipped" | "noop" | "installed" | "failed";
+  /** The package names installed (present on `installed`). */
+  installed?: string[];
+  error?: string;
+}
+
 /**
  * Provisions the default extensions on first run (idempotent: a no-op once
  * `<home>/.autosk/settings.json` exists). Never throws — a failure is logged and
@@ -82,6 +122,12 @@ export async function ensureGlobalBootstrap(opts: BootstrapOptions): Promise<Boo
 
   // settings.json is the "already initialised" marker.
   if (existsSync(settingsPath)) return { status: "skipped" };
+  // `AUTOSK_NO_AUTO_INSTALL` opts out of every network install — leave
+  // settings.json absent (so a later, opted-in start can still bootstrap).
+  if (autoInstallDisabled()) {
+    logger.info("autoskd: AUTOSK_NO_AUTO_INSTALL set — skipping first-run extension install");
+    return { status: "skipped" };
+  }
 
   const packages = [...(opts.packages ?? DEFAULT_BOOTSTRAP_PACKAGES)];
   const extensions = [...(opts.extensions ?? DEFAULT_BOOTSTRAP_EXTENSIONS)];
@@ -108,6 +154,66 @@ export async function ensureGlobalBootstrap(opts: BootstrapOptions): Promise<Boo
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
     logger.error(`autoskd: first-run init error: ${error}`);
+    return { status: "failed", error };
+  }
+}
+
+/**
+ * Per-start reconcile: install any package listed under `extensions` in the
+ * given `settings.json` files that is NOT yet present under
+ * `~/.autosk/packages/node_modules/`. Only the **missing** packages are
+ * installed — already-installed ones are left untouched (no upgrade), so a
+ * fully-provisioned environment never hits the network.
+ *
+ * Used on two seams: the global `~/.autosk/settings.json` at daemon start, and
+ * each project's `./.autosk/settings.json` on first project open. Never throws —
+ * a failed install is logged and the listed-but-missing package simply stays a
+ * `project.diagnostics` entry until the next start retries.
+ */
+export async function ensureExtensionsInstalled(opts: ReconcileOptions): Promise<ReconcileResult> {
+  const logger = opts.logger ?? consoleLogger;
+  if (autoInstallDisabled()) return { status: "skipped" };
+
+  const packagesDir = join(opts.home, AUTOSK_DIR, "packages");
+  const nodeModules = join(packagesDir, "node_modules");
+
+  // Union of every listed package name across the given settings files, in
+  // first-seen order (a missing/corrupt settings file contributes nothing).
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const settingsPath of opts.settingsPaths) {
+    for (const name of readSettingsExtensions(settingsPath)) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      names.push(name);
+    }
+  }
+  if (names.length === 0) return { status: "noop" };
+
+  // A package is "installed" iff its node_modules dir exists (the same check the
+  // discovery loader uses to decide a package resolves vs. raises a diagnostic).
+  const missing = names.filter((name) => !existsSync(join(nodeModules, name)));
+  if (missing.length === 0) return { status: "noop" };
+
+  const install = opts.install ?? npmInstaller(opts.npmBin, logger);
+  logger.info(`autoskd: installing missing extension package(s): ${missing.join(", ")} into ${packagesDir}`);
+  try {
+    mkdirSync(packagesDir, { recursive: true });
+    ensurePackagesManifest(packagesDir);
+
+    const res = await install({ packagesDir, packages: missing });
+    if (!res.ok) {
+      logger.error(
+        `autoskd: extension install failed (${res.error ?? "unknown error"}) — ` +
+          `listed-but-missing package(s) stay diagnostics until the next start retries`,
+      );
+      return { status: "failed", error: res.error, installed: [] };
+    }
+    logger.info(`autoskd: installed missing extension package(s): ${missing.join(", ")}`);
+    return { status: "installed", installed: missing };
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    logger.error(`autoskd: extension reconcile error: ${error}`);
     return { status: "failed", error };
   }
 }
