@@ -7,57 +7,126 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **Clean break — autosk v2.** The daemon is rewritten from scratch as a
+> Bun/TypeScript program (`autoskd`), and the storage engine is gone: a project's
+> tasks, comments, and session transcripts are now plain **files** under
+> `.autosk/` — there is **no database**. v2 does **not** read the old
+> `.autosk/db`, and there is **no migrator**: open an existing v1 project with the
+> last v1 release, [`v0.1.6`](https://github.com/wierdbytes/autosk/releases/tag/v0.1.6).
+> Workflows and agents are now **code** registered by extensions, not database
+> rows or installed npm-package agents.
+
 ### Added
-- **gui:** the session transcript now streams the daemon's pi-format `session.transcript` / `session-event` line stream — a session header, pi message entries (user / assistant / toolResult with text / thinking / **toolCall** / image content blocks), and the engine's structural `autosk:transit` / `autosk:steer` / `autosk:error` / `autosk:session_end` entries — replacing the old v1 `MessageEvent` renderer. Live sessions support **steer** (`session.input`) and **abort** (`session.abort`) from the session header/composer; a new **project diagnostics** affordance (a ⚠ badge + error list on the titlebar project switcher) surfaces extension load errors (`project.diagnostics`); and task comments are now **editable/deletable** inline (`task.comment.edit` / `task.comment.delete`) (ask-03019a).
-- **cli:** new `autosk session` group (proto-v2) — `session list [--task ID]`, `session get <id>`, `session transcript <id> [--from-line N] [--limit N]` (renders the pi-format transcript), `session abort <id>`, and `session input <id> <message> [--followup]` (steer/follow-up into a live session). Replaces the old `autosk daemon status|messages|cancel|list` job verbs (ask-305572).
-- **cli:** new read-only registry views — `autosk workflow list|show` (from `registry.workflow.list/get`) and `autosk agent list|show` (from `registry.agent.list`) — render workflows/agents as code registered by extensions; and a new `autosk project` group (`list`, `add`, `diagnostics`) where `project diagnostics` surfaces extension load errors (ask-305572).
-- **cli:** `autosk comment edit <task> <comment-id> [text]` and `autosk comment delete <task> <comment-id>` — comments are now editable/deletable (ask-305572).
-- **gui:** whole-UI zoom — `Cmd`/`Ctrl` + `+` / `-` / `0` scales the entire desktop window (via the native webview zoom, clamped 50%–300%, `0` resets to 100%), with a matching **UI zoom slider** in Settings → Appearance (applies on release) for mouse-only control. The chosen scale persists across restarts (localStorage, like the sidebar geometry). The control is shown only on platforms where the webview supports programmatic zoom (desktop macOS / Windows) and is hidden on Linux / iOS / Android, where Tauri's `setZoom` is a no-op.
-- **gui:** new ⋯ button at the right edge of the task header in the center panel — pops the same task-actions menu as right-clicking the task's row in the Tasks panel.
-- **tooling:** new `scripts/migrate-v11-to-v12.sh` migrates an old Go/doltlite-0.10.8 `.autosk/db` (on-disk container format **v11**) into a fresh autoskd/doltlite-0.11.8 database (format **v12**) so existing tasks/comments/workflows/agents/runs (and `.autosk/sessions` transcripts) can be opened by the new daemon + GUI. It bridges the breaking 0.11.0 on-disk change by building two pinned commits (a 0.10.8 reader + a 0.11.8 writer) in throwaway git worktrees and copying rows table-by-table; dolt commit history is not carried over. `--adopt` backs up and swaps the migrated db into place.
-- **gui:** the left sidebar is now collapsible and resizable — a toggle button in the titlebar (between the macOS traffic lights and the project switcher) shows/hides it, and dragging its right edge resizes it (clamped to 220–480px; double-click the divider to reset to the default). Both the collapsed state and the width persist across restarts.
-- **autoskd:** new Rust daemon binary serving the read-only task/job/workflow/agent/comment/signal surface over JSON-RPC on a Unix socket, with `autoskd serve` / `init` / `version` / `engine` subcommands (ask-d8f735).
-- **autoskd:** now drives workflows end-to-end natively — a per-project poller, a global worker-pool scheduler, the step executor (turn loop, kickback, worktree isolation, idle-timeout), and the compactor — plus a live job surface (`job.subscribe` transcript streaming with replay+tail, `job.input` prompt/steer/follow_up, `job.abort`, `job.cancel`) (ask-2e7e27).
-- **lazy:** the TUI now renders entirely from an auto-spawned `autoskd` daemon over JSON-RPC — reads, writes, and the live job transcript tail (`job.subscribe`) — instead of opening a local doltlite store; the single RPC-client datasource replaces the former offline/live/compose split (ask-c9251d). (Supersedes the experimental, never-released `autosk lazy --rpc` / `AUTOSK_RPC=1` opt-in, which is now the only behaviour and has been removed.)
-- **autoskd:** the daemon is now the sole writer — it serves the full JSON-RPC write surface (task create/update/enroll/resume/block/unblock/comment/metadata, workflow create/delete/updateIsolation, agent install/uninstall, sql query/exec, project.init), adds an opt-in TCP listener (`--tcp HOST:PORT`) gated by a `~/.autosk/daemon-token` token (UDS stays auth-free), pushes `task-changed`/`project-changed` notifications to subscribers, and exposes a `shutdown` RPC plus an idle-shutdown policy (`AUTOSK_IDLE_SECS`, `0` disables; never on a TCP service daemon) (ask-5cae6c).
-- **gui:** new app icon — a Liquid Glass icon (Apple Icon Composer) shipped as `icons/Assets.car` (`CFBundleIconName` via `src-tauri/Info.plist`, bundled to `Contents/Resources` through `bundle.macOS.files`) for macOS 26+, with a regenerated flat `.icns`/`.ico`/PNG set as the cross-platform fallback (macOS < 26, Windows, Linux).
-- **gui:** new Tauri desktop app (`gui/`) at `autosk lazy` parity — local (auto-spawned `autoskd` over UDS) and remote (TCP + token) modes behind a transport-agnostic frontend, live task-timeline streaming via `job.subscribe`, a state-aware composer (steer/follow_up/abort/cancel, comment/resume, enroll), and projects/tasks/jobs/workflows/agents views (ask-9e5f8c).
+- **daemon (`autoskd`):** a brand-new Bun/TypeScript daemon that owns each
+  project's `.autosk/` directory and drives tasks through their workflows. It is
+  auto-spawned on first use over a Unix socket (single-instance bind; opt-in TCP
+  + token for remote front ends; idle-shutdown), serves the proto-v2 JSON-RPC
+  surface, and ships as a standalone binary (`bun build --compile` — embeds the
+  Bun runtime, so no global `bun` is needed at runtime). Replaces the v1 Go
+  `autosk daemon`.
+- **storage:** tasks / comments / sessions are now files under `.autosk/`
+  (`tasks/<id>/task.json` + `comments.jsonl`, `sessions/<id>.json` + `.jsonl`),
+  written atomically by the daemon, with a startup scan + fs-watcher that picks
+  up external (human/script) edits. No database, no migrations, no GC.
+- **workflows & agents as code:** workflows and agents are TypeScript registered
+  by **extensions** (pi-style discovery: project `.autosk/extensions/` ▸ global
+  `~/.autosk/extensions/` ▸ npm packages in `settings.json` ▸ daemon-bundled),
+  loaded in-process with full error isolation — a broken extension is recorded
+  via `project.diagnostics` and never crashes the daemon. The engine only drives
+  the task status machine and calls each workflow's `onTransit` hook; visit caps
+  and guards live in that hook (`ctx.visits`). See `docs/extensions.md` and
+  `docs/workflows.md`.
+- **shipped extensions:** `@autosk/worktree` (the per-task git-worktree isolation
+  provider, attachable to any workflow), `@autosk/pi-agent` (an agent that drives
+  `pi --mode rpc`, mirrors pi's transcript entries 1:1, and bridges transitions
+  through an injected `autosk_transit` pi-tool), and `@autosk/feature-dev` (the
+  reference workflow `dev → review → docs → validator → accept` with review→dev /
+  validator→dev bounce-backs and a `dev` visit cap, bundled into every project —
+  replaces v1's `feature-dev-generic`).
+- **sessions:** one agent run for one step is a **session** with a pi-format
+  transcript (`sessions/<id>.jsonl`: a header, pi `message` entries with text /
+  thinking / `toolCall` / image content blocks, and the engine's structural
+  `autosk:transit` / `autosk:steer` / `autosk:error` / `autosk:session_end`
+  entries). Live sessions support steer / follow-up / abort.
+- **cli:** new `autosk session` group — `list [--task ID]`, `get`, `transcript
+  [--from-line N] [--limit N]`, `abort`, `input <message> [--followup]`;
+  read-only registry views `autosk workflow list|show` + `autosk agent list|show`;
+  a new `autosk project` group (`list`, `add`, `diagnostics`); and
+  `autosk comment edit|delete` (comments are now editable/deletable) (ask-305572).
+- **gui:** a new native **Tauri desktop app** (`gui/`) at `autosk lazy` parity —
+  a frameless two-panel workspace (a Tasks / Sessions / Workflows accordion + a
+  polymorphic entity view driven by one entity-aware composer), a live pi-format
+  session transcript (`session.transcript` / `session-event`) with steer / abort,
+  editable/deletable comments, a project switcher with an extension-diagnostics
+  badge (`project.diagnostics`), read-only workflow/agent registry views,
+  whole-UI zoom, a collapsible/resizable sidebar, and a Liquid Glass app icon.
+  Runs **local** (auto-spawned `autoskd` over UDS) or **remote** (TCP + token);
+  the Tauri backend is a pure JSON-RPC client of `autoskd` (ask-9e5f8c,
+  ask-03019a).
+- **build/release:** `make build-autoskd` compiles the Bun daemon to `bin/autoskd`
+  and bundles its extensions (`scripts/bundle-extensions.sh`); `make install`
+  installs both `autosk` + `autoskd` (+ the bundled extensions). Releases ship
+  **both** binaries per target plus a platform-agnostic bundled-extensions
+  tarball, and the Homebrew formula installs both — so auto-spawn works on a
+  clean machine with no global `bun` (ask-305572, ask-e36027).
 
 ### Changed
-- **gui:** cut the desktop app over to the **proto-v2** namespaced JSON-RPC surface (`meta.*` / `project.*` / `task.*` incl. `task.comment.*` / `registry.*` / `session.*`) carrying the `{cwd}` selector only — the v1 `db_path` selector and the `source: "gui"` write-discriminator are gone, the wire mirrors in `gui/src/types.ts` now follow `daemon/sdk/src` (not `crates/autosk-proto`), and the **task shape lost `priority` / `author` / `metadata`** and now carries `workflow`/`step` names. **Sessions replace Jobs** at the data layer (one session = one agent run; `SessionMeta` + `session.*` + the `session-event` push), and **Workflows and Agents are read-only registry projections** (code registered by project extensions — no create/edit/isolation-update or install/uninstall UI). The remote TCP handshake renames `auth` → `meta.auth`, and `task.subscribe` is now front-end-issued per active project (proto v2 requires `{cwd}` and opens that project) rather than auto-issued at connect (ask-03019a).
-- **gui:** typography pass for readability — the base font size is bumped 13→14px with a default `line-height: 1.5`, the whole font scale is lifted ~1px (the smallest 10/10.5px labels, timestamps and badges are now ≥11px), and the muted-text colour `--fg-mute` is lightened from `#6b7280` (~3.7:1 on the dark background, below WCAG AA) to `#828b9c` (~5.2:1).
-- **gui:** the center-panel composer is reworked into a single chat-style input. The per-mode status strip is dropped from every variant, the read-only strip for a terminal session is gone (no composer renders), and a selected task now always shows one comment box regardless of status. The comment / steer field starts at one line, auto-grows to ten lines (then scrolls), and sends via an inline ↑ button in the bottom-right corner (Cmd/Ctrl+Enter also sends; a plain Enter inserts a newline). Enroll / resume / reopen leave the composer for an **Enroll** button in the task header (hidden while the task is `work`) that opens a lazy-style **two-pane workflow + step picker** (current workflow/step pre-selected; single-agent enroll dropped) and routes by status (`new`/`done`/`cancel` → enroll, `human` → resume or, when switching workflow, enroll). The running-session steer composer keeps only the input; its **Abort** + **Cancel job** controls move into the session header, just before the task id.
-- **gui:** on iOS/Android the app now defaults to Remote mode (the mobile sandbox cannot run a local `autoskd`).
-- **gui:** the center panel's header row is gone — the project switcher (switch / add / init / remove) now lives in the titlebar/status bar where the `autosk` brand used to be, the brand label is dropped, and the selected entity id is no longer echoed in a separate header (each view already surfaces it). The macOS traffic lights are re-centered vertically in the titlebar (`trafficLightPosition.y` 14 → 20).
-- **gui:** the Sessions panel now renders each session as a lazy-mode-style two-line row that **leads with the status chip** from a fixed-width left gutter — line 1 is `STATUS  job-xxxxxx  ……  ask-xxxxxx` (task id magnetised to the right edge), line 2 is `work-time  workflow-name:step-name` with the work-time sitting in that same gutter so the job id / workflow:step column lines up. The job id, task id, workflow name, and step name use lazy-mode's entity hues (magenta / blue / yellow / purple), and the work-time shows pi's actual work time (started→finished, or →now while running) instead of a created-at "… ago" — and, like lazy-mode, it now counts up live (a 1s tick re-renders while any session is still running). The session-transcript header in the center panel is likewise a single line that leads with the status chip, followed by `job-id · workflow:step · @agent` in the same hues, with the task id magnetised to the right edge (the old timings / attach / corrections / pid sub-line is dropped).
-- **gui:** the Tasks panel row no longer shows the per-task running/streaming activity dot between the task id and the title — the status chip is the only state signal now (running runs remain visible in the Sessions panel and the composer).
-- **gui:** the Tasks panel now renders each task as a single lazy-mode-style line that **leads with the status chip** — `STATUS  ask-xxxxxx  Title…` — with the task id in lazy's blue hue and the title flex-growing (ellipsis-truncated) to push an optional `⛔` blocked flag to the right edge; the per-task priority widget is dropped. The per-task actions menu now opens as a **native OS context menu** on right-click of the row (the old hover/selection kebab button is gone). Tasks are a single flat list sorted by most-recently-updated first instead of being grouped by status.
-- **gui:** the center panel's **task header** is now two lines — `STATUS · ask-xxxxxx · P2 · workflow-name:step-name · @agent` over the task title — with each entity in lazy-mode's hues (id blue, priority muted, workflow yellow, step purple, agent cyan), the status chip leading the row, and an optional `⛔ blocked` flag trailing line 1. The separate updated-time meta line is dropped.
-- **gui:** redesigned the desktop app into a **frameless two-panel workspace** — a left **sidebar** that stacks **Tasks / Sessions / Workflows** as a lazygit-style accordion (the active panel grows to ~3× while the others collapse; click a header or select a row to expand a panel, and selecting an entity auto-expands its matching panel), and a **main panel** with the polymorphic entity view (task sheet with comments / session transcript / read-only workflow definition) driven by one entity-aware composer. A titlebar hosts the connection indicator and the Agents/Settings modals, and the main-panel header carries a project switcher (switch / add / init / remove); the old top-nav + projects sidebar are gone.
-- **build:** `make install` now also builds `autoskd` (release) and installs it alongside `autosk` in `$GOBIN`/`$GOPATH/bin`, so auto-spawn works for source installs out of the box; `make uninstall` removes both. New `make install-autoskd` target installs only the daemon.
-- **bootstrap:** `feature-dev-generic` workflow now ships with `isolation: worktree` by default.
-- **daemon:** `autosk daemon status | messages | cancel | list` now route to the `autoskd` daemon over JSON-RPC instead of the retired Go daemon (ask-2e7e27).
-- **cli:** every `autosk` write verb — `create` / `enroll` / `resume` / `done` / `cancel` / `reopen` / `comment` / `metadata` / `block` / `unblock`, `workflow create|delete|update`, `agent install|uninstall`, `sql`, `init` — now routes through an auto-spawned `autoskd` over JSON-RPC instead of opening the local doltlite store. A fresh-dir `autosk create` still prompts (or honours `AUTOSK_NO_AUTOINIT` / `AUTOSK_AUTOINIT_*`) and then auto-inits via the daemon's `project.init` (which runs migrations + the `feature-dev-generic` bootstrap); no Go process ever opens `.autosk/db` (ask-913906).
-- **build:** the Go `autosk` binary (CLI + lazy TUI) is now **CGO-free** — it no longer links `libdoltlite.a`, the `libsqlite3` build tag is gone, and `make build` / `install` / `vet` / `test` no longer depend on `make doctor` / the doltlite fetch. `autoskd` (Rust) is the sole doltlite consumer; the front ends build with plain `go build` (ask-913906).
-- **cli:** `autosk version` now reads the project schema version from an already-running `autoskd` (best-effort; `version` never auto-spawns the daemon, so the schema line falls back to `-` when no daemon is up) (ask-913906).
-- **cli:** `autosk version` now reports `backend: autoskd` — the Go binary links no storage engine of its own; persistence lives in the daemon (ask-60d40c).
-- **lazy:** panels now refresh on the daemon's `task-changed`/`project-changed` push instead of the fixed 2-second client-side poll; a long safety re-sync (`--refresh`, floored to 30s) remains as a backstop (ask-913906).
-- **cli/lazy:** the Go CLI + lazy TUI now speak the **proto-v2 namespaced JSON-RPC** surface (`meta.*`, `project.*`, `task.*` incl. `task.comment.add/list/edit/delete`, `registry.workflow.*`, `registry.agent.list`, `session.*`) and carry the `{cwd}` selector only (the v1 `db_path` selector + the `cli|lazy` source discriminator are gone). The **task shape lost `priority`, `author`, and `metadata`** and now carries `workflow`/`step` names; `--json` task output and the `list` table drop the priority column accordingly (ask-305572).
-- **lazy:** the Jobs pane is now the **Sessions** pane (one session = one agent run for a task step), its transcript reads the pi-format `session.transcript`/`session-event` stream, the Workflows pane is **read-only** (workflows are code now — no in-TUI create/edit/isolation editor), and the P0..P3 priority column / author filter / metadata editor are removed (ask-305572).
-- **build:** `make build-autoskd` now compiles the Bun daemon (`bun build --compile daemon/core/src/index.ts`) into `bin/autoskd` instead of building the Rust `autoskd`; `make test` points `AUTOSKD_BIN` at it and sets `AUTOSK_BUNDLED_EXTENSIONS` so the bundled `feature-dev` workflow resolves. The compiled binary embeds the Bun runtime, so no global `bun` is needed at runtime (ask-305572).
+- **protocol:** the CLI, lazy TUI, and Tauri GUI now speak the **proto-v2**
+  namespaced JSON-RPC surface (`meta.*`, `project.*`, `task.*` incl.
+  `task.comment.*`, `registry.*`, `session.*`) carrying only the `{cwd}` selector
+  (the v1 `db_path` selector and the source discriminator are gone). The wire
+  types live once in `daemon/sdk/src/proto.ts` and are mirrored by the Go
+  (`internal/daemon/api`) and Tauri (`gui/src-tauri`) clients (ask-305572,
+  ask-03019a).
+- **tasks:** the task shape **drops `priority`, `author`, and `metadata`** (incl.
+  `step_visits`) and now carries `workflow` / `step` names; `--json` output and
+  the `list` table drop the priority column accordingly (ask-305572).
+- **cli:** the Go `autosk` binary is now a pure JSON-RPC client — CGO-free
+  (`make build` is plain `go build`), it links no storage engine of its own, and
+  every verb routes through the auto-spawned `autoskd`; `autosk version` reports
+  `backend: autoskd` (ask-305572).
+- **lazy:** the Jobs pane is now the **Sessions** pane (one session = one agent
+  run; transcript reads the pi-format `session.transcript` / `session-event`
+  stream), the Workflows pane is **read-only** (workflows are code), the priority
+  column / author filter / metadata editor are gone, and panels refresh on the
+  daemon's `task-changed` / `project-changed` push (ask-305572).
+- **bootstrap:** a freshly-created project lays down `.autosk/{tasks,sessions,
+  extensions}` and registers with the daemon — no database, and no per-project
+  workflow seeding (the bundled `feature-dev` is available to every project).
 
 ### Removed
-- **gui:** removed the task **priority** (P0..P3 select + set-priority menu action) and **author** display, the **workflow create / edit / isolation-update** editor, the **agent install / uninstall** form, and the **metadata** + **sql** panes — none has a proto-v2 method; editing a workflow now means editing its extension code, and agents are code registered by extensions (ask-03019a).
-- **daemon:** the Go `autosk daemon serve` verb is retired — `autoskd` now drives workflows (ask-2e7e27).
-- **cli:** dropped the verbs that have no proto-v2 method: the whole `metadata`, `sql`, `worktree` groups; `gc`, `migrate`, `history`; `agent install|uninstall|runtime`; `workflow create|delete|update`; `step next` (and the deprecated bare `next`-as-transition alias); and the `-p/--priority` flags + `--author` filter. Editing a workflow now means editing its extension code; agents are code registered by extensions (no install) (ask-305572).
-- **cli/lazy:** removed `priority`, `author`, and `metadata` (incl. `step_visits`) from tasks; there is no database, so the `--db` flag / `AUTOSK_DB` selector and the schema/`migrate` machinery are gone — a project is now an `.autosk/` directory resolved by walk-up from `{cwd}` (ask-305572).
+- **storage:** the `.autosk/db` database and everything tied to it — the `--db`
+  flag / `AUTOSK_DB` selector and the schema/`migrate` machinery; a project is
+  now just an `.autosk/` directory resolved by walk-up from `{cwd}` (ask-305572).
+- **cli:** the verbs with no proto-v2 equivalent — the whole `metadata`, `sql`,
+  and `worktree` groups; `gc`, `migrate`, `history`; `workflow create|delete|update`;
+  `agent install|uninstall`; `step next` (and the bare `next`-as-transition
+  alias); the whole `autosk daemon` group (auto-spawn + `autosk session` /
+  `autosk project` replace it); and the `-p/--priority` flags + `--author` filter
+  (ask-305572).
+- **tasks:** `priority`, `author`, and `metadata` (incl. `step_visits`).
+- **agents/workflows:** the npm-package agent system (`autosk agent install`) and
+  the JSON/DB workflow editor, both superseded by code-as-extensions; the four v1
+  agent npm packages under `agents/` and the example workflow JSON under
+  `docs/examples/workflows/` are removed.
+- **extensions (v1):** the `@wierdbytes/pi-autosk` pi extension is retired (its
+  core verb `autosk_step` → `step next` no longer exists; transitions are
+  daemon-internal via the in-process `autosk_transit` pi-tool), along with the v1
+  custom-agent SDK + bootstrapper (`@autosk/agent-sdk`, `@autosk/agent-runtime`)
+  — superseded by `@autosk/sdk` + `@autosk/pi-agent`.
+- **daemon internals:** the v1 Rust daemon workspace and its embedded
+  database/GC/migration machinery are gone, replaced by the Bun `autoskd` (this
+  intermediate Rust daemon never reached a release).
+
+## [0.1.6] — 2026-06-08
+
+### Changed
+- **bootstrap:** the `feature-dev-generic` workflow now ships with
+  `isolation: worktree` by default.
 
 ### Fixed
-- **gui:** fix "plugin menu not found" when opening the task-actions menu on iOS — the same entries now render as an in-app popover where native menus are unavailable.
-- **gui:** fix the bottom of the window (composer actions) being cut off on iOS — the shell now sizes to the visible viewport and respects the safe-area insets.
-- **gui:** fix "Save & reconnect" failing with `Operation not permitted` on iOS — settings now persist to a sandbox-writable path, and a persist failure no longer discards the entered remote host/token for the session.
-- **daemon:** fix empty lazy transcript and `HTTP 410 session_missing` from `daemon messages <job>`
-- **gui:** the Tasks panel now uses the same card-style selection (distinct `--bg-3` fill + full rounded border) as the Sessions and Workflows panels, instead of its inconsistent left-accent stripe over a hover-colored background.
+- **daemon:** fix the empty lazy transcript and `HTTP 410 session_missing` from
+  `daemon messages <job>`.
 
 ## [0.1.5] — 2026-05-25
 
@@ -250,7 +319,9 @@ one TUI to see it all.
   and popup z-order; clear `TextArea` (not just `v.lines`) on
   dispatch / cursor-move / Esc.
 
-[Unreleased]: https://github.com/wierdbytes/autosk/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/wierdbytes/autosk/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/wierdbytes/autosk/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/wierdbytes/autosk/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/wierdbytes/autosk/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/wierdbytes/autosk/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/wierdbytes/autosk/compare/v0.1.1...v0.1.2
