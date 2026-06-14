@@ -185,6 +185,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installs on first run (see **first-run bootstrap**).
 
 ### Fixed
+- **daemon double-bind race on a stale lock:** `autoskd`'s single-instance
+  guard could let two daemons bind the same socket when a stale lock left by a
+  crashed/killed daemon was reclaimed by several auto-spawns at once. The stale
+  lock reclaim had a TOCTOU between the dead-holder check and the unlink, so a
+  sibling that had already reclaimed + bound could have its live lock and socket
+  deleted and bound over — stranding clients on an orphaned listener and leaving
+  two engines owning one `.autosk/`. Stale-lock reclamation is now serialised
+  behind an exclusive breaker file (with a liveness re-check under the breaker),
+  so exactly one daemon ever binds.
 - **empty task list with `--status all` / in the lazy dashboard:** an "all
   statuses" request was sent as `status: []`, which the daemon's membership
   filter read as "match none" — so `autosk list --status all` and the `autosk

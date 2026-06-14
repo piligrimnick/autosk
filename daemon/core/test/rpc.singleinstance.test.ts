@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -47,19 +47,33 @@ function makeStartOpts(dir: string, socketPath: string, n: number) {
   };
 }
 
-/** Polls until `socketPath` accepts a connection (or times out). */
-async function waitForSocket(socketPath: string, timeoutMs = 5000): Promise<void> {
+/**
+ * Polls until `socketPath` accepts a connection (or times out). Gated on the
+ * socket file existing first, and the connect is wrapped in try/catch: Bun's
+ * `net.connect` to a not-yet-created unix path raises ENOENT *synchronously*
+ * (before the `"error"` listener is attached), which would otherwise escape the
+ * promise. A reclaim-delayed daemon makes that window the common case.
+ */
+async function waitForSocket(socketPath: string, timeoutMs = 8000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const alive = await new Promise<boolean>((resolve) => {
-      const c = net.connect(socketPath);
-      c.once("connect", () => {
-        c.destroy();
-        resolve(true);
+    if (existsSync(socketPath)) {
+      const alive = await new Promise<boolean>((resolve) => {
+        let c: net.Socket;
+        try {
+          c = net.connect(socketPath);
+        } catch {
+          resolve(false);
+          return;
+        }
+        c.once("connect", () => {
+          c.destroy();
+          resolve(true);
+        });
+        c.once("error", () => resolve(false));
       });
-      c.once("error", () => resolve(false));
-    });
-    if (alive) return;
+      if (alive) return;
+    }
     if (Date.now() > deadline) throw new Error("waitForSocket: timed out");
     await new Promise((r) => setTimeout(r, 25));
   }
@@ -158,6 +172,73 @@ describe("single-instance bind", () => {
         if (code === 0) exited++;
       }
       expect(exited).toBe(n - 1);
+    } finally {
+      for (const p of procs) p.kill();
+      await Promise.all(procs.map((p) => p.exited));
+    }
+  }, 30_000);
+
+  test("stale lock + staggered reclaimers: exactly one binds (no double-bind)", async () => {
+    // Regression for the reclaim TOCTOU: a stale lock left by a crashed daemon,
+    // plus two SEPARATE processes reclaiming it in a stagger, used to let both
+    // delete the lock and bind the same socket — stranding clients on an
+    // orphaned listener AND leaving two engines owning one .autosk/. The reclaim
+    // is now serialised behind an exclusive breaker file.
+    //
+    // The stagger is what makes it bite (a synchronised burst is benign — the
+    // final atomic link() still picks one winner). `winner` parks INSIDE the
+    // reclaim critical section (holding the breaker, after the dead-holder
+    // re-check, before the unlink); `racer` starts while it is parked. With the
+    // breaker the racer must wait; without it the racer reclaims + binds and the
+    // parked one then unlinks the racer's LIVE lock and double-binds.
+    writeFileSync(socketPath + ".lock", "2147483646\n"); // dead-pid stale lock
+
+    const spawn = (n: number, holdMs: number) =>
+      Bun.spawn({
+        cmd: ["bun", INDEX_TS],
+        env: {
+          ...process.env,
+          HOME: join(dir, `sl-home${n}`),
+          AUTOSK_SOCK: socketPath,
+          AUTOSK_IDLE_SECS: "0",
+          AUTOSK_UDS_BREAKER_HOLD_MS: String(holdMs),
+        },
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+
+    const winner = spawn(1, 1500); // parks in the reclaim critical section
+    await new Promise((r) => setTimeout(r, 500)); // let it reach the parked window
+    const racer = spawn(2, 0); // races in while the winner is parked
+    const procs = [winner, racer];
+    try {
+      await waitForSocket(socketPath);
+      // Every client must reach the SAME live daemon (no orphaned listener).
+      const results = await Promise.all(
+        Array.from({ length: 12 }, async () => {
+          const client = await RpcClient.connect(socketPath);
+          try {
+            const v = await Promise.race([
+              client.call<{ version: string }>("meta.version", null),
+              new Promise<never>((_, rej) => setTimeout(() => rej(new Error("meta.version timed out")), 5000)),
+            ]);
+            return typeof v.version === "string";
+          } finally {
+            client.close();
+          }
+        }),
+      );
+      expect(results.every(Boolean)).toBe(true);
+      // Exactly one of the two exits 0 (the loser); the other keeps serving.
+      let exited = 0;
+      for (const p of procs) {
+        const code = await Promise.race([
+          p.exited,
+          new Promise<number | null>((r) => setTimeout(() => r(null), 2500)),
+        ]);
+        if (code === 0) exited++;
+      }
+      expect(exited).toBe(1);
     } finally {
       for (const p of procs) p.kill();
       await Promise.all(procs.map((p) => p.exited));

@@ -19,7 +19,13 @@
  *     window.)
  *  2. An `EEXIST` racer reads the holder's pid and probes liveness with
  *     `process.kill(pid, 0)`: alive ⇒ {@link AlreadyRunningError} (exit 0); a
- *     dead pid ⇒ a stale lock from a crashed daemon, which is reclaimed.
+ *     dead pid ⇒ a stale lock from a crashed daemon, which is reclaimed —
+ *     but only UNDER an exclusive `<sock>.lock.break` breaker file so two
+ *     concurrent reclaimers can't both delete the lock and double-bind. The
+ *     blind `unlink` had a TOCTOU: a sibling could reclaim + link a LIVE lock
+ *     between the dead-holder check and the unlink, which the racer then
+ *     wrongly deleted and bound over. Serialising the reclaim (and re-checking
+ *     liveness under the breaker) closes that window.
  *  3. The winner reaps any stale socket file, binds, and `chmod 0600`s the
  *     socket (parent dir `0700`), holding the lock fd for its lifetime.
  *
@@ -90,6 +96,74 @@ function tryUnlink(path: string): void {
   }
 }
 
+/** The exclusive breaker that serialises stale-lock reclamation. */
+function breakPathFor(lockPath: string): string {
+  return lockPath + ".break";
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Acquires the exclusive reclaim breaker via an `O_CREAT|O_EXCL` create.
+ * Returns `true` when we hold it (the caller MUST release it with tryUnlink),
+ * or `false` when a LIVE sibling already holds it (the caller backs off and
+ * re-attempts the claim). A breaker left behind by a crashed reclaimer is itself
+ * reclaimed via the same pid-liveness probe.
+ */
+function acquireBreaker(breakPath: string): boolean {
+  for (let i = 0; i < 8; i++) {
+    try {
+      // wx ⇒ O_CREAT|O_EXCL: fails EEXIST while another reclaimer holds it.
+      writeFileSync(breakPath, `${process.pid}\n`, { flag: "wx", mode: 0o600 });
+      return true;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      if (holderAlive(breakPath)) return false; // a live reclaimer owns it
+      tryUnlink(breakPath); // a crashed reclaimer's breaker — drop it and retry
+    }
+  }
+  return false;
+}
+
+/**
+ * Reclaims a stale lock at `lockPath` UNDER the exclusive breaker, so two
+ * concurrent racers can never both delete the lock and bind the same socket.
+ *
+ * Without this serialisation there is a TOCTOU between the dead-holder check and
+ * the reclaim unlink: a sibling could reclaim + link a LIVE lock in the gap,
+ * which the racer would then wrongly delete and bind over — stranding clients on
+ * an orphaned listener and leaving two engines owning one `.autosk/`.
+ *
+ * Returns `"reclaimed"` when the stale lock was removed (the caller re-attempts
+ * the atomic link), or `"busy"` when another reclaimer holds the breaker (the
+ * caller backs off and retries). Throws {@link AlreadyRunningError} when — while
+ * we hold the breaker — the holder turns out to be alive, i.e. a sibling
+ * reclaimed first and is now the legitimate single instance.
+ */
+async function reclaimStaleLock(lockPath: string, socketPath: string): Promise<"reclaimed" | "busy"> {
+  const breakPath = breakPathFor(lockPath);
+  if (!acquireBreaker(breakPath)) return "busy";
+  try {
+    // Re-check UNDER the breaker. While we hold it nobody else can remove or
+    // replace the lock — a fresh link() fails EEXIST against the still-present
+    // stale file, and the only other remover (reclaim) needs this same breaker —
+    // so an "alive" holder here is a sibling that legitimately reclaimed first.
+    if (holderAlive(lockPath)) throw new AlreadyRunningError(socketPath);
+    // Test seam: park INSIDE the critical section — holding the breaker, AFTER
+    // the dead-holder re-check, BEFORE the unlink — so a staggered sibling
+    // reclaimer must serialise behind us. Without the breaker it would race in
+    // here, link a LIVE lock + bind, and we'd then unlink its live lock and
+    // double-bind. Only ever set by the single-instance regression test.
+    const holdMs = Number(process.env.AUTOSK_UDS_BREAKER_HOLD_MS);
+    if (holdMs > 0) await sleep(holdMs);
+    tryUnlink(lockPath);
+    tryUnlink(socketPath);
+    return "reclaimed";
+  } finally {
+    tryUnlink(breakPath);
+  }
+}
+
 /**
  * Binds a single-instance unix listener at `socketPath`. Throws
  * {@link AlreadyRunningError} when another live daemon holds the lock; any other
@@ -110,8 +184,11 @@ export async function listenUnix(socketPath: string): Promise<UnixListenHandle> 
   // A private staging file we link into place; unique per process so concurrent
   // racers never collide on it.
   const lockTmp = `${lockPath}.${process.pid}.tmp`;
+  // Deadline-bounded so heavy stale-lock contention (every racer serialising on
+  // the breaker) still resolves instead of giving up after a fixed attempt cap.
+  const deadline = Date.now() + 5_000;
   let claimed = false;
-  for (let attempt = 0; attempt < 8 && !claimed; attempt++) {
+  while (!claimed) {
     writeFileSync(lockTmp, `${process.pid}\n`, { mode: 0o600 });
     try {
       // Atomic claim: link() fails EEXIST when the lock is held. On success the
@@ -120,25 +197,26 @@ export async function listenUnix(socketPath: string): Promise<UnixListenHandle> 
       claimed = true;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") {
-        tryUnlink(lockTmp);
         throw e;
       }
-      // Someone holds the lock. Alive ⇒ already running; dead ⇒ stale, reclaim.
+      // Someone holds the lock. Alive ⇒ already running.
       if (holderAlive(lockPath)) {
-        tryUnlink(lockTmp);
         throw new AlreadyRunningError(socketPath);
       }
-      tryUnlink(lockPath);
-      tryUnlink(socketPath);
+      // Dead holder ⇒ stale: reclaim it under the exclusive breaker so two
+      // concurrent racers can't both delete the lock and double-bind.
+      if ((await reclaimStaleLock(lockPath, socketPath)) === "busy") {
+        await sleep(10); // a sibling is breaking the lock — back off, then retry
+      }
       // loop and re-attempt the atomic claim
     } finally {
       // The lock now lives at lockPath (a hardlink to the same inode); the
       // staging name is no longer needed either way.
       tryUnlink(lockTmp);
     }
-  }
-  if (!claimed) {
-    throw new Error(`could not acquire daemon lock at ${lockPath}`);
+    if (!claimed && Date.now() > deadline) {
+      throw new Error(`could not acquire daemon lock at ${lockPath}`);
+    }
   }
 
   // We hold the lock: reap any stale socket file. The actual bind is deferred
