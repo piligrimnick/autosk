@@ -224,8 +224,11 @@ func (r *RPC) Watch(ctx context.Context) (*WatchHandle, error) {
 		defer close(ch)
 		for n := range stream.Events() {
 			kind := "task"
-			if n.Method == "project-changed" {
+			switch n.Method {
+			case "project-changed":
 				kind = "project"
+			case "session-changed":
+				kind = "session"
 			}
 			select {
 			case ch <- ChangeEvent{Kind: kind}:

@@ -42,6 +42,8 @@ export class Connection {
   authed: boolean;
   /** Roots this connection wants `task-changed` for (via `task.subscribe`). */
   readonly taskRoots = new Set<string>();
+  /** Roots this connection wants `session-changed` for (via `session.subscribeProject`). */
+  readonly sessionRoots = new Set<string>();
   /** Whether this connection wants `project-changed` (via `project.subscribe`). */
   wantsProject = false;
   /** Live `session.subscribe` cursors, keyed by session id. */

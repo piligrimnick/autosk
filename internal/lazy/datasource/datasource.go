@@ -154,12 +154,13 @@ func NewLiveHandle(ch <-chan LiveEvent, closeFn func() error) *LiveHandle {
 }
 
 // ChangeEvent is one daemon push delivered by a Watcher: a signal that the
-// project's task/job state (Kind=="task") or its workflow/agent registry
-// (Kind=="project") changed and the dashboard should re-fetch. It carries no
-// diff — the consumer re-reads the affected panels. Backed by the daemon's
-// task-changed/project-changed notifications (plan §5).
+// project's task state (Kind=="task"), its workflow/agent registry
+// (Kind=="project"), or one of its sessions (Kind=="session") changed and the
+// dashboard should re-fetch. It carries no diff — the consumer re-reads the
+// affected panels. Backed by the daemon's task-changed / project-changed /
+// session-changed notifications (plan §5).
 type ChangeEvent struct {
-	Kind string // "task" | "project"
+	Kind string // "task" | "project" | "session"
 }
 
 // WatchHandle is the active task-changed/project-changed subscription returned

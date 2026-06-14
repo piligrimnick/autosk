@@ -58,11 +58,18 @@ const PLAN_SECTION_4_METHODS = [
   "session.transcript",
   "session.subscribe",
   "session.unsubscribe",
+  "session.subscribeProject",
+  "session.unsubscribeProject",
   "session.input",
   "session.abort",
 ].sort();
 
-const PLAN_SECTION_4_NOTIFICATIONS = ["task-changed", "project-changed", "session-event"].sort();
+const PLAN_SECTION_4_NOTIFICATIONS = [
+  "task-changed",
+  "project-changed",
+  "session-event",
+  "session-changed",
+].sort();
 
 describe("proto-v2 method manifest", () => {
   test("RPC_METHODS matches plan §4 exactly", () => {

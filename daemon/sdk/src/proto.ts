@@ -292,6 +292,9 @@ export interface RpcMethodMap {
   "session.transcript": { params: SessionTranscriptParams; result: SessionTranscriptResult };
   "session.subscribe": { params: SessionSubscribeParams; result: OkResult };
   "session.unsubscribe": { params: SessionGetParams; result: OkResult };
+  /** Project-scoped session lifecycle channel (queued/running/terminal pushes). */
+  "session.subscribeProject": { params: ProjectSelector; result: OkResult };
+  "session.unsubscribeProject": { params: ProjectSelector; result: OkResult };
   "session.input": { params: SessionInputParams; result: OkResult };
   "session.abort": { params: SessionAbortParams; result: OkResult };
 }
@@ -346,6 +349,8 @@ export const RPC_METHODS = [
   "session.transcript",
   "session.subscribe",
   "session.unsubscribe",
+  "session.subscribeProject",
+  "session.unsubscribeProject",
   "session.input",
   "session.abort",
 ] as const satisfies readonly RpcMethod[];
@@ -381,10 +386,26 @@ export interface SessionEventParams {
   line?: number;
 }
 
+/**
+ * `session-changed` payload — a project-scoped push of one session's metadata
+ * whenever it is created or changes status (queued → running → terminal).
+ * Delivered to connections that issued `session.subscribeProject` for `root`.
+ *
+ * Distinct from `session-event` (the per-session transcript tail): this never
+ * carries transcript lines, only the decorated {@link SessionMeta}, so a client
+ * keeps its session list/panel live WITHOUT knowing a session id ahead of time
+ * to subscribe per-session.
+ */
+export interface SessionChangedParams {
+  root: string;
+  session: SessionMeta;
+}
+
 export interface RpcNotificationMap {
   "task-changed": TaskChangedParams;
   "project-changed": ProjectChangedParams;
   "session-event": SessionEventParams;
+  "session-changed": SessionChangedParams;
 }
 
 /** A valid proto-v2 notification name. */
@@ -398,6 +419,7 @@ export const RPC_NOTIFICATIONS = [
   "task-changed",
   "project-changed",
   "session-event",
+  "session-changed",
 ] as const satisfies readonly RpcNotificationMethod[];
 
 // ---------------------------------------------------------------------------

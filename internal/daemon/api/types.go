@@ -216,6 +216,17 @@ type SessionEventParams struct {
 	Line      int             `json:"line,omitempty"`
 }
 
+// SessionChangedParams is the `session-changed` payload: a project-scoped push
+// of one session's metadata whenever it is created or changes status (queued →
+// running → terminal). Delivered to connections that issued
+// session.subscribeProject. Unlike SessionEventParams it never carries a
+// transcript line — only the decorated SessionMeta — so a client keeps its
+// session list live without subscribing to each session id.
+type SessionChangedParams struct {
+	Root    string      `json:"root"`
+	Session SessionMeta `json:"session"`
+}
+
 // ---------------------------------------------------------------------------
 // Session transcript (transcript.ts §3.2) — pi-format entries.
 // ---------------------------------------------------------------------------

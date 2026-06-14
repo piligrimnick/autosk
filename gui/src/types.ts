@@ -390,6 +390,18 @@ export interface SessionEventParams {
   line?: number;
 }
 
+/**
+ * `session-changed` payload — a project-scoped push of one session's metadata
+ * whenever it is created or changes status (queued → running → terminal).
+ * Delivered to connections that issued `session.subscribeProject`. Unlike
+ * `session-event` it never carries a transcript line, only the SessionMeta, so
+ * the Sessions panel stays live without a per-session subscribe.
+ */
+export interface SessionChangedParams {
+  root: string;
+  session: SessionMeta;
+}
+
 // ---- frontend-only types --------------------------------------------------
 
 /** Backend transport mode (an app setting). */

@@ -309,7 +309,7 @@ export class Engine implements SessionHost {
     if (project.store.sessions.hasLiveSession(taskId)) return; // already running/queued
 
     const sessionId = newSessionId();
-    await project.store.sessions.create({
+    const meta = await project.store.sessions.create({
       id: sessionId,
       task_id: taskId,
       workflow: row.workflow,
@@ -318,6 +318,11 @@ export class Engine implements SessionHost {
       cwd: project.root, // isolation (if any) is acquired in the worker and rewrites this
       timestamp: this.clock(),
     });
+    // Announce the freshly-claimed (queued) session on the project session
+    // channel so subscribers see it appear immediately, BEFORE a worker picks it
+    // up. The queued→running flip and the terminal settle emit their own
+    // session-events (so the project channel stays live across the lifecycle).
+    this.emitSession(project, meta, "status");
 
     const runtime = new SessionRuntime({
       host: this,

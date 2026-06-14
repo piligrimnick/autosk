@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { AgentDefinition, SessionEventParams } from "@autosk/sdk";
+import type { AgentDefinition, SessionChangedParams, SessionEventParams } from "@autosk/sdk";
 
 import { canonicalize } from "../src/index.ts";
 import { gate } from "./engineHarness.ts";
@@ -19,6 +19,11 @@ import { startTestDaemon, type RpcClient, type TestDaemon } from "./rpcHarness.t
 /** session-event params off a notification frame. */
 function ev(n: { params: unknown }): SessionEventParams {
   return n.params as SessionEventParams;
+}
+
+/** session-changed params off a notification frame. */
+function sc(n: { params: unknown }): SessionChangedParams {
+  return n.params as SessionChangedParams;
 }
 
 describe("session.subscribe replay-then-tail", () => {
@@ -185,6 +190,93 @@ describe("task-changed on an external file edit (P2 watcher)", () => {
         (n.params as { task: { title: string } }).task.title === "edited externally",
     );
     expect((note.params as { task: { title: string } }).task.title).toBe("edited externally");
+  });
+});
+
+describe("session-changed project channel", () => {
+  let td: TestDaemon;
+  let cwd: string;
+
+  beforeEach(async () => {
+    td = await startTestDaemon();
+    cwd = await td.makeProject("sesschan");
+  });
+  afterEach(async () => {
+    await td.cleanup();
+  });
+
+  test("session.subscribeProject pushes queued+running then terminal WITHOUT a per-session subscribe", async () => {
+    const release = gate();
+    const agent: AgentDefinition = {
+      name: "gated",
+      onRun: async (ctx) => {
+        await release.wait;
+        await ctx.transit({ status: "done" });
+      },
+    };
+    const handle = await td.handle(cwd);
+    handle.extensions.addAgent("test", agent);
+
+    const client = await td.client();
+    // Subscribe to the project session channel BEFORE any session exists.
+    await client.call("session.subscribeProject", { cwd });
+
+    const task = await client.call<{ id: string }>("task.create", { cwd, title: "live" });
+    await client.call("task.enroll", { cwd, id: task.id, agent: "gated" });
+
+    // A `running` frame arrives for this task's session even though we never
+    // learned the session id to `session.subscribe` it.
+    const runningFrame = await client.waitForNotification(
+      (n) =>
+        n.method === "session-changed" &&
+        sc(n).session.task_id === task.id &&
+        sc(n).session.status === "running",
+    );
+    const sessionId = sc(runningFrame).session.id;
+    expect(sc(runningFrame).root).toBe(await canonicalize(cwd));
+
+    // The create (queued) frame was pushed too — proves "created" coverage.
+    const sawQueued = client.notifications.some(
+      (n) =>
+        n.method === "session-changed" &&
+        sc(n).session.id === sessionId &&
+        sc(n).session.status === "queued",
+    );
+    expect(sawQueued).toBe(true);
+
+    // Releasing the gate lets the agent transit → a terminal `done` frame.
+    release.open();
+    const doneFrame = await client.waitForNotification(
+      (n) =>
+        n.method === "session-changed" &&
+        sc(n).session.id === sessionId &&
+        sc(n).session.status === "done",
+    );
+    expect(sc(doneFrame).session.status).toBe("done");
+  });
+
+  test("session.unsubscribeProject stops the pushes", async () => {
+    const agent: AgentDefinition = {
+      name: "quick",
+      onRun: async (ctx) => ctx.transit({ status: "done" }),
+    };
+    const handle = await td.handle(cwd);
+    handle.extensions.addAgent("test", agent);
+
+    const client = await td.client();
+    await client.call("session.subscribeProject", { cwd });
+    await client.call("session.unsubscribeProject", { cwd });
+
+    const task = await client.call<{ id: string }>("task.create", { cwd, title: "silent" });
+    await client.call("task.enroll", { cwd, id: task.id, agent: "quick" });
+
+    // Drive the session to completion via the per-session list, then assert no
+    // session-changed frame was ever delivered after the unsubscribe.
+    await waitFor(async () => {
+      const sessions = await client.call<{ status: string }[]>("session.list", { cwd });
+      return sessions.length > 0 && sessions.every((s) => s.status === "done");
+    });
+    expect(client.notifications.some((n) => n.method === "session-changed")).toBe(false);
   });
 });
 

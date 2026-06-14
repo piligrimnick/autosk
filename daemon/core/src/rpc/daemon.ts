@@ -25,6 +25,8 @@ import {
   type ProjectInfo,
   type ResultOf,
   type RpcMethod,
+  type SessionChangedParams,
+  type SessionMeta,
   type StepTarget,
   type TaskChangedParams,
   type TaskFilter,
@@ -172,11 +174,27 @@ export class Daemon {
     // task-changed is sourced from the store seam (see class doc) — ignore the
     // engine's, which would only duplicate it.
     if (ev.type !== "session-event") return;
+    // 1. Per-session transcript subscribers (session.subscribe): replay-then-tail.
     for (const conn of this.connections) {
       const sub = conn.sessionSubs.get(ev.session_id);
       if (sub && sub.root === ev.root) {
         sub.onEvent({ kind: ev.kind, meta: ev.meta, error: ev.error });
       }
+    }
+    // 2. Project-scoped session lifecycle channel (session.subscribeProject):
+    //    every non-`message` frame carries the decorated meta, so a subscriber
+    //    sees a session appear (queued), start (running), and finish (terminal)
+    //    live — WITHOUT having to know a session id to subscribe per-session.
+    //    `message` frames are the transcript tail and belong only to §1.
+    if (ev.kind !== "message" && ev.meta) {
+      this.emitSessionChanged(ev.root, ev.meta);
+    }
+  }
+
+  private emitSessionChanged(root: string, session: SessionMeta): void {
+    const params: SessionChangedParams = { root, session };
+    for (const conn of this.connections) {
+      if (conn.sessionRoots.has(root)) conn.send({ method: "session-changed", params });
     }
   }
 
@@ -545,6 +563,24 @@ export class Daemon {
       },
       "session.unsubscribe": async (params, conn) => {
         conn.sessionSubs.delete(reqString(asObj(params), "id"));
+        return { ok: true };
+      },
+      "session.subscribeProject": async (params, conn) => {
+        // Resolving OPENS the project (engine scheduling + its fs watcher),
+        // which is what makes its session lifecycle pushes flow for this root.
+        // Project-scoped analogue of `task.subscribe`; the per-session
+        // `session.subscribe` transcript tail is unchanged and independent.
+        const handle = await this.resolveHandle(reqCwd(asObj(params)));
+        conn.sessionRoots.add(handle.root);
+        return { ok: true };
+      },
+      "session.unsubscribeProject": async (params, conn) => {
+        const cwd = reqCwd(asObj(params));
+        try {
+          conn.sessionRoots.delete(await resolveProjectRoot(cwd));
+        } catch {
+          // unknown/removed project — nothing to unsubscribe
+        }
         return { ok: true };
       },
       "session.input": async (params) => {

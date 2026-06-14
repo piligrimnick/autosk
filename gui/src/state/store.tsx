@@ -26,6 +26,7 @@ import * as ipc from "@/services/ipc";
 import {
   subscribeDaemonStatus,
   subscribeProjectChanged,
+  subscribeSessionChanged,
   subscribeSessionEvents,
   subscribeTaskChanged,
 } from "@/services/events";
@@ -377,9 +378,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             await eff.refreshProjects();
             const cur = stateRef.current;
             if (cur.activeProject) {
-              // task.subscribe is per-connection state and the Rust connect no
-              // longer auto-issues it — re-subscribe the active project here.
+              // task.subscribe / session.subscribeProject are per-connection
+              // state and the Rust connect no longer auto-issues them —
+              // re-subscribe the active project here.
               void ipc.taskSubscribe(cur.activeProject).catch(() => {});
+              void ipc.sessionSubscribeProject(cur.activeProject).catch(() => {});
               await eff.refreshTasks(cur.activeProject);
               await eff.refreshSessions(cur.activeProject);
               await eff.refreshMeta(cur.activeProject);
@@ -424,9 +427,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (status.connected) {
           const cur = stateRef.current;
           if (cur.activeProject) {
-            // Re-open this project's task-change push on the NEW connection
-            // (per-connection; the Rust connect no longer auto-subscribes).
+            // Re-open this project's task-change + session-lifecycle pushes on
+            // the NEW connection (per-connection; the Rust connect no longer
+            // auto-subscribes).
             void ipc.taskSubscribe(cur.activeProject).catch(() => {});
+            void ipc.sessionSubscribeProject(cur.activeProject).catch(() => {});
             void effects.refreshTasks(cur.activeProject);
             void effects.refreshSessions(cur.activeProject);
             void effects.refreshMeta(cur.activeProject);
@@ -458,6 +463,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         void effects.refreshSessions(cur.activeProject);
         const taskId = selectedTaskId(cur.selection);
         if (taskId && taskId === evt.task.id) void effects.refreshTask(taskId);
+      }),
+
+      subscribeSessionChanged((evt) => {
+        const cur = stateRef.current;
+        if (!evt.root || evt.root !== cur.activeProject) return;
+        // Project-scoped lifecycle push: upsert so a freshly-spawned session
+        // shows up live in the Sessions panel (queued → running → terminal)
+        // WITHOUT a per-session subscribe.
+        dispatch({ type: "session/upsert", session: evt.session });
+        // When the changed session belongs to the selected task, refresh it so
+        // the detail pane's session list + live tail follow the new session.
+        const taskId = selectedTaskId(cur.selection);
+        if (taskId && taskId === evt.session.task_id) void effects.refreshTask(taskId);
       }),
 
       subscribeSessionEvents((evt) => {
@@ -508,14 +526,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const root = state.activeProject;
     if (!root) return;
-    // Front-end-issued task.subscribe (v2 requires {cwd} + opens the project).
+    // Front-end-issued task.subscribe + session.subscribeProject (v2 requires
+    // {cwd} + opens the project; both are per-connection state).
     void ipc.taskSubscribe(root).catch(() => {});
+    void ipc.sessionSubscribeProject(root).catch(() => {});
     void effects.refreshTasks(root);
     void effects.refreshSessions(root);
     void effects.refreshMeta(root);
     void effects.refreshDiagnostics(root);
     return () => {
       void ipc.taskUnsubscribe(root).catch(() => {});
+      void ipc.sessionUnsubscribeProject(root).catch(() => {});
     };
   }, [state.activeProject, effects]);
 

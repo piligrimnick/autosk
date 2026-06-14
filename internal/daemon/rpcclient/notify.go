@@ -9,13 +9,15 @@ import (
 )
 
 // Notification is one server→client notification frame. In v2 the daemon scopes
-// `task-changed` to connections that issued task.subscribe and `project-changed`
-// to connections that issued project.subscribe; this client issues task.subscribe
-// (which opens the project and starts its fs watcher) and treats both kinds as a
-// "re-fetch" signal. Params is the raw payload (kept opaque; callers refetch):
-// `task-changed` carries {root, task}, `project-changed` carries {project}.
+// `task-changed` to connections that issued task.subscribe, `project-changed` to
+// connections that issued project.subscribe, and `session-changed` to
+// connections that issued session.subscribeProject; this client issues all three
+// (task.subscribe opens the project and starts its fs watcher) and treats every
+// kind as a "re-fetch" signal. Params is the raw payload (kept opaque; callers
+// refetch): `task-changed` carries {root, task}, `project-changed` carries
+// {project}, `session-changed` carries {root, session}.
 type Notification struct {
-	Method string          // "task-changed" | "project-changed"
+	Method string          // "task-changed" | "project-changed" | "session-changed"
 	Params json.RawMessage // raw notification params (kept opaque; callers refetch)
 }
 
@@ -47,6 +49,7 @@ func (s *NoteStream) Close() error {
 		// per-connection reader breaks on EOF and unregisters).
 		_ = json.NewEncoder(s.conn).Encode(rpcRequest{ID: 0, Method: "task.unsubscribe", Params: s.selector})
 		_ = json.NewEncoder(s.conn).Encode(rpcRequest{ID: 0, Method: "project.unsubscribe", Params: s.selector})
+		_ = json.NewEncoder(s.conn).Encode(rpcRequest{ID: 0, Method: "session.unsubscribeProject", Params: s.selector})
 		_ = s.conn.Close()
 		close(s.closed)
 	})
@@ -56,9 +59,10 @@ func (s *NoteStream) Close() error {
 // Subscribe opens a persistent connection, subscribes to the project's
 // task-changed AND project-changed notifications, and returns a stream of
 // frames. The caller MUST Close the stream. autoskd is auto-spawned on first use
-// (the connector handles dialing). v2 scopes the two notification kinds to
-// separate subscriptions (task.subscribe opens the project + its fs watcher;
-// project.subscribe registers for registry-level pushes), so we issue both.
+// (the connector handles dialing). v2 scopes the notification kinds to separate
+// subscriptions (task.subscribe opens the project + its fs watcher;
+// project.subscribe registers for registry-level pushes; session.subscribeProject
+// registers for project-scoped session lifecycle pushes), so we issue all three.
 func (c *Client) Subscribe(ctx context.Context) (*NoteStream, error) {
 	conn, err := c.conn.Dial(ctx)
 	if err != nil {
@@ -80,6 +84,14 @@ func (c *Client) Subscribe(ctx context.Context) (*NoteStream, error) {
 	}); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("autoskd project.subscribe: write: %w", err)
+	}
+	if err := json.NewEncoder(conn).Encode(rpcRequest{
+		ID:     c.id.Add(1),
+		Method: "session.subscribeProject",
+		Params: c.selector(nil),
+	}); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("autoskd session.subscribeProject: write: %w", err)
 	}
 	ch := make(chan Notification, 16)
 	s := &NoteStream{
@@ -122,7 +134,7 @@ func (s *NoteStream) readLoop(ch chan<- Notification, subID uint64) {
 			return // EOF / connection closed
 		}
 		switch raw.Method {
-		case "task-changed", "project-changed":
+		case "task-changed", "project-changed", "session-changed":
 			select {
 			case ch <- Notification{Method: raw.Method, Params: raw.Params}:
 			case <-s.closed:

@@ -308,6 +308,21 @@ export function sessionUnsubscribe(cwd: string, id: string): Promise<{ ok: boole
   return daemonRequest("session.unsubscribe", sel(cwd, { id }));
 }
 
+/**
+ * Subscribe to a project's session lifecycle channel: the daemon pushes a
+ * `session-changed` notification whenever any session in the project is created
+ * or changes status (queued → running → terminal), so the Sessions panel stays
+ * live WITHOUT a per-session `session.subscribe`. Per-connection state; re-issue
+ * after a reconnect (like `task.subscribe`).
+ */
+export function sessionSubscribeProject(cwd: string): Promise<{ ok: boolean }> {
+  return daemonRequest("session.subscribeProject", sel(cwd));
+}
+
+export function sessionUnsubscribeProject(cwd: string): Promise<{ ok: boolean }> {
+  return daemonRequest("session.unsubscribeProject", sel(cwd));
+}
+
 export function sessionInput(
   cwd: string,
   id: string,

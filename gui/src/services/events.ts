@@ -9,7 +9,7 @@
 // sole `listen` site by scripts/check-ipc-discipline.mjs + eslint.
 
 import { listen } from "@tauri-apps/api/event";
-import type { DaemonStatus, SessionEventParams, TaskChangedParams } from "@/types";
+import type { DaemonStatus, SessionChangedParams, SessionEventParams, TaskChangedParams } from "@/types";
 
 export type Unsubscribe = () => void;
 type Listener<T> = (payload: T) => void;
@@ -80,6 +80,7 @@ function createEventHub<T>(eventName: string) {
 
 // One hub per autoskd notification re-emitted by the Rust backend.
 const sessionEventHub = createEventHub<SessionEventParams>("session-event");
+const sessionChangedHub = createEventHub<SessionChangedParams>("session-changed");
 const taskChangedHub = createEventHub<TaskChangedParams>("task-changed");
 const projectChangedHub = createEventHub<Record<string, never>>("project-changed");
 const daemonStatusHub = createEventHub<DaemonStatus>("daemon-status");
@@ -90,6 +91,14 @@ export function subscribeSessionEvents(
   options?: SubscriptionOptions,
 ): Unsubscribe {
   return sessionEventHub.subscribe(onEvent, options);
+}
+
+/** A session in the active project was created or changed status (queued/running/terminal). */
+export function subscribeSessionChanged(
+  onEvent: (event: SessionChangedParams) => void,
+  options?: SubscriptionOptions,
+): Unsubscribe {
+  return sessionChangedHub.subscribe(onEvent, options);
 }
 
 /** A project's task state changed — carries the full TaskView for a direct upsert. */
