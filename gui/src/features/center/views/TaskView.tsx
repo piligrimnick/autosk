@@ -6,7 +6,7 @@
 // button at the right edge of the header row pops the same task-actions menu as
 // right-clicking the task's row in the Tasks panel (useTaskRowMenu).
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useStore } from "@/state/store";
 import * as ipc from "@/services/ipc";
 import { activeTask } from "@/state/selectors";
@@ -14,18 +14,16 @@ import { EmptyState, StatusBadge, localTime } from "@/components/common";
 import { Markdown } from "@/components/Markdown";
 import { useTaskRowMenu } from "@/features/tasks/components/TaskRowMenu";
 import { EnrollButton } from "../components/EnrollModal";
+import { useStickToBottom } from "../useStickToBottom";
 import type { Comment, TaskView as TaskData } from "@/types";
 
 export function TaskView() {
   const { state } = useStore();
   const task = activeTask(state);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const commentCount = task ? state.extrasByTask[task.id]?.comments?.length ?? 0 : 0;
-
-  // Sticky-tail: keep the newest comment in view as the thread grows (plan §8.3).
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [commentCount, task?.id]);
+  // Tasks open from the top (the title/description), unlike the session
+  // transcript which opens at the tail. New comments tail the bottom only when
+  // the operator is already parked there (useStickToBottom).
+  const { containerRef, onScroll } = useStickToBottom({ resetKey: task?.id ?? null, resetTo: "top" });
 
   if (!task) {
     return <EmptyState title="Task not found" hint="It may have been removed." />;
@@ -69,7 +67,7 @@ export function TaskView() {
         <h2 className="task-view-title">{task.title}</h2>
       </div>
 
-      <div className="task-view-body">
+      <div className="task-view-body" ref={containerRef} onScroll={onScroll}>
         {task.description && (
           <div className="task-desc">
             <Markdown text={task.description} />
@@ -83,7 +81,6 @@ export function TaskView() {
             comments.map((c) => <CommentItem key={c.id} task={task} comment={c} />)
           )}
         </div>
-        <div ref={bottomRef} />
       </div>
     </div>
   );

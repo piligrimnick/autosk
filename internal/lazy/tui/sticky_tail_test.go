@@ -56,6 +56,66 @@ func TestStickyTail_AtBottom_FollowsNewContent(t *testing.T) {
 	}
 }
 
+// TestTailing_FirstFrame_StartsAtTop: writeViewTailing with
+// anchorBottomOnFirstFrame=false (task / workflow / agent detail) must
+// leave the very first frame anchored at the TOP, even when the body is
+// far taller than the viewport — opening a task shows its title /
+// description, not the tail of the comment thread.
+func TestTailing_FirstFrame_StartsAtTop(t *testing.T) {
+	gu, name := stickyTailFixture(t, 80, 24)
+	v, _ := gu.g.View(name)
+
+	body := strings.Repeat("line\n", 50)
+	gu.writeViewTailing(name, "", body, false)
+	if _, oy := v.Origin(); oy != 0 {
+		t.Errorf("first-frame tailing (anchorBottom=false) should stay at top; oy=%d want 0", oy)
+	}
+}
+
+// TestTailing_AtBottom_FollowsNewContent: once the user is at the
+// bottom of a task body, appended content (a new comment) tails into
+// view even though the first frame opened at the top.
+func TestTailing_AtBottom_FollowsNewContent(t *testing.T) {
+	gu, name := stickyTailFixture(t, 80, 24)
+	v, _ := gu.g.View(name)
+
+	// First body: 5 lines (fits in the view, opens at top, oy=0).
+	gu.writeViewTailing(name, "", strings.Repeat("line\n", 5), false)
+	if _, oy := v.Origin(); oy != 0 {
+		t.Fatalf("first frame should be at top; oy=%d", oy)
+	}
+
+	// The whole body fit in the viewport, so the user is (trivially) at
+	// the bottom. A taller body must now tail.
+	gu.writeViewTailing(name, "", strings.Repeat("line\n", 100), false)
+	_, oy := v.Origin()
+	if oy == 0 {
+		t.Errorf("tailing did not advance origin after body grew while at bottom; oy=%d", oy)
+	}
+	_, h := v.InnerSize()
+	newLines := viewBufferLineCount(v)
+	if oy+h < newLines {
+		t.Errorf("tail viewport bottom %d below body length %d", oy+h, newLines)
+	}
+}
+
+// TestTailing_ScrolledUp_OriginPreserved: a task body the user has
+// scrolled up in must keep its position when new content lands — the
+// non-session detail must not yank to the bottom either.
+func TestTailing_ScrolledUp_OriginPreserved(t *testing.T) {
+	gu, name := stickyTailFixture(t, 80, 24)
+	v, _ := gu.g.View(name)
+
+	gu.writeViewTailing(name, "", strings.Repeat("line\n", 100), false)
+	ox, _ := v.Origin()
+	v.SetOrigin(ox, 5)
+
+	gu.writeViewTailing(name, "", strings.Repeat("line\n", 200), false)
+	if _, oy := v.Origin(); oy != 5 {
+		t.Errorf("tailing clobbered scrolled-up origin; oy=%d want 5", oy)
+	}
+}
+
 // TestStickyTail_ScrolledUp_OriginPreserved: when the user has
 // scrolled up, a follow-up writeViewSticky must NOT yank the
 // viewport back to the bottom.

@@ -3,9 +3,9 @@
 // oldest-first: a SessionHeader line, pi MessageEntry lines (user / assistant /
 // toolResult — with text / thinking / toolCall / image content blocks), and the
 // engine's structural `autosk:*` custom entries (transit / steer / error /
-// session_end). Auto-scrolls to the newest line as the transcript grows.
+// session_end). Scroll/tail policy lives in the SessionView scroll container
+// (useStickToBottom); this component just renders the lines oldest-first.
 
-import { useEffect, useRef } from "react";
 import type {
   AssistantMessage,
   ContentBlock,
@@ -20,18 +20,11 @@ import { isAutoskCustomType } from "@/types";
 import { Markdown } from "@/components/Markdown";
 
 export function Transcript({ lines }: { lines: TranscriptLine[] }) {
-  const bottomRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [lines.length]);
-
   return (
     <div className="transcript">
       {lines.map((line, idx) => (
         <TranscriptRow key={lineKey(line, idx)} line={line} />
       ))}
-      <div ref={bottomRef} />
     </div>
   );
 }
