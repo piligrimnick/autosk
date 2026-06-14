@@ -27,10 +27,6 @@ AUTOSKD_BIN         := $(BIN_DIR)/autoskd
 # extension's bare imports). The test/install targets point
 # $AUTOSK_BUNDLED_EXTENSIONS at that built tree.
 BUNDLED_EXTENSIONS  := $(BIN_DIR)/extensions
-# Where `make install` drops the bundled extensions: <gobin>/../libexec/autosk/
-# extensions, which the installed autoskd discovers relative to its own path
-# (defaultBundledDir(), no env needed).
-LIBEXEC_EXTENSIONS  := $(abspath $(GOBIN_DIR)/../libexec/autosk/extensions)
 
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -45,6 +41,12 @@ GOBIN_DIR := $(shell $(GO) env GOBIN)
 ifeq ($(strip $(GOBIN_DIR)),)
 GOBIN_DIR := $(firstword $(subst :, ,$(shell $(GO) env GOPATH)))/bin
 endif
+
+# Where `make install` drops the bundled extensions: <gobin>/../libexec/autosk/
+# extensions, which the installed autoskd discovers relative to its own path
+# (defaultBundledDir(), no env needed). Defined after GOBIN_DIR so the abspath
+# resolves against the real install root, not "/".
+LIBEXEC_EXTENSIONS  := $(abspath $(GOBIN_DIR)/../libexec/autosk/extensions)
 
 .PHONY: all build build-autoskd install install-autoskd uninstall test test-short lint \
         clean distclean tidy fmt vet help
