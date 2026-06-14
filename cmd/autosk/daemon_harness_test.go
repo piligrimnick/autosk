@@ -68,6 +68,18 @@ func ensureTestDaemon(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("AUTOSK_SOCK", sock)
 	t.Setenv("AUTOSK_IDLE_SECS", "0")
+	// Hermetic project selection: a verb test pins its project via runRoot's
+	// os.Chdir(t.TempDir()). But callerCwd() honours $AUTOSK_CWD ahead of the
+	// process cwd, and a workflow agent's environment carries AUTOSK_CWD=<real
+	// project root> (the daemon injects it so CLI calls from a throwaway worktree
+	// still target the right project). If the test suite is launched from inside
+	// such a run — e.g. a validator step shelling out to `go test` — that leaked
+	// AUTOSK_CWD would defeat the chdir and make every create/comment write into
+	// the operator's real .autosk/. Clear it (and AUTOSK_AGENT, which would
+	// otherwise leak the agent's name as the default comment author) so each test
+	// resolves its own t.TempDir() regardless of the launching environment.
+	t.Setenv("AUTOSK_CWD", "")
+	t.Setenv("AUTOSK_AGENT", "")
 	seedFixtureExtensions(t, home)
 
 	harnessDaemons.Store(t, struct{}{})
