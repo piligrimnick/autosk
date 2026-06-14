@@ -409,14 +409,9 @@ export class Daemon {
       "task.enroll": async (params) => {
         const o = asObj(params);
         const id = reqString(o, "id");
-        const hasWorkflow = typeof o.workflow === "string" && o.workflow.length > 0;
-        const hasAgent = typeof o.agent === "string" && o.agent.length > 0;
-        if (hasWorkflow === hasAgent) {
-          throw new RpcError(ErrorCodes.INVALID_PARAMS, "enroll requires exactly one of { workflow } / { agent }");
-        }
+        const workflow = reqString(o, "workflow");
         const handle = await this.resolveHandle(reqCwd(o));
-        const target = hasWorkflow ? { workflow: o.workflow as string } : { agent: o.agent as string };
-        return this.engine.enroll(handle.root, id, target);
+        return this.engine.enroll(handle.root, id, { workflow });
       },
       "task.resume": async (params) => {
         const o = asObj(params);
@@ -515,10 +510,6 @@ export class Daemon {
         const info = handle.extensions.getWorkflowInfo(reqString(o, "name"));
         if (!info) throw new RpcError(ErrorCodes.NOT_FOUND, `workflow not found: ${reqString(o, "name")}`);
         return info;
-      },
-      "registry.agent.list": async (params) => {
-        const handle = await this.resolveHandle(reqCwd(asObj(params)));
-        return handle.extensions.listAgents();
       },
 
       // ---- session -------------------------------------------------------

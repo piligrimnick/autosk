@@ -16,6 +16,7 @@
  */
 
 import {
+  isStatusStep,
   newSessionId,
   type SessionMeta,
   type StepTarget,
@@ -59,8 +60,8 @@ export interface EngineOptions {
   logger?: Logger;
 }
 
-/** What `enroll` accepts: a named workflow XOR an agent (a `single:<agent>` synthetic). */
-export type EnrollTarget = { workflow: string } | { agent: string };
+/** What `enroll` accepts: a named workflow. */
+export type EnrollTarget = { workflow: string };
 
 export class Engine implements SessionHost {
   readonly clock: Clock;
@@ -171,14 +172,15 @@ export class Engine implements SessionHost {
   // -- enroll / resume (client-driven transitions) -------------------------
 
   /**
-   * Enrolls a `new` task into a workflow (`{ workflow }`) or materialises a
-   * `single:<agent>` for an agent (`{ agent }`), transitioning it to the
-   * workflow's first step. Runs `onTransit` for the enroll → firstStep edge
+   * Enrolls a `new` task into a workflow (`{ workflow }`), transitioning it to
+   * the workflow's first step. Runs `onTransit` for the enroll → firstStep edge
    * (a throw rejects the enroll).
    */
   async enroll(root: string, taskId: string, target: EnrollTarget): Promise<TaskView> {
     const project = this.requireProject(root);
-    const { wf, workflowName } = this.resolveEnrollTarget(project, target);
+    const wf = project.registry.resolveWorkflow(target.workflow);
+    if (!wf) throw EngineError.invalidParams(`unknown workflow: ${target.workflow}`);
+    const workflowName = target.workflow;
 
     const view = await this.requireTask(project, taskId);
     if (view.status !== "new") {
@@ -301,11 +303,10 @@ export class Engine implements SessionHost {
     if (row.workflow === null || row.step === null) return;
     const wf = project.registry.resolveWorkflow(row.workflow);
     if (!wf) return; // unknown workflow — the live-code hazard guard parks it
-    const stepDef = wf.steps[row.step];
-    if (!stepDef) return; // unknown step — hazard guard parks it
-    if (stepDef.human || !stepDef.agent) return; // human-owned step: never scheduled
-    const agent = project.registry.getAgent(stepDef.agent);
-    if (!agent) return; // missing agent — hazard guard parks it
+    const step = wf.steps[row.step];
+    if (!step) return; // unknown step — hazard guard parks it
+    if (isStatusStep(step)) return; // terminal/park step: never scheduled
+    const agent = step; // an agent step IS the agent definition (inline)
     if (project.store.sessions.hasLiveSession(taskId)) return; // already running/queued
 
     const sessionId = newSessionId();
@@ -314,7 +315,7 @@ export class Engine implements SessionHost {
       task_id: taskId,
       workflow: row.workflow,
       step: row.step,
-      agent: stepDef.agent,
+      agent: row.step, // the step key IS the agent name
       cwd: project.root, // isolation (if any) is acquired in the worker and rewrites this
       timestamp: this.clock(),
     });
@@ -330,7 +331,7 @@ export class Engine implements SessionHost {
       workflow: wf,
       workflowName: row.workflow,
       agent,
-      agentName: stepDef.agent,
+      agentName: row.step,
       sessionId,
       taskId,
       step: row.step,
@@ -464,22 +465,6 @@ export class Engine implements SessionHost {
       author: ENGINE_COMMENT_AUTHOR,
     });
     await wf.onTransit(tctx, to);
-  }
-
-  private resolveEnrollTarget(
-    project: EngineProject,
-    target: EnrollTarget,
-  ): { wf: WorkflowDefinition; workflowName: string } {
-    if ("agent" in target) {
-      if (!project.registry.hasAgent(target.agent)) {
-        throw EngineError.invalidParams(`unknown agent: ${target.agent}`);
-      }
-      const wf = project.registry.singleStepFor(target.agent);
-      return { wf, workflowName: wf.name };
-    }
-    const wf = project.registry.resolveWorkflow(target.workflow);
-    if (!wf) throw EngineError.invalidParams(`unknown workflow: ${target.workflow}`);
-    return { wf, workflowName: target.workflow };
   }
 
   private requireProject(root: string): EngineProject {

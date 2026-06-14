@@ -42,7 +42,6 @@ describe("parseTarget", () => {
 describe("buildPiCommand", () => {
   test("assembles `pi --mode rpc` with model/thinking + the injected transit tool", () => {
     const cmd = buildPiCommand({
-      name: "@x/dev",
       piBin: "/bin/pi",
       model: "sonnet:high",
       thinking: "xhigh",
@@ -70,9 +69,9 @@ describe("buildPiCommand", () => {
     const prev = process.env.AUTOSK_PI_BIN;
     delete process.env.AUTOSK_PI_BIN;
     try {
-      expect(buildPiCommand({ name: "x" })[0]).toBe("pi");
+      expect(buildPiCommand({})[0]).toBe("pi");
       process.env.AUTOSK_PI_BIN = "/custom/pi";
-      expect(buildPiCommand({ name: "x" })[0]).toBe("/custom/pi");
+      expect(buildPiCommand({})[0]).toBe("/custom/pi");
     } finally {
       if (prev === undefined) delete process.env.AUTOSK_PI_BIN;
       else process.env.AUTOSK_PI_BIN = prev;
@@ -81,10 +80,9 @@ describe("buildPiCommand", () => {
 });
 
 describe("piAgent factory", () => {
-  test("requires a name and exposes the four hooks", () => {
-    expect(() => piAgent({ name: "" })).toThrow(/name/);
-    const a = piAgent({ name: "@x/dev" });
-    expect(a.name).toBe("@x/dev");
+  test("exposes the four hooks and carries no name (the step key is the agent name)", () => {
+    const a = piAgent();
+    expect("name" in a).toBe(false);
     expect(typeof a.onRun).toBe("function");
     expect(typeof a.onSteer).toBe("function");
     expect(typeof a.onFollowup).toBe("function");

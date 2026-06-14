@@ -3,48 +3,27 @@
  *
  * Each opened project gets its own registry, populated by running the union of
  * global + project-local extension factories (see `loader.ts`). It holds the
- * registered workflows + agents (code, not data), the load diagnostics, and the
- * rendered views the RPC layer (P5) serves over `registry.workflow.*` /
- * `registry.agent.list` and `project.diagnostics`.
+ * registered workflows (code, not data — agents are inline step values, not a
+ * separate map), the load diagnostics, and the rendered views the RPC layer
+ * (P5) serves over `registry.workflow.*` and `project.diagnostics`.
  *
- * Two design rules from the plan:
+ * Design rule from the plan:
  *  - **Error isolation.** A name collision or an invalid definition is never
  *    fatal: it is recorded as a diagnostic and the offending registration is
  *    skipped (first-registered wins, so the higher-priority source — project
  *    beats global — keeps the name). The factory keeps running; the rest of the
  *    registry stays usable (pi's `ExtensionRunner.onError` model).
- *  - **`singleStep` builtin.** The v1 `single:<agent>` synthetic workflows are a
- *    built-in factory the engine materialises on demand from `task.enroll
- *    {agent}` (`singleStepFor` / `resolveWorkflow`). They are never persisted
- *    and never appear in `listWorkflows()`. The `single:` prefix is **reserved**:
- *    `addWorkflow` rejects any extension that tries to register a `single:*`
- *    name (recorded as a diagnostic), so the builtin is the single source of
- *    truth for these workflows — no resolve/enroll drift, no list-invariant leak.
  */
 
 import {
-  singleStep,
-  type AgentDefinition,
-  type AgentInfo,
+  isStatusStep,
   type ExtensionLoadError,
+  type StepDef,
   type StepTarget,
   type WorkflowDefinition,
   type WorkflowInfo,
   type WorkflowStepInfo,
 } from "@autosk/sdk";
-
-/** The name prefix the `singleStep` builtin materialises (`single:<agent>`). */
-export const SINGLE_STEP_PREFIX = "single:";
-
-/**
- * If `name` is a `single:<agent>` synthetic-workflow name, returns the agent
- * part; otherwise `null`. The agent part must be non-empty.
- */
-export function parseSingleStepName(name: string): string | null {
-  if (!name.startsWith(SINGLE_STEP_PREFIX)) return null;
-  const agent = name.slice(SINGLE_STEP_PREFIX.length);
-  return agent.length > 0 ? agent : null;
-}
 
 /** The result of validating a `(workflow, step)` position against the registry. */
 export interface PositionValidation {
@@ -55,7 +34,6 @@ export interface PositionValidation {
 
 export class ExtensionRegistry {
   private readonly workflows = new Map<string, WorkflowDefinition>();
-  private readonly agents = new Map<string, AgentDefinition>();
   private readonly loadErrors: ExtensionLoadError[] = [];
 
   // -- diagnostics ---------------------------------------------------------
@@ -74,27 +52,17 @@ export class ExtensionRegistry {
 
   /**
    * Registers a workflow on behalf of `source`. A duplicate name, an empty
-   * name, a reserved `single:*` name, an absent `steps`, or a `firstStep` that
-   * is not a declared step are each recorded as a diagnostic and skip the
-   * registration (never throw — the factory keeps running). First-registered
-   * wins on a collision.
+   * name, an absent `steps`, a `firstStep` that is not a declared step, or a
+   * step value that is neither an agent (`onRun`) nor a valid `statusStep`
+   * (`status` ∈ {done,cancel,human}) are each recorded as a diagnostic and skip
+   * the registration (never throw — the factory keeps running). First-registered
+   * wins on a collision. The definition is stored exactly as written — agents
+   * live inline in `steps`, so there is no harvest into a separate agent map.
    */
   addWorkflow(source: string, workflow: WorkflowDefinition): void {
     const name = workflow?.name;
     if (typeof name !== "string" || name.length === 0) {
       this.recordDiagnostic(source, "registerWorkflow: workflow.name must be a non-empty string");
-      return;
-    }
-    if (name.startsWith(SINGLE_STEP_PREFIX)) {
-      // The `single:` namespace belongs to the `singleStep` builtin alone
-      // (materialised on demand, never registered). Letting an extension claim
-      // a `single:*` name would (a) leak a synthetic into listWorkflows() and
-      // (b) diverge resolveWorkflow (map hit) from singleStepFor (always the
-      // builtin) for the same enrolled task — so reject it outright.
-      this.recordDiagnostic(
-        source,
-        `registerWorkflow: ${JSON.stringify(name)} uses the reserved "${SINGLE_STEP_PREFIX}*" synthetic-workflow namespace`,
-      );
       return;
     }
     if (this.workflows.has(name)) {
@@ -112,66 +80,21 @@ export class ExtensionRegistry {
       );
       return;
     }
+    for (const [stepName, step] of Object.entries(workflow.steps)) {
+      const err = validateStep(name, stepName, step);
+      if (err) {
+        this.recordDiagnostic(source, err);
+        return;
+      }
+    }
     this.workflows.set(name, workflow);
-  }
-
-  /**
-   * Registers an agent on behalf of `source`. A duplicate or empty name is
-   * recorded as a diagnostic and skipped (never throws). First wins.
-   */
-  addAgent(source: string, agent: AgentDefinition): void {
-    const name = agent?.name;
-    if (typeof name !== "string" || name.length === 0) {
-      this.recordDiagnostic(source, "registerAgent: agent.name must be a non-empty string");
-      return;
-    }
-    if (this.agents.has(name)) {
-      this.recordDiagnostic(source, `duplicate agent name: ${name}`);
-      return;
-    }
-    this.agents.set(name, agent);
   }
 
   // -- resolution (engine-facing) ------------------------------------------
 
-  /** The registered agent definition, if any. */
-  getAgent(name: string): AgentDefinition | undefined {
-    return this.agents.get(name);
-  }
-
-  /** Whether an agent is registered. */
-  hasAgent(name: string): boolean {
-    return this.agents.has(name);
-  }
-
-  /**
-   * Resolves a workflow by name. A registered (non-synthetic) workflow wins;
-   * a `single:<agent>` name can never be registered (the prefix is reserved in
-   * {@link addWorkflow}), so it always materialises the `singleStep` builtin on
-   * demand — IFF the agent is registered. Unknown ⇒ `undefined`. Keeping the
-   * builtin the sole source of truth means `resolveWorkflow` and
-   * {@link singleStepFor} can never disagree about a `single:*` workflow.
-   */
+  /** Resolves a registered workflow by name. Unknown ⇒ `undefined`. */
   resolveWorkflow(name: string): WorkflowDefinition | undefined {
-    const direct = this.workflows.get(name);
-    if (direct) return direct;
-    const agentName = parseSingleStepName(name);
-    if (agentName !== null && this.agents.has(agentName)) {
-      return singleStep(agentName);
-    }
-    return undefined;
-  }
-
-  /**
-   * Materialises the `single:<agent>` workflow for `task.enroll {agent}`. Throws
-   * if the agent is not registered. The result is never persisted and never
-   * appears in {@link listWorkflows}.
-   */
-  singleStepFor(agentName: string): WorkflowDefinition {
-    if (!this.agents.has(agentName)) {
-      throw new Error(`cannot enroll: unknown agent ${JSON.stringify(agentName)}`);
-    }
-    return singleStep(agentName);
+    return this.workflows.get(name);
   }
 
   // -- live-code hazard validation -----------------------------------------
@@ -182,7 +105,7 @@ export class ExtensionRegistry {
    * both yield `{ ok:false, error:"workflow_missing: …" }`.
    */
   validatePosition(workflow: string, step: string): PositionValidation {
-    const wf = this.resolveWorkflow(workflow);
+    const wf = this.workflows.get(workflow);
     if (!wf) return { ok: false, error: `workflow_missing: ${workflow}` };
     if (!(step in wf.steps)) {
       return { ok: false, error: `workflow_missing: ${workflow} has no step ${step}` };
@@ -199,30 +122,35 @@ export class ExtensionRegistry {
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   }
 
-  /**
-   * A single workflow rendered for `registry.workflow.get`. Resolves
-   * `single:<agent>` synthetics too (so a client can inspect an enrolled task's
-   * workflow) — they still never appear in {@link listWorkflows}.
-   */
+  /** A single workflow rendered for `registry.workflow.get`. */
   getWorkflowInfo(name: string): WorkflowInfo | undefined {
-    const wf = this.resolveWorkflow(name);
+    const wf = this.workflows.get(name);
     return wf ? renderWorkflowInfo(wf) : undefined;
-  }
-
-  /** Registered agents rendered for `registry.agent.list`, sorted by name. */
-  listAgents(): AgentInfo[] {
-    return [...this.agents.keys()].sort().map((name) => ({ name }));
   }
 
   /** Registered workflow names (sorted) — the deterministic merge result. */
   workflowNames(): string[] {
     return [...this.workflows.keys()].sort();
   }
+}
 
-  /** Registered agent names (sorted). */
-  agentNames(): string[] {
-    return [...this.agents.keys()].sort();
+/**
+ * Validates one workflow step value. Returns an error message (for a
+ * diagnostic) or `null` when the step is a valid agent or `statusStep`. A
+ * `statusStep`'s `status` must be one of the three terminal/park statuses; an
+ * agent step must carry an `onRun` function.
+ */
+function validateStep(workflow: string, stepName: string, step: StepDef): string | null {
+  if (step && typeof step === "object") {
+    if (isStatusStep(step)) {
+      if (step.status === "done" || step.status === "cancel" || step.status === "human") {
+        return null;
+      }
+      return `registerWorkflow: "${workflow}" step "${stepName}" has invalid status ${JSON.stringify(step.status)} (expected done|cancel|human)`;
+    }
+    if (typeof (step as { onRun?: unknown }).onRun === "function") return null;
   }
+  return `registerWorkflow: "${workflow}" step "${stepName}" must be an agent (with onRun) or a statusStep`;
 }
 
 /**
@@ -250,8 +178,7 @@ export function renderWorkflowInfo(wf: WorkflowDefinition): WorkflowInfo {
     const def = wf.steps[stepName]!;
     return {
       name: stepName,
-      agent: def.agent ?? null,
-      human: def.human ?? false,
+      status: isStatusStep(def) ? def.status : null,
       targets: [...stepTargets, ...statusTargets],
     };
   });

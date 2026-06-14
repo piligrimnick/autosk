@@ -178,7 +178,7 @@ func TestClient_ErrorDecoding(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, err = cli.Agents(ctx)
+	_, err = cli.Workflows(ctx)
 	if err == nil {
 		t.Fatal("expected error")
 	}

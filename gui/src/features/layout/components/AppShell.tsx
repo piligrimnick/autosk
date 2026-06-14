@@ -15,7 +15,6 @@ import { CenterPanel } from "@/features/center/components/CenterPanel";
 import { TasksPanel } from "@/features/tasks/components/TasksPanel";
 import { WorkflowsPanel } from "@/features/workflows/components/WorkflowsPanel";
 import { SettingsModal } from "@/features/settings/components/SettingsModal";
-import { AgentsModal } from "@/features/agents/components/AgentsModal";
 
 export function AppShell() {
   const { state, effects } = useStore();
@@ -47,7 +46,6 @@ export function AppShell() {
         <CenterPanel />
       </div>
       {state.ui.modal === "settings" && <SettingsModal onClose={closeModal} />}
-      {state.ui.modal === "agents" && <AgentsModal onClose={closeModal} />}
     </div>
   );
 }

@@ -12,9 +12,15 @@ import type { Comment, TaskFilter, TaskView, WorkflowInfo } from "./types.ts";
 import type { StepTarget } from "./workflow.ts";
 import type { TranscriptMessage } from "./transcript.ts";
 
-/** An agent the engine can run for a step (plan §3.4). */
+/**
+ * An agent the engine can run for a step (plan §3.4).
+ *
+ * An agent is an inline step value: the workflow step key IS the agent name
+ * (there is no separate `name` field and no separate agent registry). The
+ * engine discriminates an agent step from a {@link StatusStep} structurally via
+ * the presence of `onRun`.
+ */
 export interface AgentDefinition {
-  name: string;
   /**
    * Runs one full step. MUST call `ctx.transit(...)` exactly once before
    * returning.

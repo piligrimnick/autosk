@@ -67,7 +67,7 @@ func newWorkflowListCmd() *cobra.Command {
 func newWorkflowShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show <name>",
-		Short: "Show one registered workflow (steps, agents, isolation)",
+		Short: "Show one registered workflow (steps, isolation)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cl, err := readClient(cmd.Context())
@@ -89,16 +89,15 @@ func newWorkflowShowCmd() *cobra.Command {
 			fmt.Printf("isolation:  %s\n", wf.Isolation)
 			fmt.Println("steps:")
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "  STEP\tAGENT\tTARGETS")
+			fmt.Fprintln(w, "  STEP\tKIND\tTARGETS")
 			for _, s := range wf.Steps {
-				agent := s.Agent
-				if s.Human {
-					agent = "(human)"
+				// An agent step has status=null (its name is the agent name); a
+				// statusStep renders its terminal/park status (done/cancel/human).
+				kind := "agent"
+				if s.Status != nil {
+					kind = *s.Status
 				}
-				if agent == "" {
-					agent = "-"
-				}
-				fmt.Fprintf(w, "  %s\t%s\t%s\n", s.Name, agent, joinTargets(s.Targets))
+				fmt.Fprintf(w, "  %s\t%s\t%s\n", s.Name, kind, joinTargets(s.Targets))
 			}
 			return w.Flush()
 		},

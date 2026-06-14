@@ -165,7 +165,6 @@ async function loadEntry(registry: ExtensionRegistry, entry: ExtensionEntry): Pr
 
   const api: AutoskAPI = {
     registerWorkflow: (workflow) => registry.addWorkflow(entry.source, workflow),
-    registerAgent: (agent) => registry.addAgent(entry.source, agent),
   };
   try {
     await (factory as ExtensionFactory)(api);
@@ -177,8 +176,8 @@ async function loadEntry(registry: ExtensionRegistry, entry: ExtensionEntry): Pr
 /**
  * Builds a fresh {@link ExtensionRegistry} for a project: discover → import →
  * invoke factories, in priority order, with full error isolation. The returned
- * registry carries both the registered workflows/agents and the load
- * diagnostics (for `project.diagnostics`).
+ * registry carries both the registered workflows (agents live inline in their
+ * steps) and the load diagnostics (for `project.diagnostics`).
  */
 export async function loadProjectRegistry(
   projectRoot: string,

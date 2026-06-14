@@ -12,7 +12,6 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  AgentInfo,
   AppSettings,
   Comment,
   DaemonStatus,
@@ -204,11 +203,11 @@ export function taskReopen(cwd: string, id: string): Promise<TaskView> {
   return daemonRequest<TaskView>("task.reopen", sel(cwd, { id }));
 }
 
-/** Enroll into a named workflow XOR materialise a single-step agent run. */
+/** Enroll a task into a named workflow (workflow-only in v2). */
 export function taskEnroll(
   cwd: string,
   id: string,
-  target: { workflow: string } | { agent: string },
+  target: { workflow: string },
 ): Promise<TaskView> {
   return daemonRequest<TaskView>("task.enroll", sel(cwd, { id, ...target }));
 }
@@ -253,7 +252,7 @@ export function commentDelete(cwd: string, taskId: string, commentId: string): P
   return daemonRequest("task.comment.delete", sel(cwd, { task_id: taskId, comment_id: commentId }));
 }
 
-// ---- registry (workflows + agents are code; read-only) -------------------
+// ---- registry (workflows are code; read-only) ----------------------------
 
 export function workflowList(cwd: string): Promise<WorkflowInfo[]> {
   return daemonRequest<WorkflowInfo[]>("registry.workflow.list", sel(cwd));
@@ -261,10 +260,6 @@ export function workflowList(cwd: string): Promise<WorkflowInfo[]> {
 
 export function workflowGet(cwd: string, name: string): Promise<WorkflowInfo> {
   return daemonRequest<WorkflowInfo>("registry.workflow.get", sel(cwd, { name }));
-}
-
-export function agentList(cwd: string): Promise<AgentInfo[]> {
-  return daemonRequest<AgentInfo[]>("registry.agent.list", sel(cwd));
 }
 
 // ---- sessions ------------------------------------------------------------

@@ -1,9 +1,9 @@
 /**
  * The daemon-bundled extension discovery route (P6 step-4 decision / acceptance
  * #4): a fresh project, with no per-project files, discovers the shipped
- * `@autosk/feature-dev` workflow + its four pi-agent roles from the bundled
- * `daemon/extensions/` dir — so it can enroll into `feature-dev` out of the box.
- * The bundled dir is the LOWEST priority, and sibling library packages
+ * `@autosk/feature-dev` workflow (with its four inline pi-agent steps) from the
+ * bundled `daemon/extensions/` dir — so it can enroll into `feature-dev` out of
+ * the box. The bundled dir is the LOWEST priority, and sibling library packages
  * (`pi-agent`, `worktree`) that declare no extension entry are NOT loaded.
  */
 
@@ -14,12 +14,8 @@ import { ProjectManager, ProjectRegistry, initProject, loadProjectRegistry } fro
 import { tempDir } from "./helpers.ts";
 
 const BUNDLED_DIR = fileURLToPath(new URL("../../extensions", import.meta.url));
-const ROLES = [
-  "@autosk/pi-agent/dev",
-  "@autosk/pi-agent/review",
-  "@autosk/pi-agent/docs",
-  "@autosk/pi-agent/validator",
-];
+/** The four agent steps of feature-dev (the step key IS the agent name). */
+const AGENT_STEPS = ["dev", "docs", "review", "validator"];
 
 describe("bundled extension discovery — feature-dev", () => {
   const cleanups: (() => void)[] = [];
@@ -40,9 +36,11 @@ describe("bundled extension discovery — feature-dev", () => {
     expect(wf!.first_step).toBe("dev");
     expect(wf!.isolation).toBe("worktree");
     expect(wf!.steps.map((s) => s.name).sort()).toEqual(["accept", "dev", "docs", "review", "validator"]);
-    expect(wf!.steps.find((s) => s.name === "accept")!.human).toBe(true);
-
-    for (const role of ROLES) expect(registry.hasAgent(role)).toBe(true);
+    // `accept` is a statusStep("human"); the four roles are agent steps (status null).
+    expect(wf!.steps.find((s) => s.name === "accept")!.status).toBe("human");
+    for (const name of AGENT_STEPS) {
+      expect(wf!.steps.find((s) => s.name === name)!.status).toBeNull();
+    }
 
     // The bundled discovery picks ONLY feature-dev; the sibling library packages
     // (pi-agent, worktree) declare no extension entry, so they contribute no
@@ -67,7 +65,6 @@ describe("bundled extension discovery — feature-dev", () => {
       // {workflow:"feature-dev"}` will resolve it (the engine path is exercised
       // separately in engine.featuredev.test.ts).
       expect(handle.extensions.resolveWorkflow("feature-dev")).toBeDefined();
-      expect(handle.extensions.agentNames()).toEqual(expect.arrayContaining(ROLES));
     } finally {
       await pm.close();
     }

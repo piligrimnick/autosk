@@ -15,5 +15,5 @@ export * from "./agent.ts";
 export * from "./transcript.ts";
 export * from "./proto.ts";
 export * from "./api.ts";
-export * from "./singleStep.ts";
+export * from "./statusStep.ts";
 export * from "./ids.ts";

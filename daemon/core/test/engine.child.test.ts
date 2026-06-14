@@ -28,14 +28,13 @@ describe("engine — ctx.exec / ctx.spawn", () => {
   /** Runs `body(ctx)` inside one session, then transits done. */
   async function inSession(body: AgentDefinition["onRun"]): Promise<TestProject> {
     const ag: AgentDefinition = {
-      name: "runner",
       async onRun(ctx) {
         await body(ctx);
         await ctx.transit({ status: "done" });
       },
     };
-    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: { agent: "runner" } } };
-    const p = track(await makeProject({ workflows: [wf], agents: [ag] }));
+    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: ag } };
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);

@@ -1,6 +1,7 @@
 /**
- * ExtensionRegistry (plan §3.6): registration + error isolation, the
- * `singleStep` builtin, live-code validation, and the rendered proto-v2 views.
+ * ExtensionRegistry (plan §3.6): registration + error isolation, step-shape
+ * validation (inline agent vs statusStep), live-code validation, and the
+ * rendered proto-v2 views.
  *
  * These exercise the registry directly (no filesystem); the loader test wires
  * the same registry up to on-disk fixtures.
@@ -8,28 +9,25 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { ExtensionRegistry, parseSingleStepName, renderWorkflowInfo } from "../src/index.ts";
-import type { AgentDefinition, WorkflowDefinition } from "@autosk/sdk";
+import { ExtensionRegistry, renderWorkflowInfo } from "../src/index.ts";
+import { statusStep, type AgentDefinition, type StepDef, type WorkflowDefinition } from "@autosk/sdk";
 
-const agent = (name: string): AgentDefinition => ({ name, async onRun() {} });
+const agentStep = (): AgentDefinition => ({ async onRun() {} });
 
 const wf = (name: string, extra: Partial<WorkflowDefinition> = {}): WorkflowDefinition => ({
   name,
   firstStep: "dev",
-  steps: { dev: { agent: "a1" }, review: { agent: "a2" }, accept: { human: true } },
+  steps: { dev: agentStep(), review: agentStep(), accept: statusStep("human") },
   ...extra,
 });
 
 describe("ExtensionRegistry registration", () => {
-  test("registers workflows + agents and exposes sorted names", () => {
+  test("registers workflows (agents inline) and exposes sorted names", () => {
     const r = new ExtensionRegistry();
-    r.addAgent("src", agent("a2"));
-    r.addAgent("src", agent("a1"));
     r.addWorkflow("src", wf("beta"));
     r.addWorkflow("src", wf("alpha"));
 
     expect(r.workflowNames()).toEqual(["alpha", "beta"]);
-    expect(r.agentNames()).toEqual(["a1", "a2"]);
     expect(r.diagnostics).toEqual([]);
   });
 
@@ -43,45 +41,55 @@ describe("ExtensionRegistry registration", () => {
     expect(r.diagnostics).toEqual([{ source: "second", error: "duplicate workflow name: alpha" }]);
   });
 
-  test("a duplicate agent name keeps the first and records a diagnostic", () => {
-    const r = new ExtensionRegistry();
-    r.addAgent("first", agent("a1"));
-    r.addAgent("second", agent("a1"));
-    expect(r.agentNames()).toEqual(["a1"]);
-    expect(r.diagnostics).toEqual([{ source: "second", error: "duplicate agent name: a1" }]);
-  });
-
   test("rejects an empty name and a firstStep that is not a declared step", () => {
     const r = new ExtensionRegistry();
-    r.addWorkflow("s", { name: "", firstStep: "do", steps: { do: {} } });
-    r.addWorkflow("s", { name: "bad", firstStep: "missing", steps: { do: {} } });
-    r.addAgent("s", { name: "" } as AgentDefinition);
+    r.addWorkflow("s", { name: "", firstStep: "do", steps: { do: agentStep() } });
+    r.addWorkflow("s", { name: "bad", firstStep: "missing", steps: { do: agentStep() } });
 
     expect(r.workflowNames()).toEqual([]);
-    expect(r.agentNames()).toEqual([]);
     expect(r.diagnostics.map((d) => d.error)).toEqual([
       "registerWorkflow: workflow.name must be a non-empty string",
       'registerWorkflow: "bad" firstStep "missing" is not a declared step',
-      "registerAgent: agent.name must be a non-empty string",
     ]);
   });
 
-  test("rejects a reserved single:* name as a diagnostic and never adds it to the map", () => {
+  test("accepts a statusStep firstStep (a task that parks/closes on enroll)", () => {
     const r = new ExtensionRegistry();
-    r.addAgent("s", agent("dev"));
-    // An extension trying to claim the synthetic namespace is rejected ...
-    r.addWorkflow("sample-ext", { name: "single:dev", firstStep: "do", steps: { do: { agent: "dev" } } });
+    r.addWorkflow("s", { name: "park", firstStep: "accept", steps: { accept: statusStep("human") } });
+    expect(r.workflowNames()).toEqual(["park"]);
+    expect(r.diagnostics).toEqual([]);
+  });
 
+  test("rejects a step that is neither an agent nor a statusStep", () => {
+    const r = new ExtensionRegistry();
+    r.addWorkflow("ext", {
+      name: "bogus",
+      firstStep: "dev",
+      steps: { dev: { foo: 1 } as unknown as StepDef },
+    });
     expect(r.workflowNames()).toEqual([]);
-    expect(r.listWorkflows()).toEqual([]); // never leaks into the list ...
     expect(r.diagnostics).toEqual([
       {
-        source: "sample-ext",
-        error: 'registerWorkflow: "single:dev" uses the reserved "single:*" synthetic-workflow namespace',
+        source: "ext",
+        error: 'registerWorkflow: "bogus" step "dev" must be an agent (with onRun) or a statusStep',
       },
     ]);
-    // ... yet the builtin still resolves it from the live agent set (no drift).
-    expect(r.resolveWorkflow("single:dev")?.steps).toEqual({ do: { agent: "dev" } });
+  });
+
+  test("rejects a statusStep with an invalid status", () => {
+    const r = new ExtensionRegistry();
+    r.addWorkflow("ext", {
+      name: "bogus",
+      firstStep: "dev",
+      steps: { dev: { status: "ship" } as unknown as StepDef },
+    });
+    expect(r.workflowNames()).toEqual([]);
+    expect(r.diagnostics).toEqual([
+      {
+        source: "ext",
+        error: 'registerWorkflow: "bogus" step "dev" has invalid status "ship" (expected done|cancel|human)',
+      },
+    ]);
   });
 
   test("diagnostics getter returns a defensive copy", () => {
@@ -90,48 +98,6 @@ describe("ExtensionRegistry registration", () => {
     const snap = r.diagnostics;
     snap.push({ source: "x", error: "y" });
     expect(r.diagnostics).toHaveLength(1);
-  });
-});
-
-describe("singleStep builtin", () => {
-  test("parseSingleStepName extracts the agent, or null", () => {
-    expect(parseSingleStepName("single:dev")).toBe("dev");
-    expect(parseSingleStepName("single:")).toBeNull();
-    expect(parseSingleStepName("feature-dev")).toBeNull();
-  });
-
-  test("singleStepFor materialises a runnable one-step workflow for a known agent", () => {
-    const r = new ExtensionRegistry();
-    r.addAgent("s", agent("dev"));
-    const built = r.singleStepFor("dev");
-    expect(built).toEqual({
-      name: "single:dev",
-      firstStep: "do",
-      steps: { do: { agent: "dev" } },
-    });
-  });
-
-  test("singleStepFor throws for an unknown agent", () => {
-    const r = new ExtensionRegistry();
-    expect(() => r.singleStepFor("ghost")).toThrow(/unknown agent/);
-  });
-
-  test("resolveWorkflow materialises single:<agent> on demand but list/get hide it", () => {
-    const r = new ExtensionRegistry();
-    r.addAgent("s", agent("dev"));
-    r.addWorkflow("s", wf("feature-dev"));
-
-    // Resolves for the engine ...
-    expect(r.resolveWorkflow("single:dev")?.steps).toEqual({ do: { agent: "dev" } });
-    // ... and getWorkflowInfo renders it (so a client can inspect an enrolled task) ...
-    expect(r.getWorkflowInfo("single:dev")?.name).toBe("single:dev");
-    // ... but it NEVER leaks into the normal workflow list.
-    expect(r.listWorkflows().map((w) => w.name)).toEqual(["feature-dev"]);
-  });
-
-  test("resolveWorkflow returns undefined for single:<agent> when the agent is gone", () => {
-    const r = new ExtensionRegistry();
-    expect(r.resolveWorkflow("single:dev")).toBeUndefined();
   });
 });
 
@@ -158,12 +124,6 @@ describe("validatePosition (live-code hazard)", () => {
       error: "workflow_missing: feature-dev has no step ship",
     });
   });
-
-  test("ok for a single:<agent> position when the agent exists", () => {
-    const r = new ExtensionRegistry();
-    r.addAgent("s", agent("dev"));
-    expect(r.validatePosition("single:dev", "do")).toEqual({ ok: true });
-  });
 });
 
 describe("renderWorkflowInfo (proto-v2 projection)", () => {
@@ -178,8 +138,8 @@ describe("renderWorkflowInfo (proto-v2 projection)", () => {
     expect(info.steps.map((s) => s.name)).toEqual(["accept", "dev", "review"]);
 
     const dev = info.steps.find((s) => s.name === "dev")!;
-    expect(dev.agent).toBe("a1");
-    expect(dev.human).toBe(false);
+    // An agent step renders status: null.
+    expect(dev.status).toBeNull();
     // The superset projection declares EVERY step, including the self-loop
     // ({step:"dev"}) — a structurally valid retry target.
     expect(dev.targets).toEqual([
@@ -192,8 +152,8 @@ describe("renderWorkflowInfo (proto-v2 projection)", () => {
     ]);
 
     const accept = info.steps.find((s) => s.name === "accept")!;
-    expect(accept.agent).toBeNull();
-    expect(accept.human).toBe(true);
+    // A statusStep renders its park/terminal status.
+    expect(accept.status).toBe("human");
   });
 
   test("isolation tag is surfaced; description is omitted when absent", () => {
@@ -210,12 +170,5 @@ describe("renderWorkflowInfo (proto-v2 projection)", () => {
     );
     expect(info.isolation).toBe("worktree");
     expect("description" in info).toBe(false);
-  });
-
-  test("listAgents renders sorted AgentInfo[]", () => {
-    const r = new ExtensionRegistry();
-    r.addAgent("s", agent("zeta"));
-    r.addAgent("s", agent("alpha"));
-    expect(r.listAgents()).toEqual([{ name: "alpha" }, { name: "zeta" }]);
   });
 });

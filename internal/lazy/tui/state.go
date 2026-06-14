@@ -241,8 +241,7 @@ const (
 	popupIsolation
 	// popupEnroll is the two-pane workflow + step picker used by both
 	// `e` (enroll) and `r` (resume) on the Tasks panel. Left pane
-	// lists workflows (synthetic single:<agent> entries filtered
-	// out), right pane mirrors the highlighted workflow's step list.
+	// lists workflows, right pane mirrors the highlighted workflow's step list.
 	// `r` reuses the same popup with WorkflowLocked=true so the
 	// workflow pane only shows the task's current workflow as a
 	// single, non-navigable row. See popupEnrollState for the

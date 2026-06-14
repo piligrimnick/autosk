@@ -8,12 +8,15 @@ the v2 [`IsolationProvider`](../../sdk/src/workflow.ts) contract (design
 ## Usage
 
 ```ts
+import { statusStep } from "@autosk/sdk";
+import { piAgent } from "@autosk/pi-agent";
 import { worktreeIsolation } from "@autosk/worktree";
 
 autosk.registerWorkflow({
   name: "feature-dev",
   firstStep: "dev",
-  steps: { dev: { agent: "@autosk/pi-agent/dev" }, /* … */ },
+  // Agents are inline step values (the step key is the agent name).
+  steps: { dev: piAgent({ firstMessageFile: ".../dev.md" }), accept: statusStep("human") },
   isolation: worktreeIsolation(),
 });
 ```

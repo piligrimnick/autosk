@@ -103,7 +103,7 @@ type SessionMeta struct {
 }
 
 // ---------------------------------------------------------------------------
-// Registry domain (types.ts / registry.workflow.* + registry.agent.list).
+// Registry domain (types.ts / registry.workflow.*).
 // ---------------------------------------------------------------------------
 
 // StepTarget mirrors the workflow StepTarget union ({step} XOR {status}).
@@ -116,9 +116,9 @@ type StepTarget struct {
 // WorkflowStepInfo is one step of a workflow as rendered from code.
 type WorkflowStepInfo struct {
 	Name string `json:"name"`
-	// Agent name from the registry, or "" for a human-owned step.
-	Agent   string       `json:"agent"`
-	Human   bool         `json:"human"`
+	// Status is the terminal/park status for a statusStep ("done"/"cancel"/
+	// "human"), or nil/absent for an agent step (whose Name is the agent name).
+	Status  *string      `json:"status"`
 	Targets []StepTarget `json:"targets"`
 }
 
@@ -130,11 +130,6 @@ type WorkflowInfo struct {
 	Steps       []WorkflowStepInfo `json:"steps"`
 	// Isolation provider tag; "none" when the workflow has no provider.
 	Isolation string `json:"isolation"`
-}
-
-// AgentInfo is an agent rendered from code (registry.agent.list).
-type AgentInfo struct {
-	Name string `json:"name"`
 }
 
 // ---------------------------------------------------------------------------

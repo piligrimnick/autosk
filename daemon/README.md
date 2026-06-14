@@ -30,9 +30,9 @@ for the full design.
   - **extension loader** (`src/extensions/`) — pi-style discovery (project-local
     `.autosk/extensions/` ▸ global `~/.autosk/extensions/` ▸ npm packages listed
     under `"extensions"` in `settings.json` ▸ daemon-bundled), in-process factory
-    loading with full error isolation (a broken extension is recorded as a load
-    diagnostic and never crashes the daemon), the on-demand `singleStep` builtin,
-    and the live-code hazard guard that parks any in-flight task whose
+    loading with full error isolation (a broken extension — or one with an
+    invalid step shape — is recorded as a load diagnostic and never crashes the
+    daemon), and the live-code hazard guard that parks any in-flight task whose
     workflow/step has vanished from the registry to `human`.
   - **engine** (`src/engine/`) — the scheduler (a single event-driven scan + a
     global FIFO worker pool, `--workers`, shared across projects, plus a slow

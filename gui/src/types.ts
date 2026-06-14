@@ -93,10 +93,11 @@ export type StepTarget = { step: string } | { status: "done" | "cancel" | "human
 /** One step of a workflow as rendered from code for `registry.workflow.*`. */
 export interface WorkflowStepInfo {
   name: string;
-  /** Agent name from the registry, or `null` for a human-owned step. */
-  agent: string | null;
-  /** `true` for a human-owned step the engine parks at and never schedules. */
-  human: boolean;
+  /**
+   * Terminal/park status for a statusStep (`"done"|"cancel"|"human"`), or
+   * `null` for an agent step (whose `name` IS the agent key).
+   */
+  status: "done" | "cancel" | "human" | null;
   /** Conservative declared target set (a superset). */
   targets: StepTarget[];
 }
@@ -110,11 +111,6 @@ export interface WorkflowInfo {
   steps: WorkflowStepInfo[];
   /** Isolation provider tag; `"none"` when the workflow has no provider. */
   isolation: string;
-}
-
-/** An agent rendered from code (`registry.agent.list`). */
-export interface AgentInfo {
-  name: string;
 }
 
 // ---------------------------------------------------------------------------

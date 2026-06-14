@@ -54,7 +54,6 @@ func (f *fakeDS) TaskCancel(context.Context, string) error                   { r
 func (f *fakeDS) TaskReopen(context.Context, string) error                   { return nil }
 func (f *fakeDS) UpdateTask(context.Context, string, *string, *string) error { return nil }
 func (f *fakeDS) EnrollWorkflow(context.Context, string, string) error       { return nil }
-func (f *fakeDS) EnrollAgent(context.Context, string, string) error          { return nil }
 func (f *fakeDS) Resume(context.Context, string, string) error               { return nil }
 func (f *fakeDS) Block(context.Context, string, string) error                { return nil }
 func (f *fakeDS) Unblock(context.Context, string, string) error              { return nil }

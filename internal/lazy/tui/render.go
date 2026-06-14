@@ -1072,14 +1072,23 @@ func renderWorkflowDetail(w datasource.Workflow, width int) string {
 	// the ANSI escapes added by renderStepName / renderAgentName don't
 	// inflate the byte width past what the padding math can reason
 	// about.
+	// An agent step renders kind=agent; a statusStep renders its terminal/park
+	// status (done/cancel/human). The step Name IS the agent name now, so there
+	// is no separate agent column.
+	stepKind := func(s datasource.WorkflowStep) string {
+		if s.Status != "" {
+			return s.Status
+		}
+		return "agent"
+	}
 	stepW := 0
-	agentW := 0
+	kindW := 0
 	for _, s := range w.Steps {
 		if n := utf8.RuneCountInString(s.Name); n > stepW {
 			stepW = n
 		}
-		if n := utf8.RuneCountInString(s.AgentName); n > agentW {
-			agentW = n
+		if n := utf8.RuneCountInString(stepKind(s)); n > kindW {
+			kindW = n
 		}
 	}
 
@@ -1098,15 +1107,12 @@ func renderWorkflowDetail(w datasource.Workflow, width int) string {
 		if nexts == "" {
 			nexts = styleMuted.Render("(none)")
 		}
-		agentLabel := s.AgentName
-		if s.Human {
-			agentLabel = "(human)"
-		}
+		kind := stepKind(s)
 		stepPad := strings.Repeat(" ", stepW-utf8.RuneCountInString(s.Name))
-		agentPad := strings.Repeat(" ", agentW-utf8.RuneCountInString(agentLabel))
+		kindPad := strings.Repeat(" ", kindW-utf8.RuneCountInString(kind))
 		lines = append(lines,
 			renderStepName(s.Name)+stepPad+" "+
-				styleMuted.Render("agent=")+renderAgentName(agentLabel)+agentPad+" "+
+				styleMuted.Render("kind=")+renderAgentName(kind)+kindPad+" "+
 				styleMuted.Render("next=")+nexts)
 	}
 
@@ -1120,7 +1126,7 @@ func renderWorkflowDetail(w datasource.Workflow, width int) string {
 func renderAgentDetail(a datasource.Agent) string {
 	var b strings.Builder
 	fmt.Fprintln(&b, styleHeader.Render("agent")+" "+renderAgentName(a.Name))
-	b.WriteString(styleMuted.Render("(registered by an extension; v2 agents are code)") + "\n")
+	b.WriteString(styleMuted.Render("(a workflow step agent; v2 agents are inline step values)") + "\n")
 	return b.String()
 }
 

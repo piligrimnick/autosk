@@ -145,9 +145,6 @@ func (w *timeoutWrapper) UpdateTask(ctx context.Context, id string, title, descr
 func (w *timeoutWrapper) EnrollWorkflow(ctx context.Context, id, workflow string) error {
 	return w.ds.EnrollWorkflow(ctx, id, workflow)
 }
-func (w *timeoutWrapper) EnrollAgent(ctx context.Context, id, agent string) error {
-	return w.ds.EnrollAgent(ctx, id, agent)
-}
 func (w *timeoutWrapper) Resume(ctx context.Context, id, toStep string) error {
 	return w.ds.Resume(ctx, id, toStep)
 }

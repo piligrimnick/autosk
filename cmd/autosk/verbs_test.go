@@ -221,53 +221,6 @@ func TestEnrollIntoWorkflow(t *testing.T) {
 	}
 }
 
-func TestEnrollMutuallyExclusive(t *testing.T) {
-	dir := initProject(t)
-	id := createTask(t, dir, "x")
-	if _, err := runRoot(t, dir, "enroll", id, "--workflow", "human-flow", "--agent", "foo"); err == nil {
-		t.Fatal("expected --workflow + --agent to be rejected")
-	}
-}
-
-// TestEnroll_Agent covers the `enroll --agent NAME` path: it must materialise
-// the single-step workflow single:<NAME> via task.enroll {agent}, NOT fire a
-// spurious task.enroll {workflow:""} first. Enrolling into the fixture `stub`
-// agent runs it in-process, so after asserting the workflow name we poll until
-// the async run reaches done — both to confirm the single:stub flow actually
-// drives the agent and so the daemon finishes writing .autosk/sessions before
-// the tempdir teardown (avoids a RemoveAll-vs-still-writing cleanup race).
-func TestEnroll_Agent(t *testing.T) {
-	dir := initProject(t)
-	id := createTask(t, dir, "to enroll into agent")
-	out, err := runRoot(t, dir, "enroll", id, "--agent", "stub", "--json")
-	if err != nil {
-		t.Fatalf("enroll --agent: %v\n%s", err, out)
-	}
-	var tv map[string]any
-	if err := json.Unmarshal([]byte(out), &tv); err != nil {
-		t.Fatalf("unmarshal enroll json: %v\n%s", err, out)
-	}
-	if tv["workflow"] != "single:stub" {
-		t.Errorf("enroll --agent should materialise single:stub, got: %v", tv)
-	}
-
-	// Let the in-process stub agent finish (it transits the task to done).
-	var status string
-	for i := 0; i < 80; i++ {
-		show, _ := runRoot(t, dir, "show", id, "--json")
-		var sv map[string]any
-		_ = json.Unmarshal([]byte(show), &sv)
-		if s, _ := sv["status"].(string); s == "done" {
-			status = s
-			break
-		}
-		time.Sleep(75 * time.Millisecond)
-	}
-	if status != "done" {
-		t.Fatalf("single:stub did not drive the agent to done; last status=%q", status)
-	}
-}
-
 func TestCreateWithWorkflowEnrolls(t *testing.T) {
 	dir := initProject(t)
 	out, err := runRoot(t, dir, "create", "enrolled-on-create", "--workflow", "human-flow", "--json")

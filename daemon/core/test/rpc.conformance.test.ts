@@ -31,7 +31,6 @@ function paramsFor(method: string, cwd: string, initDir: string): unknown {
     case "task.subscribe":
     case "task.unsubscribe":
     case "registry.workflow.list":
-    case "registry.agent.list":
     case "session.list":
       return { cwd };
     case "project.init":
@@ -113,6 +112,8 @@ describe("proto-v2 conformance (live daemon over UDS)", () => {
       "workflow.updateIsolation",
       "agent.install",
       "agent.uninstall",
+      // v2 removed the agent registry: agents are inline step values now.
+      "registry.agent.list",
     ];
     const registered = new Set(td.runtime.daemon.registeredMethods());
     const client = await td.client();

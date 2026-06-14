@@ -83,10 +83,11 @@ export interface SessionMeta {
 /** One step of a workflow as rendered from code for `registry.workflow.*`. */
 export interface WorkflowStepInfo {
   name: string;
-  /** Agent name from the registry, or `null` for a human-owned step. */
-  agent: string | null;
-  /** `true` for a human-owned step the engine parks at and never schedules. */
-  human: boolean;
+  /**
+   * The terminal/park status for a `statusStep` (`done`/`cancel`/`human`), or
+   * `null` for an agent step. An agent step's `name` is the agent name.
+   */
+  status: "done" | "cancel" | "human" | null;
   /**
    * Targets the engine can reach from this step. Because the actual graph is
    * decided at runtime by `onTransit`, this is the conservative declared set (a
@@ -108,9 +109,4 @@ export interface WorkflowInfo {
   steps: WorkflowStepInfo[];
   /** Isolation provider tag; `"none"` when the workflow has no provider. */
   isolation: string;
-}
-
-/** An agent rendered from code (plan §4 `registry.agent.list`). */
-export interface AgentInfo {
-  name: string;
 }

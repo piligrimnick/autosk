@@ -48,7 +48,7 @@ export function WorkflowView() {
               <div key={s.name} className="workflow-step-row">
                 <span className="workflow-step-name">{s.name}</span>
                 <span className="workflow-step-agent">
-                  {s.human ? "human" : `agent=${s.agent ?? "—"}`}
+                  {s.status === null ? "agent" : s.status}
                 </span>
                 <span className="workflow-step-next">next={targets.length > 0 ? targets.join(", ") : "(none)"}</span>
               </div>

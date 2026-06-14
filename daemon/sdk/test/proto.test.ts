@@ -51,7 +51,6 @@ const PLAN_SECTION_4_METHODS = [
   // registry
   "registry.workflow.list",
   "registry.workflow.get",
-  "registry.agent.list",
   // session
   "session.list",
   "session.get",

@@ -19,7 +19,7 @@ function mkWorkflow(name: string): WorkflowInfo {
     name,
     description: "",
     first_step: "dev",
-    steps: [{ name: "dev", agent: "coder", human: false, targets: [{ status: "done" }] }],
+    steps: [{ name: "dev", status: null, targets: [{ status: "done" }] }],
     isolation: "none",
   };
 }

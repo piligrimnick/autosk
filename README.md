@@ -19,9 +19,6 @@ ask-3f9b2c
 
 $ autosk enroll ask-3f9b2c --workflow feature-dev
 # the daemon picks it up, runs the agent pipeline, and returns to you when done or parked
-
-# OR enroll directly against a single agent (a one-step workflow on the fly)
-$ autosk enroll ask-3f9b2c --agent @your-org/coding-agent
 ```
 
 > ### A clean break from v1
@@ -126,14 +123,14 @@ iPad, see [docs/gui-release.md](docs/gui-release.md).
    `feature-dev` runs each task inside its own git worktree
    (`isolation: worktree`), so the project root must be a git repo.
 
-3. **(Optional) Use your own agent or workflow.** Drop a TypeScript extension
-   into `~/.autosk/extensions/` (or your project's `.autosk/extensions/`) that
-   registers an agent, then enroll directly against it (autosk wraps it in a
-   one-step workflow on the fly):
+3. **(Optional) Use your own workflow.** Drop a TypeScript extension into
+   `~/.autosk/extensions/` (or your project's `.autosk/extensions/`) that
+   registers a workflow (its agents are inline step values), then enroll into
+   it:
    ```bash
-   # ~/.autosk/extensions/mine.ts registers an agent named @your-org/developer
+   # ~/.autosk/extensions/mine.ts registers a workflow named my-flow
    id=$(autosk create "Fix the flaky test" --json | jq -r .id)
-   autosk enroll "$id" --agent @your-org/developer
+   autosk enroll "$id" --workflow my-flow
    ```
    See [docs/extensions.md](docs/extensions.md) for the extension contract and
    [docs/workflows.md](docs/workflows.md) for full workflows.
@@ -155,18 +152,13 @@ Tasks live as files under `.autosk/` inside your repo
 
 ### Agents
 
-An **agent** is a named actor that can own a task step. AI agents are **code**
-registered by [extensions](docs/extensions.md) — the bundled
+An **agent** owns a task step. AI agents are **code** defined **inline** in a
+workflow's steps by [extensions](docs/extensions.md) — the bundled
 `@autosk/pi-agent` drives `pi --mode rpc`, and you can write your own. There is
-no install step; an extension that registers an agent makes it available:
-
-```bash
-autosk agent list           # agents registered by this project's extensions
-autosk agent show <name>
-```
-
-You reference agents by name in **workflows**; a `human` step is the only
-non-agent owner.
+no install step and no separate agent registry: a step whose value is an
+`AgentDefinition` (it has an `onRun`) is an agent step, and the **step key is the
+agent's name**. A `statusStep("human")` is the only non-agent step (a human
+gate).
 
 ### [Workflows](docs/workflows.md)
 
@@ -185,9 +177,9 @@ autosk workflow show feature-dev
 ```
 
 The daemon ships `feature-dev` (`dev → review → docs → validator → accept`,
-`isolation: worktree`) and makes it available to every project. For one-off
-uses, skip the workflow and pass `--agent <name>` to `enroll` — autosk creates a
-single-step workflow for you on the fly.
+`isolation: worktree`) and makes it available to every project. For a one-off
+agent, register a tiny workflow with a single agent step (plus a terminal
+`statusStep`).
 
 See [Make your own workflow](docs/workflows.md#make-your-own-workflow) to adapt
 it for your dev pipeline, and [docs/extensions.md](docs/extensions.md) for how

@@ -10,10 +10,8 @@ import (
 )
 
 // openEnrollPicker pushes the two-pane workflow + step picker used by
-// both `e` (enroll) and `r` (resume) on the Tasks panel. The caller
-// is expected to have already filtered synthetic single:<agent>
-// workflows out of `workflows`; the picker treats whatever it
-// receives as authoritative.
+// both `e` (enroll) and `r` (resume) on the Tasks panel. The picker
+// treats whatever it receives as authoritative.
 //
 //   - workflowCursor seeds the workflow pane's cursor (typically the
 //     index of the task's current workflow when present, 0 otherwise).
@@ -436,8 +434,9 @@ func renderEnrollStepBody(steps []datasource.WorkflowStep, cursor int) string {
 }
 
 // filterPickerWorkflows returns the workflows to show in the picker. v2
-// workflows are all real, read-only registry entries, so this is now the
-// identity (kept as a seam so callers don't change).
+// workflows are all real, read-only registry entries (there are no synthetic
+// single:<agent> entries), so this is the identity (kept as a seam so callers
+// don't change).
 func filterPickerWorkflows(in []datasource.Workflow) []datasource.Workflow {
 	return in
 }

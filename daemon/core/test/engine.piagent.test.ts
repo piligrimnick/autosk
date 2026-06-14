@@ -15,13 +15,15 @@ import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type {
-  AssistantMessage,
-  MessageEntry,
-  SessionHeader,
-  StepDef,
-  TranscriptLine,
-  WorkflowDefinition,
+import {
+  statusStep,
+  type AgentDefinition,
+  type AssistantMessage,
+  type MessageEntry,
+  type SessionHeader,
+  type StepDef,
+  type TranscriptLine,
+  type WorkflowDefinition,
 } from "@autosk/sdk";
 import { piAgent } from "@autosk/pi-agent";
 
@@ -52,18 +54,19 @@ describe("engine — pi-agent over a stub pi", () => {
     to?: string;
     transitOnTurn?: string;
     maxCorrections?: number;
-    steps?: Record<string, StepDef>;
+    /** Builds the workflow steps from the pi agent (the step key is its name). */
+    steps?: (ag: AgentDefinition) => Record<string, StepDef>;
     firstStep?: string;
   }
 
   async function start(opts: ScenarioOpts): Promise<{ p: TestProject; engine: ReturnType<typeof makeEngine>["engine"]; taskId: string }> {
-    const ag = piAgent({ name: "pi-dev", piBin: STUB, maxCorrections: opts.maxCorrections });
+    const ag = piAgent({ piBin: STUB, maxCorrections: opts.maxCorrections });
     const wf: WorkflowDefinition = {
       name: "w",
       firstStep: opts.firstStep ?? "do",
-      steps: opts.steps ?? { do: { agent: "pi-dev" } },
+      steps: opts.steps ? opts.steps(ag) : { do: ag },
     };
-    const p = track(await makeProject({ workflows: [wf], agents: [ag] }));
+    const p = track(await makeProject({ workflows: [wf] }));
     // The stub reads its scenario from `<cwd>/.stub-pi.json` (cwd = ctx.cwd =
     // project root), not env — Bun.spawn ignores the parent's runtime env edits.
     writeFileSync(
@@ -106,9 +109,9 @@ describe("engine — pi-agent over a stub pi", () => {
     const { p, taskId } = await start({
       scenario: "transit",
       to: "review",
-      // `review` is a human step (no agent) so the dev→review hop lands and the
+      // `review` is a statusStep(human) so the dev→review hop lands and the
       // task PARKS there — a clean settled terminal, not a review→review hot loop.
-      steps: { dev: { agent: "pi-dev" }, review: { human: true } },
+      steps: (ag) => ({ dev: ag, review: statusStep("human") }),
       firstStep: "dev",
     });
     // The task settles parked at `review`; assert the settled state, not a
@@ -181,7 +184,9 @@ describe("engine — pi-agent over a stub pi", () => {
     const header = lines[0] as SessionHeader;
     expect(header.type).toBe("session");
     expect(header.version).toBe(1);
-    expect(header.agent).toBe("pi-dev");
+    // The step key IS the agent name (inline step agents) — this is a single-step
+    // `do` workflow, so the session's agent is "do".
+    expect(header.agent).toBe("do");
     expect(header.task_id).toBe(taskId);
 
     const entries = lines.slice(1) as Exclude<TranscriptLine, SessionHeader>[];

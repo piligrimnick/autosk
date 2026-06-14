@@ -8,7 +8,7 @@
  * (no session) and {@link SessionRuntime.transit} (a live session).
  */
 
-import type { StepTarget, TaskStatus, TransitContext, WorkflowDefinition } from "@autosk/sdk";
+import { isStatusStep, type StepTarget, type TaskStatus, type TransitContext, type WorkflowDefinition } from "@autosk/sdk";
 
 import type { Store } from "../store/store.ts";
 import { buildTasksApi } from "./context.ts";
@@ -45,18 +45,20 @@ export function validateTarget(wf: WorkflowDefinition, to: StepTarget): void {
 /**
  * The position a target commits to (plan §3.3, step 7).
  *
- *  - `{ step }` into a normal step → `work` at that step (the scheduler picks it
- *    up); into a `human:true` step → `human` at that step (the engine parks it,
- *    never schedules, and `resume` re-enters). This is what "transit into a
- *    human step parks the task" means.
+ *  - `{ step }` into an agent step → `work` at that step (the scheduler picks it
+ *    up); into a `statusStep` → that step's status at that step (the engine
+ *    moves the task: `human` parks it — never scheduled, `resume` re-enters —
+ *    while `done`/`cancel` close it on that step). This is what "transit into a
+ *    statusStep moves the task to its status" means.
  *  - `{ status }` → flips status but KEEPS the workflow + the step the task was at
  *    (so a parked `human` task can resume the same step, and a closed task shows
  *    where it ended). `currentStep` is the step being left.
  */
 export function positionFor(wf: WorkflowDefinition, currentStep: string, to: StepTarget): Position {
   if ("step" in to) {
-    const human = wf.steps[to.step]?.human === true;
-    return { status: human ? "human" : "work", workflow: wf.name, step: to.step };
+    const step = wf.steps[to.step];
+    const status: TaskStatus = step && isStatusStep(step) ? step.status : "work";
+    return { status, workflow: wf.name, step: to.step };
   }
   return { status: to.status, workflow: wf.name, step: currentStep };
 }

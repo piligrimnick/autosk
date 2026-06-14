@@ -41,7 +41,6 @@ describe("session.subscribe replay-then-tail", () => {
   test("replays from from_line, then live-tails new entries and the done frame", async () => {
     const release = gate();
     const agent: AgentDefinition = {
-      name: "logger",
       onRun: async (ctx) => {
         ctx.log.custom("test:hello", { n: 1 });
         await release.wait;
@@ -50,11 +49,11 @@ describe("session.subscribe replay-then-tail", () => {
       },
     };
     const handle = await td.handle(cwd);
-    handle.extensions.addAgent("test", agent);
+    handle.extensions.addWorkflow("test", { name: "logger", firstStep: "logger", steps: { logger: agent } });
 
     const client = await td.client();
     const task = await client.call<{ id: string }>("task.create", { cwd, title: "logged" });
-    await client.call("task.enroll", { cwd, id: task.id, agent: "logger" });
+    await client.call("task.enroll", { cwd, id: task.id, workflow: "logger" });
 
     // Wait until the session is live and has logged `test:hello` (so the replay
     // has something past the header to return).
@@ -105,7 +104,6 @@ describe("session.subscribe replay-then-tail", () => {
   test("an out-of-range from_line clamps to the tail and still tails later appends (review #7)", async () => {
     const release = gate();
     const agent: AgentDefinition = {
-      name: "logger2",
       onRun: async (ctx) => {
         ctx.log.custom("test:hello", { n: 1 });
         await release.wait;
@@ -114,11 +112,11 @@ describe("session.subscribe replay-then-tail", () => {
       },
     };
     const handle = await td.handle(cwd);
-    handle.extensions.addAgent("test", agent);
+    handle.extensions.addWorkflow("test", { name: "logger2", firstStep: "logger2", steps: { logger2: agent } });
 
     const client = await td.client();
     const task = await client.call<{ id: string }>("task.create", { cwd, title: "logged" });
-    await client.call("task.enroll", { cwd, id: task.id, agent: "logger2" });
+    await client.call("task.enroll", { cwd, id: task.id, workflow: "logger2" });
 
     let sessionId = "";
     await waitFor(async () => {
@@ -208,21 +206,20 @@ describe("session-changed project channel", () => {
   test("session.subscribeProject pushes queued+running then terminal WITHOUT a per-session subscribe", async () => {
     const release = gate();
     const agent: AgentDefinition = {
-      name: "gated",
       onRun: async (ctx) => {
         await release.wait;
         await ctx.transit({ status: "done" });
       },
     };
     const handle = await td.handle(cwd);
-    handle.extensions.addAgent("test", agent);
+    handle.extensions.addWorkflow("test", { name: "gated", firstStep: "gated", steps: { gated: agent } });
 
     const client = await td.client();
     // Subscribe to the project session channel BEFORE any session exists.
     await client.call("session.subscribeProject", { cwd });
 
     const task = await client.call<{ id: string }>("task.create", { cwd, title: "live" });
-    await client.call("task.enroll", { cwd, id: task.id, agent: "gated" });
+    await client.call("task.enroll", { cwd, id: task.id, workflow: "gated" });
 
     // A `running` frame arrives for this task's session even though we never
     // learned the session id to `session.subscribe` it.
@@ -257,18 +254,17 @@ describe("session-changed project channel", () => {
 
   test("session.unsubscribeProject stops the pushes", async () => {
     const agent: AgentDefinition = {
-      name: "quick",
       onRun: async (ctx) => ctx.transit({ status: "done" }),
     };
     const handle = await td.handle(cwd);
-    handle.extensions.addAgent("test", agent);
+    handle.extensions.addWorkflow("test", { name: "quick", firstStep: "quick", steps: { quick: agent } });
 
     const client = await td.client();
     await client.call("session.subscribeProject", { cwd });
     await client.call("session.unsubscribeProject", { cwd });
 
     const task = await client.call<{ id: string }>("task.create", { cwd, title: "silent" });
-    await client.call("task.enroll", { cwd, id: task.id, agent: "quick" });
+    await client.call("task.enroll", { cwd, id: task.id, workflow: "quick" });
 
     // Drive the session to completion via the per-session list, then assert no
     // session-changed frame was ever delivered after the unsubscribe.

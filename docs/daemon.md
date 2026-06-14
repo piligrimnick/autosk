@@ -95,8 +95,9 @@ keeps it loaded. The worker pool is global and FIFO across every loaded project.
 
 The engine has exactly one scheduling rule:
 
-> a task in `status=work` whose current step has an agent (not a `human` step)
-> and no live session ⇒ start a **session** that runs that agent's `onRun`.
+> a task in `status=work` whose current step is an **agent step** (not a
+> `statusStep`) and has no live session ⇒ start a **session** that runs that
+> agent's `onRun`.
 
 For each such task:
 
@@ -171,8 +172,8 @@ RFC3339 UTC. The wire types are defined once in
 | --- | --- |
 | meta | `version`, `auth`, `healthz`, `shutdown` |
 | project | `list`, `add`, `remove`, `init`, `diagnostics` (extension load errors), `subscribe`/`unsubscribe` |
-| task | `list`, `get`, `create`, `update`, `enroll {workflow \| agent}`, `resume {to?}`, `done`, `cancel`, `reopen`, `block`/`unblock`, `comment.add/list/edit/delete`, `subscribe`/`unsubscribe` |
-| registry | `workflow.list`, `workflow.get`, `agent.list` (rendered from code — read-only) |
+| task | `list`, `get`, `create`, `update`, `enroll {workflow}`, `resume {to?}`, `done`, `cancel`, `reopen`, `block`/`unblock`, `comment.add/list/edit/delete`, `subscribe`/`unsubscribe` |
+| registry | `workflow.list`, `workflow.get` (rendered from code — read-only) |
 | session | `list {task_id?}`, `get`, `transcript {from_line?, limit?}`, `subscribe`/`unsubscribe` (replay-then-tail), `input {message, kind}`, `abort` |
 
 Notifications (server→client push): `task-changed`, `project-changed`,

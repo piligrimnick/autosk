@@ -17,24 +17,20 @@ func newCreateCmd() *cobra.Command {
 		blocks      []string
 		blockedBy   []string
 		workflowArg string
-		agentArg    string
 	)
 	cmd := &cobra.Command{
 		Use:   "create [title]",
 		Short: "Create a new task (optionally enroll it into a workflow)",
 		Long: `Create a new task.
 
-The task starts in status='new' unless --workflow or --agent (mutually
-exclusive) is given, in which case it is enrolled right after creation:
+The task starts in status='new' unless --workflow NAME is given, in which
+case it is enrolled right after creation:
 
   --workflow NAME   enroll into the named workflow at its first step
                     (status becomes 'work').
 
-  --agent    NAME   materialise the single-step workflow single:<NAME>
-                    and enroll into it (status becomes 'work').
-
 For tasks that already exist, use 'autosk enroll <id> --workflow NAME'
-/ '--agent NAME' to attach them without recreating the task.
+to attach them without recreating the task.
 
 If --description is "-", the description is read from stdin.`,
 		Args: cobra.MaximumNArgs(1),
@@ -49,10 +45,6 @@ If --description is "-", the description is read from stdin.`,
 			if title == "" {
 				return errors.New("title is required")
 			}
-			if workflowArg != "" && agentArg != "" {
-				return errors.New("--workflow and --agent are mutually exclusive")
-			}
-
 			if description == "-" {
 				b, err := io.ReadAll(os.Stdin)
 				if err != nil {
@@ -76,13 +68,8 @@ If --description is "-", the description is read from stdin.`,
 				}
 			}
 			// Optional enrollment.
-			switch {
-			case workflowArg != "":
+			if workflowArg != "" {
 				if t, err = cl.EnrollWorkflow(cmd.Context(), t.ID, workflowArg); err != nil {
-					return err
-				}
-			case agentArg != "":
-				if t, err = cl.EnrollAgent(cmd.Context(), t.ID, agentArg); err != nil {
 					return err
 				}
 			}
@@ -99,6 +86,5 @@ If --description is "-", the description is read from stdin.`,
 	cmd.Flags().StringSliceVar(&blocks, "blocks", nil, "ids of tasks this task blocks")
 	cmd.Flags().StringSliceVar(&blockedBy, "blocked-by", nil, "ids of tasks that block this task")
 	cmd.Flags().StringVar(&workflowArg, "workflow", "", "enroll into this named workflow at its first step")
-	cmd.Flags().StringVar(&agentArg, "agent", "", "enroll into the single-step workflow single:<name>")
 	return cmd
 }

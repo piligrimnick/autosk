@@ -61,14 +61,6 @@ func (c *Client) EnrollWorkflow(ctx context.Context, id, workflow string) (Task,
 	return out, err
 }
 
-// EnrollAgent materialises a single-step workflow for an agent and enrolls the
-// task into it.
-func (c *Client) EnrollAgent(ctx context.Context, id, agent string) (Task, error) {
-	var out Task
-	err := c.call(ctx, "task.enroll", c.selector(map[string]any{"id": id, "agent": agent}), &out)
-	return out, err
-}
-
 // Resume flips human→work, optionally relocating to a sibling step or status.
 // A nil `to` resumes at the current step.
 func (c *Client) Resume(ctx context.Context, id string, to *StepTarget) (Task, error) {

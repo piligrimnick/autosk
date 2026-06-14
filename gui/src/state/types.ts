@@ -5,7 +5,6 @@
 // `project-changed` into these actions; render flows from this state.
 
 import type {
-  AgentInfo,
   AppSettings,
   Comment,
   DaemonStatus,
@@ -27,7 +26,6 @@ export interface ProjectSlice {
   /** Task id order (creation/update order as returned by task.list). */
   taskOrder: string[];
   workflows: WorkflowInfo[];
-  agents: AgentInfo[];
   /** Extension load errors for this project (project.diagnostics). */
   diagnostics: ProjectDiagnostics | null;
   tasksLoaded: boolean;
@@ -43,8 +41,8 @@ export interface TaskExtras {
   loaded: boolean;
 }
 
-/** Which overlay modal is open (Agents / Settings), if any. */
-export type ModalKind = "agents" | "settings" | null;
+/** Which overlay modal is open (Settings), if any. */
+export type ModalKind = "settings" | null;
 
 /** Which sidebar accordion panel is expanded/active (lazygit-style stack). */
 export type SidebarPanel = "tasks" | "sessions" | "workflows";
@@ -105,7 +103,6 @@ export function emptyProjectSlice(): ProjectSlice {
     tasks: {},
     taskOrder: [],
     workflows: [],
-    agents: [],
     diagnostics: null,
     tasksLoaded: false,
     metaLoaded: false,
@@ -162,7 +159,7 @@ export type Action =
   | { type: "project/select"; root: string | null }
   | { type: "project/tasksLoading"; root: string }
   | { type: "project/tasksLoaded"; root: string; tasks: TaskView[] }
-  | { type: "project/metaLoaded"; root: string; workflows: WorkflowInfo[]; agents: AgentInfo[] }
+  | { type: "project/metaLoaded"; root: string; workflows: WorkflowInfo[] }
   | { type: "project/diagnosticsLoaded"; root: string; diagnostics: ProjectDiagnostics }
   | { type: "project/error"; root: string; error: string }
   // selection

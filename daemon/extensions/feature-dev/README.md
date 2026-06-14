@@ -14,13 +14,17 @@ dev ──▶ review ──▶ docs ──▶ validator ──▶ accept (human)
  └────────┘────────────────────┘   (review→dev and validator→dev bounce-backs)
 ```
 
-| Step        | Role                          | Notes                                                        |
+| Step        | Kind                          | Notes                                                        |
 | ----------- | ----------------------------- | ------------------------------------------------------------ |
-| `dev`       | `@autosk/pi-agent/dev`        | first step; implements the task                              |
-| `review`    | `@autosk/pi-agent/review`     | thorough code review (`thinking: xhigh`); bounces back to `dev` |
-| `docs`      | `@autosk/pi-agent/docs`       | documentation pass                                           |
-| `validator` | `@autosk/pi-agent/validator`  | independent item-by-item verification; bounces back to `dev` |
-| `accept`    | _human_                       | the engine parks here for a human's final acceptance         |
+| `dev`       | `piAgent` (name `dev`)        | first step; implements the task                              |
+| `review`    | `piAgent` (name `review`)     | thorough code review (`thinking: xhigh`); bounces back to `dev` |
+| `docs`      | `piAgent` (name `docs`)       | documentation pass                                           |
+| `validator` | `piAgent` (name `validator`)  | independent item-by-item verification; bounces back to `dev` |
+| `accept`    | `statusStep("human")`         | the engine parks here for a human's final acceptance         |
+
+Each agent step is an inline `@autosk/pi-agent` value: the **step key is the
+agent name** (`dev`/`review`/`docs`/`validator`), and registering the workflow
+registers those agents — there is no separate agent registration.
 
 - **Isolation:** `worktreeIsolation()` — each task runs in its own git worktree.
 - **Visit cap:** `onTransit` rejects a bounce-back into `dev` once the task has
@@ -54,17 +58,16 @@ autosk enroll <task-id> --workflow feature-dev
 ## Configuration
 
 This package exposes no per-step config knobs of its own — the agent behaviour
-is configured on the [`@autosk/pi-agent`](../pi-agent) roles (model, thinking,
-extra args, …) constructed in `featureDevAgents()`. To customise, copy this
+is configured on the inline [`@autosk/pi-agent`](../pi-agent) step values (model,
+thinking, extra args, …) inside `featureDevWorkflow()`. To customise, copy this
 extension into `~/.autosk/extensions/` (or your project's `.autosk/extensions/`)
 and edit the `piAgent({...})` / `featureDevWorkflow({...})` calls; your copy then
 overrides the bundled one.
 
 ## Exports
 
-- default export — the extension factory (registers the four roles + the
-  workflow).
+- default export — the extension factory (registers the workflow, whose steps
+  carry the four inline agents).
 - `featureDevWorkflow(options?)` → `WorkflowDefinition` (a factory; tests inject
   a custom `isolation`).
-- `featureDevAgents()` → the four `piAgent` role definitions.
-- `DEV_VISIT_CAP`, `ROLE_PREFIX` — the cap constant and role-name prefix.
+- `DEV_VISIT_CAP` — the `dev` re-entry cap constant.

@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { ErrorCodes } from "@autosk/sdk";
+import { ErrorCodes, statusStep } from "@autosk/sdk";
 import type {
   AgentDefinition,
   Comment,
@@ -72,7 +72,7 @@ describe("task lifecycle + done/cancel/reopen", () => {
 
   test("cancel then reopen of an enrolled task → human (resumable, keeps workflow/step)", async () => {
     const handle = await td.handle(cwd);
-    handle.extensions.addWorkflow("test", { name: "wf", firstStep: "review", steps: { review: { human: true } } });
+    handle.extensions.addWorkflow("test", { name: "wf", firstStep: "review", steps: { review: statusStep("human") } });
 
     const t = await client.call<TaskView>("task.create", { cwd, title: "T" });
     await client.call("task.enroll", { cwd, id: t.id, workflow: "wf" });
@@ -95,11 +95,11 @@ describe("task lifecycle + done/cancel/reopen", () => {
 
   test("done is rejected while a session is live, then succeeds after abort", async () => {
     const handle = await td.handle(cwd);
-    const agent: AgentDefinition = { name: "hang", onRun: () => new Promise<void>(() => {}) };
-    handle.extensions.addAgent("test", agent);
+    const agent: AgentDefinition = { onRun: () => new Promise<void>(() => {}) };
+    handle.extensions.addWorkflow("test", { name: "hang", firstStep: "do", steps: { do: agent } });
 
     const t = await client.call<TaskView>("task.create", { cwd, title: "T" });
-    await client.call("task.enroll", { cwd, id: t.id, agent: "hang" });
+    await client.call("task.enroll", { cwd, id: t.id, workflow: "hang" });
 
     let sessionId = "";
     await waitFor(async () => {
@@ -135,10 +135,10 @@ describe("session.input / abort wire translation (plan §3.4)", () => {
     await td.cleanup();
   });
 
-  /** Drives a task to a live `running` session under `agent` and returns the session id. */
-  async function liveSession(agentName: string): Promise<string> {
+  /** Drives a task to a live `running` session under `workflow` and returns the session id. */
+  async function liveSession(workflow: string): Promise<string> {
     const t = await client.call<TaskView>("task.create", { cwd, title: "T" });
-    await client.call("task.enroll", { cwd, id: t.id, agent: agentName });
+    await client.call("task.enroll", { cwd, id: t.id, workflow });
     let sessionId = "";
     await waitFor(async () => {
       const sessions = await client.call<SessionMeta[]>("session.list", { cwd });
@@ -154,7 +154,11 @@ describe("session.input / abort wire translation (plan §3.4)", () => {
     // A hanging agent with NO onSteer hook: the run is live, but it cannot accept
     // a steer — the engine returns { handled:false }, which the RPC layer must map
     // to CONFLICT/unsupported_by_agent (NOT a no-op success).
-    handle.extensions.addAgent("test", { name: "plain", onRun: () => new Promise<void>(() => {}) });
+    handle.extensions.addWorkflow("test", {
+      name: "plain",
+      firstStep: "do",
+      steps: { do: { onRun: () => new Promise<void>(() => {}) } },
+    });
 
     const sessionId = await liveSession("plain");
     const frame = await client.callRaw("session.input", { cwd, id: sessionId, message: "go left", kind: "steer" });
@@ -169,7 +173,11 @@ describe("session.input / abort wire translation (plan §3.4)", () => {
     // `aborted`. A SECOND abort then hits a settled-but-live runtime — the engine
     // returns { handled:false }, which for abort means only "nothing left to
     // abort" and must surface as ok:false, NOT a CONFLICT/unsupported error.
-    handle.extensions.addAgent("test", { name: "hang", onRun: () => new Promise<void>(() => {}) });
+    handle.extensions.addWorkflow("test", {
+      name: "hang",
+      firstStep: "do",
+      steps: { do: { onRun: () => new Promise<void>(() => {}) } },
+    });
 
     const sessionId = await liveSession("hang");
     const first = await client.call<{ ok: boolean }>("session.abort", { cwd, id: sessionId });
@@ -239,13 +247,12 @@ describe("registry + session reads + health + projects", () => {
     await td.cleanup();
   });
 
-  test("registry.workflow.list/get and agent.list reflect the registered code", async () => {
+  test("registry.workflow.list/get reflect the registered code (agents inline)", async () => {
     const handle = await td.handle(cwd);
-    handle.extensions.addAgent("test", { name: "doer", onRun: async (c) => void (await c.transit({ status: "done" })) });
     handle.extensions.addWorkflow("test", {
       name: "flow",
       firstStep: "dev",
-      steps: { dev: { agent: "doer" }, accept: { human: true } },
+      steps: { dev: { onRun: async (c) => void (await c.transit({ status: "done" })) }, accept: statusStep("human") },
     });
 
     const workflows = await client.call<WorkflowInfo[]>("registry.workflow.list", { cwd });
@@ -253,11 +260,9 @@ describe("registry + session reads + health + projects", () => {
 
     const flow = await client.call<WorkflowInfo>("registry.workflow.get", { cwd, name: "flow" });
     expect(flow.first_step).toBe("dev");
-    expect(flow.steps.find((s) => s.name === "dev")?.agent).toBe("doer");
-    expect(flow.steps.find((s) => s.name === "accept")?.human).toBe(true);
-
-    const agents = await client.call<{ name: string }[]>("registry.agent.list", { cwd });
-    expect(agents.map((a) => a.name)).toContain("doer");
+    // The agent step renders status null; the accept step is a human statusStep.
+    expect(flow.steps.find((s) => s.name === "dev")?.status).toBeNull();
+    expect(flow.steps.find((s) => s.name === "accept")?.status).toBe("human");
 
     // Unknown workflow → NOT_FOUND.
     expect((await client.callRaw("registry.workflow.get", { cwd, name: "ghost" })).error).toBeDefined();
@@ -265,16 +270,21 @@ describe("registry + session reads + health + projects", () => {
 
   test("session.list/get/transcript over a finished session", async () => {
     const handle = await td.handle(cwd);
-    handle.extensions.addAgent("test", {
-      name: "quick",
-      onRun: async (c) => {
-        c.log.custom("note", { ok: true });
-        await c.transit({ status: "done" });
+    handle.extensions.addWorkflow("test", {
+      name: "quick-wf",
+      firstStep: "quick",
+      steps: {
+        quick: {
+          onRun: async (c) => {
+            c.log.custom("note", { ok: true });
+            await c.transit({ status: "done" });
+          },
+        },
       },
     });
 
     const t = await client.call<TaskView>("task.create", { cwd, title: "T" });
-    await client.call("task.enroll", { cwd, id: t.id, agent: "quick" });
+    await client.call("task.enroll", { cwd, id: t.id, workflow: "quick-wf" });
     await waitFor(async () => {
       const list = await client.call<SessionMeta[]>("session.list", { cwd });
       return list.length === 1 && list[0]!.status === "done";
@@ -286,6 +296,7 @@ describe("registry + session reads + health + projects", () => {
 
     const meta = await client.call<SessionMeta>("session.get", { cwd, id: sid });
     expect(meta.status).toBe("done");
+    // SessionMeta.agent is the step key (inline step agents).
     expect(meta.agent).toBe("quick");
 
     const { entries, next_line } = await client.call<{ entries: { type: string }[]; next_line: number }>(

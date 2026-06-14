@@ -14,6 +14,7 @@ import type {
   IsolationProvider,
   StepTarget,
   TransitContext,
+  WorkflowDefinition,
 } from "@autosk/sdk";
 import { DEV_VISIT_CAP, featureDevWorkflow } from "@autosk/feature-dev";
 
@@ -29,8 +30,34 @@ const fakeIsolation: IsolationProvider = {
   async release() {},
 };
 
-function scripted(name: string, decide: () => StepTarget): AgentDefinition {
-  return { name, onRun: async (ctx) => void (await ctx.transit(decide())) };
+function scripted(decide: () => StepTarget): AgentDefinition {
+  return { onRun: async (ctx) => void (await ctx.transit(decide())) };
+}
+
+/**
+ * The shipped `feature-dev` workflow with its four pi-agent steps replaced by
+ * scripted stubs (so the real step graph + `onTransit` + the `accept`
+ * statusStep are exercised without spawning pi). The step KEYS are unchanged,
+ * so the agents stay inline — we just swap the `dev/review/docs/validator`
+ * values for controllable doubles and keep `accept: statusStep("human")`.
+ */
+function scriptedFeatureDev(steps: {
+  dev: () => StepTarget;
+  review: () => StepTarget;
+  docs: () => StepTarget;
+  validator: () => StepTarget;
+}): WorkflowDefinition {
+  const real = featureDevWorkflow({ isolation: fakeIsolation });
+  return {
+    ...real,
+    steps: {
+      ...real.steps,
+      dev: scripted(steps.dev),
+      review: scripted(steps.review),
+      docs: scripted(steps.docs),
+      validator: scripted(steps.validator),
+    },
+  };
 }
 
 describe("feature-dev — scripted walk + visit cap", () => {
@@ -47,15 +74,14 @@ describe("feature-dev — scripted walk + visit cap", () => {
 
   test("walks dev → review → dev (bounce) → review → docs → validator → accept", async () => {
     let reviewCount = 0;
-    const agents = [
-      scripted("@autosk/pi-agent/dev", () => ({ step: "review" })),
+    const wf = scriptedFeatureDev({
+      dev: () => ({ step: "review" }),
       // First review bounces back to dev; the second review forwards to docs.
-      scripted("@autosk/pi-agent/review", () => (++reviewCount === 1 ? { step: "dev" } : { step: "docs" })),
-      scripted("@autosk/pi-agent/docs", () => ({ step: "validator" })),
-      scripted("@autosk/pi-agent/validator", () => ({ step: "accept" })),
-    ];
-    const wf = featureDevWorkflow({ isolation: fakeIsolation });
-    const p = track(await makeProject({ workflows: [wf], agents }));
+      review: () => (++reviewCount === 1 ? { step: "dev" } : { step: "docs" }),
+      docs: () => ({ step: "validator" }),
+      validator: () => ({ step: "accept" }),
+    });
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);
@@ -80,15 +106,14 @@ describe("feature-dev — scripted walk + visit cap", () => {
     // bounces that the engine's own `visits('dev')` (transition.ts, counts prior
     // dev sessions) crosses the cap — protecting the prior-vs-inclusive semantics
     // against a future refactor of how sessions are counted.
-    const agents = [
-      scripted("@autosk/pi-agent/dev", () => ({ step: "review" })),
+    const wf = scriptedFeatureDev({
+      dev: () => ({ step: "review" }),
       // `review` always bounces back to `dev` — the loop is bounded ONLY by the cap.
-      scripted("@autosk/pi-agent/review", () => ({ step: "dev" })),
-      scripted("@autosk/pi-agent/docs", () => ({ step: "validator" })),
-      scripted("@autosk/pi-agent/validator", () => ({ step: "accept" })),
-    ];
-    const wf = featureDevWorkflow({ isolation: fakeIsolation });
-    const p = track(await makeProject({ workflows: [wf], agents }));
+      review: () => ({ step: "dev" }),
+      docs: () => ({ step: "validator" }),
+      validator: () => ({ step: "accept" }),
+    });
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);

@@ -256,8 +256,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const cwd = root ?? cwdOf();
         if (!cwd) return;
         try {
-          const [workflows, agents] = await Promise.all([ipc.workflowList(cwd), ipc.agentList(cwd)]);
-          dispatch({ type: "project/metaLoaded", root: cwd, workflows, agents });
+          const workflows = await ipc.workflowList(cwd);
+          dispatch({ type: "project/metaLoaded", root: cwd, workflows });
         } catch {
           /* meta is non-fatal */
         }

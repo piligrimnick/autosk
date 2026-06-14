@@ -6,22 +6,21 @@
  * ```ts
  * import type { AutoskAPI } from "@autosk/sdk";
  * export default function (autosk: AutoskAPI) {
- *   autosk.registerAgent(...);
  *   autosk.registerWorkflow(...);
  * }
  * ```
  *
- * `registerWorkflow` / `registerAgent` write into the calling project's
- * registry. A name collision is a load error surfaced via
- * `project.diagnostics`; it never takes the daemon down.
+ * `registerWorkflow` writes into the calling project's registry. A workflow
+ * registers its agents inline (each step value is an `AgentDefinition` or a
+ * `statusStep`), so there is no separate agent registration. A name collision
+ * or an invalid step shape is a load error surfaced via `project.diagnostics`;
+ * it never takes the daemon down.
  */
 
-import type { AgentDefinition } from "./agent.ts";
 import type { WorkflowDefinition } from "./workflow.ts";
 
 export interface AutoskAPI {
   registerWorkflow(workflow: WorkflowDefinition): void;
-  registerAgent(agent: AgentDefinition): void;
 }
 
 /** The default export an extension module must provide. */

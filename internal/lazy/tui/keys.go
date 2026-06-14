@@ -1168,13 +1168,10 @@ func (gu *Gui) taskReopen(*gocui.Gui, *gocui.View) error {
 }
 
 // taskClaim was removed: the v0.2 schema has no claim verb. See the
-// design plan + the help screen — 'e' enrolls into a workflow (or,
-// with `--agent NAME`, into a synthetic single:<agent> flow); there is
+// design plan + the help screen — 'e' enrolls into a workflow; there is
 // no separate assign verb anymore.
 
-// taskEnroll opens the two-pane workflow + step picker. Synthetic
-// single:<agent> workflows are filtered out (operators still drive
-// those via `autosk enroll --agent NAME` on the CLI). On open the
+// taskEnroll opens the two-pane workflow + step picker. On open the
 // workflow cursor pre-selects the task's current workflow when it
 // exists in the cached slice; otherwise row 0. Enter on the step
 // pane dispatches Datasource.Enroll(ctx, taskID, wfName, stepName).

@@ -17,23 +17,22 @@ An extension is a module with a **default export** that is a factory function.
 The daemon calls it once per project with an [`AutoskAPI`](../daemon/sdk/src/api.ts):
 
 ```ts
-import type { AutoskAPI } from "@autosk/sdk";
+import { statusStep, type AutoskAPI } from "@autosk/sdk";
 import { piAgent } from "@autosk/pi-agent";
 import { worktreeIsolation } from "@autosk/worktree";
 
 export default function (autosk: AutoskAPI) {
-  autosk.registerAgent(piAgent({
-    name: "@me/dev",
-    model: "sonnet:high",
-    firstMessageFile: new URL("./prompts/dev.md", import.meta.url).pathname,
-  }));
-
   autosk.registerWorkflow({
     name: "my-flow",
     firstStep: "dev",
     steps: {
-      dev:    { agent: "@me/dev" },
-      accept: { human: true },
+      // The step key IS the agent name; registering the workflow registers
+      // its inline agents — there is no separate registerAgent call.
+      dev: piAgent({
+        model: "sonnet:high",
+        firstMessageFile: new URL("./prompts/dev.md", import.meta.url).pathname,
+      }),
+      accept: statusStep("human"),
     },
     onTransit(ctx, to) {
       if ("step" in to && to.step === "dev" && ctx.visits("dev") >= 5) {
@@ -45,13 +44,15 @@ export default function (autosk: AutoskAPI) {
 }
 ```
 
-`AutoskAPI` has exactly two methods:
+`AutoskAPI` has exactly one method:
 
 - `registerWorkflow(workflow: WorkflowDefinition)` — adds a workflow to the
-  calling project's registry.
-- `registerAgent(agent: AgentDefinition)` — adds an agent.
+  calling project's registry. The workflow's agents are declared **inline** as
+  step values (an `AgentDefinition` per agent step, the step key being the agent
+  name), so registering the workflow registers its agents — there is no separate
+  `registerAgent`.
 
-Both write into **that project's** registry. The daemon imports TypeScript
+It writes into **that project's** registry. The daemon imports TypeScript
 natively (it runs on Bun), so an extension can be plain `.ts` — no build step.
 
 ## Discovery order
@@ -102,8 +103,9 @@ recorded, and the rest of the registry stays usable:
 
 - the module fails to import;
 - it has no default-export factory;
-- the factory throws;
+- the factory throws (e.g. a stale extension calling the removed `registerAgent`);
 - it registers a name that collides with an already-registered one;
+- a workflow step is neither an inline agent (`onRun`) nor a `statusStep`;
 - a `settings.json` package is listed but not installed / declares no extension.
 
 Each failure becomes a load diagnostic tagged with the offending source (a path,
@@ -124,13 +126,6 @@ every `work` / `human` task is validated against the registry; a task whose
 workflow or step has vanished is parked to `human` with
 `error="workflow_missing: …"`. Fix the code (or restore the name) and resume the
 task.
-
-## The `singleStep` builtin
-
-You don't always need a full workflow. `task.enroll {agent}` (CLI: `autosk
-enroll <id> --agent <name>`) materialises a one-step workflow named
-`single:<agent>` on demand — no persisted rows, no registry entry — whose only
-step runs that agent. This replaces v1's `single:<agent>` synthetic workflows.
 
 ## Shipped (bundled) extensions
 
@@ -157,25 +152,31 @@ The smallest extension is a single file:
 
 ```ts
 // ~/.autosk/extensions/hello.ts
-import type { AutoskAPI } from "@autosk/sdk";
+import { type AutoskAPI } from "@autosk/sdk";
 
 export default function (autosk: AutoskAPI) {
-  autosk.registerAgent({
-    name: "@me/echo",
-    async onRun(ctx) {
-      await ctx.comment("hello from @me/echo");
-      await ctx.transit({ status: "done" });
+  autosk.registerWorkflow({
+    name: "echo",
+    firstStep: "echo",
+    steps: {
+      // The step key "echo" is the inline agent's name.
+      echo: {
+        async onRun(ctx) {
+          await ctx.comment("hello from echo");
+          await ctx.transit({ status: "done" });
+        },
+      },
     },
   });
 }
 ```
 
 ```bash
-autosk enroll <task-id> --agent @me/echo   # uses the singleStep builtin
+autosk enroll <task-id> --workflow echo
 ```
 
 To customise a shipped extension, copy it into `~/.autosk/extensions/` (or your
 project's `.autosk/extensions/`) and edit it; your copy overrides the bundled one
 by name. See [docs/workflows.md](workflows.md) for the full
-`WorkflowDefinition` / `AgentDefinition` / `IsolationProvider` contracts and the
-`AgentRunContext` your `onRun` receives.
+`WorkflowDefinition` / `AgentDefinition` / `StatusStep` / `IsolationProvider`
+contracts and the `AgentRunContext` your `onRun` receives.

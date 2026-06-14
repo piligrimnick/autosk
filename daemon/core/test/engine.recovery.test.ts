@@ -19,9 +19,8 @@ describe("engine — crash recovery", () => {
     for (const c of cleanups.splice(0)) c();
   });
 
-  function buildRegistry(workflows: WorkflowDefinition[], agents: AgentDefinition[]): ExtensionRegistry {
+  function buildRegistry(workflows: WorkflowDefinition[]): ExtensionRegistry {
     const registry = new ExtensionRegistry();
-    for (const a of agents) registry.addAgent("test", a);
     for (const w of workflows) registry.addWorkflow("test", w);
     return registry;
   }
@@ -30,11 +29,9 @@ describe("engine — crash recovery", () => {
     const dir = tempDir();
     cleanups.push(() => dir.cleanup());
 
-    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: { agent: "stuck" } } };
     let started!: () => void;
     const startedP = new Promise<void>((r) => (started = r));
     const stuck: AgentDefinition = {
-      name: "stuck",
       // Runs forever until its AbortSignal fires (the daemon-stop simulation).
       onRun: (ctx) =>
         new Promise<void>((resolve) => {
@@ -42,12 +39,13 @@ describe("engine — crash recovery", () => {
           ctx.signal.addEventListener("abort", () => resolve(), { once: true });
         }),
     };
+    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: stuck } };
 
     // -- engine #1: dispatch a session, then "crash" (stop) mid-run -----------
     const store1 = new Store(dir.path, { watch: false });
     stores.push(store1);
     await store1.open();
-    const registry1 = buildRegistry([wf], [stuck]);
+    const registry1 = buildRegistry([wf]);
     const project1: EngineProject = { root: store1.root, store: store1, registry: registry1 };
     const engine1 = new Engine({ logger: new CapturingLogger() });
     await engine1.addProject(project1);
@@ -69,7 +67,7 @@ describe("engine — crash recovery", () => {
     const store2 = new Store(dir.path, { watch: false });
     stores.push(store2);
     await store2.open(); // startup scan loads the `running` meta
-    const registry2 = buildRegistry([wf], [stuck]);
+    const registry2 = buildRegistry([wf]);
     const project2: EngineProject = { root: store2.root, store: store2, registry: registry2 };
     const engine2 = new Engine({ logger: new CapturingLogger() });
     await engine2.addProject(project2); // recovery runs here

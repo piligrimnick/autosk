@@ -14,8 +14,9 @@ defines. This page is the reference for the contracts your extension registers
 
 > **Clean break from v1.** There is no in-place workflow editor and no
 > agent-package installer — editing a workflow means editing its extension code,
-> and agents are code too. `autosk workflow` and `autosk agent` are now
-> **read-only** views of what the project's extensions registered.
+> and agents are code too (each step's agent is declared **inline** in the
+> workflow). `autosk workflow` is now a **read-only** view of what the project's
+> extensions registered.
 
 ## The task status machine
 
@@ -47,9 +48,13 @@ interface WorkflowDefinition {
   isolation?: IsolationProvider;      // optional, pluggable (see "Isolation")
 }
 
-interface StepDef {
-  agent?: string;                     // agent name from the registry
-  human?: boolean;                    // human-owned step: the engine parks, never schedules
+// A step is EITHER an inline agent OR a terminal/park status step.
+// Discriminated structurally: an AgentDefinition has `onRun`; a StatusStep
+// has `status`. The step key is the agent name.
+type StepDef = AgentDefinition | StatusStep;
+
+interface StatusStep {
+  status: "done" | "cancel" | "human";   // build one with statusStep(...)
 }
 
 type StepTarget =
@@ -58,9 +63,26 @@ type StepTarget =
 ```
 
 - **`firstStep`** is where `task.enroll {workflow}` lands the task.
-- A **`human` step** (`{ human: true }`) is one the engine never schedules: it
-  parks the task to `human` and waits for a person to `resume` it.
-- A step with an **`agent`** is scheduled: the daemon runs that agent's `onRun`.
+- An **agent step** is an inline [`AgentDefinition`](#agent-definitions) (it has
+  an `onRun`): the daemon schedules it and runs that agent's `onRun`. The step
+  key is the agent's name.
+- A **status step** (`statusStep(...)`) is one the engine never schedules:
+  entering it moves the task to that status. `statusStep("human")` parks the task
+  and waits for a person to `resume` it; `statusStep("done")` /
+  `statusStep("cancel")` close the task (recording the step it ended on).
+
+A `statusStep` is built with the SDK helper:
+
+```ts
+import { statusStep } from "@autosk/sdk";
+import { piAgent } from "@autosk/pi-agent";
+
+steps: {
+  dev:     piAgent({ firstMessageFile: ".../dev.md" }),  // agent step (name "dev")
+  accept:  statusStep("human"),                          // park for a human
+  shipped: statusStep("done"),                           // close as done
+}
+```
 
 ### `onTransit` — the only graph authority
 
@@ -99,11 +121,12 @@ produces an accepted transition, the task is parked to `human`.
 
 ## Agent definitions
 
-An agent is an [`AgentDefinition`](../daemon/sdk/src/agent.ts):
+An agent is an [`AgentDefinition`](../daemon/sdk/src/agent.ts) — an inline step
+value. There is no `name` field and no separate agent registry: the **step key
+is the agent name**, and registering the workflow registers its agents.
 
 ```ts
 interface AgentDefinition {
-  name: string;
   onRun(ctx: AgentRunContext): Promise<void>;
   onSteer?(ctx: AgentRunContext, message: string): Promise<void>;
   onFollowup?(ctx: AgentRunContext, message: string): Promise<void>;
@@ -188,11 +211,9 @@ every step in the project root (`tag: "none"`).
 # Create, optionally enrolling at the same time.
 autosk create "Wire up the auth flow"
 autosk create "Fix the flaky test" --workflow feature-dev   # create + enroll
-autosk create "say hi" --agent @me/echo                     # create + single-step enroll
 
 # Enroll an existing task.
 autosk enroll <id> --workflow feature-dev   # at the workflow's firstStep
-autosk enroll <id> --agent @me/echo         # singleStep: one step, one agent
 
 # Resume a parked (human) task back into its workflow.
 autosk resume <id>                 # at the current step
@@ -204,24 +225,25 @@ autosk cancel <id>
 autosk reopen <id>
 ```
 
-`enroll` accepts exactly one of `--workflow` or `--agent`. `--agent` uses the
-[`singleStep`](extensions.md#the-singlestep-builtin) builtin (a one-step
-`single:<agent>` workflow materialised on demand).
+`enroll` (and `create --workflow`) takes a `--workflow` target only — a task is
+always enrolled into a named workflow at its `firstStep`.
 
 ### Read-only registry views
 
-Workflows and agents come from code, so the CLI only *shows* them:
+Workflows come from code, so the CLI only *shows* them:
 
 ```bash
 autosk workflow list          # workflows registered by this project's extensions
-autosk workflow show <name>   # steps, declared targets, isolation tag
-autosk agent list             # agents registered by this project's extensions
-autosk agent show <name>
+autosk workflow show <name>   # steps (KIND: agent | done|cancel|human), targets, isolation
 ```
 
-If a workflow or agent you expect is missing, check
-`autosk project diagnostics` — a broken extension records a load error there
-instead of crashing the daemon (see [docs/extensions.md](extensions.md#error-isolation--projectdiagnostics)).
+`workflow show` renders each step with a `KIND` column: `agent` for an inline
+agent step (its `name` is the agent name), or the terminal/park status
+(`done` / `cancel` / `human`) for a `statusStep`.
+
+If a workflow you expect is missing, check `autosk project diagnostics` — a
+broken extension (or an invalid step shape) records a load error there instead
+of crashing the daemon (see [docs/extensions.md](extensions.md#error-isolation--projectdiagnostics)).
 
 ## The shipped reference workflow: `feature-dev`
 
@@ -234,13 +256,13 @@ dev ──▶ review ──▶ docs ──▶ validator ──▶ accept (human)
  └────────┴────────────────────┘   (review→dev and validator→dev bounce-backs)
 ```
 
-| Step | Role | Notes |
+| Step | Kind | Notes |
 | --- | --- | --- |
-| `dev` | `@autosk/pi-agent/dev` | implements the task (first step) |
-| `review` | `@autosk/pi-agent/review` | thorough review; can bounce back to `dev` |
-| `docs` | `@autosk/pi-agent/docs` | documentation pass |
-| `validator` | `@autosk/pi-agent/validator` | independent verification; can bounce back to `dev` |
-| `accept` | _human_ | the engine parks here for final acceptance |
+| `dev` | agent (`piAgent`) | implements the task (first step) |
+| `review` | agent (`piAgent`) | thorough review; can bounce back to `dev` |
+| `docs` | agent (`piAgent`) | documentation pass |
+| `validator` | agent (`piAgent`) | independent verification; can bounce back to `dev` |
+| `accept` | `statusStep("human")` | the engine parks here for final acceptance |
 
 - **Isolation:** `worktreeIsolation()` — each task runs in its own git worktree,
   so the project root must be a git repo.
@@ -270,23 +292,22 @@ A minimal two-step flow with a human gate:
 
 ```ts
 // ~/.autosk/extensions/my-flow.ts
-import type { AutoskAPI } from "@autosk/sdk";
+import { statusStep, type AutoskAPI } from "@autosk/sdk";
 import { piAgent } from "@autosk/pi-agent";
 import { worktreeIsolation } from "@autosk/worktree";
 
 export default function (autosk: AutoskAPI) {
-  autosk.registerAgent(piAgent({
-    name: "@me/dev",
-    model: "sonnet:high",
-    firstMessageFile: new URL("./prompts/dev.md", import.meta.url).pathname,
-  }));
-
   autosk.registerWorkflow({
     name: "my-flow",
     firstStep: "dev",
     steps: {
-      dev:    { agent: "@me/dev" },
-      accept: { human: true },
+      // The step key is the agent name; registering the workflow registers
+      // its inline agents — there is no separate registerAgent call.
+      dev: piAgent({
+        model: "sonnet:high",
+        firstMessageFile: new URL("./prompts/dev.md", import.meta.url).pathname,
+      }),
+      accept: statusStep("human"),
     },
     onTransit(ctx, to) {
       // gate, count, or comment here; throw to reject a transition.

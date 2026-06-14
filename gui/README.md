@@ -50,7 +50,7 @@ gui/
 │   │   ├── tasks/              # TasksPanel, TaskRow, TaskRowMenu, NewTaskModal
 │   │   ├── workflows/          # WorkflowsPanel, WorkflowRow (read-only)
 │   │   ├── projects/           # ProjectSwitcher (+ diagnostics), AddProjectModal
-│   │   ├── agents/ · settings/ # AgentsModal, SettingsModal
+│   │   ├── settings/          # SettingsModal
 │   │   └── shared/             # Menu (portal dropdown)
 │   └── components/             # shared primitives: Modal, Markdown, NoticeBar, common
 └── src-tauri/                  # Tauri (Rust) backend — a self-contained
@@ -106,10 +106,11 @@ The design mirrors the CodexMonitor blueprint ("shared core + thin adapters"):
   auto-expands its matching panel — and a **main panel** with the polymorphic
   entity view (task sheet with editable/deletable comments / session transcript /
   **read-only** workflow definition) plus one entity-aware composer (steer a live
-  session / comment a task). Workflows AND agents are code now (registered by
-  project extensions), so both panels are read-only — there is no create / edit /
-  install / uninstall UI. A titlebar hosts the connection indicator and the
-  Agents/Settings modals; the titlebar project switcher (switch / add / init /
+  session / comment a task). Workflows are code now (registered by project
+  extensions, with their agents inline as step values), so the panel is
+  read-only — there is no create / edit / install / uninstall UI. A titlebar
+  hosts the connection indicator and the Settings modal; the titlebar project
+  switcher (switch / add / init /
   remove) also surfaces a ⚠ **diagnostics** badge + list when an extension fails
   to load (`project.diagnostics`).
 

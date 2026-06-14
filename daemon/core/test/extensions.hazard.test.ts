@@ -1,6 +1,6 @@
 /**
  * Live-code hazard guard (plan §3.6, step 5) + the project-manager integration
- * that runs it on open, plus the `singleStep` enroll path end-to-end.
+ * that runs it on open.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -12,7 +12,6 @@ import {
   CapturingLogger,
   ExtensionRegistry,
   initProject,
-  loadProjectRegistry,
   ProjectManager,
   ProjectRegistry,
   Store,
@@ -21,11 +20,11 @@ import {
 import type { AgentDefinition, WorkflowDefinition } from "@autosk/sdk";
 import { fixedClock, tempDir } from "./helpers.ts";
 
-const agent = (name: string): AgentDefinition => ({ name, async onRun() {} });
+const agentStep = (): AgentDefinition => ({ async onRun() {} });
 const featureDev = (): WorkflowDefinition => ({
   name: "feature-dev",
   firstStep: "dev",
-  steps: { dev: { agent: "dev" }, review: { agent: "review" } },
+  steps: { dev: agentStep(), review: agentStep() },
 });
 
 function write(path: string, content: string): void {
@@ -158,20 +157,6 @@ describe("validateInFlightTasks", () => {
     expect(await store.listComments(t.id)).toEqual([]);
   });
 
-  test("a single:<agent> position validates against the live registry", async () => {
-    const ok = await store.createTask({ title: "solo ok" });
-    await store.setPosition(ok.id, { status: "work", workflow: "single:dev", step: "do" });
-    const gone = await store.createTask({ title: "solo gone" });
-    await store.setPosition(gone.id, { status: "work", workflow: "single:ghost", step: "do" });
-
-    const registry = new ExtensionRegistry();
-    registry.addAgent("s", agent("dev"));
-    const parked = await validateInFlightTasks(store, registry);
-
-    expect(parked.map((p) => p.taskId)).toEqual([gone.id]);
-    expect((await store.taskView(ok.id)).status).toBe("work"); // untouched
-    expect((await store.taskView(gone.id)).status).toBe("human");
-  });
 });
 
 describe("ProjectManager open() runs the loader + hazard guard", () => {
@@ -207,8 +192,7 @@ describe("ProjectManager open() runs the loader + hazard guard", () => {
       join(proj, ".autosk/extensions/wf.ts"),
       [
         "export default function (autosk) {",
-        '  autosk.registerAgent({ name: "dev", async onRun() {} });',
-        '  autosk.registerWorkflow({ name: "feature-dev", firstStep: "dev", steps: { dev: { agent: "dev" }, review: { agent: "dev" } } });',
+        '  autosk.registerWorkflow({ name: "feature-dev", firstStep: "dev", steps: { dev: { onRun: async () => {} }, review: { onRun: async () => {} } } });',
         "}",
         "",
       ].join("\n"),
@@ -267,26 +251,4 @@ describe("ProjectManager open() runs the loader + hazard guard", () => {
     expect(parkWarns[0]).toContain("workflow_missing: ghost-flow");
   });
 
-  test("the singleStep enroll path is runnable without leaking into workflow.list", async () => {
-    write(
-      join(proj, ".autosk/extensions/solo.ts"),
-      [
-        "export default function (autosk) {",
-        '  autosk.registerAgent({ name: "solo", async onRun() {} });',
-        "}",
-        "",
-      ].join("\n"),
-    );
-
-    const registry = await loadProjectRegistry(proj, { home });
-
-    // enroll {agent: "solo"} materialises a runnable one-step workflow ...
-    const built = registry.singleStepFor("solo");
-    expect(built).toEqual({ name: "single:solo", firstStep: "do", steps: { do: { agent: "solo" } } });
-    expect(registry.validatePosition("single:solo", "do")).toEqual({ ok: true });
-
-    // ... but it never appears in the normal workflow list.
-    expect(registry.listWorkflows().map((w) => w.name)).toEqual([]);
-    expect(registry.workflowNames()).toEqual([]);
-  });
 });

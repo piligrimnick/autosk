@@ -87,14 +87,16 @@ type Workflow struct {
 
 // WorkflowStep is one step of a workflow rendered from code.
 type WorkflowStep struct {
-	Name      string
-	AgentName string // from Agent field, "" for human
-	Human     bool
-	Targets   []string // step names or status values from Targets
+	Name string
+	// Status is the terminal/park status for a statusStep ("done"/"cancel"/
+	// "human"), or "" for an agent step (whose Name is the agent name).
+	Status  string
+	Targets []string // step names or status values from Targets
 }
 
-// Agent is the read-only projection of an agent from code (api.AgentInfo).
-// v2 drops ID, IsHuman, Source, Version, Model, Thinking, ExtraArgs, PiSkills, PiExt, TasksOwned.
+// Agent is the read-only projection of an agent. v2 agents are inline step
+// values (the step key is the agent name), so this is derived from the
+// registered workflows' agent steps rather than a dedicated registry view.
 type Agent struct {
 	Name string
 }
@@ -209,7 +211,7 @@ type Datasource interface {
 	Sessions(ctx context.Context, taskID string) ([]Session, error) // replaces Jobs
 	GetSession(ctx context.Context, id string) (Session, error)     // replaces GetJob
 	Workflows(ctx context.Context) ([]Workflow, error)              // drops includeSynthetic
-	Agents(ctx context.Context) ([]Agent, error)
+	Agents(ctx context.Context) ([]Agent, error)                    // derived from workflow agent steps
 	Comments(ctx context.Context, taskID string) ([]Comment, error)
 	Healthz(ctx context.Context) (Health, error)
 
@@ -224,8 +226,6 @@ type Datasource interface {
 	UpdateTask(ctx context.Context, id string, title, description *string) error
 	// EnrollWorkflow replaces Enroll - drops stepName/base-ref; v2 enroll has no step
 	EnrollWorkflow(ctx context.Context, id, workflow string) error
-	// EnrollAgent materialises single-step workflow
-	EnrollAgent(ctx context.Context, id, agent string) error
 	// Resume maps to Resume(id, nil) for "resume from human" or Resume(id, &StepTarget{Step:toStep})
 	Resume(ctx context.Context, id, toStep string) error
 	Block(ctx context.Context, id, blocker string) error

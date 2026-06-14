@@ -31,7 +31,6 @@ describe("engine — worktreeIsolation acquire failure parks the task", () => {
     // either way the task parks, so the assertion holds without a git guard.
     let ran = false;
     const ag: AgentDefinition = {
-      name: "do",
       async onRun(ctx) {
         ran = true;
         await ctx.transit({ status: "done" });
@@ -42,11 +41,11 @@ describe("engine — worktreeIsolation acquire failure parks the task", () => {
     const wf: WorkflowDefinition = {
       name: "iso-wt",
       firstStep: "do",
-      steps: { do: { agent: "do" } },
+      steps: { do: ag },
       isolation: worktreeIsolation({ home: home.path }),
     };
     // makeProject's root is a plain temp dir — NOT a git repo — so acquire throws.
-    const p = track(await makeProject({ workflows: [wf], agents: [ag] }));
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);

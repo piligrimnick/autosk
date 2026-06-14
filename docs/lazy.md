@@ -153,7 +153,7 @@ ctrl+shift+s). The in-app `?` cheatsheet uses the same spellings.
 | `d` | Mark **done** (confirms when status was `work`). |
 | `x` | Cancel (confirms). |
 | `o` | Reopen (`done` / `cancel` → `new`, preserves the workflow). |
-| `e` | Enroll into a workflow — opens the [two-pane workflow + step picker](#enroll--resume-picker). Synthetic `single:<agent>` workflows are filtered out (use `autosk enroll --agent NAME` on the CLI for those). Flashes `no workflows defined` and skips the popup when the project has zero real workflows. |
+| `e` | Enroll into a workflow — opens the [two-pane workflow + step picker](#enroll--resume-picker). Flashes `no workflows defined` and skips the popup when the project has no workflows. |
 | `r` | Resume (`human` → `work`) via the same picker, with the workflow pane locked to the task's current workflow. See [Enroll / resume picker](#enroll--resume-picker) for the step-selection semantics and the no-transition shortcut. |
 | `b` | Add a blocker (prompts for blocker id). |
 | `u` | Remove a blocker (prompts for blocker id). |
@@ -202,8 +202,7 @@ step when present in that workflow, otherwise on row 0.
   reads `resumed <id> -> STEP`.
 
 Type-to-filter / fuzzy search inside the picker is not bound; the
-picker is navigation-only. To enroll into a synthetic `single:`
-flow, use `autosk enroll <id> --agent NAME` on the CLI.
+picker is navigation-only.
 
 ### Sessions `[2]`
 
@@ -230,14 +229,14 @@ create / delete / update or isolation-edit hotkey.
 | `enter` | Filter the Tasks panel to this workflow (scope chip `wf=<name>`) and focus Tasks. |
 
 Isolated workflow rows render a muted `[wt]` marker after the
-workflow name; synthetic `single:*` rows never carry it.
+workflow name.
 
 ### Agents `[4]`
 
-**Read-only.** Agents are code registered by extensions — there is
-no install / uninstall verb in v2. The pane lists the agents the
-daemon resolved for the project; the Detail pane shows the agent's
-name.
+**Read-only.** Agents are inline step values inside workflows — there
+is no separate agent registry and no install / uninstall verb in v2.
+The pane lists the distinct agent steps across the project's workflows
+(by step name); the Detail pane shows the agent's name.
 
 ### Detail pane (any entity)
 

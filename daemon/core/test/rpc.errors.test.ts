@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 
-import { ErrorCodes } from "@autosk/sdk";
+import { ErrorCodes, statusStep } from "@autosk/sdk";
 
 import { startTestDaemon, type TestDaemon } from "./rpcHarness.ts";
 
@@ -26,7 +26,7 @@ describe("RPC error mapping", () => {
     handle.extensions.addWorkflow("test", {
       name: "wf",
       firstStep: "review",
-      steps: { review: { human: true } },
+      steps: { review: statusStep("human") },
     });
   });
   afterEach(async () => {
@@ -64,10 +64,11 @@ describe("RPC error mapping", () => {
     expect(frame.error?.code).toBe(ErrorCodes.INVALID_PARAMS);
   });
 
-  test("enroll with both workflow and agent → INVALID_PARAMS", async () => {
+  test("enroll without a workflow (the removed {agent} arm) → INVALID_PARAMS", async () => {
     const client = await td.client();
     const task = await client.call<{ id: string }>("task.create", { cwd, title: "t" });
-    const frame = await client.callRaw("task.enroll", { cwd, id: task.id, workflow: "wf", agent: "a" });
+    // The v1 `{ agent }` enroll arm is gone: `workflow` is now required.
+    const frame = await client.callRaw("task.enroll", { cwd, id: task.id, agent: "a" });
     expect(frame.error?.code).toBe(ErrorCodes.INVALID_PARAMS);
   });
 

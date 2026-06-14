@@ -11,18 +11,29 @@ turns, kickback loop) onto the v2 `ctx.spawn` + `ctx.transit` API (design
 
 ```ts
 import { piAgent } from "@autosk/pi-agent";
+import { worktreeIsolation } from "@autosk/worktree";
 
 export default function (autosk) {
-  autosk.registerAgent(piAgent({
-    name: "@autosk/pi-agent/dev",
-    model: "sonnet:high",
-    firstMessageFile: new URL("./prompts/dev.md", import.meta.url).pathname,
-  }));
+  autosk.registerWorkflow({
+    name: "my-flow",
+    firstStep: "dev",
+    steps: {
+      // The step key IS the agent name; registering the workflow registers
+      // its inline agents.
+      dev: piAgent({
+        model: "sonnet:high",
+        firstMessageFile: new URL("./prompts/dev.md", import.meta.url).pathname,
+      }),
+      review: piAgent({ thinking: "xhigh", firstMessageFile: ".../review.md" }),
+    },
+    isolation: worktreeIsolation(),
+  });
 }
 ```
 
-Register one agent per role (dev / review / …), then reference each by `name`
-from a workflow's steps.
+A `piAgent({...})` is an inline **step value**: the step key is the agent name
+(there is no `name` option — the driver takes its display name from
+`ctx.workflows.current.step`), so registering the workflow registers its agents.
 
 ## How it works
 
@@ -49,9 +60,11 @@ terminates the child).
 
 ## Configuration — `PiAgentOptions`
 
+The agent name is **not** an option — it is the workflow step key the `piAgent`
+is assigned to (taken from `ctx.workflows.current.step` at run time).
+
 | Option             | Default                       | Description                                                              |
 | ------------------ | ----------------------------- | ------------------------------------------------------------------------ |
-| `name` (required)  | —                             | Agent name to register (e.g. `"@autosk/pi-agent/dev"`).                   |
 | `model`            | pi default                    | pi model spec, e.g. `"sonnet:high"` (`--model`).                          |
 | `thinking`         | pi default                    | Thinking level `off`…`xhigh` (`--thinking`).                             |
 | `firstMessage`     | `""`                          | Inline first-message seed (wins over `firstMessageFile`).                |

@@ -4,7 +4,7 @@
  * drives the task status machine and calls `onTransit` on every transition.
  */
 
-import type { TasksAPI } from "./agent.ts";
+import type { AgentDefinition, TasksAPI } from "./agent.ts";
 
 /**
  * The target of a transition: either a sibling step within the same workflow,
@@ -12,12 +12,31 @@ import type { TasksAPI } from "./agent.ts";
  */
 export type StepTarget = { step: string } | { status: "done" | "cancel" | "human" };
 
-/** One step of a workflow (plan §3.3). */
-export interface StepDef {
-  /** Agent name from the registry. Absent on a `human` step. */
-  agent?: string;
-  /** Human-owned step: the engine parks the task and never schedules an agent. */
-  human?: boolean;
+/**
+ * A terminal/park step. Entering a `statusStep` does not schedule an agent; the
+ * engine moves the task to that status — `human` parks it (resumable via
+ * `task.resume`), `done`/`cancel` close it. Build one with the {@link statusStep}
+ * helper.
+ */
+export interface StatusStep {
+  status: "done" | "cancel" | "human";
+}
+
+/**
+ * One step of a workflow (plan §3.3). Either an inline {@link AgentDefinition}
+ * (the step key is the agent name; discriminated by `onRun`) or a
+ * {@link StatusStep} (discriminated by `status`).
+ */
+export type StepDef = AgentDefinition | StatusStep;
+
+/** Narrows a {@link StepDef} to a {@link StatusStep} (a terminal/park step). */
+export function isStatusStep(step: StepDef): step is StatusStep {
+  return typeof (step as StatusStep).status === "string";
+}
+
+/** Narrows a {@link StepDef} to an {@link AgentDefinition} (a runnable step). */
+export function isAgentStep(step: StepDef): step is AgentDefinition {
+  return typeof (step as AgentDefinition).onRun === "function";
 }
 
 /**

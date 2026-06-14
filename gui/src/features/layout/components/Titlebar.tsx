@@ -4,9 +4,9 @@
 // strip is a drag region; interactive children opt out via
 // data-tauri-drag-region="false" + `-webkit-app-region: no-drag` (shell.css).
 //
-// The Agents + Settings buttons open their modals via the store's ui.modal flag
-// (rendered by AppShell); the connection dot + reconnect mirror the daemon
-// status (plan §8.7, decision #7).
+// The Settings button opens its modal via the store's ui.modal flag (rendered
+// by AppShell); the connection dot + reconnect mirror the daemon status (plan
+// §8.7, decision #7).
 
 import { useStore } from "@/state/store";
 import { isMacPlatform } from "../utils/platform";
@@ -54,16 +54,6 @@ export function Titlebar() {
         type="button"
         className="titlebar-action"
         data-tauri-drag-region="false"
-        title="Agents"
-        aria-label="Agents"
-        onClick={() => effects.openModal("agents")}
-      >
-        <IconAgents />
-      </button>
-      <button
-        type="button"
-        className="titlebar-action"
-        data-tauri-drag-region="false"
         title="Settings"
         aria-label="Settings"
         onClick={() => effects.openModal("settings")}
@@ -84,18 +74,6 @@ function IconSidebar({ collapsed }: { collapsed: boolean }) {
       {!collapsed && (
         <rect x="2.9" y="4.1" width="3.1" height="7.8" rx="0.6" fill="currentColor" stroke="none" opacity="0.5" />
       )}
-    </svg>
-  );
-}
-
-function IconAgents() {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden>
-      <rect x="3" y="5" width="10" height="8" rx="2" />
-      <line x1="8" y1="2.6" x2="8" y2="5" />
-      <circle cx="8" cy="2.3" r="0.9" fill="currentColor" stroke="none" />
-      <circle cx="6" cy="9" r="0.95" fill="currentColor" stroke="none" />
-      <circle cx="10" cy="9" r="0.95" fill="currentColor" stroke="none" />
     </svg>
   );
 }

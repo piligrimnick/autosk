@@ -1,14 +1,11 @@
 /**
  * The extension system (plan §3.6): pi-style discovery, in-process loading with
- * full error isolation, per-project registries, the `singleStep` builtin, and
- * the live-code hazard guard.
+ * full error isolation, per-project registries, and the live-code hazard guard.
  */
 
 export {
   ExtensionRegistry,
   renderWorkflowInfo,
-  parseSingleStepName,
-  SINGLE_STEP_PREFIX,
   type PositionValidation,
 } from "./registry.ts";
 export {

@@ -71,15 +71,12 @@ func TestRPC_MapsReadSurface(t *testing.T) {
 			"comment_count": 2,
 			"created_at":    "2023-11-14T22:15:00Z", "updated_at": "2023-11-14T22:16:40Z",
 		}},
-		"registry.agent.list": []map[string]any{
-			{"name": "human"},
-		},
 		"registry.workflow.list": []map[string]any{{
 			"name": "feature-dev", "description": "",
 			"first_step": "dev",
 			"steps": []map[string]any{{
-				"name": "dev", "agent": "@a/g",
-				"human": false, "targets": []map[string]any{{"step": "review"}},
+				"name": "dev", "status": nil,
+				"targets": []map[string]any{{"step": "review"}},
 			}},
 			"isolation": "worktree",
 		}},
@@ -118,8 +115,10 @@ func TestRPC_MapsReadSurface(t *testing.T) {
 		t.Errorf("created_at not parsed")
 	}
 
+	// Agents are derived from the workflows' agent steps (status == null): the
+	// only agent step is `dev`.
 	agents, err := ds.Agents(ctx)
-	if err != nil || len(agents) != 1 || agents[0].Name != "human" {
+	if err != nil || len(agents) != 1 || agents[0].Name != "dev" {
 		t.Errorf("Agents mapping wrong: %+v err=%v", agents, err)
 	}
 

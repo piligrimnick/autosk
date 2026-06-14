@@ -1,24 +1,26 @@
 # @autosk/sdk
 
 Public, extension-facing types for autoskd v2. An autosk extension is a
-default-export factory that receives an `AutoskAPI` and registers workflows and
-agents:
+default-export factory that receives an `AutoskAPI` and registers workflows
+(their agents are inline step values — the step key is the agent name):
 
 ```ts
-import type { AutoskAPI } from "@autosk/sdk";
+import { type AutoskAPI } from "@autosk/sdk";
 
 export default function (autosk: AutoskAPI) {
-  autosk.registerAgent({
-    name: "echo",
-    async onRun(ctx) {
-      await ctx.comment("hello from echo");
-      await ctx.transit({ status: "done" });
-    },
-  });
   autosk.registerWorkflow({
     name: "trivial",
     firstStep: "do",
-    steps: { do: { agent: "echo" } },
+    steps: {
+      // The step key "do" is the inline agent's name; registering the
+      // workflow registers its agents (there is no registerAgent).
+      do: {
+        async onRun(ctx) {
+          await ctx.comment("hello from do");
+          await ctx.transit({ status: "done" });
+        },
+      },
+    },
   });
 }
 ```
@@ -32,8 +34,9 @@ This package contains three layers:
 - **Proto-v2** (`proto.ts`) — the JSON-RPC v2 wire types and the canonical
   method / notification manifest the Go and Tauri clients mirror (plan §4).
 
-It also ships the `singleStep(agentName)` workflow factory and the shared id
-helpers (`newTaskId`, `newCommentId`, `newSessionId`, `newEntryId`). Comment ids
+It also ships the `statusStep(status)` step helper (build a terminal/park step
+with `statusStep("done"|"cancel"|"human")`) and the shared id helpers
+(`newTaskId`, `newCommentId`, `newSessionId`, `newEntryId`). Comment ids
 are strings in v2 (v1's autoincrement ints die with the SQL store), and
 `newCommentId` is collision-checked against a task's existing comment ids since
 the id is the edit/delete key.

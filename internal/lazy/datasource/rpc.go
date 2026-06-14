@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sort"
 	"time"
 
 	"autosk/internal/daemon/rpcclient"
@@ -84,14 +85,33 @@ func (r *RPC) Workflows(ctx context.Context) ([]Workflow, error) {
 	return out, nil
 }
 
+// Agents derives the project's agents from the registered workflows: v2 agents
+// are inline step values (the step key is the agent name), so the agent set is
+// the deduplicated, sorted union of every workflow's agent steps (steps whose
+// rendered status is nil).
 func (r *RPC) Agents(ctx context.Context) ([]Agent, error) {
-	raw, err := r.cli.Agents(ctx)
+	raw, err := r.cli.Workflows(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Agent, 0, len(raw))
-	for _, a := range raw {
-		out = append(out, Agent{Name: a.Name})
+	seen := make(map[string]struct{})
+	names := make([]string, 0)
+	for _, w := range raw {
+		for _, s := range w.Steps {
+			if s.Status != nil {
+				continue // a statusStep is not an agent
+			}
+			if _, ok := seen[s.Name]; ok {
+				continue
+			}
+			seen[s.Name] = struct{}{}
+			names = append(names, s.Name)
+		}
+	}
+	sort.Strings(names)
+	out := make([]Agent, 0, len(names))
+	for _, n := range names {
+		out = append(out, Agent{Name: n})
 	}
 	return out, nil
 }
@@ -276,11 +296,6 @@ func (r *RPC) EnrollWorkflow(ctx context.Context, id, workflow string) error {
 	return err
 }
 
-func (r *RPC) EnrollAgent(ctx context.Context, id, agent string) error {
-	_, err := r.cli.EnrollAgent(ctx, id, agent)
-	return err
-}
-
 func (r *RPC) Resume(ctx context.Context, id, toStep string) error {
 	var target *rpcclient.StepTarget
 	if toStep != "" {
@@ -393,11 +408,14 @@ func mapWorkflow(w rpcclient.WorkflowInfo) Workflow {
 				targets = append(targets, t.Status)
 			}
 		}
+		status := ""
+		if s.Status != nil {
+			status = *s.Status
+		}
 		out.Steps = append(out.Steps, WorkflowStep{
-			Name:      s.Name,
-			AgentName: s.Agent,
-			Human:     s.Human,
-			Targets:   targets,
+			Name:    s.Name,
+			Status:  status,
+			Targets: targets,
 		})
 	}
 	return out

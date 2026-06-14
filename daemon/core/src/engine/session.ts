@@ -48,7 +48,7 @@ export interface SessionRuntimeInit {
   host: SessionHost;
   project: EngineProject;
   workflow: WorkflowDefinition;
-  /** The workflow name the task is enrolled under (may be a `single:<agent>` synthetic). */
+  /** The workflow name the task is enrolled under. */
   workflowName: string;
   agent: AgentDefinition;
   agentName: string;

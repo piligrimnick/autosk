@@ -6,7 +6,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import type { AgentDefinition, StepTarget, WorkflowDefinition } from "@autosk/sdk";
+import type { AgentDefinition, WorkflowDefinition } from "@autosk/sdk";
 
 import type { CustomEntry } from "@autosk/sdk";
 import { gate, makeEngine, makeProject, oneStep, transitAgent, type TestProject } from "./engineHarness.ts";
@@ -28,14 +28,14 @@ describe("engine — behavioural", () => {
   // -- happy path ----------------------------------------------------------
 
   test("enroll → run → transit → next step → done", async () => {
-    const dev = transitAgent("dev", { step: "review" });
-    const review = transitAgent("review", { status: "done" });
+    const dev = transitAgent({ step: "review" });
+    const review = transitAgent({ status: "done" });
     const wf: WorkflowDefinition = {
       name: "fd",
       firstStep: "dev",
-      steps: { dev: { agent: "dev" }, review: { agent: "review" } },
+      steps: { dev, review },
     };
-    const p = track(await makeProject({ workflows: [wf], agents: [dev, review] }));
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);
@@ -63,18 +63,7 @@ describe("engine — behavioural", () => {
 
   test("onTransit rejection surfaces to the agent; a second target succeeds", async () => {
     const rejection: { v: string | null } = { v: null };
-    const wf: WorkflowDefinition = {
-      name: "fd",
-      firstStep: "dev",
-      steps: { dev: { agent: "dev" }, review: { agent: "review" } },
-      onTransit(ctx, to) {
-        if ("status" in to && to.status === "done" && ctx.step === "dev") {
-          throw new Error("no direct done from dev");
-        }
-      },
-    };
     const dev: AgentDefinition = {
-      name: "dev",
       async onRun(ctx) {
         try {
           await ctx.transit({ status: "done" }); // rejected by onTransit
@@ -84,8 +73,18 @@ describe("engine — behavioural", () => {
         await ctx.transit({ step: "review" }); // second target succeeds
       },
     };
-    const review = transitAgent("review", { status: "done" });
-    const p = track(await makeProject({ workflows: [wf], agents: [dev, review] }));
+    const review = transitAgent({ status: "done" });
+    const wf: WorkflowDefinition = {
+      name: "fd",
+      firstStep: "dev",
+      steps: { dev, review },
+      onTransit(ctx, to) {
+        if ("status" in to && to.status === "done" && ctx.step === "dev") {
+          throw new Error("no direct done from dev");
+        }
+      },
+    };
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);
@@ -106,7 +105,6 @@ describe("engine — behavioural", () => {
   test("a second transit in one session throws; the first stands", async () => {
     const secondError: { v: string | null } = { v: null };
     const dev: AgentDefinition = {
-      name: "dev",
       async onRun(ctx) {
         await ctx.transit({ status: "done" });
         try {
@@ -116,8 +114,8 @@ describe("engine — behavioural", () => {
         }
       },
     };
-    const wf: WorkflowDefinition = { name: "single", firstStep: "dev", steps: { dev: { agent: "dev" } } };
-    const p = track(await makeProject({ workflows: [wf], agents: [dev] }));
+    const wf: WorkflowDefinition = { name: "single", firstStep: "dev", steps: { dev } };
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);
@@ -139,9 +137,9 @@ describe("engine — behavioural", () => {
   // -- missing transit -----------------------------------------------------
 
   test("an agent that returns without a transit parks the task to human", async () => {
-    const noop: AgentDefinition = { name: "noop", onRun: async () => {} };
-    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: { agent: "noop" } } };
-    const p = track(await makeProject({ workflows: [wf], agents: [noop] }));
+    const noop: AgentDefinition = { onRun: async () => {} };
+    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: noop } };
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);
@@ -167,8 +165,7 @@ describe("engine — behavioural", () => {
     const g = gate();
     let active = 0;
     let maxActive = 0;
-    const blocker = (name: string): AgentDefinition => ({
-      name,
+    const blocker = (): AgentDefinition => ({
       async onRun(ctx) {
         active += 1;
         maxActive = Math.max(maxActive, active);
@@ -177,10 +174,10 @@ describe("engine — behavioural", () => {
         await ctx.transit({ status: "done" });
       },
     });
-    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: { agent: "b" } } };
+    const wf: WorkflowDefinition = oneStep("w", blocker());
 
-    const p1 = track(await makeProject({ workflows: [wf], agents: [blocker("b")] }));
-    const p2 = track(await makeProject({ workflows: [wf], agents: [blocker("b")] }));
+    const p1 = track(await makeProject({ workflows: [wf] }));
+    const p2 = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine({ workers: 2 });
     engines.push(engine);
     await engine.addProject(p1.project);
@@ -221,7 +218,6 @@ describe("engine — behavioural", () => {
     let abortObserved = false;
     let onAbortCalled = false;
     const ag: AgentDefinition = {
-      name: "long",
       onRun: (ctx) =>
         new Promise<void>((resolve) => {
           started.open();
@@ -238,8 +234,8 @@ describe("engine — behavioural", () => {
         onAbortCalled = true;
       },
     };
-    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: { agent: "long" } } };
-    const p = track(await makeProject({ workflows: [wf], agents: [ag] }));
+    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: ag } };
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);
@@ -271,7 +267,6 @@ describe("engine — behavioural", () => {
     const started = gate();
     let abortObserved = false;
     const ag: AgentDefinition = {
-      name: "plain",
       onRun: (ctx) =>
         new Promise<void>((resolve) => {
           started.open();
@@ -286,8 +281,8 @@ describe("engine — behavioural", () => {
         }),
       // deliberately NO onAbort
     };
-    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: { agent: "plain" } } };
-    const p = track(await makeProject({ workflows: [wf], agents: [ag] }));
+    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: ag } };
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);
@@ -317,7 +312,6 @@ describe("engine — behavioural", () => {
     const steered = gate();
     const steerMsg: { v: string | null } = { v: null };
     const ag: AgentDefinition = {
-      name: "steerable",
       async onRun(ctx) {
         started.open();
         await steered.wait;
@@ -328,8 +322,8 @@ describe("engine — behavioural", () => {
         steered.open();
       },
     };
-    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: { agent: "steerable" } } };
-    const p = track(await makeProject({ workflows: [wf], agents: [ag] }));
+    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: ag } };
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);
@@ -360,7 +354,6 @@ describe("engine — behavioural", () => {
     const delivered = gate();
     const got: { v: string | null } = { v: null };
     const ag: AgentDefinition = {
-      name: "f",
       async onRun(ctx) {
         started.open();
         await delivered.wait;
@@ -371,8 +364,8 @@ describe("engine — behavioural", () => {
         delivered.open();
       },
     };
-    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: { agent: "f" } } };
-    const p = track(await makeProject({ workflows: [wf], agents: [ag] }));
+    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: ag } };
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);
@@ -395,7 +388,6 @@ describe("engine — behavioural", () => {
     const order: string[] = [];
     const hold = gate();
     const a1: AgentDefinition = {
-      name: "a1",
       async onRun(ctx) {
         order.push("run:1");
         await hold.wait;
@@ -403,7 +395,6 @@ describe("engine — behavioural", () => {
       },
     };
     const a2: AgentDefinition = {
-      name: "a2",
       async onRun(ctx) {
         order.push("run:2");
         await ctx.transit({ status: "done" });
@@ -412,7 +403,7 @@ describe("engine — behavioural", () => {
         order.push("abort:2");
       },
     };
-    const p = track(await makeProject({ workflows: [oneStep("w1", "a1"), oneStep("w2", "a2")], agents: [a1, a2] }));
+    const p = track(await makeProject({ workflows: [oneStep("w1", a1), oneStep("w2", a2)] }));
     const { engine } = makeEngine({ workers: 1 });
     engines.push(engine);
     await engine.addProject(p.project);
@@ -448,7 +439,6 @@ describe("engine — behavioural", () => {
     const order: string[] = [];
     const hold = gate();
     const a1: AgentDefinition = {
-      name: "a1",
       async onRun(ctx) {
         order.push("run:1");
         await hold.wait;
@@ -456,7 +446,6 @@ describe("engine — behavioural", () => {
       },
     };
     const a2: AgentDefinition = {
-      name: "a2",
       async onRun(ctx) {
         order.push("run:2");
         await ctx.transit({ status: "done" });
@@ -465,7 +454,7 @@ describe("engine — behavioural", () => {
         order.push(`steer:2:${message}`);
       },
     };
-    const p = track(await makeProject({ workflows: [oneStep("w1", "a1"), oneStep("w2", "a2")], agents: [a1, a2] }));
+    const p = track(await makeProject({ workflows: [oneStep("w1", a1), oneStep("w2", a2)] }));
     const { engine } = makeEngine({ workers: 1 });
     engines.push(engine);
     await engine.addProject(p.project);
@@ -491,15 +480,14 @@ describe("engine — behavioural", () => {
     const started = gate();
     const release = gate();
     const ag: AgentDefinition = {
-      name: "plain",
       async onRun(ctx) {
         started.open();
         await release.wait;
         await ctx.transit({ status: "done" });
       },
     };
-    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: { agent: "plain" } } };
-    const p = track(await makeProject({ workflows: [wf], agents: [ag] }));
+    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: ag } };
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);

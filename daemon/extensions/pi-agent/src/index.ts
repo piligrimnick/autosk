@@ -39,10 +39,13 @@ export {
   targetLabels,
 } from "./prompt.ts";
 
-/** Configuration for one pi-backed agent role (plan §3.4, extended in P6). */
+/**
+ * Configuration for one pi-backed agent role (plan §3.4, extended in P6).
+ *
+ * No `name`: a pi agent is an inline step value, so its display name is the
+ * workflow step key (taken from `ctx.workflows.current.step` at run time).
+ */
 export interface PiAgentOptions {
-  /** Agent name to register (e.g. `"@autosk/pi-agent/dev"`). */
-  name: string;
   /** pi model spec, e.g. `"sonnet:high"`. */
   model?: string;
   /** pi thinking level: `off`|`minimal`|`low`|`medium`|`high`|`xhigh`. */
@@ -77,10 +80,7 @@ const liveSessions = new Map<string, PiDriver>();
  * returned agent spawns `pi --mode rpc` on each `onRun`, drives it to a single
  * `autosk_transit`, and forwards steer/followup/abort into the live process.
  */
-export function piAgent(opts: PiAgentOptions): AgentDefinition {
-  if (!opts.name || opts.name.trim() === "") {
-    throw new Error("piAgent: `name` is required");
-  }
+export function piAgent(opts: PiAgentOptions = {}): AgentDefinition {
   const maxCorrections = opts.maxCorrections ?? 3;
   // Resolve the first-message seed at most once per process: extension code is
   // frozen until the daemon restarts (the loader caches modules), so re-reading
@@ -89,8 +89,6 @@ export function piAgent(opts: PiAgentOptions): AgentDefinition {
   const firstMessage = (): Promise<string> => (firstMessageOnce ??= resolveFirstMessage(opts));
 
   return {
-    name: opts.name,
-
     async onRun(ctx: AgentRunContext): Promise<void> {
       const cmd = buildPiCommand(opts);
       const child = ctx.spawn(cmd, { cwd: ctx.cwd });
@@ -107,7 +105,7 @@ export function piAgent(opts: PiAgentOptions): AgentDefinition {
       liveSessions.set(ctx.session.id, driver);
       try {
         const seed = await firstMessage();
-        await runTurns(ctx, driver, opts, seed, maxCorrections);
+        await runTurns(ctx, driver, seed, maxCorrections);
       } finally {
         liveSessions.delete(ctx.session.id);
         await driver.shutdown().catch(() => {});
@@ -136,7 +134,6 @@ export function piAgent(opts: PiAgentOptions): AgentDefinition {
 async function runTurns(
   ctx: AgentRunContext,
   driver: PiDriver,
-  opts: PiAgentOptions,
   firstMessage: string,
   maxCorrections: number,
 ): Promise<void> {
@@ -146,7 +143,8 @@ async function runTurns(
   await driver.sendPrompt(
     renderInitialPrompt({
       firstMessage,
-      agentName: opts.name,
+      // The step key IS the agent name (inline step agents).
+      agentName: ctx.workflows.current.step,
       workflow: ctx.workflows.current.workflow,
       step: ctx.workflows.current.step,
       task,

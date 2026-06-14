@@ -90,41 +90,4 @@
   gap: 6px;
 }
 
-.agents-actions {
-  margin-bottom: 12px;
-}
-/* Read-only agent registry list (agents are code now; no install UI). */
-.agent-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.agent-row {
-  padding: 7px 10px;
-  border-bottom: 1px solid rgba(51, 58, 69, 0.5);
-  font-size: 13px;
-}
-.agent-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-.agent-table th {
-  text-align: left;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--fg-mute);
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-}
-.agent-table td {
-  padding: 7px 10px;
-  border-bottom: 1px solid rgba(51, 58, 69, 0.5);
-}
-.agent-table tr:hover td {
-  background: var(--bg-1);
-}
+

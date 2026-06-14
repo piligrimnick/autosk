@@ -18,7 +18,6 @@ type (
 	WorkflowInfo       = api.WorkflowInfo
 	WorkflowStepInfo   = api.WorkflowStepInfo
 	StepTarget         = api.StepTarget
-	Agent              = api.AgentInfo
 	Health             = api.Health
 	HealthProject      = api.HealthProject
 	Version            = api.VersionInfo
@@ -105,13 +104,6 @@ func (c *Client) Workflows(ctx context.Context) ([]WorkflowInfo, error) {
 func (c *Client) GetWorkflow(ctx context.Context, name string) (WorkflowInfo, error) {
 	var out WorkflowInfo
 	err := c.call(ctx, "registry.workflow.get", c.selector(map[string]any{"name": name}), &out)
-	return out, err
-}
-
-// Agents lists the project's registered agents.
-func (c *Client) Agents(ctx context.Context) ([]Agent, error) {
-	var out []Agent
-	err := c.call(ctx, "registry.agent.list", c.selector(nil), &out)
 	return out, err
 }
 

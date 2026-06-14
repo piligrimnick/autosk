@@ -26,17 +26,15 @@ export interface TestProject {
   cleanup: () => void;
 }
 
-/** Builds a fresh on-disk project with the given workflows/agents registered. */
+/** Builds a fresh on-disk project with the given workflows registered (agents are inline steps). */
 export async function makeProject(opts: {
   workflows?: WorkflowDefinition[];
-  agents?: AgentDefinition[];
   clock?: Clock;
 } = {}): Promise<TestProject> {
   const dir = tempDir();
   const store = new Store(dir.path, { watch: false, clock: opts.clock });
   await store.open();
   const registry = new ExtensionRegistry();
-  for (const agent of opts.agents ?? []) registry.addAgent("test", agent);
   for (const wf of opts.workflows ?? []) registry.addWorkflow("test", wf);
   const project: EngineProject = { root: store.root, store, registry };
   return { project, store, registry, root: store.root, cleanup: () => dir.cleanup() };
@@ -59,14 +57,18 @@ export function makeEngine(opts: { workers?: number; rescanMs?: number; clock?: 
   return { engine, logger };
 }
 
-/** A trivial agent that transits to a fixed target on `onRun`. */
-export function transitAgent(name: string, to: StepTarget): AgentDefinition {
-  return { name, onRun: async (ctx) => void (await ctx.transit(to)) };
+/** A trivial inline agent that transits to a fixed target on `onRun`. */
+export function transitAgent(to: StepTarget): AgentDefinition {
+  return { onRun: async (ctx) => void (await ctx.transit(to)) };
 }
 
-/** A one-step workflow `do → <agent>` (not the reserved `single:` synthetic). */
-export function oneStep(name: string, agent: string, isolation?: WorkflowDefinition["isolation"]): WorkflowDefinition {
-  const wf: WorkflowDefinition = { name, firstStep: "do", steps: { do: { agent } } };
+/** A one-step workflow `do → <agent>` with the agent inlined as the `do` step. */
+export function oneStep(
+  name: string,
+  agent: AgentDefinition,
+  isolation?: WorkflowDefinition["isolation"],
+): WorkflowDefinition {
+  const wf: WorkflowDefinition = { name, firstStep: "do", steps: { do: agent } };
   if (isolation) wf.isolation = isolation;
   return wf;
 }

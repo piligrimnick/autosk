@@ -41,12 +41,19 @@ describe("idle-shutdown", () => {
   test("a pending status=work task holds the daemon open", async () => {
     const cwd = await td.makeProject("busy");
     const handle = await td.handle(cwd);
-    // A step with neither agent nor human ⇒ the task sits at `status=work`
-    // without ever spawning a session (the scheduler skips agent-less steps).
-    handle.extensions.addWorkflow("test", { name: "wf", firstStep: "todo", steps: { todo: {} } });
+    // An agent step, but the enrolled task is BLOCKED so the scheduler never
+    // dispatches it — it sits at `status=work` (pending work) without ever
+    // spawning a session.
+    handle.extensions.addWorkflow("test", {
+      name: "wf",
+      firstStep: "todo",
+      steps: { todo: { onRun: async () => {} } },
+    });
 
     const client = await td.client();
+    const blocker = await client.call<{ id: string }>("task.create", { cwd, title: "blocker" });
     const task = await client.call<{ id: string }>("task.create", { cwd, title: "t" });
+    await client.call("task.block", { cwd, id: task.id, blocked_by: blocker.id });
     const enrolled = await client.call<{ status: string }>("task.enroll", { cwd, id: task.id, workflow: "wf" });
     expect(enrolled.status).toBe("work");
     client.close(); // drop the connection so ONLY the work task keeps it alive
@@ -58,15 +65,14 @@ describe("idle-shutdown", () => {
     const cwd = await td.makeProject("running");
     const handle = await td.handle(cwd);
     const agent: AgentDefinition = {
-      name: "hang",
       // Never transits until aborted/torn down — keeps a running session live.
       onRun: () => new Promise<void>(() => {}),
     };
-    handle.extensions.addAgent("test", agent);
+    handle.extensions.addWorkflow("test", { name: "hang", firstStep: "do", steps: { do: agent } });
 
     const client = await td.client();
     const task = await client.call<{ id: string }>("task.create", { cwd, title: "t" });
-    await client.call("task.enroll", { cwd, id: task.id, agent: "hang" });
+    await client.call("task.enroll", { cwd, id: task.id, workflow: "hang" });
     client.close();
 
     expect(await settledWithin(td.exited, 300)).toBe("pending");

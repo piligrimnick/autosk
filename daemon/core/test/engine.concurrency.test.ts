@@ -34,22 +34,21 @@ describe("engine — scheduler concurrency", () => {
     let devRuns = 0;
     const devGate = gate();
     const dev: AgentDefinition = {
-      name: "dev",
       async onRun(ctx) {
         devRuns += 1;
         await devGate.wait;
         await ctx.transit({ step: "review" });
       },
     };
-    const review = transitAgent("review", { status: "done" });
+    const review = transitAgent({ status: "done" });
     const multi: WorkflowDefinition = {
       name: "multi",
       firstStep: "dev",
-      steps: { dev: { agent: "dev" }, review: { agent: "review" } },
+      steps: { dev, review },
     };
-    const bAgent = transitAgent("b", { status: "done" });
+    const bAgent = transitAgent({ status: "done" });
 
-    const p = track(await makeProject({ workflows: [multi, oneStep("one", "b")], agents: [dev, review, bAgent] }));
+    const p = track(await makeProject({ workflows: [multi, oneStep("one", bAgent)] }));
     const { engine } = makeEngine({ workers: 4 });
     engines.push(engine);
     await engine.addProject(p.project);
@@ -109,15 +108,14 @@ describe("engine — scheduler concurrency", () => {
   test("a session id is not routable under another project's root (ISSUE #6)", async () => {
     const release = gate();
     const ag: AgentDefinition = {
-      name: "a",
       async onRun(ctx) {
         await release.wait;
         await ctx.transit({ status: "done" });
       },
     };
-    const wf = oneStep("w", "a");
-    const pa = track(await makeProject({ workflows: [wf], agents: [ag] }));
-    const pb = track(await makeProject({ workflows: [wf], agents: [ag] }));
+    const wf = oneStep("w", ag);
+    const pa = track(await makeProject({ workflows: [wf] }));
+    const pb = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(pa.project);
@@ -140,8 +138,8 @@ describe("engine — scheduler concurrency", () => {
   });
 
   test("the periodic safety rescan dispatches a task made schedulable with no engine event (ISSUE #4)", async () => {
-    const solo = transitAgent("solo", { status: "done" });
-    const p = track(await makeProject({ workflows: [oneStep("w", "solo")], agents: [solo] }));
+    const solo = transitAgent({ status: "done" });
+    const p = track(await makeProject({ workflows: [oneStep("w", solo)] }));
     const { engine } = makeEngine({ rescanMs: 20 });
     engines.push(engine);
     await engine.addProject(p.project); // initial scan: nothing schedulable

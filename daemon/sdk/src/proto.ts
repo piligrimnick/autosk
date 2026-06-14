@@ -24,7 +24,6 @@
  */
 
 import type {
-  AgentInfo,
   Comment,
   SessionMeta,
   TaskFilter,
@@ -167,16 +166,11 @@ export interface TaskUpdateParams extends ProjectSelector {
   title?: string;
   description?: string;
 }
-/**
- * Enroll into a named workflow OR materialise a `singleStep` for an agent.
- * The two arms are mutually exclusive (workflow XOR agent, plan §4): the
- * `never` guards make a caller that passes both fail typecheck rather than
- * deferring the rejection to a runtime daemon error.
- */
-export type TaskEnrollParams = ProjectSelector & { id: string } & (
-    | { workflow: string; agent?: never }
-    | { agent: string; workflow?: never }
-  );
+/** Enroll a `new` task into a named workflow, transitioning it to the first step. */
+export interface TaskEnrollParams extends ProjectSelector {
+  id: string;
+  workflow: string;
+}
 export interface TaskResumeParams extends ProjectSelector {
   id: string;
   to?: StepTarget;
@@ -284,7 +278,6 @@ export interface RpcMethodMap {
   // registry
   "registry.workflow.list": { params: ProjectSelector; result: WorkflowInfo[] };
   "registry.workflow.get": { params: WorkflowGetParams; result: WorkflowInfo };
-  "registry.agent.list": { params: ProjectSelector; result: AgentInfo[] };
 
   // session
   "session.list": { params: SessionListParams; result: SessionMeta[] };
@@ -343,7 +336,6 @@ export const RPC_METHODS = [
   "task.unsubscribe",
   "registry.workflow.list",
   "registry.workflow.get",
-  "registry.agent.list",
   "session.list",
   "session.get",
   "session.transcript",

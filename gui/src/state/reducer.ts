@@ -93,7 +93,6 @@ function projectsSlice(state: AppState, action: Action): AppState {
       return patchProject(state, action.root, (s) => ({
         ...s,
         workflows: action.workflows,
-        agents: action.agents,
         metaLoaded: true,
       }));
     case "project/diagnosticsLoaded":

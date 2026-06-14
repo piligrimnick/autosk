@@ -59,7 +59,6 @@ describe("engine — transcript golden", () => {
       timestamp: 1_700_000_000_001,
     };
     const ag: AgentDefinition = {
-      name: "scribe",
       async onRun(ctx) {
         ctx.log.message(user);
         ctx.log.message(assistant);
@@ -67,8 +66,8 @@ describe("engine — transcript golden", () => {
         await ctx.transit({ status: "done" });
       },
     };
-    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: { agent: "scribe" } } };
-    const p = track(await makeProject({ workflows: [wf], agents: [ag] }));
+    const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: ag } };
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);
@@ -95,7 +94,7 @@ describe("engine — transcript golden", () => {
       task_id: task.id,
       workflow: "w",
       step: "do",
-      agent: "scribe",
+      agent: "do", // the step key IS the agent name (inline step agents)
     });
     expect(typeof header.timestamp).toBe("string");
     expect(header.cwd).toBe(p.root);

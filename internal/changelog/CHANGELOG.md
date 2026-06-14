@@ -35,8 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`tasks/<id>/task.json` + `comments.jsonl`, `sessions/<id>.json` + `.jsonl`),
   written atomically by the daemon, with a startup scan + fs-watcher that picks
   up external (human/script) edits. No database, no migrations, no GC.
-- **workflows & agents as code:** workflows and agents are TypeScript registered
-  by **extensions** (pi-style discovery: project `.autosk/extensions/` ▸ global
+- **workflows & agents as code:** workflows are TypeScript registered by
+  **extensions** (their agents are inline step values — the step key is the agent
+  name), with pi-style discovery (project `.autosk/extensions/` ▸ global
   `~/.autosk/extensions/` ▸ npm packages in `settings.json` ▸ daemon-bundled),
   loaded in-process with full error isolation — a broken extension is recorded
   via `project.diagnostics` and never crashes the daemon. The engine only drives
@@ -57,7 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entries). Live sessions support steer / follow-up / abort.
 - **cli:** new `autosk session` group — `list [--task ID]`, `get`, `transcript
   [--from-line N] [--limit N]`, `abort`, `input <message> [--followup]`;
-  read-only registry views `autosk workflow list|show` + `autosk agent list|show`;
+  the read-only `autosk workflow list|show` registry view;
   a new `autosk project` group (`list`, `add`, `diagnostics`); and
   `autosk comment edit|delete` (comments are now editable/deletable) (ask-305572).
 - **gui:** a new native **Tauri desktop app** (`gui/`) at `autosk lazy` parity —
@@ -65,7 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   polymorphic entity view driven by one entity-aware composer), a live pi-format
   session transcript (`session.transcript` / `session-event`) with steer / abort,
   editable/deletable comments, a project switcher with an extension-diagnostics
-  badge (`project.diagnostics`), read-only workflow/agent registry views,
+  badge (`project.diagnostics`), a read-only workflow registry view,
   whole-UI zoom, a collapsible/resizable sidebar, and a Liquid Glass app icon.
   Runs **local** (auto-spawned `autoskd` over UDS) or **remote** (TCP + token);
   the Tauri backend is a pure JSON-RPC client of `autoskd` (ask-9e5f8c,
@@ -78,6 +79,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clean machine with no global `bun` (ask-305572, ask-e36027).
 
 ### Changed
+- **workflows:** workflow extensions now register their agents **inline** as
+  step values — each step is either an `AgentDefinition` (the step key is the
+  agent name) or a `statusStep`, and the single `registerWorkflow` API registers
+  the workflow together with its agents (there is no `registerAgent`). The new
+  `statusStep("done"|"cancel"|"human")` SDK helper replaces a step's
+  `{ human: true }` marker and adds terminal `done` / `cancel` steps; the
+  `registry.workflow.*` wire shape carries a per-step
+  `status: "done"|"cancel"|"human"|null` (agent steps are `null`) instead of the
+  old `agent` + `human` fields. See `docs/workflows.md` and `docs/extensions.md`.
 - **protocol:** the CLI, lazy TUI, and Tauri GUI now speak the **proto-v2**
   namespaced JSON-RPC surface (`meta.*`, `project.*`, `task.*` incl.
   `task.comment.*`, `registry.*`, `session.*`) carrying only the `{cwd}` selector
@@ -102,6 +112,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workflow seeding (the bundled `feature-dev` is available to every project).
 
 ### Removed
+- **agents (inline-step redesign):** the `autosk agent list/show` CLI, the
+  `enroll` / `create` `--agent` flag (and the `single:<agent>` synthetic
+  workflow it materialised), the `registry.agent.list` RPC verb + the `AgentInfo`
+  wire type, and the `AutoskAPI.registerAgent` method — agents are now inline
+  workflow-step values (see Changed).
 - **storage:** the `.autosk/db` database and everything tied to it — the `--db`
   flag / `AUTOSK_DB` selector and the schema/`migrate` machinery; a project is
   now just an `.autosk/` directory resolved by walk-up from `{cwd}` (ask-305572).

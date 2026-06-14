@@ -71,9 +71,6 @@ func (f *refreshFakeDS) UpdateTask(_ context.Context, _ string, _, _ *string) er
 func (f *refreshFakeDS) EnrollWorkflow(_ context.Context, _, _ string) error {
 	return datasource.ErrDaemonRequired
 }
-func (f *refreshFakeDS) EnrollAgent(_ context.Context, _, _ string) error {
-	return datasource.ErrDaemonRequired
-}
 func (f *refreshFakeDS) Resume(_ context.Context, _, _ string) error {
 	return datasource.ErrDaemonRequired
 }

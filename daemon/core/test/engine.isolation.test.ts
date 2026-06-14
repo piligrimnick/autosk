@@ -54,7 +54,6 @@ describe("engine — isolation lifecycle", () => {
     const events: IsoEvent[] = [];
     let cwdSeen = "";
     const ag: AgentDefinition = {
-      name: "do",
       async onRun(ctx) {
         cwdSeen = ctx.cwd;
         await ctx.transit(to);
@@ -63,10 +62,10 @@ describe("engine — isolation lifecycle", () => {
     const wf: WorkflowDefinition = {
       name: "iso",
       firstStep: "do",
-      steps: { do: { agent: "do" } },
+      steps: { do: ag },
       isolation: recordingProvider(events),
     };
-    const p = track(await makeProject({ workflows: [wf], agents: [ag] }));
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);
@@ -108,15 +107,15 @@ describe("engine — isolation lifecycle", () => {
 
   test("a sibling step transition releases with terminal:false and re-acquires", async () => {
     const events: IsoEvent[] = [];
-    const dev = transitAgent("dev", { step: "review" });
-    const review = transitAgent("review", { status: "done" });
+    const dev = transitAgent({ step: "review" });
+    const review = transitAgent({ status: "done" });
     const wf: WorkflowDefinition = {
       name: "iso2",
       firstStep: "dev",
-      steps: { dev: { agent: "dev" }, review: { agent: "review" } },
+      steps: { dev, review },
       isolation: recordingProvider(events),
     };
-    const p = track(await makeProject({ workflows: [wf], agents: [dev, review] }));
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);
@@ -137,7 +136,6 @@ describe("engine — isolation lifecycle", () => {
     const events: IsoEvent[] = [];
     let ran = false;
     const ag: AgentDefinition = {
-      name: "do",
       async onRun(ctx) {
         ran = true;
         await ctx.transit({ status: "done" });
@@ -146,10 +144,10 @@ describe("engine — isolation lifecycle", () => {
     const wf: WorkflowDefinition = {
       name: "iso",
       firstStep: "do",
-      steps: { do: { agent: "do" } },
+      steps: { do: ag },
       isolation: recordingProvider(events, { failAcquire: true }),
     };
-    const p = track(await makeProject({ workflows: [wf], agents: [ag] }));
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine();
     engines.push(engine);
     await engine.addProject(p.project);
@@ -196,7 +194,6 @@ describe("engine — isolation lifecycle", () => {
     };
     const release = gate();
     const ag: AgentDefinition = {
-      name: "do",
       async onRun(ctx) {
         await release.wait;
         await ctx.transit({ status: "done" });
@@ -205,10 +202,10 @@ describe("engine — isolation lifecycle", () => {
     const wf: WorkflowDefinition = {
       name: "iso",
       firstStep: "do",
-      steps: { do: { agent: "do" } },
+      steps: { do: ag },
       isolation: provider,
     };
-    const p = track(await makeProject({ workflows: [wf], agents: [ag] }));
+    const p = track(await makeProject({ workflows: [wf] }));
     const { engine } = makeEngine({ workers: 2 });
     engines.push(engine);
     await engine.addProject(p.project);
