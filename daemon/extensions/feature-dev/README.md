@@ -18,8 +18,8 @@ dev ──▶ review ──▶ docs ──▶ validator ──▶ accept (human)
 | ----------- | ----------------------------- | ------------------------------------------------------------ |
 | `dev`       | `piAgent` (name `dev`)        | first step; implements the task                              |
 | `review`    | `piAgent` (name `review`)     | thorough code review (`thinking: xhigh`); bounces back to `dev` |
-| `docs`      | `piAgent` (name `docs`)       | documentation pass                                           |
-| `validator` | `piAgent` (name `validator`)  | independent item-by-item verification; bounces back to `dev` |
+| `docs`      | `piAgent` (name `docs`)       | documentation pass (leaves `CHANGELOG.md` to `validator`)    |
+| `validator` | `piAgent` (name `validator`)  | independent item-by-item verification; on success runs release hygiene (CHANGELOG `[Unreleased]` + a clean, committed worktree) before `accept`; bounces back to `dev` |
 | `accept`    | `statusStep("human")`         | the engine parks here for a human's final acceptance         |
 
 Each agent step is an inline `@autosk/pi-agent` value: the **step key is the
@@ -34,6 +34,10 @@ registers those agents — there is no separate agent registration.
 
 The role prompts live under [`prompts/`](./prompts) as `.md` files; the workflow
 reads each one and seeds it into the corresponding pi agent as its `firstMessage`.
+Each prompt ends with an **Available transitions** section that names the
+intended `autosk_transit` targets for that step (e.g. `review → docs | dev`),
+so the agent picks the right edge out of the conservative target superset the
+engine injects at runtime.
 
 ## Discovery — how every project gets it
 

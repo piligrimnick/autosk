@@ -88,6 +88,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scripts/publish-extensions.sh` (ask-305572, ask-e36027).
 
 ### Changed
+- **`@autosk/feature-dev`:** the shipped reference workflow's `validator` step
+  now performs mandatory **release hygiene** on success (updates `CHANGELOG.md`
+  `[Unreleased]` per Keep a Changelog, then commits a clean worktree with
+  Conventional Commits) before transitioning to `accept`, and the `docs` step
+  now explicitly defers `CHANGELOG.md` to `validator`. Every role prompt also
+  gained an **Available transitions** section naming its intended
+  `autosk_transit` targets (ported from the customized `feature-dev-generic`
+  workflow that lived in v1 `.autosk/db`).
 - **workflows:** workflow extensions now register their agents **inline** as
   step values — each step is either an `AgentDefinition` (the step key is the
   agent name) or a `statusStep`, and the single `registerWorkflow` API registers

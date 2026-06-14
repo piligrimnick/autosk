@@ -9,3 +9,9 @@ You receive a task with a description and an implementation plan (see the task t
 5. If you are blocked by something external, file a blocker task and do not transit until the blocker is resolved.
 
 When the implementation per the plan is complete and local checks pass, hand the task off to the `review` step. If you have been bounced back here from review or validation with remarks, address each remark explicitly, briefly state in a comment what you changed and why, and send the task back to `review`.
+
+## Available transitions
+
+When the step is done, call the `autosk_transit` tool exactly once with `to` set to:
+
+- `review` — when the implementation per the plan is complete and local checks/tests pass, or after you have addressed every bounce-back remark from `review`/`validator`.
