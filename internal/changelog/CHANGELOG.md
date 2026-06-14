@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   surface, and ships as a standalone binary (`bun build --compile` — embeds the
   Bun runtime, so no global `bun` is needed at runtime). Replaces the v1 Go
   `autosk daemon`.
+- **live session updates:** the `autosk lazy` TUI and the desktop GUI now see
+  sessions appear and change state in real time. The daemon adds a project-scoped
+  `session-changed` notification (pushed on a session's create → running →
+  terminal transitions) plus the `session.subscribeProject` /
+  `session.unsubscribeProject` RPC verbs; front ends subscribe once per active
+  project and no longer have to know a session id ahead of time — or poll — to
+  watch a freshly-enrolled task's session spin up and run to completion.
 - **storage:** tasks / comments / sessions are now files under `.autosk/`
   (`tasks/<id>/task.json` + `comments.jsonl`, `sessions/<id>.json` + `.jsonl`),
   written atomically by the daemon, with a startup scan + fs-watcher that picks
@@ -117,6 +124,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **daemon internals:** the v1 Rust daemon workspace and its embedded
   database/GC/migration machinery are gone, replaced by the Bun `autoskd` (this
   intermediate Rust daemon never reached a release).
+
+### Fixed
+- **empty task list with `--status all` / in the lazy dashboard:** an "all
+  statuses" request was sent as `status: []`, which the daemon's membership
+  filter read as "match none" — so `autosk list --status all` and the `autosk
+  lazy` Tasks panel (which always asks for every status) came back empty. The Go
+  client now omits the status key when no positive status is requested, and the
+  daemon treats an empty status list as "no constraint" (all statuses).
+- **session list ordering:** `session.list` now returns sessions newest-first
+  (by id, descending) by default — previously oldest-first — so the `autosk lazy`
+  Sessions panel and the CLI render the most recent run at the top without any
+  client-side re-sort.
 
 ## [0.1.6] — 2026-06-08
 
