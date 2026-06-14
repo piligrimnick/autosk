@@ -251,6 +251,8 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 			if hadPrev {
 				oldSessionID = prevSession.ID
 			}
+			// The daemon returns sessions newest-first (by id, descending), so the
+			// panel renders them top-to-bottom as-is.
 			gu.st.sessions = applySessionSearch(r.sessions, r.sessionsSearch)
 			if idx, ok := findIndexByKey(gu.st.sessions, oldSessionID, func(s datasource.Session) string { return s.ID }); ok {
 				gu.st.sessionCursor = idx

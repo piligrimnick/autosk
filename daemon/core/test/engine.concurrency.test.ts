@@ -100,7 +100,9 @@ describe("engine — scheduler concurrency", () => {
 
     expect(devRuns).toBe(1); // dev ran exactly once
     const sessions = p.store.sessions.sessionsForTask(aId);
-    expect(sessions.map((s) => s.step)).toEqual(["dev", "review"]);
+    // sessionsForTask is newest-first (descending id): review (created second)
+    // precedes dev (created first).
+    expect(sessions.map((s) => s.step)).toEqual(["review", "dev"]);
     expect(sessions.every((s) => s.status === "done")).toBe(true);
   });
 

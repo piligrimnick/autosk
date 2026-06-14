@@ -54,7 +54,8 @@ describe("engine — behavioural", () => {
 
     const sessions = p.store.sessions.sessionsForTask(task.id);
     expect(sessions).toHaveLength(2);
-    expect(sessions.map((s) => s.step)).toEqual(["dev", "review"]);
+    // sessionsForTask is newest-first (descending id): review precedes dev.
+    expect(sessions.map((s) => s.step)).toEqual(["review", "dev"]);
     expect(sessions.every((s) => s.status === "done")).toBe(true);
   });
 
@@ -95,7 +96,8 @@ describe("engine — behavioural", () => {
 
     expect(rejection.v).toContain("no direct done from dev");
     const sessions = p.store.sessions.sessionsForTask(task.id);
-    expect(sessions.map((s) => s.step)).toEqual(["dev", "review"]);
+    // sessionsForTask is newest-first (descending id): review precedes dev.
+    expect(sessions.map((s) => s.step)).toEqual(["review", "dev"]);
     expect(sessions.every((s) => s.status === "done")).toBe(true);
   });
 

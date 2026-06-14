@@ -66,14 +66,18 @@ export class SessionStore {
     set.add(meta.id);
   }
 
-  /** Sessions for a task, oldest-id first (UUIDv7 ids sort by creation). */
+  /**
+   * Sessions for a task, NEWEST-id first (UUIDv7 ids sort by creation, so a
+   * descending id sort is newest-first). This is the default order clients
+   * render top-to-bottom; a client wanting oldest-first reverses it.
+   */
   sessionsForTask(taskId: string): SessionMeta[] {
     const ids = this.byTask.get(taskId);
     if (!ids) return [];
     return [...ids]
       .map((id) => this.metaCache.get(id)?.value)
       .filter((m): m is SessionMeta => m !== undefined)
-      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      .sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   }
 
   /** Live (`queued`|`running`) sessions for a task. */

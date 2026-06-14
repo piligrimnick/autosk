@@ -120,9 +120,10 @@ describe("session-by-task index", () => {
       timestamp: "2026-01-01T00:02:00Z",
     });
 
+    // Newest-id first (descending) is the default order.
     expect(store.sessions.sessionsForTask(a.id).map((m) => m.id)).toEqual([
-      "0190a1b2-0000-7000-8000-000000000001",
       "0190a1b2-0000-7000-8000-000000000002",
+      "0190a1b2-0000-7000-8000-000000000001",
     ]);
     expect(store.sessions.sessionsForTask(b.id)).toHaveLength(1);
 

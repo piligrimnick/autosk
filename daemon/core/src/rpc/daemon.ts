@@ -527,9 +527,11 @@ export class Daemon {
         const handle = await this.resolveHandle(reqCwd(o));
         const taskId = optString(o, "task_id");
         if (taskId) return handle.store.sessions.sessionsForTask(taskId);
+        // Newest-first by id (UUIDv7 ids sort by creation), the default order
+        // clients render top-to-bottom — matches sessionsForTask.
         return handle.store.sessions
           .allMetas()
-          .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+          .sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
       },
       "session.get": async (params) => {
         const o = asObj(params);

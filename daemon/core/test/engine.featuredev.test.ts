@@ -69,9 +69,10 @@ describe("feature-dev — scripted walk + visit cap", () => {
     expect(view.status).toBe("human");
     expect(view.step).toBe("accept");
 
-    // The six sessions trace the exact bounce-and-forward path.
+    // The six sessions trace the exact bounce-and-forward path. sessionsForTask
+    // is newest-first, so reverse to read it chronologically.
     const steps = p.store.sessions.sessionsForTask(task.id).map((m) => m.step);
-    expect(steps).toEqual(["dev", "review", "dev", "review", "docs", "validator"]);
+    expect(steps.reverse()).toEqual(["dev", "review", "dev", "review", "docs", "validator"]);
   }, 15000);
 
   test("the dev visit-cap fires through the engine's REAL session-counting visits()", async () => {
