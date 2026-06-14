@@ -29,10 +29,12 @@ for the full design.
     store + extension registry + scheduler).
   - **extension loader** (`src/extensions/`) — pi-style discovery (project-local
     `.autosk/extensions/` ▸ global `~/.autosk/extensions/` ▸ npm packages listed
-    under `"extensions"` in `settings.json` ▸ daemon-bundled), in-process factory
-    loading with full error isolation (a broken extension — or one with an
-    invalid step shape — is recorded as a load diagnostic and never crashes the
-    daemon), and the live-code hazard guard that parks any in-flight task whose
+    under `"extensions"` in `settings.json`), in-process factory loading with
+    full error isolation (a broken extension — or one with an invalid step shape
+    — is recorded as a load diagnostic and never crashes the daemon), the
+    first-run **bootstrap** that npm-installs the default `@autosk/feature-dev`
+    workflow into `~/.autosk/packages/` when `~/.autosk/settings.json` is absent,
+    and the live-code hazard guard that parks any in-flight task whose
     workflow/step has vanished from the registry to `human`.
   - **engine** (`src/engine/`) — the scheduler (a single event-driven scan + a
     global FIFO worker pool, `--workers`, shared across projects, plus a slow
@@ -62,12 +64,12 @@ for the full design.
   steer / followup / abort forwarding into the live pi). See
   [`extensions/pi-agent/README.md`](extensions/pi-agent/README.md).
 
-- **`extensions/feature-dev/`** — `@autosk/feature-dev`: the shipped **reference
+- **`extensions/feature-dev/`** — `@autosk/feature-dev`: the **reference
   workflow** `dev → review → docs → validator → accept` (with review→dev /
   validator→dev bounce-backs, a `ctx.visits("dev")` visit cap, and
-  `worktreeIsolation()`), wired to four `@autosk/pi-agent` roles. It is
-  discovered by the daemon via the bundled-extension seam, so every project can
-  enroll into it with no per-project files. See
+  `worktreeIsolation()`), wired to four `@autosk/pi-agent` roles. It is published
+  to npm and provisioned by the daemon's first-run bootstrap, so every project
+  can enroll into it with no per-project files. See
   [`extensions/feature-dev/README.md`](extensions/feature-dev/README.md).
 
 ## Scripts
@@ -78,8 +80,9 @@ Run from this directory:
 - `bun run typecheck` — `tsc --noEmit` across all workspace packages.
 - `bun test` — run every package's `*.test.ts` (pure unit tests, no daemon).
 
-To produce the distributable daemon (compiled standalone binary + bundled
-extensions), use the repo-root targets `make build-autoskd` / `make install` or
-`scripts/package-autoskd.sh <out-dir>` — they wrap `bun build --compile` and the
-extension bundler. The compiled binary embeds the Bun runtime, so no global
-`bun` is required at runtime.
+To produce the distributable daemon (compiled standalone binary), use the
+repo-root targets `make build-autoskd` / `make install` or
+`scripts/package-autoskd.sh <out-dir>` — they wrap `bun build --compile`. The
+compiled binary embeds the Bun runtime, so no global `bun` is required at
+runtime. The extensions ship separately as npm packages (published from
+`sdk/` + `extensions/*`; see `scripts/publish-extensions.sh`).

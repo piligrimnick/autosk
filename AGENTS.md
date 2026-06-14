@@ -25,12 +25,14 @@ no native libraries.
 
 - `make build` — compiles `bin/autosk` (entrypoint: `cmd/autosk`), CGO-free
 - `make build-autoskd` — compiles the Bun daemon into `bin/autoskd` with
-  `bun build --compile` and bundles its extensions into `bin/extensions/`
-  (via `scripts/bundle-extensions.sh`); the compiled binary embeds the Bun
-  runtime, so **no global `bun` is needed at runtime**
+  `bun build --compile`; the compiled binary embeds the Bun runtime, so **no
+  global `bun` is needed at runtime**. There are no bundled extensions: the
+  reference `@autosk/feature-dev` workflow is an npm package the daemon installs
+  on first run (`ensureGlobalBootstrap`)
 - `make test` — builds `autoskd` first, then runs `go test ./...` with
-  `AUTOSKD_BIN` pointed at the compiled daemon and `AUTOSK_BUNDLED_EXTENSIONS`
-  pointed at `bin/extensions/` (so the bundled `feature-dev` workflow resolves)
+  `AUTOSKD_BIN` pointed at the compiled daemon (the verb-test harness seeds its
+  own temp `~/.autosk/extensions/` fixture + an empty `settings.json`, so no
+  real `npm install` runs)
 - `make test-short` — same with `-short`
 - `make vet` — `go vet ./...`
 - `make fmt` — `gofmt`
@@ -101,14 +103,15 @@ is in the script header.
     isolation provider
   - `daemon/extensions/pi-agent/` — `@autosk/pi-agent`: the shipped agent that
     drives `pi --mode rpc`
-  - `daemon/extensions/feature-dev/` — `@autosk/feature-dev`: the shipped
-    reference workflow (`dev → review → docs → validator → accept`), bundled into
-    every project
+  - `daemon/extensions/feature-dev/` — `@autosk/feature-dev`: the reference
+    workflow (`dev → review → docs → validator → accept`), published to npm and
+    installed by the daemon's first-run bootstrap
 - `gui/` — the Tauri desktop app: `src/` (React + Vite front end), `src-tauri/`
   (thin Tauri backend, a pure JSON-RPC client of `autoskd`; standalone cargo crate)
-- `scripts/` — `bundle-extensions.sh` / `package-autoskd.sh` (release packaging
-  of `autoskd` + its bundled extensions), `clean-layout-test.sh` (the clean-machine
-  auto-spawn smoke), `changelog-section.sh`, `pi-rpc-probe.sh`, `update-gui-icons.sh`
+- `scripts/` — `package-autoskd.sh` (release packaging of the `autoskd` binary),
+  `publish-extensions.sh` (publish the `@autosk/*` extension packages to npm),
+  `clean-layout-test.sh` (the clean-machine auto-spawn smoke),
+  `changelog-section.sh`, `pi-rpc-probe.sh`, `update-gui-icons.sh`
 
 ## Additional docs
 

@@ -1,28 +1,45 @@
 {
   "name": "@autosk/feature-dev",
-  "version": "0.0.0",
-  "description": "Shipped autoskd v2 reference workflow: feature-dev (dev → review → docs → validator → accept) wired to @autosk/pi-agent roles and worktree isolation.",
+  "version": "0.1.0",
+  "description": "feature-dev (dev → review → docs → validator → accept) wired to @autosk/pi-agent roles and worktree isolation.",
   "license": "MIT",
+  "author": "wierdbytes",
+  "homepage": "https://github.com/wierdbytes/autosk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wierdbytes/autosk.git",
+    "directory": "daemon/extensions/feature-dev"
+  },
+  "bugs": {
+    "url": "https://github.com/wierdbytes/autosk/issues"
+  },
+  "keywords": [
+    "autosk",
+    "autosk-extension",
+    "workflow",
+    "feature-dev"
+  ],
   "type": "module",
   "publishConfig": {
     "access": "public"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./index.ts"
   },
-  "types": "./src/index.ts",
+  "types": "./index.ts",
   "autosk": {
-    "extensions": ["./src/index.ts"]
+    "extensions": ["./index.ts"]
   },
   "files": [
+    "index.ts",
     "src/",
     "prompts/",
     "README.md"
   ],
   "dependencies": {
-    "@autosk/pi-agent": "workspace:*",
-    "@autosk/sdk": "workspace:*",
-    "@autosk/worktree": "workspace:*"
+    "@autosk/pi-agent": "^0.1.0",
+    "@autosk/sdk": "^0.1.0",
+    "@autosk/worktree": "^0.1.0"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

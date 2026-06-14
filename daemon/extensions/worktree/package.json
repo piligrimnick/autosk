@@ -1,22 +1,39 @@
 {
   "name": "@autosk/worktree",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Shipped autoskd v2 isolation provider: per-task git worktree isolation (worktreeIsolation()) attachable to any workflow.",
   "license": "MIT",
+  "author": "wierdbytes",
+  "homepage": "https://github.com/wierdbytes/autosk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wierdbytes/autosk.git",
+    "directory": "daemon/extensions/worktree"
+  },
+  "bugs": {
+    "url": "https://github.com/wierdbytes/autosk/issues"
+  },
+  "keywords": [
+    "autosk",
+    "autosk-extension",
+    "git-worktree",
+    "isolation"
+  ],
   "type": "module",
   "publishConfig": {
     "access": "public"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./index.ts"
   },
-  "types": "./src/index.ts",
+  "types": "./index.ts",
   "files": [
+    "index.ts",
     "src/",
     "README.md"
   ],
   "dependencies": {
-    "@autosk/sdk": "workspace:*"
+    "@autosk/sdk": "^0.1.0"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

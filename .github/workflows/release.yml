@@ -7,14 +7,14 @@ name: Release
 #   v1.2.3        -> regular release
 #   v1.2.3-rc1    -> auto-marked as pre-release (doesn't become "latest")
 #
-# A release ships THREE assets per the v2 architecture:
+# A release ships TWO assets per the v2 architecture:
 #   * autosk-<target>          the Go CLI + lazy TUI (pure JSON-RPC client)
 #   * autoskd-<target>         the Bun daemon, compiled standalone (embeds Bun;
 #                              no global bun needed at runtime). autosk auto-spawns
 #                              it, so it MUST ship.
-#   * autosk-extensions.tar.gz the daemon-bundled `feature-dev` workflow (pure
-#                              JS/prompts, platform-agnostic — one shared asset).
-#                              The daemon discovers it relative to its own path.
+#
+# There are no bundled extensions: the reference `feature-dev` workflow is the
+# npm package `@autosk/feature-dev`, which the daemon installs on first run.
 #
 # Build matrix mirrors ci.yml so we only ship what CI exercises.
 on:
@@ -65,10 +65,9 @@ jobs:
       - name: build autosk (Go CLI/TUI)
         run: make build
 
-      # Compile autoskd + assemble the bundled-extensions tree into dist/pkg
-      # (dist/pkg/bin/autoskd + dist/pkg/libexec/autosk/extensions). Bake the
-      # tag/commit into the daemon's reported version.
-      - name: package autoskd + bundled extensions
+      # Compile autoskd into dist/pkg/bin/autoskd. Bake the tag/commit into the
+      # daemon's reported version.
+      - name: package autoskd
         env:
           AUTOSK_VERSION: ${{ github.ref_name }}
           AUTOSK_COMMIT: ${{ github.sha }}
@@ -80,12 +79,6 @@ jobs:
           cp bin/autosk           "dist/out/autosk-${{ matrix.target }}"
           cp dist/pkg/bin/autoskd "dist/out/autoskd-${{ matrix.target }}"
           chmod +x "dist/out/autosk-${{ matrix.target }}" "dist/out/autoskd-${{ matrix.target }}"
-          # The bundled extensions are platform-agnostic; build the shared
-          # tarball once (on the linux target) so the two builds don't collide
-          # on the upload name.
-          if [ "${{ matrix.target }}" = "linux-x64" ]; then
-            tar -C dist/pkg/libexec/autosk -czf dist/out/autosk-extensions.tar.gz extensions
-          fi
 
       - name: upload artifacts
         uses: actions/upload-artifact@v6
@@ -157,10 +150,9 @@ jobs:
   # `brew install wierdbytes/autosk/autosk` (and `brew upgrade`) pick up
   # the new release with no manual bookkeeping.
   #
-  # The formula installs BOTH binaries (autosk + autoskd) and the bundled
-  # extensions: v2 auto-spawn needs autoskd on disk, and the daemon resolves
-  # the bundled feature-dev workflow at `<prefix>/libexec/autosk/extensions`
-  # (relative to its own path — no env var, no global bun).
+  # The formula installs BOTH binaries (autosk + autoskd): v2 auto-spawn needs
+  # autoskd on disk. There are no bundled extensions — the daemon installs the
+  # `@autosk/feature-dev` npm package on first run.
   #
   # Pre-releases (tag contains '-') skip the bump: brew has no
   # 'pre-release channel' for taps, and we don't want rc/beta tags to
@@ -200,7 +192,6 @@ jobs:
           lin_autosk_sha=$(sha256sum assets/autosk-linux-x64   | awk '{print $1}')
           mac_daemon_sha=$(sha256sum assets/autoskd-osx-arm64  | awk '{print $1}')
           lin_daemon_sha=$(sha256sum assets/autoskd-linux-x64  | awk '{print $1}')
-          ext_sha=$(sha256sum assets/autosk-extensions.tar.gz  | awk '{print $1}')
 
           cat > tap/Formula/autosk.rb <<EOF
           # NOTE: this file is regenerated end-to-end by the release workflow in
@@ -213,8 +204,7 @@ jobs:
             version "${version}"
             license "MIT"
 
-            # The Go CLI + the Bun daemon ship as separate per-arch binaries; the
-            # bundled feature-dev workflow is a shared, platform-agnostic tarball.
+            # The Go CLI + the Bun daemon ship as separate per-arch binaries.
             on_macos do
               on_arm do
                 url "https://github.com/${REPO}/releases/download/v#{version}/autosk-osx-arm64"
@@ -239,12 +229,6 @@ jobs:
               end
             end
 
-            # The daemon-bundled extensions (feature-dev workflow + prompts).
-            resource "extensions" do
-              url "https://github.com/${REPO}/releases/download/v#{version}/autosk-extensions.tar.gz"
-              sha256 "${ext_sha}"
-            end
-
             def install
               # Go CLI: the only per-arch \`url\` above downloads as the cask-style
               # bare filename, so install it as \`autosk\`.
@@ -256,12 +240,6 @@ jobs:
                 daemon = OS.mac? ? "autoskd-osx-arm64" : "autoskd-linux-x64"
                 bin.install daemon => "autoskd"
               end
-
-              # Bundled feature-dev workflow: the daemon discovers it at
-              # <prefix>/libexec/autosk/extensions, relative to its own path.
-              resource("extensions").stage do
-                (libexec/"autosk").install "extensions"
-              end
             end
 
             test do
@@ -269,9 +247,8 @@ jobs:
               # the same tag we point the URL at. Substring-match so it works
               # whether or not the build embedded a leading 'v'.
               assert_match version.to_s, shell_output("#{bin}/autosk version")
-              # The daemon ships alongside and the bundled workflow is in place.
+              # The daemon ships alongside (first-run installs feature-dev from npm).
               assert_predicate bin/"autoskd", :exist?
-              assert_predicate libexec/"autosk/extensions/feature-dev", :exist?
             end
           end
           EOF

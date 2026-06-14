@@ -38,19 +38,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **workflows & agents as code:** workflows are TypeScript registered by
   **extensions** (their agents are inline step values — the step key is the agent
   name), with pi-style discovery (project `.autosk/extensions/` ▸ global
-  `~/.autosk/extensions/` ▸ npm packages in `settings.json` ▸ daemon-bundled),
+  `~/.autosk/extensions/` ▸ npm packages in `settings.json`),
   loaded in-process with full error isolation — a broken extension is recorded
   via `project.diagnostics` and never crashes the daemon. The engine only drives
   the task status machine and calls each workflow's `onTransit` hook; visit caps
   and guards live in that hook (`ctx.visits`). See `docs/extensions.md` and
   `docs/workflows.md`.
-- **shipped extensions:** `@autosk/worktree` (the per-task git-worktree isolation
-  provider, attachable to any workflow), `@autosk/pi-agent` (an agent that drives
-  `pi --mode rpc`, mirrors pi's transcript entries 1:1, and bridges transitions
-  through an injected `autosk_transit` pi-tool), and `@autosk/feature-dev` (the
-  reference workflow `dev → review → docs → validator → accept` with review→dev /
-  validator→dev bounce-backs and a `dev` visit cap, bundled into every project —
-  replaces v1's `feature-dev-generic`).
+- **extension packages (npm):** `@autosk/sdk` (the extension-facing types),
+  `@autosk/worktree` (the per-task git-worktree isolation provider, attachable to
+  any workflow), `@autosk/pi-agent` (an agent that drives `pi --mode rpc`, mirrors
+  pi's transcript entries 1:1, and bridges transitions through an injected
+  `autosk_transit` pi-tool), and `@autosk/feature-dev` (the reference workflow
+  `dev → review → docs → validator → accept` with review→dev / validator→dev
+  bounce-backs and a `dev` visit cap — replaces v1's `feature-dev-generic`). All
+  four are published to npm as raw TypeScript; the daemon installs
+  `@autosk/feature-dev` on first run (see **first-run bootstrap**).
+- **first-run bootstrap:** on a fresh machine (no `~/.autosk/settings.json`) the
+  daemon provisions the default extensions itself — it `npm install`s
+  `@autosk/feature-dev` (deps pulled transitively) into `~/.autosk/packages/` and
+  writes `~/.autosk/settings.json`, so every project discovers `feature-dev` with
+  no per-project files. `settings.json`'s presence is the "already initialised"
+  marker (provide your own to opt out); the install needs `npm` on `PATH`
+  (`$AUTOSK_NPM_BIN`) + network and is logged-but-never-fatal on failure.
 - **sessions:** one agent run for one step is a **session** with a pi-format
   transcript (`sessions/<id>.jsonl`: a header, pi `message` entries with text /
   thinking / `toolCall` / image content blocks, and the engine's structural
@@ -72,11 +81,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Tauri backend is a pure JSON-RPC client of `autoskd` (ask-9e5f8c,
   ask-03019a).
 - **build/release:** `make build-autoskd` compiles the Bun daemon to `bin/autoskd`
-  and bundles its extensions (`scripts/bundle-extensions.sh`); `make install`
-  installs both `autosk` + `autoskd` (+ the bundled extensions). Releases ship
-  **both** binaries per target plus a platform-agnostic bundled-extensions
-  tarball, and the Homebrew formula installs both — so auto-spawn works on a
-  clean machine with no global `bun` (ask-305572, ask-e36027).
+  (no extension bundling); `make install` installs both `autosk` + `autoskd`.
+  Releases ship **both** binaries per target, and the Homebrew formula installs
+  both — so auto-spawn works on a clean machine with no global `bun`. The
+  `@autosk/*` extension packages are published to npm via
+  `scripts/publish-extensions.sh` (ask-305572, ask-e36027).
 
 ### Changed
 - **workflows:** workflow extensions now register their agents **inline** as
@@ -109,7 +118,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   daemon's `task-changed` / `project-changed` push (ask-305572).
 - **bootstrap:** a freshly-created project lays down `.autosk/{tasks,sessions,
   extensions}` and registers with the daemon — no database, and no per-project
-  workflow seeding (the bundled `feature-dev` is available to every project).
+  workflow seeding (`feature-dev` is provisioned once, globally, on the daemon's
+  first run — see **first-run bootstrap** — and is then available to every
+  project).
 
 ### Removed
 - **agents (inline-step redesign):** the `autosk agent list/show` CLI, the
@@ -139,6 +150,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **daemon internals:** the v1 Rust daemon workspace and its embedded
   database/GC/migration machinery are gone, replaced by the Bun `autoskd` (this
   intermediate Rust daemon never reached a release).
+- **daemon-bundled extensions:** there is no longer a fourth, lowest-priority
+  "daemon-bundled" discovery source, no extensions packaged beside the binary,
+  the `$AUTOSK_BUNDLED_EXTENSIONS` env override, and the `scripts/bundle-extensions.sh`
+  bundler — the reference `feature-dev` workflow is now an npm package the daemon
+  installs on first run (see **first-run bootstrap**).
 
 ### Fixed
 - **empty task list with `--status all` / in the lazy dashboard:** an "all

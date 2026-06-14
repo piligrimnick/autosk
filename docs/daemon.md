@@ -81,7 +81,7 @@ Environment knobs:
 | `AUTOSK_SOCK` | UDS path (when `--sock` is not passed). |
 | `AUTOSK_IDLE_SECS` | Idle-shutdown window in seconds (default `1800`; `0` or negative disables; ignored in TCP mode). |
 | `AUTOSK_TOKEN_FILE` | Path to the TCP auth token file (default `~/.autosk/daemon-token`). |
-| `AUTOSK_BUNDLED_EXTENSIONS` | Override the daemon-bundled extensions directory (where the shipped `feature-dev` workflow is discovered). |
+| `AUTOSK_NPM_BIN` | `npm` binary used by the first-run bootstrap to install the default extensions (default `npm` on `PATH`). |
 | `AUTOSKD_BIN` | (front-end side) explicit path to the `autoskd` binary for auto-spawn. |
 
 ### One daemon per host, many projects

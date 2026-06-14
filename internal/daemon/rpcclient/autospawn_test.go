@@ -36,8 +36,15 @@ func seedProject(t *testing.T, _ string) (proj, sock string) {
 		t.Fatalf("mkdir proj: %v", err)
 	}
 	home := filepath.Join(tmp, "home")
-	if err := os.MkdirAll(home, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, ".autosk"), 0o755); err != nil {
 		t.Fatalf("mkdir home: %v", err)
+	}
+	// Seed an empty ~/.autosk/settings.json so the auto-spawned daemon treats this
+	// home as "already initialised" and SKIPS its first-run bootstrap — otherwise
+	// opening the project would block on a real `npm install` of the default
+	// extensions (network-dependent + flaky).
+	if err := os.WriteFile(filepath.Join(home, ".autosk", "settings.json"), []byte("{\"extensions\":[]}\n"), 0o644); err != nil {
+		t.Fatalf("write settings.json: %v", err)
 	}
 	t.Setenv("HOME", home)
 	// The socket must live on a SHORT path: AF_UNIX sun_path caps at ~104 bytes

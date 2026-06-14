@@ -72,11 +72,12 @@ jobs:
       - name: test
         run: make test
 
-  # Release-layout smoke: package `autoskd` + its bundled extensions exactly as
-  # the release ships them, then prove the installed `autosk` auto-spawns the
-  # compiled `autoskd` and resolves the bundled `feature-dev` workflow with NO
-  # global bun and NO env override (P9 auto-spawn acceptance criterion). This is
-  # the one path that exercises the compiled binary loading an on-disk extension.
+  # Release-layout smoke: package `autoskd` exactly as the release ships it, then
+  # prove the installed `autosk` auto-spawns the compiled `autoskd` and serves
+  # with NO global bun (auto-spawn acceptance criterion). There are no bundled
+  # extensions — the reference `feature-dev` workflow is an npm package the daemon
+  # installs on first run (which needs npm + network, deliberately not asserted
+  # by this offline smoke).
   clean-layout:
     runs-on: ubuntu-latest
     steps:

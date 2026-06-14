@@ -37,19 +37,18 @@ reads each one and seeds it into the corresponding pi agent as its `firstMessage
 
 ## Discovery — how every project gets it
 
-`feature-dev` ships as a **daemon-bundled** extension (declared via
-`package.json#autosk.extensions`). The daemon discovers `daemon/extensions/` at
-the **lowest** priority, so every project can enroll into `feature-dev` with **no
-per-project files**:
+`feature-dev` is an **npm package** (declared via `package.json#autosk.extensions`).
+The daemon installs it into `~/.autosk/packages/` on first run (see the
+[extensions docs → First-run bootstrap](../../../docs/extensions.md#first-run-bootstrap))
+and lists it in `~/.autosk/settings.json`, so every project can enroll into
+`feature-dev` with **no per-project files**:
 
 ```
-project-local (.autosk/extensions) ▸ global (~/.autosk/extensions) ▸ npm (settings.json) ▸ BUNDLED
+project-local (.autosk/extensions) ▸ global (~/.autosk/extensions) ▸ npm (settings.json)
 ```
 
 A project- or global-level extension that registers a workflow/agent of the same
-name **overrides** the bundled one (first-registered wins). The bundled dir is
-`$AUTOSK_BUNDLED_EXTENSIONS`, else `daemon/extensions/` resolved relative to the
-daemon. To enroll a task:
+name **overrides** the npm one (first-registered wins). To enroll a task:
 
 ```
 autosk enroll <task-id> --workflow feature-dev
@@ -62,7 +61,7 @@ is configured on the inline [`@autosk/pi-agent`](../pi-agent) step values (model
 thinking, extra args, …) inside `featureDevWorkflow()`. To customise, copy this
 extension into `~/.autosk/extensions/` (or your project's `.autosk/extensions/`)
 and edit the `piAgent({...})` / `featureDevWorkflow({...})` calls; your copy then
-overrides the bundled one.
+overrides the npm one.
 
 ## Exports
 

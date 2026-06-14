@@ -28,3 +28,11 @@ export {
   HAZARD_COMMENT_AUTHOR,
   type ParkedTask,
 } from "./hazard.ts";
+export {
+  ensureGlobalBootstrap,
+  DEFAULT_BOOTSTRAP_PACKAGES,
+  DEFAULT_BOOTSTRAP_EXTENSIONS,
+  type BootstrapOptions,
+  type BootstrapInstaller,
+  type BootstrapResult,
+} from "./bootstrap.ts";

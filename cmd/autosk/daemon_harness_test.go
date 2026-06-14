@@ -20,11 +20,13 @@ import (
 //
 //   - AUTOSK_SOCK   — a short private UDS path (sun_path < ~104 bytes).
 //   - HOME          — an isolated home so ~/.autosk/projects.json + the daemon
-//     token never collide with the operator's real ~/.autosk.
-//   - AUTOSK_BUNDLED_EXTENSIONS — a fixture extensions dir (testdata/extensions)
-//     that registers a deterministic, human-only "human-flow" workflow so
-//     enroll/registry verbs work WITHOUT the scheduler auto-running an agent
-//     (a human-first step is never scheduled).
+//     token never collide with the operator's real ~/.autosk. We also seed its
+//     ~/.autosk/extensions/ with the fixture workflow file (testdata/extensions/
+//     test-flow.js — a deterministic human-only "human-flow" plus an in-process
+//     "auto-flow", discovered via the global extensions source) AND an empty
+//     ~/.autosk/settings.json. settings.json's presence is the daemon's "already
+//     initialised" marker, so its first-run bootstrap is SKIPPED — a test never
+//     triggers a real `npm install`.
 //   - AUTOSK_IDLE_SECS=0 — disable idle-shutdown so the daemon stays up for the
 //     whole test even across the brief gaps between verb calls.
 //
@@ -62,10 +64,11 @@ func ensureTestDaemon(t *testing.T) {
 	}
 
 	sock := shortSocketPath(t)
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	t.Setenv("AUTOSK_SOCK", sock)
 	t.Setenv("AUTOSK_IDLE_SECS", "0")
-	t.Setenv("AUTOSK_BUNDLED_EXTENSIONS", fixtureExtDir)
+	seedFixtureExtensions(t, home)
 
 	harnessDaemons.Store(t, struct{}{})
 	t.Cleanup(func() {
@@ -76,6 +79,32 @@ func ensureTestDaemon(t *testing.T) {
 		}
 		harnessDaemons.Delete(t)
 	})
+}
+
+// seedFixtureExtensions provisions the test home's global ~/.autosk so the
+// daemon discovers the fixture workflows AND skips its first-run bootstrap:
+//   - ~/.autosk/extensions/test-flow.js — copied from testdata/extensions, a
+//     self-contained plain-JS extension (no @autosk/* imports), discovered via
+//     the global extensions source.
+//   - ~/.autosk/settings.json — an empty extension list whose mere presence
+//     marks the environment "already initialised", so no real `npm install` runs.
+func seedFixtureExtensions(t *testing.T, home string) {
+	t.Helper()
+	autoskDir := filepath.Join(home, ".autosk")
+	extDir := filepath.Join(autoskDir, "extensions")
+	if err := os.MkdirAll(extDir, 0o755); err != nil {
+		t.Fatalf("mkdir extensions dir: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(fixtureExtDir, "test-flow.js"))
+	if err != nil {
+		t.Fatalf("read fixture extension: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(extDir, "test-flow.js"), src, 0o644); err != nil {
+		t.Fatalf("write fixture extension: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(autoskDir, "settings.json"), []byte("{\"extensions\":[]}\n"), 0o644); err != nil {
+		t.Fatalf("write settings.json: %v", err)
+	}
 }
 
 // runRoot executes the CLI's root cobra command in-process inside dir and

@@ -57,7 +57,7 @@ natively (it runs on Bun), so an extension can be plain `.ts` — no build step.
 
 ## Discovery order
 
-For each project, the daemon discovers extensions from four sources and merges
+For each project, the daemon discovers extensions from three sources and merges
 them in **precedence order** (highest first):
 
 1. **project-local** — `./.autosk/extensions/`
@@ -65,8 +65,11 @@ them in **precedence order** (highest first):
 3. **npm packages** listed under `"extensions"` in `settings.json` (project
    `./.autosk/settings.json` first, then global `~/.autosk/settings.json`),
    installed under `~/.autosk/packages/node_modules/`
-4. **daemon-bundled** — the extensions shipped with `autoskd` (lowest precedence;
-   this is how `@autosk/feature-dev` reaches every project)
+
+There is **no daemon-bundled source**: the reference `@autosk/feature-dev`
+workflow is an ordinary npm package that the daemon **provisions on first run**
+(see [First-run bootstrap](#first-run-bootstrap)) into source (3), so every
+project discovers it with no per-project files.
 
 Within a directory, discovery is one level deep, in sorted filename order:
 
@@ -76,11 +79,10 @@ Within a directory, discovery is one level deep, in sorted filename order:
   ["./src/index.ts", …] }` contributes those declared entries.
 
 Dedup is by entry path (first/highest-precedence occurrence wins), and on a
-**name collision** the first-registered definition wins. Because the bundled
-source is last, **any project-local, global, or npm extension that registers a
-workflow/agent of the same name overrides the bundled one** — e.g. drop your own
-`feature-dev` into `.autosk/extensions/` to replace the shipped reference
-workflow.
+**name collision** the first-registered definition wins. Because the npm source
+is last, **any project-local or global extension that registers a workflow/agent
+of the same name overrides an npm one** — e.g. drop your own `feature-dev` into
+`.autosk/extensions/` to replace the provisioned reference workflow.
 
 A `settings.json` simply lists package names:
 
@@ -127,11 +129,28 @@ workflow or step has vanished is parked to `human` with
 `error="workflow_missing: …"`. Fix the code (or restore the name) and resume the
 task.
 
-## Shipped (bundled) extensions
+## First-run bootstrap
 
-`autoskd` ships three extensions in `daemon/extensions/`, packaged beside the
-binary for releases and discovered via the bundled source (override the location
-with `AUTOSK_BUNDLED_EXTENSIONS`):
+`autoskd` ships **no bundled extensions**. On a brand-new machine — detected by
+the absence of `~/.autosk/settings.json` — the daemon provisions the default
+extensions itself on startup: it shells out to `npm` to install
+`@autosk/feature-dev` (which pulls `@autosk/pi-agent` / `@autosk/worktree` /
+`@autosk/sdk` transitively) into `~/.autosk/packages/`, then writes
+`~/.autosk/settings.json` listing `@autosk/feature-dev`. Every project then
+discovers `feature-dev` through the npm-packages source above.
+
+- `settings.json` **is** the "already initialised" marker: once it exists the
+  bootstrap is a no-op, so an operator who manages extensions by hand (or is
+  air-gapped) is never surprised by a network install. Provide your own
+  `~/.autosk/settings.json` to opt out entirely.
+- The install needs `npm` on `PATH` (override with `$AUTOSK_NPM_BIN`) and network
+  access. A failed install is **logged, never fatal** — the daemon keeps serving
+  and leaves `settings.json` absent so the next start retries.
+
+## The default extensions
+
+These are the npm packages the first-run bootstrap provisions (and the building
+blocks for your own workflows):
 
 - **[`@autosk/worktree`](../daemon/extensions/worktree/README.md)** —
   `worktreeIsolation()`, the per-task git-worktree isolation provider you attach
@@ -175,8 +194,8 @@ export default function (autosk: AutoskAPI) {
 autosk enroll <task-id> --workflow echo
 ```
 
-To customise a shipped extension, copy it into `~/.autosk/extensions/` (or your
-project's `.autosk/extensions/`) and edit it; your copy overrides the bundled one
+To customise a default extension, copy it into `~/.autosk/extensions/` (or your
+project's `.autosk/extensions/`) and edit it; your copy overrides the npm one
 by name. See [docs/workflows.md](workflows.md) for the full
 `WorkflowDefinition` / `AgentDefinition` / `StatusStep` / `IsolationProvider`
 contracts and the `AgentRunContext` your `onRun` receives.

@@ -245,10 +245,12 @@ If a workflow you expect is missing, check `autosk project diagnostics` — a
 broken extension (or an invalid step shape) records a load error there instead
 of crashing the daemon (see [docs/extensions.md](extensions.md#error-isolation--projectdiagnostics)).
 
-## The shipped reference workflow: `feature-dev`
+## The reference workflow: `feature-dev`
 
-`autoskd` bundles [`@autosk/feature-dev`](../daemon/extensions/feature-dev/README.md)
-into every project, so you can enroll into it with no per-project files:
+[`@autosk/feature-dev`](../daemon/extensions/feature-dev/README.md) is an npm
+package the daemon installs on first run (see
+[docs/extensions.md → First-run bootstrap](extensions.md#first-run-bootstrap)),
+so every project can enroll into it with no per-project files:
 
 ```text
 dev ──▶ review ──▶ docs ──▶ validator ──▶ accept (human)
@@ -281,8 +283,8 @@ id=$(autosk create "Fix the flaky test" --workflow feature-dev --json | jq -r .i
 Copy the extension into `~/.autosk/extensions/` (or your project's
 `.autosk/extensions/`) and edit the `piAgent({...})` / `featureDevWorkflow({...})`
 calls (model, thinking, the visit cap, the step graph, the prompts under
-`prompts/`). Because a project/global extension overrides a bundled one by name,
-your `feature-dev` then replaces the shipped one. See
+`prompts/`). Because a project/global extension overrides an npm one by name,
+your `feature-dev` then replaces the provisioned one. See
 [docs/extensions.md → Writing your own](extensions.md#writing-your-own) for the
 discovery/override rules.
 

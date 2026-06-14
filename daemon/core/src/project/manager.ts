@@ -18,8 +18,10 @@
 import type { ProjectInfo } from "@autosk/sdk";
 
 import {
+  ensureGlobalBootstrap,
   loadProjectRegistry,
   validateInFlightTasks,
+  type BootstrapOptions,
   type ExtensionEnv,
   type ExtensionRegistry,
 } from "../extensions/index.ts";
@@ -59,7 +61,18 @@ export interface ProjectManagerOptions {
   extensions?: ExtensionEnv;
   /** Logger for live-code hazard parks (defaults to the console logger). */
   logger?: Logger;
+  /**
+   * First-run bootstrap config (npm-install the default extensions into
+   * `~/.autosk/packages/` + write `~/.autosk/settings.json` when it is absent).
+   * `home`/`logger` are taken from the manager. Omit to DISABLE bootstrap (the
+   * test default — tests must never trigger a real `npm install`); the
+   * production daemon passes `{}` to enable it with the defaults.
+   */
+  bootstrap?: ProjectBootstrap;
 }
+
+/** Per-daemon bootstrap config (manager supplies `home`/`logger`). */
+export type ProjectBootstrap = Omit<BootstrapOptions, "home" | "logger">;
 
 export class ProjectManager {
   private readonly registry: ProjectRegistry;
@@ -67,9 +80,12 @@ export class ProjectManager {
   private readonly clock: Clock;
   private readonly extensionsEnv: ExtensionEnv;
   private readonly logger: Logger;
+  private readonly bootstrapConfig?: ProjectBootstrap;
 
   private projects = new Map<string, ProjectHandle>();
   private openLocks = new KeyedMutex();
+  /** Single-flight first-run bootstrap; resolved once per daemon process. */
+  private bootstrapOnce: Promise<void> | null = null;
 
   constructor(opts: ProjectManagerOptions = {}) {
     this.registry = opts.registry ?? ProjectRegistry.openDefault();
@@ -77,6 +93,23 @@ export class ProjectManager {
     this.clock = opts.clock ?? systemClock;
     this.extensionsEnv = opts.extensions ?? {};
     this.logger = opts.logger ?? consoleLogger;
+    this.bootstrapConfig = opts.bootstrap;
+  }
+
+  /**
+   * Runs the first-run environment bootstrap at most once (no-op when disabled,
+   * when no home is resolvable, or once `settings.json` already exists). Awaited
+   * before any project's extension registry is built, and kicked off eagerly at
+   * daemon start so it is usually done by the time a project opens. Never throws.
+   */
+  ensureBootstrap(): Promise<void> {
+    if (!this.bootstrapConfig) return Promise.resolve();
+    this.bootstrapOnce ??= (async () => {
+      const home = this.extensionsEnv.home ?? process.env.HOME ?? "";
+      if (!home) return;
+      await ensureGlobalBootstrap({ home, logger: this.logger, ...this.bootstrapConfig });
+    })();
+    return this.bootstrapOnce;
   }
 
   // -- resolution / lazy open ----------------------------------------------
@@ -91,6 +124,9 @@ export class ProjectManager {
   async open(root: string): Promise<ProjectHandle> {
     const cached = this.projects.get(root);
     if (cached) return cached;
+    // Provision the default extensions before the first registry build so a
+    // fresh machine discovers `feature-dev` on its very first project open.
+    await this.ensureBootstrap();
     return this.openLocks.run(root, async () => {
       const again = this.projects.get(root);
       if (again) return again;

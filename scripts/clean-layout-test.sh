@@ -2,16 +2,20 @@
 #
 # clean-layout-test.sh — prove the packaged release works on a clean machine.
 #
-# Acceptance criterion (P9): "the installed `autosk` locates + spawns the shipped
-# `autoskd` with the bundled feature-dev resolvable — no global bun at runtime."
+# Acceptance criterion: "the installed `autosk` locates + spawns the shipped
+# `autoskd` and serves — no global bun at runtime."
 #
-# This builds the Go `autosk` + packages `autoskd` and its bundled extensions
-# into a throwaway prefix (the same layout the brew formula installs), then runs
-# `autosk` against a fresh project with:
+# This builds the Go `autosk` + packages `autoskd` into a throwaway prefix (the
+# same layout the brew formula installs), then runs `autosk` against a fresh
+# project with:
 #   * PATH scrubbed of bun        (proves the compiled autoskd needs no global bun)
-#   * AUTOSK_BUNDLED_EXTENSIONS    unset (proves execPath-relative discovery works)
 #   * a clean $HOME                (proves nothing leaks from the dev machine)
-# and asserts the auto-spawned daemon resolves the bundled `feature-dev` workflow.
+# and asserts the auto-spawned daemon serves a basic verb.
+#
+# NB: there are no daemon-bundled extensions any more. The reference `feature-dev`
+# workflow is an npm package the daemon installs on first run (ensureGlobalBootstrap),
+# which needs `npm` + network — deliberately ABSENT from this scrubbed env — so
+# this smoke does NOT assert feature-dev resolves; it only proves auto-spawn.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,8 +38,6 @@ install -m 0755 "$repo_root/bin/autosk" "$prefix/bin/autosk"
 
 test -x "$prefix/bin/autosk"   || { echo "FAIL: no autosk in prefix"  >&2; exit 1; }
 test -x "$prefix/bin/autoskd"  || { echo "FAIL: no autoskd in prefix" >&2; exit 1; }
-test -d "$prefix/libexec/autosk/extensions/feature-dev" \
-  || { echo "FAIL: feature-dev not packaged" >&2; exit 1; }
 
 echo "== fresh project under a clean HOME =="
 mkdir -p "$home" "$proj"
@@ -43,7 +45,7 @@ git -C "$proj" init -q
 git -C "$proj" config user.email t@t && git -C "$proj" config user.name t
 git -C "$proj" commit -q --allow-empty -m init
 
-# A runtime env with NO bun on PATH and NO bundled-extensions override.
+# A runtime env with NO bun on PATH.
 clean_path="$prefix/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 run() {
   env -i \
@@ -62,13 +64,10 @@ fi
 echo "== init (auto-spawns autoskd) =="
 ( cd "$proj" && run init >/dev/null )
 
-echo "== assert the bundled feature-dev workflow resolves =="
-out="$(cd "$proj" && run workflow show feature-dev 2>&1)" || {
-  echo "FAIL: 'workflow show feature-dev' errored:" >&2; echo "$out" >&2; exit 1;
-}
-echo "$out" | grep -qi "feature-dev" || {
-  echo "FAIL: feature-dev not in 'workflow show' output:" >&2; echo "$out" >&2; exit 1;
+echo "== assert the auto-spawned daemon serves a basic verb =="
+out="$(cd "$proj" && run project list 2>&1)" || {
+  echo "FAIL: 'project list' errored (daemon did not auto-spawn/serve):" >&2; echo "$out" >&2; exit 1;
 }
 
 echo
-echo "PASS: clean-layout auto-spawn resolves the bundled feature-dev workflow (no global bun)."
+echo "PASS: clean-layout auto-spawn serves with no global bun (no bundled extensions)."

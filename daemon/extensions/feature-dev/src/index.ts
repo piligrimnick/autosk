@@ -8,10 +8,11 @@
  * is an inline `@autosk/pi-agent` role seeded with that role's prompt (the step
  * key IS the agent name), and `accept` is a `statusStep("human")` park step.
  *
- * Discovery (P6 step-4 decision): this package ships as a daemon-BUNDLED
- * extension (declared via `package.json#autosk.extensions`), discovered at the
- * lowest priority so every project can enroll into `feature-dev` with no
- * per-project files, while a project/global extension of the same name wins.
+ * Discovery: this package is published to npm and declared as an extension via
+ * `package.json#autosk.extensions`. The daemon installs it into
+ * `~/.autosk/packages/` on first run (ensureGlobalBootstrap) and lists it in
+ * `~/.autosk/settings.json`, so every project can enroll into `feature-dev` with
+ * no per-project files, while a project/global extension of the same name wins.
  */
 
 import { readFileSync } from "node:fs";

@@ -4,21 +4,19 @@
 # host platform.
 #
 # The Bun daemon is compiled to a standalone binary with `bun build --compile`
-# (it embeds the Bun runtime, so there is NO global bun at runtime). The shipped
-# `feature-dev` reference workflow is loaded by the daemon at runtime from the
-# FILESYSTEM, so it ships as files beside the binary (see bundle-extensions.sh);
-# the daemon's defaultBundledDir() (daemon/core/src/rpc/bootstrap.ts) discovers
-# them relative to `process.execPath`.
+# (it embeds the Bun runtime, so there is NO global bun at runtime). There are no
+# daemon-bundled extensions: the reference `feature-dev` workflow ships as an
+# npm package (`@autosk/feature-dev`) that the daemon installs into
+# ~/.autosk/packages/ on first run (ensureGlobalBootstrap), so nothing but the
+# binary needs to be packaged.
 #
 # Usage:
 #   scripts/package-autoskd.sh <out-dir>
 #
-# Produces (the canonical packaged layout — brew installs <out-dir>/* under the
-# formula prefix verbatim, so the relative bin/ ↔ libexec/ geometry holds):
+# Produces:
 #
 #   <out-dir>/
-#     bin/autoskd                              the compiled daemon
-#     libexec/autosk/extensions/feature-dev/   the bundled reference workflow
+#     bin/autoskd   the compiled daemon
 #
 # Requires `bun` on PATH (build time only).
 set -euo pipefail
@@ -42,8 +40,5 @@ defines=()
 
 echo "package-autoskd: bun build --compile -> $out/bin/autoskd"
 (cd "$daemon" && "$bun" build --compile core/src/index.ts ${defines[@]+"${defines[@]}"} --outfile "$out/bin/autoskd")
-
-echo "package-autoskd: bundling extensions"
-"$repo_root/scripts/bundle-extensions.sh" "$out/libexec/autosk/extensions"
 
 echo "package-autoskd: done -> $out"

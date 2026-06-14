@@ -10,10 +10,7 @@
  * without killing the test process.
  */
 
-import { existsSync } from "node:fs";
 import net from "node:net";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { Engine, type EngineOptions } from "../engine/index.ts";
 import { ProjectManager } from "../project/index.ts";
@@ -73,13 +70,14 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<StartD
   }
 
   const token = resolveDaemonToken(opts, logger);
-  // The default project manager discovers the daemon-BUNDLED extensions
-  // (`@autosk/feature-dev` + its pi-agent roles) at the lowest priority, so every
-  // project can enroll into `feature-dev` with no per-project files (P6 step-4
-  // decision). Tests inject their own `projectManager`, so this default branch
-  // is never hit by the suite.
-  const projectManager =
-    opts.projectManager ?? new ProjectManager({ logger, extensions: { bundledDir: defaultBundledDir() } });
+  // There are no daemon-bundled extensions: on first run (no
+  // `~/.autosk/settings.json`) the default project manager npm-installs the
+  // reference `@autosk/feature-dev` workflow into `~/.autosk/packages/` and
+  // writes `settings.json`, so every project then discovers it through the
+  // normal npm-packages source. Tests inject their own `projectManager` (with no
+  // `bootstrap`), so this default branch — and any real `npm install` — is never
+  // hit by the suite.
+  const projectManager = opts.projectManager ?? new ProjectManager({ logger, bootstrap: {} });
   const engine = opts.engine ?? new Engine({ ...opts.engineOptions, logger });
 
   // Idle-shutdown is disabled in TCP mode (a remote daemon is a long-lived service).
@@ -124,6 +122,12 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<StartD
   server.serve(unix.server, { isTcp: false, requireAuth: false });
   await unix.listen();
 
+  // Kick off the first-run bootstrap AFTER the socket is accepting, so the Go
+  // auto-spawn readiness wait is never blocked by an `npm install`. A project
+  // open awaits the same single-flight promise, so `feature-dev` is guaranteed
+  // present by the time it is used even if this warm-up has not finished.
+  void projectManager.ensureBootstrap();
+
   let tcpAddress: { host: string; port: number } | undefined;
   if (opts.tcp) {
     const host = opts.tcp.host ?? "127.0.0.1";
@@ -153,39 +157,6 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<StartD
 
   logger.info(`autoskd ${VERSION}: listening on ${socketPath}`);
   return { daemon, server, socketPath, token, tcpAddress, shutdown };
-}
-
-/**
- * The daemon-bundled extensions directory, resolved in priority order:
- *
- *  1. `$AUTOSK_BUNDLED_EXTENSIONS` (explicit override; used by `make test` /
- *     `make install` and any custom packaging).
- *  2. the repo's `daemon/extensions/` resolved relative to this module — present
- *     when running from source (`bun`/`make test`); absent in a compiled binary,
- *     whose `import.meta.url` points inside the embedded FS.
- *  3. paths relative to the real on-disk binary (`process.execPath`) — this is
- *     the zero-config packaged-install case (`bun build --compile`): the
- *     extensions tree ships next to `autoskd`. Brew installs it to
- *     `<prefix>/libexec/autosk/extensions`; a flat install keeps `extensions/`
- *     beside the binary.
- *
- * A non-existent result is harmless (discovery yields nothing and the daemon
- * still serves — `feature-dev` just isn't bundled).
- */
-function defaultBundledDir(): string {
-  const override = process.env.AUTOSK_BUNDLED_EXTENSIONS;
-  if (override && override.trim() !== "") return override;
-
-  const sourceDir = fileURLToPath(new URL("../../../extensions", import.meta.url));
-  if (existsSync(sourceDir)) return sourceDir;
-
-  const execDir = path.dirname(process.execPath);
-  for (const rel of ["../libexec/autosk/extensions", "../share/autosk/extensions", "extensions"]) {
-    const cand = path.resolve(execDir, rel);
-    if (existsSync(cand)) return cand;
-  }
-
-  return sourceDir;
 }
 
 /** Resolves the configured token: explicit override, else the token file (or `null`). */

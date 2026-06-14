@@ -39,16 +39,17 @@ brew install wierdbytes/autosk/autosk    # macOS / Linux — installs autosk + a
 make install
 ```
   Homebrew (and `make install`) install **both** binaries: the `autosk` CLI/TUI
-  and the `autoskd` daemon it auto-spawns. The bundled `feature-dev` workflow
-  ships alongside.
+  and the `autoskd` daemon it auto-spawns. The `feature-dev` workflow is fetched
+  from npm on first run (see below).
 
 - **[pi.dev](https://pi.dev)** — installed and configured for at least one LLM
   provider (the shipped agents drive `pi --mode rpc`).
 
-- **Node.js 22+** *(optional)* — only needed if you install **npm-packaged
-  extensions** (listed in `settings.json`). The bundled workflow + your own
-  local `.autosk/extensions/*.ts` need nothing extra; the daemon runs them
-  in-process.
+- **Node.js 22+ (with `npm`)** — needed on first run so the daemon can install
+  the default `@autosk/feature-dev` workflow into `~/.autosk/packages/`, and
+  whenever you add other **npm-packaged extensions** (listed in `settings.json`).
+  Your own local `.autosk/extensions/*.ts` need nothing extra; the daemon runs
+  them in-process.
 
 ## Quick start
 
@@ -107,12 +108,13 @@ iPad, see [docs/gui-release.md](docs/gui-release.md).
    `AUTOSK_AUTOINIT_ASSUME_YES=1` (or disable the behaviour entirely with
    `AUTOSK_NO_AUTOINIT=1`). The same prompt fires when you launch `autosk lazy`
    for the first time in a fresh project. There is no database and no per-project
-   workflow seeding — the bundled workflow is available to every project.
+   workflow seeding — the `feature-dev` workflow is provisioned once (on the
+   daemon's first run) and is then available to every project.
 
-2. **(Optional) Hand a task to the bundled developer workflow.** The
-   `feature-dev` workflow (`dev → review → docs → validator → accept`) ships with
-   the daemon and is available in every project, so all that's left is to enroll
-   a task:
+2. **(Optional) Hand a task to the developer workflow.** The `feature-dev`
+   workflow (`dev → review → docs → validator → accept`) is installed from npm on
+   the daemon's first run and is available in every project, so all that's left
+   is to enroll a task:
    ```bash
    id=$(autosk create "Fix the flaky test" --workflow feature-dev --json | jq -r .id)
    ```
@@ -153,7 +155,7 @@ Tasks live as files under `.autosk/` inside your repo
 ### Agents
 
 An **agent** owns a task step. AI agents are **code** defined **inline** in a
-workflow's steps by [extensions](docs/extensions.md) — the bundled
+workflow's steps by [extensions](docs/extensions.md) — the npm-published
 `@autosk/pi-agent` drives `pi --mode rpc`, and you can write your own. There is
 no install step and no separate agent registry: a step whose value is an
 `AgentDefinition` (it has an `onRun`) is an agent step, and the **step key is the
@@ -176,8 +178,9 @@ autosk workflow list          # workflows registered by this project's extension
 autosk workflow show feature-dev
 ```
 
-The daemon ships `feature-dev` (`dev → review → docs → validator → accept`,
-`isolation: worktree`) and makes it available to every project. For a one-off
+The daemon installs `feature-dev` (`dev → review → docs → validator → accept`,
+`isolation: worktree`) from npm on first run and makes it available to every
+project. For a one-off
 agent, register a tiny workflow with a single agent step (plus a terminal
 `statusStep`).
 
