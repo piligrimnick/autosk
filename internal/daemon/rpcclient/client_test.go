@@ -105,6 +105,69 @@ func TestClient_VersionAndSelector(t *testing.T) {
 	}
 }
 
+// TestClient_TasksStatusFilter locks in the empty-vs-non-empty Statuses wire
+// contract: nil and a non-nil EMPTY slice both mean "all statuses" and must NOT
+// send a `status` key (an empty `status: []` would make the daemon match
+// nothing — the bug that emptied the lazy dashboard and `autosk list --status
+// all`). A non-empty slice is forwarded verbatim.
+func TestClient_TasksStatusFilter(t *testing.T) {
+	var gotParams map[string]any
+	sock := fakeServer(t, func(method string, params map[string]any) (any, *RPCError) {
+		if method == "task.list" {
+			gotParams = params
+			return []map[string]any{}, nil
+		}
+		return nil, &RPCError{Code: CodeMethodNotFound, Message: "unknown"}
+	})
+	cli, err := New(Options{Sock: sock, Cwd: "/repo", NoAutoSpawn: true})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	statusKey := func() (any, bool) {
+		f, ok := gotParams["filter"].(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		s, ok := f["status"]
+		return s, ok
+	}
+
+	// nil Statuses → no status filter on the wire.
+	gotParams = nil
+	if _, err := cli.Tasks(ctx, TaskListFilter{}); err != nil {
+		t.Fatalf("tasks(nil): %v", err)
+	}
+	if _, present := statusKey(); present {
+		t.Errorf("nil Statuses must not send a status filter; got %v", gotParams["filter"])
+	}
+
+	// non-nil EMPTY Statuses ("all") → still no status filter (the regression).
+	gotParams = nil
+	if _, err := cli.Tasks(ctx, TaskListFilter{Statuses: []string{}}); err != nil {
+		t.Fatalf("tasks(empty): %v", err)
+	}
+	if _, present := statusKey(); present {
+		t.Errorf("empty Statuses must omit the status filter (means 'all'); got %v", gotParams["filter"])
+	}
+
+	// non-empty Statuses → forwarded verbatim.
+	gotParams = nil
+	if _, err := cli.Tasks(ctx, TaskListFilter{Statuses: []string{"new", "work"}}); err != nil {
+		t.Fatalf("tasks(some): %v", err)
+	}
+	s, present := statusKey()
+	if !present {
+		t.Fatalf("non-empty Statuses must send a status filter; got %v", gotParams["filter"])
+	}
+	arr, ok := s.([]any)
+	if !ok || len(arr) != 2 || arr[0] != "new" || arr[1] != "work" {
+		t.Errorf("status filter = %v, want [new work]", s)
+	}
+}
+
 func TestClient_ErrorDecoding(t *testing.T) {
 	sock := fakeServer(t, func(method string, params map[string]any) (any, *RPCError) {
 		return nil, &RPCError{Code: CodeProjectNotFound, Message: "no .autosk/ project"}

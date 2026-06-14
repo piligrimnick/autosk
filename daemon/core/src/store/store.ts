@@ -764,7 +764,10 @@ function buildReverseIndex(all: Map<string, StoredTask>): Map<string, TaskRef[]>
 function matchesFilter(v: TaskView, f: TaskFilter): boolean {
   if (f.status !== undefined) {
     const wanted = Array.isArray(f.status) ? f.status : [f.status];
-    if (!wanted.includes(v.status)) return false;
+    // An empty status list is "no constraint" (all statuses), NOT "match none":
+    // clients send an empty array to mean "all" (the lazy dashboard, the CLI
+    // `--status all`). A non-empty list is a positive membership filter.
+    if (wanted.length > 0 && !wanted.includes(v.status)) return false;
   }
   if (f.workflow !== undefined && v.workflow !== f.workflow) return false;
   if (f.step !== undefined && v.step !== f.step) return false;

@@ -28,9 +28,12 @@ type (
 	TranscriptResult   = api.SessionTranscriptResult
 )
 
-// TaskListFilter narrows Tasks. A nil Statuses sends no status filter (daemon
-// default = open statuses); a non-nil empty slice means "all statuses". v2 has
-// no priority/author/search/limit filters.
+// TaskListFilter narrows Tasks. A nil OR empty Statuses sends no status filter
+// (the daemon returns tasks of every status); a non-empty slice filters to those
+// statuses. Callers use an empty slice to mean "all" (the lazy dashboard, the
+// CLI `--status all`), so an empty list must NOT be forwarded as `status: []`
+// (which the daemon would read as "match none"). v2 has no
+// priority/author/search/limit filters.
 type TaskListFilter struct {
 	Statuses []string
 	Workflow string
@@ -57,7 +60,10 @@ func (c *Client) Healthz(ctx context.Context) (Health, error) {
 // Tasks lists tasks matching the filter.
 func (c *Client) Tasks(ctx context.Context, f TaskListFilter) ([]Task, error) {
 	filter := map[string]any{}
-	if f.Statuses != nil {
+	// Only send a positive status constraint. An empty (or nil) slice means "all
+	// statuses", which on the wire is the ABSENCE of the `status` key — sending
+	// `status: []` would make the daemon's membership filter match nothing.
+	if len(f.Statuses) > 0 {
 		filter["status"] = f.Statuses
 	}
 	putStr(filter, "workflow", f.Workflow)

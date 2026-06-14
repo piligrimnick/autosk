@@ -69,6 +69,9 @@ describe("derived blocks / blocked", () => {
     expect((await store.listTaskViews({ status: "new" })).length).toBe(1);
     expect((await store.listTaskViews({ workflow: "wf" })).map((v) => v.id)).toEqual([a.id]);
     expect((await store.listTaskViews({ status: ["new", "work"] })).length).toBe(2);
+    // An EMPTY status list is "no constraint" (all statuses), not "match none":
+    // the lazy dashboard and the CLI `--status all` lean on this.
+    expect((await store.listTaskViews({ status: [] })).length).toBe(2);
   });
 });
 
