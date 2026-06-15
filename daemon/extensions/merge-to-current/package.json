@@ -1,6 +1,6 @@
 {
   "name": "@autosk/merge-to-current",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Single-step workflow: merge the autosk-managed branch `autosk/<task-id>` into the project's CURRENT branch (non-isolated, fast-forward when possible).",
   "license": "MIT",
   "author": "wierdbytes",
