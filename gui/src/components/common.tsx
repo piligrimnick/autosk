@@ -27,6 +27,14 @@ export function localTime(ts: string | null | undefined): string {
   return d.toLocaleString();
 }
 
+/** Date-only rendering of an RFC3339 UTC timestamp in the operator's locale. */
+export function localDate(ts: string | null | undefined): string {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts;
+  return d.toLocaleDateString();
+}
+
 export function relativeTime(ts: string | null | undefined): string {
   if (!ts) return "";
   const d = new Date(ts);

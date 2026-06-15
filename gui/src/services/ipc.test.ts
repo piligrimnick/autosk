@@ -139,3 +139,42 @@ describe("ipc v2 method rewire", () => {
     });
   }
 });
+
+// ---- extension management shims -------------------------------------------
+// extension.install legitimately carries a `source` (the package spec), so it
+// is exempt from the generic loop's no-`source` assertion; extension_search is
+// a LOCAL Tauri command (not a daemon_request), so it is pinned separately.
+describe("ipc extension shims", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue({});
+  });
+
+  it("extensionList → extension.list with the {cwd} selector", async () => {
+    await ipc.extensionList(cwd);
+    expect(invokeMock).toHaveBeenCalledWith("daemon_request", { method: "extension.list", params: { cwd } });
+  });
+
+  it("extensionInstall(global) → extension.install {cwd, source, local:false}", async () => {
+    await ipc.extensionInstall(cwd, "npm:@autosk/feature-dev", false);
+    expect(invokeMock).toHaveBeenCalledWith("daemon_request", {
+      method: "extension.install",
+      params: { cwd, source: "npm:@autosk/feature-dev", local: false },
+    });
+  });
+
+  it("extensionInstall(project) → extension.install {cwd, source, local:true}", async () => {
+    await ipc.extensionInstall(cwd, "npm:left-pad", true);
+    expect(invokeMock).toHaveBeenCalledWith("daemon_request", {
+      method: "extension.install",
+      params: { cwd, source: "npm:left-pad", local: true },
+    });
+  });
+
+  it("extensionSearch → the local `extension_search` Tauri command (not daemon_request)", async () => {
+    invokeMock.mockResolvedValue([]);
+    await ipc.extensionSearch();
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledWith("extension_search");
+  });
+});

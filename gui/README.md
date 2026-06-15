@@ -48,7 +48,9 @@ gui/
 │   │   ├── center/             # CenterPanel, Composer, Transcript (pi-format),
 │   │   │                       #   views/ (Session | Task | Workflow | Empty)
 │   │   ├── tasks/              # TasksPanel, TaskRow, TaskRowMenu, NewTaskModal
-│   │   ├── workflows/          # WorkflowsPanel, WorkflowRow (read-only)
+│   │   ├── workflows/          # WorkflowsPanel (＋ → browse/install npm extensions),
+│   │   │                       #   WorkflowRow (read-only), BrowseExtensionsModal,
+│   │   │                       #   ExtensionRow, InstallScopeModal, extensions.ts
 │   │   ├── projects/           # ProjectSwitcher (+ diagnostics), AddProjectModal
 │   │   ├── settings/          # SettingsModal
 │   │   └── shared/             # Menu (portal dropdown)
@@ -107,8 +109,16 @@ The design mirrors the CodexMonitor blueprint ("shared core + thin adapters"):
   entity view (task sheet with editable/deletable comments / session transcript /
   **read-only** workflow definition) plus one entity-aware composer (steer a live
   session / comment a task). Workflows are code now (registered by project
-  extensions, with their agents inline as step values), so the panel is
-  read-only — there is no create / edit / install / uninstall UI. A titlebar
+  extensions, with their agents inline as step values), so the definition view
+  is read-only — there is no create / edit / uninstall UI — but the panel header
+  carries a `＋` action (shown only when a project is active) that opens a
+  **browser of `autosk-extension` npm packages**: the search runs in the Rust
+  backend (`extension_search` → `registry.npmjs.org`, sorted by weekly
+  downloads), rows link to npmjs.com via `@tauri-apps/plugin-opener`, and
+  **Install** reuses the daemon's `extension.install` RPC to add the package
+  globally or to the active project (no new daemon RPC). Newly installed
+  workflows appear only after the project is reopened (no hot-reload — matches
+  the CLI). A titlebar
   hosts the connection indicator and the Settings modal; the titlebar project
   switcher (switch / add / init /
   remove) also surfaces a ⚠ **diagnostics** badge + list when an extension fails

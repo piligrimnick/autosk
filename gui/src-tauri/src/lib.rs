@@ -5,12 +5,14 @@
 
 mod client;
 mod commands;
+mod npm;
 mod settings;
 mod state;
 
 use crate::commands::{
     daemon_request, daemon_status, get_app_settings, reconnect_daemon, update_app_settings,
 };
+use crate::npm::extension_search;
 use crate::settings::AppSettings;
 use crate::state::AppState;
 
@@ -20,12 +22,14 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(AppState::new(loaded))
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             daemon_request,
             get_app_settings,
             update_app_settings,
             reconnect_daemon,
             daemon_status,
+            extension_search,
         ])
         .setup(|_app| {
             // macOS keeps native decorations + traffic lights via the
