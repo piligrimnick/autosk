@@ -197,6 +197,28 @@ func (c *Client) ListExtensions(ctx context.Context) (ExtensionListResult, error
 	return out, err
 }
 
+// UpdateExtensions bumps installed npm extensions to newer registry versions in
+// place. source (optional) targets a single extension by npm name; scope
+// ("global"|"project", optional) forces one scope, else the daemon auto-detects
+// (the union of global + project inside a project, global only outside one);
+// dryRun reports available updates without installing. Only non-empty/true
+// selector keys are sent so the daemon's auto-detect stays the default.
+func (c *Client) UpdateExtensions(ctx context.Context, source, scope string, dryRun bool) (ExtensionUpdateResult, error) {
+	extra := map[string]any{}
+	if source != "" {
+		extra["source"] = source
+	}
+	if scope != "" {
+		extra["scope"] = scope
+	}
+	if dryRun {
+		extra["dry_run"] = true
+	}
+	var out ExtensionUpdateResult
+	err := c.call(ctx, "extension.update", c.selector(extra), &out)
+	return out, err
+}
+
 // stepTargetParam renders a StepTarget into its wire object ({step} XOR
 // {status}).
 func stepTargetParam(t api.StepTarget) map[string]any {

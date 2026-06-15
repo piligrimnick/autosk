@@ -1,6 +1,6 @@
 /**
- * Explicit extension management — the engine behind `autosk install` /
- * `autosk install list` / `autosk install remove`.
+ * Explicit extension management — the engine behind `autosk ext add` /
+ * `autosk ext list` / `autosk ext remove`.
  *
  * Unlike the first-run bootstrap and the per-start reconcile (which are gated by
  * `AUTOSK_NO_AUTO_INSTALL`), an EXPLICIT install always runs: the operator asked
@@ -78,7 +78,7 @@ export async function installExtension(opts: InstallExtensionOptions): Promise<I
   // local: the path is referenced in place (never copied) — resolve it now so a
   // typo or a non-extension path fails fast at install time, with the SAME
   // message the loader would emit, instead of being silently registered and
-  // surfacing as `resolved: false` in `autosk install list`.
+  // surfacing as `resolved: false` in `autosk ext list`.
   const resolution = resolveLocalPath(opts.source.path);
   if (resolution.entries.length === 0) {
     throw new Error(
@@ -114,7 +114,7 @@ export function removeExtensionFromSettings(opts: RemoveExtensionOptions): Remov
   return { removed: removed.length > 0, entries: removed };
 }
 
-/** One classified settings entry, surfaced by `autosk install list`. */
+/** One classified settings entry, surfaced by `autosk ext list`. */
 export interface ExtensionEntryInfo {
   /** The raw `settings.json` entry (`npm:<spec>` | `<abs-path>` | junk). */
   source: string;

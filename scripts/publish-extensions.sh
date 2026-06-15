@@ -13,7 +13,7 @@
 # It also publishes `@autosk/merge-to-current` (a standalone workflow that merges
 # a task branch into the project's current branch); it depends only on
 # `@autosk/sdk` + `@autosk/pi-agent`, so it publishes after them and is NOT part
-# of the first-run bootstrap (install it explicitly with `autosk install`).
+# of the first-run bootstrap (install it explicitly with `autosk ext add`).
 #
 # It ALSO publishes `@autosk/pi-tools` — the standalone pi extension exposing the
 # agent-facing `autosk_task` / `autosk_comment` tools. It is NOT part of the

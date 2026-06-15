@@ -185,7 +185,7 @@ type ProjectDiagnostics struct {
 }
 
 // ---------------------------------------------------------------------------
-// Extension management (autosk install) — proto.ts extension.* methods.
+// Extension management (autosk ext) — proto.ts extension.* methods.
 // ---------------------------------------------------------------------------
 
 // ExtensionInstallResult is the extension.install result. Scope is
@@ -221,6 +221,30 @@ type ExtensionEntryInfo struct {
 // ExtensionListResult is the extension.list result.
 type ExtensionListResult struct {
 	Entries []ExtensionEntryInfo `json:"entries"`
+}
+
+// ExtensionUpdateEntry is one extension considered by extension.update. Status
+// is updated|up-to-date|failed (real run), available|unknown (dry-run), or
+// skipped (version-pinned npm / local-path entry). FromVersion is the installed
+// version before; ToVersion the latest (or installed-after on a real update);
+// Reason explains a skip/failure.
+type ExtensionUpdateEntry struct {
+	Source      string `json:"source"`
+	Name        string `json:"name"`
+	Scope       string `json:"scope"`
+	Status      string `json:"status"`
+	FromVersion string `json:"from_version,omitempty"`
+	ToVersion   string `json:"to_version,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+}
+
+// ExtensionUpdateResult is the extension.update result. DryRun reports whether
+// the run installed nothing; Changed reports whether anything was actually
+// updated (drives the daemon restart hint).
+type ExtensionUpdateResult struct {
+	Entries []ExtensionUpdateEntry `json:"entries"`
+	DryRun  bool                   `json:"dry_run"`
+	Changed bool                   `json:"changed"`
 }
 
 // ---------------------------------------------------------------------------

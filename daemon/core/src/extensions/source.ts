@@ -1,5 +1,5 @@
 /**
- * Extension source parsing + classification (the `autosk install` model).
+ * Extension source parsing + classification (the `autosk ext` model).
  *
  * autosk follows pi's explicit-source convention: a source is EITHER an
  * `npm:`-prefixed package spec (optionally `@version`) OR a local path
@@ -10,7 +10,7 @@
  * Two entry points:
  *  - {@link parseInstallSource} parses a CLI/RPC `source` argument (relative
  *    paths resolve against the caller's `cwd`); it THROWS on an unrecognised
- *    source so `autosk install foo` fails loudly.
+ *    source so `autosk ext add foo` fails loudly.
  *  - {@link classifySettingsEntry} classifies a `settings.json#extensions`
  *    string (relative paths resolve against the settings file's directory); it
  *    returns an `{ kind: "invalid" }` discriminant for an unrecognised entry so

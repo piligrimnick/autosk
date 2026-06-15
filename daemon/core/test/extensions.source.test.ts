@@ -1,5 +1,5 @@
 /**
- * Extension source parsing + classification (the `autosk install` model).
+ * Extension source parsing + classification (the `autosk ext` model).
  *
  * Covers: npm: vs local-path detection, `~` expansion, relative resolution
  * against cwd (install args) vs baseDir (settings entries), scoped-name version

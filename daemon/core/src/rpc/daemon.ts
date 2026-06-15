@@ -513,9 +513,10 @@ export class Daemon {
         return info;
       },
 
-      // ---- extension management (autosk install) -------------------------
-      // A GLOBAL install does NOT require an open project (only `cwd`, used to
-      // resolve a relative local path); `-l/--local` requires a project at cwd.
+      // ---- extension management (autosk ext) -----------------------------
+      // A GLOBAL install/update does NOT require an open project (only `cwd`,
+      // used to resolve a relative local path); `-l/--local` (`scope:"project"`)
+      // requires a project at cwd.
       "extension.install": async (params) => {
         const o = asObj(params);
         return this.projectManager.installExtension(reqCwd(o), reqString(o, "source"), optBool(o, "local") ?? false);
@@ -527,6 +528,18 @@ export class Daemon {
       "extension.list": async (params) => {
         const o = asObj(params);
         return this.projectManager.listExtensions(reqCwd(o));
+      },
+      "extension.update": async (params) => {
+        const o = asObj(params);
+        const scope = optString(o, "scope");
+        if (scope !== undefined && scope !== "global" && scope !== "project") {
+          throw new RpcError(ErrorCodes.INVALID_PARAMS, `invalid scope ${JSON.stringify(scope)}: use "global" or "project"`);
+        }
+        return this.projectManager.updateExtensions(reqCwd(o), {
+          source: optString(o, "source"),
+          scope,
+          dryRun: optBool(o, "dry_run") ?? false,
+        });
       },
 
       // ---- session -------------------------------------------------------

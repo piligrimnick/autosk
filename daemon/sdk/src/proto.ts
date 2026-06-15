@@ -235,6 +235,18 @@ export interface ExtensionRemoveParams extends ProjectSelector {
   source: string;
   local?: boolean;
 }
+/**
+ * Update installed npm extensions to newer registry versions in place
+ * (`autosk ext update`). `source` targets a single extension by npm name;
+ * `scope` forces one scope (`global` / `project`); absent ⇒ auto (the union of
+ * global + project inside a project, global only outside one). `dry_run` reports
+ * available updates and installs nothing.
+ */
+export interface ExtensionUpdateParams extends ProjectSelector {
+  source?: string;
+  scope?: "global" | "project";
+  dry_run?: boolean;
+}
 export interface ExtensionInstallResult {
   scope: "global" | "project";
   /** The canonical `settings.json` entry written (`npm:<spec>` | `<abs-path>`). */
@@ -264,6 +276,31 @@ export interface ExtensionEntryInfo {
 }
 export interface ExtensionListResult {
   entries: ExtensionEntryInfo[];
+}
+/**
+ * One extension considered by `extension.update`. `status` is the outcome:
+ * `updated`/`up-to-date`/`failed` (real run), `available`/`unknown` (dry-run),
+ * or `skipped` (version-pinned npm or a local-path entry — nothing to update).
+ * `from_version` is the installed version before; `to_version` the latest (or
+ * installed-after on a real update); `reason` explains a skip/failure.
+ */
+export interface ExtensionUpdateEntry {
+  /** The raw `settings.json` entry (`npm:<spec>` | `<abs-path>`). */
+  source: string;
+  /** The npm package name (or the local path for a local entry). */
+  name: string;
+  scope: "global" | "project";
+  status: "updated" | "up-to-date" | "skipped" | "failed" | "available" | "unknown";
+  from_version?: string;
+  to_version?: string;
+  reason?: string;
+}
+export interface ExtensionUpdateResult {
+  entries: ExtensionUpdateEntry[];
+  /** Whether this was a dry-run (no installs performed). */
+  dry_run: boolean;
+  /** Whether anything was actually updated (drives the restart hint). */
+  changed: boolean;
 }
 
 // ---- session domain params ------------------------------------------------
@@ -342,10 +379,11 @@ export interface RpcMethodMap {
   "registry.workflow.list": { params: ProjectSelector; result: WorkflowInfo[] };
   "registry.workflow.get": { params: WorkflowGetParams; result: WorkflowInfo };
 
-  // extension management (autosk install)
+  // extension management (autosk ext)
   "extension.install": { params: ExtensionInstallParams; result: ExtensionInstallResult };
   "extension.list": { params: ProjectSelector; result: ExtensionListResult };
   "extension.remove": { params: ExtensionRemoveParams; result: ExtensionRemoveResult };
+  "extension.update": { params: ExtensionUpdateParams; result: ExtensionUpdateResult };
 
   // session
   "session.list": { params: SessionListParams; result: SessionMeta[] };
@@ -407,6 +445,7 @@ export const RPC_METHODS = [
   "extension.install",
   "extension.list",
   "extension.remove",
+  "extension.update",
   "session.list",
   "session.get",
   "session.transcript",

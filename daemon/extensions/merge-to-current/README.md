@@ -61,7 +61,7 @@ This package is an **npm extension** (declared via
 (only `feature-dev` is), so install it explicitly to make the workflow available:
 
 ```
-autosk install @autosk/merge-to-current     # add to ~/.autosk/settings.json + install
+autosk ext add npm:@autosk/merge-to-current  # add to ~/.autosk/settings.json + install
 autosk enroll <task-id> --workflow merge-to-current
 ```
 

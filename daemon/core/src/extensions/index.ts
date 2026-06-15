@@ -47,6 +47,10 @@ export {
   type ListExtensionsOptions,
 } from "./install.ts";
 export {
+  updateExtensions,
+  type UpdateExtensionsOptions,
+} from "./update.ts";
+export {
   loadProjectRegistry,
   resolveProjectEntries,
   type ExtensionEnv,
@@ -62,12 +66,14 @@ export {
   ensureExtensionsInstalled,
   ensurePackagesManifest,
   npmInstaller,
+  npmViewVersion,
   autoInstallDisabled,
   DEFAULT_BOOTSTRAP_PACKAGES,
   DEFAULT_BOOTSTRAP_EXTENSIONS,
   type BootstrapOptions,
   type BootstrapInstaller,
   type BootstrapResult,
+  type NpmViewVersion,
   type ReconcileOptions,
   type ReconcileResult,
 } from "./bootstrap.ts";

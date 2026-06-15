@@ -41,7 +41,7 @@ func newRootCmd() *cobra.Command {
 		newUnblockCmd(),
 		newDepCmd(),
 		newInitCmd(),
-		newInstallCmd(),
+		newExtCmd(),
 		newProjectCmd(),
 		newSessionCmd(),
 		newWorkflowCmd(),
