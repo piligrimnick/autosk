@@ -103,6 +103,10 @@ const (
 	// CodeConflict marks a retryable "exists but not in a state that accepts the
 	// request now" condition (e.g. a live session, or an absent steer hook).
 	CodeConflict = 1004
+	// CodeEnvironmentDirty marks a terminal verb (done/cancel) that would discard
+	// uncommitted changes in the task's isolation environment (e.g. a git
+	// worktree). Retry with force. Not worktree-specific.
+	CodeEnvironmentDirty = 1005
 )
 
 // call dials the daemon (auto-spawning if needed), sends one request, and

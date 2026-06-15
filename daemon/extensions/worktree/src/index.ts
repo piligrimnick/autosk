@@ -22,7 +22,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
-import type { IsolationHandle, IsolationProvider } from "@autosk/sdk";
+import type { IsolationHandle, IsolationProvider, IsolationReapResult } from "@autosk/sdk";
 
 /** Options for {@link worktreeIsolation}. */
 export interface WorktreeIsolationOptions {
@@ -95,7 +95,7 @@ export function worktreeIsolation(opts: WorktreeIsolationOptions = {}): Isolatio
       return { cwd: path, meta };
     },
 
-    async release(handle, { terminal }): Promise<void> {
+    async release(handle, { terminal, force }): Promise<void> {
       // Non-terminal (sibling step / human-park): keep the dir so the next step
       // re-uses the same checkout. Nothing to do.
       if (!terminal) return;
@@ -103,7 +103,20 @@ export function worktreeIsolation(opts: WorktreeIsolationOptions = {}): Isolatio
       const path = handle.cwd;
       const canon = meta.projectRoot ? canonRoot(meta.projectRoot) : "";
       await ensureGitAvailable(gitBin);
-      await onTerminal(gitBin, canon, path);
+      const r = await cleanupTerminal(gitBin, canon, path, force);
+      // The engine drives a terminal `release` with `force:true`, so this never
+      // fires there; an explicit `force:false` caller gets a descriptive throw it
+      // can surface (the engine would wrap it as `isolation_release_failed:`).
+      if (r.dirty && !r.removed) {
+        throw new Error(`worktree_dirty: ${path}${r.detail ? ` (${r.detail})` : ""}`);
+      }
+    },
+
+    async reap({ projectRoot, taskId }, { force }): Promise<IsolationReapResult> {
+      const canon = canonRoot(projectRoot);
+      const path = pathFor(canon, taskId, opts.home);
+      await ensureGitAvailable(gitBin);
+      return cleanupTerminal(gitBin, canon, path, force);
     },
   };
 }
@@ -170,6 +183,47 @@ async function verifyHealthy(gitBin: string, canon: string, path: string): Promi
   if (!sameDir(wtGitdir, projGitdir)) {
     throw new Error(`worktree_stranded: worktree gitdir=${wtGitdir}, project gitdir=${projGitdir}`);
   }
+}
+
+/**
+ * The shared terminal-cleanup core for both {@link IsolationProvider.release}
+ * (live handle) and {@link IsolationProvider.reap} (session-free identity).
+ *
+ * Removes the worktree dir while PRESERVING its branch, gated on `force`:
+ * `force:false` leaves a dirty checkout in place and reports `{dirty:true}` so
+ * the caller can warn; `force:true` removes it regardless. A vanished/absent dir
+ * is a no-op (`{removed:false}`); a stranded dir that is not a healthy checkout
+ * cannot be "dirty" in any recoverable sense and is reaped.
+ */
+async function cleanupTerminal(
+  gitBin: string,
+  canon: string,
+  path: string,
+  force: boolean,
+): Promise<IsolationReapResult> {
+  if (!existsPath(path)) {
+    // Nothing on disk; best-effort clear of any stale git registration.
+    if (canon !== "" && (await isGitRepo(gitBin, canon))) await pruneWorktrees(gitBin, canon);
+    return { removed: false, dirty: false };
+  }
+  const { dirty, detail } = await worktreeDirty(gitBin, path);
+  if (dirty && !force) return { removed: false, dirty: true, detail };
+  await onTerminal(gitBin, canon, path);
+  return { removed: true, dirty, detail: dirty ? detail : undefined };
+}
+
+/**
+ * Reports whether the checkout at `path` has uncommitted changes (modified,
+ * staged, OR untracked — anything `git status --porcelain` surfaces). A path
+ * that is not a healthy worktree (status errors) reads as NOT dirty: there is no
+ * recoverable working state to protect, so the caller may reap the stranded dir.
+ */
+async function worktreeDirty(gitBin: string, path: string): Promise<{ dirty: boolean; detail: string }> {
+  const r = await runGit(gitBin, path, ["status", "--porcelain", "--untracked-files=all"]);
+  if (r.code !== 0) return { dirty: false, detail: "" };
+  const lines = r.stdout.split("\n").filter((l) => l.trim() !== "");
+  if (lines.length === 0) return { dirty: false, detail: "" };
+  return { dirty: true, detail: `${lines.length} uncommitted file(s)` };
 }
 
 /** Removes the worktree dir on a terminal transition while PRESERVING its branch. */

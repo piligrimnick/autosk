@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -1118,15 +1119,7 @@ func (gu *Gui) taskDone(*gocui.Gui, *gocui.View) error {
 		return nil
 	}
 	gu.confirmThen(fmt.Sprintf("mark %s done?", t.ID), func() {
-		gu.g.OnWorker(func(_ gocui.Task) error {
-			if err := gu.ds.TaskDone(gu.ctx, t.ID); err != nil {
-				gu.flashf("err", "done: %v", err)
-				return nil
-			}
-			gu.flashf("info", "done %s", t.ID)
-			gu.refreshAll()
-			return nil
-		})
+		gu.runTerminalVerb("done", t.ID, false)
 	})
 	return nil
 }
@@ -1137,17 +1130,42 @@ func (gu *Gui) taskCancel(*gocui.Gui, *gocui.View) error {
 		return nil
 	}
 	gu.confirmThen(fmt.Sprintf("cancel %s?", t.ID), func() {
-		gu.g.OnWorker(func(_ gocui.Task) error {
-			if err := gu.ds.TaskCancel(gu.ctx, t.ID); err != nil {
-				gu.flashf("err", "cancel: %v", err)
-				return nil
-			}
-			gu.flashf("info", "cancelled %s", t.ID)
-			gu.refreshAll()
-			return nil
-		})
+		gu.runTerminalVerb("cancel", t.ID, false)
 	})
 	return nil
+}
+
+// runTerminalVerb drives done/cancel on a worker. On a clean transition the
+// daemon reaps the task's worktree (branch preserved). If the worktree is dirty
+// and `force` was not set, the daemon refuses with ErrEnvironmentDirty; we then
+// prompt to retry with force (which discards the uncommitted changes).
+func (gu *Gui) runTerminalVerb(verb, id string, force bool) {
+	gu.g.OnWorker(func(_ gocui.Task) error {
+		var err error
+		if verb == "done" {
+			err = gu.ds.TaskDone(gu.ctx, id, force)
+		} else {
+			err = gu.ds.TaskCancel(gu.ctx, id, force)
+		}
+		if err != nil {
+			if !force && errors.Is(err, datasource.ErrEnvironmentDirty) {
+				gu.confirmThen(
+					fmt.Sprintf("%s: isolation environment has uncommitted changes — %s --force (discards them)?", id, verb),
+					func() { gu.runTerminalVerb(verb, id, true) },
+				)
+				return nil
+			}
+			gu.flashf("err", "%s: %v", verb, err)
+			return nil
+		}
+		if verb == "done" {
+			gu.flashf("info", "done %s", id)
+		} else {
+			gu.flashf("info", "cancelled %s", id)
+		}
+		gu.refreshAll()
+		return nil
+	})
 }
 
 func (gu *Gui) taskReopen(*gocui.Gui, *gocui.View) error {

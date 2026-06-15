@@ -47,6 +47,7 @@ export const ErrorCode = {
   InvalidProject: 1002,
   NotFound: 1003,
   Conflict: 1004,
+  EnvironmentDirty: 1005,
 } as const;
 
 /**
@@ -191,12 +192,14 @@ export function taskUpdate(
   return daemonRequest<TaskView>("task.update", sel(cwd, { id, ...patch }));
 }
 
-export function taskDone(cwd: string, id: string): Promise<TaskView> {
-  return daemonRequest<TaskView>("task.done", sel(cwd, { id }));
+// done/cancel reap the task's worktree (branch preserved); `force` reaps it even
+// with uncommitted changes. Without force a dirty env yields ErrorCode.EnvironmentDirty.
+export function taskDone(cwd: string, id: string, force = false): Promise<TaskView> {
+  return daemonRequest<TaskView>("task.done", sel(cwd, force ? { id, force } : { id }));
 }
 
-export function taskCancel(cwd: string, id: string): Promise<TaskView> {
-  return daemonRequest<TaskView>("task.cancel", sel(cwd, { id }));
+export function taskCancel(cwd: string, id: string, force = false): Promise<TaskView> {
+  return daemonRequest<TaskView>("task.cancel", sel(cwd, force ? { id, force } : { id }));
 }
 
 export function taskReopen(cwd: string, id: string): Promise<TaskView> {

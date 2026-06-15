@@ -182,6 +182,33 @@ func TestDoneCancelReopen(t *testing.T) {
 	}
 }
 
+func TestDoneCancelForceFlag(t *testing.T) {
+	dir := initProject(t)
+	// `--force` is accepted on done/cancel (a never-enrolled task has no worktree
+	// to reap, so force is a harmless no-op here — this asserts the flag wiring).
+	id := createTask(t, dir, "forced done")
+	if _, err := runRoot(t, dir, "done", "--force", id); err != nil {
+		t.Fatalf("done --force: %v", err)
+	}
+	show, _ := runRoot(t, dir, "show", id, "--json")
+	var tv map[string]any
+	_ = json.Unmarshal([]byte(show), &tv)
+	if tv["status"] != "done" {
+		t.Errorf("expected done, got %v", tv["status"])
+	}
+
+	id2 := createTask(t, dir, "forced cancel")
+	if _, err := runRoot(t, dir, "cancel", "-f", id2); err != nil {
+		t.Fatalf("cancel -f: %v", err)
+	}
+	show2, _ := runRoot(t, dir, "show", id2, "--json")
+	var tv2 map[string]any
+	_ = json.Unmarshal([]byte(show2), &tv2)
+	if tv2["status"] != "cancel" {
+		t.Errorf("expected cancel, got %v", tv2["status"])
+	}
+}
+
 func TestWorkflowRegistryReadOnly(t *testing.T) {
 	dir := initProject(t)
 	list, err := runRoot(t, dir, "workflow", "list")

@@ -87,13 +87,47 @@ export interface IsolationHandle {
 }
 
 /**
+ * The outcome of a session-free {@link IsolationProvider.reap}. Lets the caller
+ * distinguish "removed the env" from "left it in place because it was dirty and
+ * `force` was not set" so it can warn the operator instead of silently dropping
+ * uncommitted work.
+ */
+export interface IsolationReapResult {
+  /** Whether an isolation env existed for the identity and was removed. */
+  removed: boolean;
+  /** True when removal was SKIPPED because the env had uncommitted changes (and `force` was false). */
+  dirty: boolean;
+  /** Optional human-readable detail (e.g. `"3 uncommitted file(s)"`). */
+  detail?: string;
+}
+
+/**
  * A pluggable isolation provider attached to a workflow (sandcastle pattern,
  * plan §3.5). The engine calls `acquire` before scheduling a session and
  * `release` on transitions (`terminal=true` on done/cancel).
+ *
+ * Cleanup honours a `force` flag: `force:false` refuses to discard an env that
+ * still has uncommitted changes, `force:true` removes it regardless (branches
+ * created by the env are always preserved — only the working dir is reaped).
  */
 export interface IsolationProvider {
   /** `"worktree"` | `"none"` | future: `"docker"`, … */
   tag: string;
   acquire(ctx: { projectRoot: string; taskId: string }): Promise<IsolationHandle>;
-  release(handle: IsolationHandle, opts: { terminal: boolean }): Promise<void>;
+  /**
+   * Session-bound cleanup for a LIVE handle. The engine passes `force:true` on a
+   * terminal transition (it owns the decision to close the task); a provider may
+   * still honour `force:false` by throwing if the env is dirty.
+   */
+  release(handle: IsolationHandle, opts: { terminal: boolean; force: boolean }): Promise<void>;
+  /**
+   * Session-FREE cleanup, keyed by the deterministic `(projectRoot, taskId)`
+   * identity rather than a live handle. Called when a task reaches a terminal
+   * status OUTSIDE the engine (a manual `task.done`/`task.cancel` after the task
+   * was parked), where no in-memory handle exists. With `force:false` a dirty env
+   * is left in place and reported via {@link IsolationReapResult.dirty}; with
+   * `force:true` it is removed regardless. Optional: providers with no
+   * out-of-band identity may omit it (the caller then skips reaping).
+   */
+  reap?(ctx: { projectRoot: string; taskId: string }, opts: { force: boolean }): Promise<IsolationReapResult>;
 }

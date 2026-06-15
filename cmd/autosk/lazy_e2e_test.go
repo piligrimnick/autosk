@@ -49,8 +49,8 @@ func (f *fakeDS) Healthz(context.Context) (datasource.Health, error) {
 	return datasource.Health{Daemon: "down"}, nil
 }
 func (f *fakeDS) CreateTask(context.Context, string, string) (string, error) { return "", nil }
-func (f *fakeDS) TaskDone(context.Context, string) error                     { return nil }
-func (f *fakeDS) TaskCancel(context.Context, string) error                   { return nil }
+func (f *fakeDS) TaskDone(context.Context, string, bool) error               { return nil }
+func (f *fakeDS) TaskCancel(context.Context, string, bool) error             { return nil }
 func (f *fakeDS) TaskReopen(context.Context, string) error                   { return nil }
 func (f *fakeDS) UpdateTask(context.Context, string, *string, *string) error { return nil }
 func (f *fakeDS) EnrollWorkflow(context.Context, string, string) error       { return nil }

@@ -172,7 +172,7 @@ func TestRPC_WritesDispatch(t *testing.T) {
 	if err != nil || id != "ask-000009" {
 		t.Errorf("CreateTask id=%q err=%v, want ask-000009/nil", id, err)
 	}
-	if err := ds.TaskDone(ctx, "ask-1"); err != nil {
+	if err := ds.TaskDone(ctx, "ask-1", false); err != nil {
 		t.Errorf("TaskDone err = %v, want nil", err)
 	}
 	if err := ds.AddComment(ctx, "ask-1", "hi"); err != nil {

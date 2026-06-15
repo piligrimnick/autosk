@@ -83,6 +83,12 @@ export const ErrorCodes = {
   NOT_FOUND: 1003,
   /** The entity exists but is not in a state that accepts the request now. Retryable. */
   CONFLICT: 1004,
+  /**
+   * A terminal verb (`task.done`/`task.cancel`) would discard uncommitted changes
+   * in the task's isolation environment (e.g. a git worktree). Retryable with
+   * `force:true`. Not worktree-specific — any isolation provider may raise it.
+   */
+  ENVIRONMENT_DIRTY: 1005,
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
@@ -155,6 +161,14 @@ export interface TaskListParams extends ProjectSelector {
 }
 export interface TaskGetParams extends ProjectSelector {
   id: string;
+}
+/**
+ * `task.done` / `task.cancel`. `force:true` reaps the task's isolation env
+ * (worktree) even when it has uncommitted changes (the branch is preserved);
+ * without it a dirty env is refused with {@link ErrorCodes.ENVIRONMENT_DIRTY}.
+ */
+export interface TaskTerminalParams extends TaskGetParams {
+  force?: boolean;
 }
 export interface TaskCreateParams extends ProjectSelector {
   title: string;
@@ -307,8 +321,8 @@ export interface RpcMethodMap {
   "task.update": { params: TaskUpdateParams; result: TaskView };
   "task.enroll": { params: TaskEnrollParams; result: TaskView };
   "task.resume": { params: TaskResumeParams; result: TaskView };
-  "task.done": { params: TaskGetParams; result: TaskView };
-  "task.cancel": { params: TaskGetParams; result: TaskView };
+  "task.done": { params: TaskTerminalParams; result: TaskView };
+  "task.cancel": { params: TaskTerminalParams; result: TaskView };
   "task.reopen": { params: TaskGetParams; result: TaskView };
   "task.block": { params: TaskBlockParams; result: TaskView };
   "task.unblock": { params: TaskBlockParams; result: TaskView };

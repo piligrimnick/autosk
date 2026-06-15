@@ -419,7 +419,10 @@ export class SessionRuntime {
     if (!this.wf.isolation || !this.isolation || this.isolationReleased) return;
     this.isolationReleased = true;
     try {
-      await this.wf.isolation.release(this.isolation, { terminal });
+      // The engine owns the close decision, so a terminal release force-removes
+      // the env (the worktree provider preserves the branch regardless); a
+      // non-terminal release keeps the dir, so `force` is moot there.
+      await this.wf.isolation.release(this.isolation, { terminal, force: terminal });
     } catch (e) {
       this.host.logger.warn(`session ${this.id}: isolation release failed (${errMsg(e)})`);
       if (opts.parkOnFailure) {

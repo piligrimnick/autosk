@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > rows or installed npm-package agents.
 
 ### Added
+- **`--force`/`-f` on `autosk done` & `autosk cancel`:** force-reaps the task's
+  isolation env (git worktree) even when it has uncommitted changes — the branch
+  is always preserved, only the working dir + its uncommitted edits are dropped.
+  Surfaced in all three front ends: the CLI flag, a force-confirm prompt in the
+  `autosk lazy` Tasks panel, and a force-confirm dialog in the desktop GUI. New
+  proto-v2 error code `ENVIRONMENT_DIRTY` (1005) backs the warn-then-force flow, and
+  the `IsolationProvider` SDK contract gains an optional `reap()` (session-free
+  cleanup) method plus a `force` flag on `release()`.
 - **daemon (`autoskd`):** a brand-new Bun/TypeScript daemon that owns each
   project's `.autosk/` directory and drives tasks through their workflows. It is
   auto-spawned on first use over a Unix socket (single-instance bind; opt-in TCP
@@ -190,6 +198,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installs on first run (see **first-run bootstrap**).
 
 ### Fixed
+- **orphaned worktree on a manual done/cancel:** marking a task `done`/`cancel`
+  by hand (CLI `autosk done`/`cancel`, the `autosk lazy` Tasks panel, or the
+  desktop GUI) used to leave its git worktree (e.g. one a human-park step had
+  kept on disk) stranded under `~/.autosk/worktrees/` forever — only the
+  workflow-engine's own terminal transition reaped it. A manual terminal now
+  reaps the task's worktree too, by its deterministic `(projectRoot, taskId)`
+  identity, **preserving the branch** (the work survives for review/merge). If
+  the worktree has uncommitted changes the verb is refused with a warning
+  (`ENVIRONMENT_DIRTY`) instead of silently discarding them; re-run with `--force`
+  (`autosk done -f` / `cancel -f`, or confirm the TUI/GUI force prompt) to remove
+  the worktree and discard the changes.
 - **daemon double-bind race on a stale lock:** `autoskd`'s single-instance
   guard could let two daemons bind the same socket when a stale lock left by a
   crashed/killed daemon was reclaimed by several auto-spawns at once. The stale

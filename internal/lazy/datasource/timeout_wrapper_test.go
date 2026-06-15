@@ -130,11 +130,11 @@ func (w *timeoutWrapper) Comments(ctx context.Context, taskID string) ([]Comment
 func (w *timeoutWrapper) CreateTask(ctx context.Context, title, description string) (string, error) {
 	return w.ds.CreateTask(ctx, title, description)
 }
-func (w *timeoutWrapper) TaskDone(ctx context.Context, id string) error {
-	return w.ds.TaskDone(ctx, id)
+func (w *timeoutWrapper) TaskDone(ctx context.Context, id string, force bool) error {
+	return w.ds.TaskDone(ctx, id, force)
 }
-func (w *timeoutWrapper) TaskCancel(ctx context.Context, id string) error {
-	return w.ds.TaskCancel(ctx, id)
+func (w *timeoutWrapper) TaskCancel(ctx context.Context, id string, force bool) error {
+	return w.ds.TaskCancel(ctx, id, force)
 }
 func (w *timeoutWrapper) TaskReopen(ctx context.Context, id string) error {
 	return w.ds.TaskReopen(ctx, id)

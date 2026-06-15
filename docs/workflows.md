@@ -196,7 +196,15 @@ sandcastle pattern), not a hard-wired engine feature:
 interface IsolationProvider {
   tag: string;                        // "worktree" | "none" | future: "docker", …
   acquire(ctx: { projectRoot: string; taskId: string }): Promise<IsolationHandle>;
-  release(handle: IsolationHandle, opts: { terminal: boolean }): Promise<void>;
+  // Session-bound cleanup for a LIVE handle. `terminal: true` on done/cancel;
+  // the engine passes `force: true` so it always reaps on a terminal transition.
+  release(handle: IsolationHandle, opts: { terminal: boolean; force: boolean }): Promise<void>;
+  // Session-FREE cleanup, keyed by (projectRoot, taskId) — used when a task
+  // reaches a terminal status OUTSIDE the engine (a manual done/cancel after a
+  // human-park, where no live handle exists). `force: false` leaves a dirty env
+  // in place and reports `{ dirty: true }`; `force: true` removes it regardless.
+  reap?(ctx: { projectRoot: string; taskId: string }, opts: { force: boolean }):
+    Promise<{ removed: boolean; dirty: boolean; detail?: string }>;
 }
 interface IsolationHandle { cwd: string; meta?: Record<string, unknown> }
 ```
@@ -205,10 +213,17 @@ The engine `acquire`s before scheduling a session (the returned `cwd` becomes
 `ctx.cwd`) and `release`s on every transition (`terminal: true` on done/cancel).
 On a provider failure it parks the task to `human` with the provider's message.
 
+A **manual** terminal (a `task.done`/`task.cancel` RPC issued while no session is
+live — e.g. after a human-park) runs no `release`, so the daemon calls `reap`
+instead to clean up an env a prior step left on disk. By default `reap` refuses
+to discard uncommitted changes (the verb is rejected with `ENVIRONMENT_DIRTY`); pass
+`--force` (`autosk done -f` / `cancel -f`, or the TUI/GUI force-confirm prompt) to
+remove the env and discard them — the branch is always preserved.
+
 The shipped [`worktreeIsolation()`](../daemon/extensions/worktree/README.md)
 provider runs each task in its own git worktree at
 `~/.autosk/worktrees/<slug>/<task-id>` on branch `autosk/<task-id>`, preserving
-the branch on terminal release (so the work survives for review/merge) and
+the branch on terminal release/reap (so the work survives for review/merge) and
 keeping the checkout across sibling/human-park steps. Attach it with
 `isolation: worktreeIsolation()`; a workflow without an `isolation` field runs
 every step in the project root (`tag: "none"`).

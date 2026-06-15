@@ -11,6 +11,7 @@ import type {
   AgentDefinition,
   Comment,
   Health,
+  IsolationProvider,
   ProjectInfo,
   SessionMeta,
   TaskView,
@@ -118,6 +119,71 @@ describe("task lifecycle + done/cancel/reopen", () => {
     await waitFor(async () => (await client.call<SessionMeta>("session.get", { cwd, id: sessionId })).status === "aborted");
     const done = await client.call<TaskView>("task.done", { cwd, id: t.id });
     expect(done.status).toBe("done");
+  });
+
+  test("manual done reaps the workflow's isolation env (session-free) with force from the param", async () => {
+    const reaped: { force: boolean }[] = [];
+    const handle = await td.handle(cwd);
+    handle.extensions.addWorkflow("test", {
+      name: "iso",
+      firstStep: "park",
+      steps: { park: statusStep("human") },
+      isolation: {
+        tag: "fake",
+        async acquire({ taskId }) {
+          return { cwd: `/iso/${taskId}`, meta: {} };
+        },
+        async release() {},
+        async reap(_ctx, { force }) {
+          reaped.push({ force });
+          return { removed: true, dirty: false };
+        },
+      } satisfies IsolationProvider,
+    });
+
+    const t = await client.call<TaskView>("task.create", { cwd, title: "T" });
+    await client.call("task.enroll", { cwd, id: t.id, workflow: "iso" });
+    await waitFor(async () => (await client.call<TaskView>("task.get", { cwd, id: t.id })).status === "human");
+
+    const done = await client.call<TaskView>("task.done", { cwd, id: t.id });
+    expect(done.status).toBe("done");
+    expect(reaped).toEqual([{ force: false }]); // reap ran, default (non-force)
+  });
+
+  test("manual done is refused with ENVIRONMENT_DIRTY when the env is dirty; force overrides", async () => {
+    const reaped: { force: boolean }[] = [];
+    const handle = await td.handle(cwd);
+    handle.extensions.addWorkflow("test", {
+      name: "iso",
+      firstStep: "park",
+      steps: { park: statusStep("human") },
+      isolation: {
+        tag: "fake",
+        async acquire({ taskId }) {
+          return { cwd: `/iso/${taskId}`, meta: {} };
+        },
+        async release() {},
+        async reap(_ctx, { force }) {
+          reaped.push({ force });
+          if (!force) return { removed: false, dirty: true, detail: "2 uncommitted file(s)" };
+          return { removed: true, dirty: true };
+        },
+      } satisfies IsolationProvider,
+    });
+
+    const t = await client.call<TaskView>("task.create", { cwd, title: "T" });
+    await client.call("task.enroll", { cwd, id: t.id, workflow: "iso" });
+    await waitFor(async () => (await client.call<TaskView>("task.get", { cwd, id: t.id })).status === "human");
+
+    // Without force: rejected with ENVIRONMENT_DIRTY, status UNCHANGED.
+    const blocked = await client.callRaw("task.done", { cwd, id: t.id });
+    expect(blocked.error?.code).toBe(ErrorCodes.ENVIRONMENT_DIRTY);
+    expect((await client.call<TaskView>("task.get", { cwd, id: t.id })).status).toBe("human");
+
+    // With force: reap removes the env and the task closes.
+    const done = await client.call<TaskView>("task.done", { cwd, id: t.id, force: true });
+    expect(done.status).toBe("done");
+    expect(reaped).toEqual([{ force: false }, { force: true }]);
   });
 });
 

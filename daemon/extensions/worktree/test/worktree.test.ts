@@ -10,7 +10,7 @@
 
 import { createHash } from "node:crypto";
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
@@ -104,7 +104,7 @@ describe("worktreeIsolation — acquire/release matrix (real git)", () => {
     expect(handle.meta?.branch).toBe("autosk/ask-deadbe");
     expect(branchListed(root, "autosk/ask-deadbe")).toBe(true);
 
-    await prov.release(handle, { terminal: true });
+    await prov.release(handle, { terminal: true, force: true });
     expect(existsSync(handle.cwd)).toBe(false); // dir removed
     expect(branchListed(root, "autosk/ask-deadbe")).toBe(true); // branch PRESERVED
   });
@@ -117,7 +117,7 @@ describe("worktreeIsolation — acquire/release matrix (real git)", () => {
     const taskId = "ask-keepit";
 
     const h1 = await prov.acquire({ projectRoot: root, taskId });
-    await prov.release(h1, { terminal: false });
+    await prov.release(h1, { terminal: false, force: false });
     expect(existsSync(h1.cwd)).toBe(true); // dir kept
 
     // Re-acquire (next sibling step): same path, still healthy, dir untouched.
@@ -125,7 +125,7 @@ describe("worktreeIsolation — acquire/release matrix (real git)", () => {
     expect(h2.cwd).toBe(h1.cwd);
     expect(existsSync(h2.cwd)).toBe(true);
 
-    await prov.release(h2, { terminal: true });
+    await prov.release(h2, { terminal: true, force: true });
     expect(existsSync(h2.cwd)).toBe(false);
   });
 
@@ -146,6 +146,77 @@ describe("worktreeIsolation — acquire/release matrix (real git)", () => {
     expect(h2.cwd).toBe(h1.cwd);
     expect(existsSync(h2.cwd)).toBe(true); // re-allocated
     expect(branchListed(root, "autosk/ask-vanish")).toBe(true);
+  });
+});
+
+describe("worktreeIsolation — reap (session-free cleanup) + dirty handling", () => {
+  test("reap removes a clean worktree, preserves the branch", async () => {
+    if (!gitOk) return;
+    const home = mkTemp("wt-home-");
+    const root = makeRepo();
+    const prov = worktreeIsolation({ home });
+    const taskId = "ask-clean1";
+
+    const handle = await prov.acquire({ projectRoot: root, taskId });
+    expect(existsSync(handle.cwd)).toBe(true);
+
+    // No live handle is passed — reap re-derives the path from identity.
+    const r = await prov.reap!({ projectRoot: root, taskId }, { force: false });
+    expect(r).toEqual({ removed: true, dirty: false, detail: undefined });
+    expect(existsSync(handle.cwd)).toBe(false); // dir removed
+    expect(branchListed(root, "autosk/ask-clean1")).toBe(true); // branch PRESERVED
+  });
+
+  test("reap on a missing worktree is a no-op", async () => {
+    if (!gitOk) return;
+    const home = mkTemp("wt-home-");
+    const root = makeRepo();
+    const prov = worktreeIsolation({ home });
+
+    const r = await prov.reap!({ projectRoot: root, taskId: "ask-never" }, { force: false });
+    expect(r).toEqual({ removed: false, dirty: false });
+  });
+
+  test("reap without force REFUSES a dirty worktree; force removes it (branch kept)", async () => {
+    if (!gitOk) return;
+    const home = mkTemp("wt-home-");
+    const root = makeRepo();
+    const prov = worktreeIsolation({ home });
+    const taskId = "ask-dirty1";
+
+    const handle = await prov.acquire({ projectRoot: root, taskId });
+    // An UNTRACKED file makes the checkout dirty (status --porcelain shows `??`).
+    writeFileSync(join(handle.cwd, "scratch.txt"), "uncommitted");
+
+    const refused = await prov.reap!({ projectRoot: root, taskId }, { force: false });
+    expect(refused.removed).toBe(false);
+    expect(refused.dirty).toBe(true);
+    expect(refused.detail).toMatch(/uncommitted file/);
+    expect(existsSync(handle.cwd)).toBe(true); // LEFT IN PLACE
+
+    const forced = await prov.reap!({ projectRoot: root, taskId }, { force: true });
+    expect(forced.removed).toBe(true);
+    expect(forced.dirty).toBe(true);
+    expect(existsSync(handle.cwd)).toBe(false); // removed
+    expect(branchListed(root, "autosk/ask-dirty1")).toBe(true); // branch PRESERVED
+  });
+
+  test("release({terminal,force:false}) throws on a dirty worktree; force:true removes it", async () => {
+    if (!gitOk) return;
+    const home = mkTemp("wt-home-");
+    const root = makeRepo();
+    const prov = worktreeIsolation({ home });
+    const taskId = "ask-dirty2";
+
+    const handle = await prov.acquire({ projectRoot: root, taskId });
+    writeFileSync(join(handle.cwd, "scratch.txt"), "uncommitted");
+
+    await expect(prov.release(handle, { terminal: true, force: false })).rejects.toThrow(/worktree_dirty/);
+    expect(existsSync(handle.cwd)).toBe(true); // not removed
+
+    await prov.release(handle, { terminal: true, force: true });
+    expect(existsSync(handle.cwd)).toBe(false); // removed
+    expect(branchListed(root, "autosk/ask-dirty2")).toBe(true);
   });
 });
 

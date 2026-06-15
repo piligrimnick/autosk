@@ -51,6 +51,32 @@ export function useTaskRowMenu(task: TaskView): {
     [effects, task.id],
   );
 
+  // done/cancel: the daemon reaps the task's worktree (branch preserved). If it
+  // is dirty and `force` was not set, the verb fails with EnvironmentDirty; we
+  // then confirm a forced retry (which discards the uncommitted changes).
+  const runTerminal = useCallback(
+    (verb: "done" | "cancel") => {
+      const call = (force: boolean) =>
+        verb === "done" ? ipc.taskDone(cwd, task.id, force) : ipc.taskCancel(cwd, task.id, force);
+      void run(async () => {
+        try {
+          await call(false);
+        } catch (err) {
+          if (err instanceof ipc.DaemonError && err.code === ipc.ErrorCode.EnvironmentDirty) {
+            const label = verb === "done" ? "Mark done" : "Cancel";
+            if (!confirm(`${task.id}: isolation environment has uncommitted changes.\n${label} with force (discards them)?`)) {
+              return; // declined — leave the task as-is
+            }
+            await call(true);
+            return;
+          }
+          throw err; // surface every other error via run()'s notice
+        }
+      });
+    },
+    [cwd, run, task.id],
+  );
+
   const [popover, setPopover] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
 
   const buildEntries = useCallback((): MenuEntry[] => {
@@ -58,10 +84,10 @@ export function useTaskRowMenu(task: TaskView): {
     entries.push({ kind: "item", text: task.id, enabled: false });
     entries.push({ kind: "separator" });
     if (task.status !== "done") {
-      entries.push({ kind: "item", text: "Mark done", action: () => void run(() => ipc.taskDone(cwd, task.id)) });
+      entries.push({ kind: "item", text: "Mark done", action: () => runTerminal("done") });
     }
     if (task.status !== "cancel") {
-      entries.push({ kind: "item", text: "Cancel", action: () => void run(() => ipc.taskCancel(cwd, task.id)) });
+      entries.push({ kind: "item", text: "Cancel", action: () => runTerminal("cancel") });
     }
     if (TERMINAL.has(task.status)) {
       entries.push({ kind: "item", text: "Reopen", action: () => void run(() => ipc.taskReopen(cwd, task.id)) });
@@ -76,7 +102,7 @@ export function useTaskRowMenu(task: TaskView): {
       }
     }
     return entries;
-  }, [cwd, run, task.blocked_by, task.id, task.status]);
+  }, [cwd, run, runTerminal, task.blocked_by, task.id, task.status]);
 
   const openMenu = useCallback(
     async (e: MouseEvent) => {

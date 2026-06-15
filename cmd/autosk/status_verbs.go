@@ -16,11 +16,40 @@ import (
 // CLI surface.
 
 func newDoneCmd() *cobra.Command {
-	return taskIDVerbCmd("done", "Mark a task done", (*rpcclient.Client).TaskDone)
+	return terminalVerbCmd("done", "Mark a task done", (*rpcclient.Client).TaskDone)
 }
 
 func newCancelCmd() *cobra.Command {
-	return taskIDVerbCmd("cancel", "Cancel a task", (*rpcclient.Client).TaskCancel)
+	return terminalVerbCmd("cancel", "Cancel a task", (*rpcclient.Client).TaskCancel)
+}
+
+// terminalVerbCmd builds a `<verb> <id> [-f]` command for done/cancel. On a
+// terminal transition the daemon reaps the task's worktree (preserving the
+// branch); `--force` reaps it even with uncommitted changes. A dirty refusal
+// (CodeEnvironmentDirty) is surfaced with a hint instead of a raw rpc error.
+func terminalVerbCmd(use, short string, fn func(*rpcclient.Client, context.Context, string, bool) (rpcclient.Task, error)) *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use:   use + " <id>",
+		Short: short,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cl, err := writeClient(cmd.Context())
+			if err != nil {
+				return err
+			}
+			t, err := fn(cl, cmd.Context(), args[0], force)
+			if err != nil {
+				if apiErr, ok := rpcclient.IsAPIError(err); ok && apiErr.Code == rpcclient.CodeEnvironmentDirty {
+					return fmt.Errorf("%s\n(re-run with --force to remove the isolation environment and discard the uncommitted changes)", apiErr.Message)
+				}
+				return err
+			}
+			return emitTaskWire(t)
+		},
+	}
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "remove the worktree even with uncommitted changes (branch is preserved)")
+	return cmd
 }
 
 // newReopenCmd: reopen a done/cancel task. Enrolled tasks park to `human`
