@@ -233,8 +233,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GUI now matches the `autosk lazy` TUI: selecting a session in the Sessions
   panel anchors its transcript at the newest line, opening a task starts from the
   top (title/description), and new lines/comments only auto-scroll into view when
-  you are already parked at the bottom. The TUI task detail gained the same
-  tail-when-at-bottom behaviour (it previously never followed new comments).
+  you are already parked at the bottom. While tailing, the GUI glides to the
+  newest line with a smooth scroll animation (instant when the OS prefers reduced
+  motion) instead of jumping abruptly, and a deliberate scroll-up mid-animation
+  releases the tail so a streaming transcript never traps the reader. The TUI
+  task detail gained the same tail-when-at-bottom behaviour (it previously never
+  followed new comments).
 
 ## [0.1.6] — 2026-06-08
 
