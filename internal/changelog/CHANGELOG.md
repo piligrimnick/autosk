@@ -69,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   task-worktree edits to the branch first, refuses on a dirty tree / detached
   HEAD, and either lands cleanly (`done`) or fully rolls back and parks for a
   human (`human`). Published to npm but NOT part of the first-run bootstrap —
-  install with `autosk install @autosk/merge-to-current`, then
+  install with `autosk ext add npm:@autosk/merge-to-current`, then
   `autosk enroll <id> --workflow merge-to-current`.
 - **first-run bootstrap:** on a fresh machine (no `~/.autosk/settings.json`) the
   daemon provisions the default extensions itself — it `npm install`s
@@ -84,11 +84,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `./.autosk/settings.json` on first open. Only **missing** packages install
   (no upgrade); set **`AUTOSK_NO_AUTO_INSTALL`** to disable all automatic
   installs (first-run bootstrap included).
-- **`autosk install` (extension management):** new `autosk install <source>`,
-  `autosk install list`, and `autosk install remove <source>` verbs to manage
-  `settings.json#extensions`, with `-l/--local` for project scope; a source is
-  `npm:<spec>[@version]` (installed into the scope's packages dir) or a local
-  path (`/abs`, `./rel`, `../rel`, `~/path`, referenced in place) (ask-6dfc43).
+- **`autosk ext` (extension management):** the `autosk ext` command group —
+  `autosk ext add <source>`, `autosk ext list`, and `autosk ext remove <source>`
+  to manage `settings.json#extensions`, with `-l/--local` for project scope; a
+  source is `npm:<spec>[@version]` (installed into the scope's packages dir) or a
+  local path (`/abs`, `./rel`, `../rel`, `~/path`, referenced in place). Plus
+  `autosk ext update [source]`: bump installed floating-`npm:` extensions to
+  newer registry versions in place — global scope outside a project, the union
+  of global + project inside one, with `--global` / `-l/--local` scope overrides
+  and a `--dry-run`/`--check` preview; version-pinned (`npm:foo@1.2.3`) and
+  local-path entries are reported as skipped (ask-6dfc43, ask-08d0cb).
 - **sessions:** one agent run for one step is a **session** with a pi-format
   transcript (`sessions/<id>.jsonl`: a header, pi `message` entries with text /
   thinking / `toolCall` / image content blocks, and the engine's structural
