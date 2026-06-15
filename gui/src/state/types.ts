@@ -49,13 +49,26 @@ export type SidebarPanel = "tasks" | "sessions" | "workflows";
 
 /** Sidebar resize bounds (px). The default matches the `--sidebar-width` token. */
 export const SIDEBAR_MIN_WIDTH = 220;
+/** Static upper bound used as a fallback when the window size is unknown
+ *  (non-browser, e.g. unit tests). In the browser the live cap is dynamic —
+ *  see `sidebarMaxWidth()`. */
 export const SIDEBAR_MAX_WIDTH = 480;
 export const SIDEBAR_DEFAULT_WIDTH = 300;
+
+/** Current upper bound for the sidebar width: half the window width (so it can
+ *  be dragged out to the middle of the window), floored at the min width.
+ *  Falls back to the static `SIDEBAR_MAX_WIDTH` when there is no DOM. */
+export function sidebarMaxWidth(): number {
+  if (typeof window === "undefined" || !Number.isFinite(window.innerWidth)) {
+    return SIDEBAR_MAX_WIDTH;
+  }
+  return Math.max(SIDEBAR_MIN_WIDTH, Math.floor(window.innerWidth / 2));
+}
 
 /** Clamp + round a candidate sidebar width to the allowed range. */
 export function clampSidebarWidth(width: number): number {
   if (!Number.isFinite(width)) return SIDEBAR_DEFAULT_WIDTH;
-  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+  return Math.min(sidebarMaxWidth(), Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
 }
 
 /** The whole app state. */

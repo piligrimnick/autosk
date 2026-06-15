@@ -131,6 +131,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the throwaway worktree to the wrong (or no) `.autosk/`.
 
 ### Changed
+- **desktop GUI — wider sidebar resize:** the sidebar can now be dragged out to
+  half the window width (the cap is dynamic instead of a fixed 480px), so the
+  Tasks / Sessions / Workflows lists get more room on wide displays.
 - **desktop GUI — calmer typography:** status badges (Tasks / Sessions panels
   and the center task/session views) now render lowercase (`work`, `running`,
   `done`, …) and are centered in their fixed-width gutter; panel titles, section
