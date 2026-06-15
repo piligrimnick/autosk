@@ -26,36 +26,46 @@
     },
     "extensions/feature-dev": {
       "name": "@autosk/feature-dev",
-      "version": "0.0.0",
+      "version": "0.1.2",
       "dependencies": {
         "@autosk/pi-agent": "workspace:*",
         "@autosk/sdk": "workspace:*",
         "@autosk/worktree": "workspace:*",
       },
     },
+    "extensions/merge-to-current": {
+      "name": "@autosk/merge-to-current",
+      "version": "0.1.0",
+      "dependencies": {
+        "@autosk/pi-agent": "^0.1.0",
+        "@autosk/sdk": "^0.1.0",
+      },
+    },
     "extensions/pi-agent": {
       "name": "@autosk/pi-agent",
-      "version": "0.0.0",
+      "version": "0.1.1",
       "dependencies": {
-        "@autosk/sdk": "workspace:*",
+        "@autosk/sdk": "^0.1.0",
       },
     },
     "extensions/worktree": {
       "name": "@autosk/worktree",
-      "version": "0.0.0",
+      "version": "0.1.1",
       "dependencies": {
         "@autosk/sdk": "workspace:*",
       },
     },
     "sdk": {
       "name": "@autosk/sdk",
-      "version": "0.0.0",
+      "version": "0.1.0",
     },
   },
   "packages": {
     "@autosk/core": ["@autosk/core@workspace:core"],
 
     "@autosk/feature-dev": ["@autosk/feature-dev@workspace:extensions/feature-dev"],
+
+    "@autosk/merge-to-current": ["@autosk/merge-to-current@workspace:extensions/merge-to-current"],
 
     "@autosk/pi-agent": ["@autosk/pi-agent@workspace:extensions/pi-agent"],
 

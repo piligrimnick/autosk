@@ -61,6 +61,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bounce-backs and a `dev` visit cap — replaces v1's `feature-dev-generic`). All
   four are published to npm as raw TypeScript; the daemon installs
   `@autosk/feature-dev` on first run (see **first-run bootstrap**).
+- **`@autosk/merge-to-current` workflow (npm):** a single-step, non-isolated
+  workflow that merges a task's `autosk/<task-id>` branch into the project's
+  **current** branch (whatever `HEAD` points at) — the v2 port of v1's
+  `merge-to-main`, with the destination changed from `main`/`master` to the
+  current branch and a fast-forward-when-possible merge. It auto-commits pending
+  task-worktree edits to the branch first, refuses on a dirty tree / detached
+  HEAD, and either lands cleanly (`done`) or fully rolls back and parks for a
+  human (`human`). Published to npm but NOT part of the first-run bootstrap —
+  install with `autosk install @autosk/merge-to-current`, then
+  `autosk enroll <id> --workflow merge-to-current`.
 - **first-run bootstrap:** on a fresh machine (no `~/.autosk/settings.json`) the
   daemon provisions the default extensions itself — it `npm install`s
   `@autosk/feature-dev` (deps pulled transitively) into `~/.autosk/packages/` and

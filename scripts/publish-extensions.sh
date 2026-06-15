@@ -10,6 +10,11 @@
 #
 #   @autosk/sdk  →  @autosk/worktree  →  @autosk/pi-agent  →  @autosk/feature-dev
 #
+# It also publishes `@autosk/merge-to-current` (a standalone workflow that merges
+# a task branch into the project's current branch); it depends only on
+# `@autosk/sdk` + `@autosk/pi-agent`, so it publishes after them and is NOT part
+# of the first-run bootstrap (install it explicitly with `autosk install`).
+#
 # It ALSO publishes `@autosk/pi-tools` — the standalone pi extension exposing the
 # agent-facing `autosk_task` / `autosk_comment` tools. It is NOT part of the
 # daemon install chain (it carries no inter-@autosk deps and is installed into
@@ -71,6 +76,7 @@ packages=(
   "daemon/extensions/worktree"
   "daemon/extensions/pi-agent"
   "daemon/extensions/feature-dev"
+  "daemon/extensions/merge-to-current"
   "pi-tools"
 )
 
