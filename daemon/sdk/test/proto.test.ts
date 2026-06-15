@@ -51,10 +51,11 @@ const PLAN_SECTION_4_METHODS = [
   // registry
   "registry.workflow.list",
   "registry.workflow.get",
-  // extension management (autosk install)
+  // extension management (autosk ext)
   "extension.install",
   "extension.list",
   "extension.remove",
+  "extension.update",
   // session
   "session.list",
   "session.get",

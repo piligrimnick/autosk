@@ -107,29 +107,31 @@ A relative path in a `settings.json` entry resolves against that file's
 `.autosk/` directory; the stored form is absolute. An entry that is **neither**
 `npm:`-prefixed nor a path (a bare `review-bot`) is **invalid** — there is no
 implicit bare-name → npm form: it is recorded as a `project.diagnostics` entry
-and shown as `kind:invalid` by [`autosk install list`](#installing-extensions).
-Prefer managing this file with [`autosk install`](#installing-extensions) over
+and shown as `kind:invalid` by [`autosk ext list`](#managing-extensions).
+Prefer managing this file with [`autosk ext`](#managing-extensions) over
 editing it by hand.
 
-## Installing extensions
+## Managing extensions
 
-Manage `settings.json#extensions` with the `autosk install` command group rather
+Manage `settings.json#extensions` with the `autosk ext` command group rather
 than hand-editing the file (modeled on [pi](https://pi.dev)'s package
 management). A **source** is always explicit — either an `npm:`-prefixed package
 spec or a local path; there is no implicit bare-name → npm form.
 
 ```bash
 # npm package — installed into the scope's packages prefix
-autosk install npm:@acme/review-bot
-autosk install npm:@acme/review-bot@1.4.0   # pin a version
+autosk ext add npm:@acme/review-bot
+autosk ext add npm:@acme/review-bot@1.4.0   # pin a version
 
 # local directory or a single .ts/.js file — referenced in place, never copied
-autosk install ./my-ext
-autosk install ~/work/autosk-flows
-autosk install /abs/path/to/ext.ts
+autosk ext add ./my-ext
+autosk ext add ~/work/autosk-flows
+autosk ext add /abs/path/to/ext.ts
 
-autosk install list                          # both scopes: kind + resolved
-autosk install remove npm:@acme/review-bot   # drop the entry (matches any version)
+autosk ext list                             # both scopes: kind + resolved
+autosk ext remove npm:@acme/review-bot      # drop the entry (matches any version)
+autosk ext update                           # bump floating npm entries to latest
+autosk ext update --dry-run                 # report available updates, install nothing
 ```
 
 - **Sources.** An `npm:<spec>` source `npm install`s the package (the `<spec>`
@@ -138,28 +140,53 @@ autosk install remove npm:@acme/review-bot   # drop the entry (matches any versi
   `~/path`) is resolved to an **absolute** path, checked to exist, and recorded
   as-is — the file/dir is loaded in place, never copied. Anything else (a bare
   `review-bot`) is rejected with an error.
-- **Scope — global by default, `-l/--local` for the project.** A bare install is
-  **global**: the package lands in `~/.autosk/packages/` and the entry in
+- **Scope — global by default, `-l/--local` for the project.** A bare `ext add`
+  is **global**: the package lands in `~/.autosk/packages/` and the entry in
   `~/.autosk/settings.json`. Pass **`-l/--local`** to target the current project
   instead — npm packages install into `<project>/.autosk/packages/` and the entry
   goes into `<project>/.autosk/settings.json`. A `-l` install requires a project
   at the cwd; a global install does not.
-- **`install list`.** Shows both scopes' entries with their `kind`
+- **`ext list`.** Shows both scopes' entries with their `kind`
   (`npm` / `local` / `invalid`) and a `resolved` flag — whether the entry
   actually resolves to a loadable extension *right now* (an installed npm
   package, or an existing local path that declares an extension). A local source
   is only checked for existence at install time, so a path that exists but
   declares no loadable extension still records the entry and then shows
   `resolved:false` here. `--json` returns the structured form.
-- **`install remove`.** Drops the matching entry from the scope's
+- **`ext remove`.** Drops the matching entry from the scope's
   `settings.json` (global by default, `-l/--local` for the current project) —
   npm matches by **name** (any version), local by absolute **path**. It does
   **not** uninstall the package from `node_modules` (like pi); only the settings
   entry goes. Because `remove` takes a valid source, an
-  `invalid` entry that `install list` flags must be cleared by hand-editing
+  `invalid` entry that `ext list` flags must be cleared by hand-editing
   `settings.json`.
-- **Always runs.** An explicit `autosk install` is **not** gated by
-  `AUTOSK_NO_AUTO_INSTALL` — that switch only disables the automatic
+- **`ext update [source]`.** Bumps installed **floating** npm extensions
+  (`npm:foo`) to their newest registry version, in place. The version check is
+  `npm view <name> version` against the installed
+  `node_modules/<name>/package.json` — when they differ the package is
+  re-installed with `<name>@latest` into that scope's `packages/` prefix. The
+  floating `settings.json` entry needs no rewrite (only `node_modules` moves).
+  - **Scope.** Outside a project it updates the **global** scope only; inside a
+    project it updates the **union** of global + project (mirroring how a project
+    loads extensions). Pass **`--global`** to force global-only, or
+    **`-l/--local`** to force project-only (which requires a project, like
+    `add`/`remove`); the two flags are mutually exclusive.
+  - **Skips.** Version-pinned npm entries (`npm:foo@1.2.3`) and local-path
+    entries are **skipped** (reported with a reason) — a pin is intentional and
+    a local path is loaded in place, so there is nothing to bump.
+  - **Targeting.** An optional `[source]` (`npm:<name>`) updates a single
+    extension; a name that matches nothing errors with a "did you mean
+    npm:<name>?" hint, and a pinned/local match is reported as `skipped`.
+  - **`--dry-run` / `--check`.** Report available updates (with from → to
+    versions) and install nothing; this path always exits 0. A registry lookup
+    that fails is **fail-open** — a real run updates anyway, while `--dry-run`
+    surfaces the row as `unknown`.
+  - The table is `SCOPE PACKAGE FROM TO STATUS` (status one of `updated` /
+    `up-to-date` / `skipped` / `failed` / `available` / `unknown`) plus a
+    summary; `--json` emits the structured result. A real run that left any
+    package `failed` exits non-zero (for both the table and `--json`).
+- **Always runs.** An explicit `autosk ext add` / `autosk ext update` is **not**
+  gated by `AUTOSK_NO_AUTO_INSTALL` — that switch only disables the automatic
   [first-run bootstrap](#first-run-bootstrap) and
   [reconcile](#auto-install-reconcile-every-start).
 
@@ -168,8 +195,8 @@ when the project is first opened, and cached for the daemon's lifetime (see
 [The live-code hazard](#the-live-code-hazard)). A freshly-installed package or
 local path is therefore picked up only on the **next daemon start / first
 project open** — there is deliberately no in-process hot-reload (it would risk
-active sessions and the engine). The `install` commands print a hint to restart
-the daemon (or reopen the project).
+active sessions and the engine). The `ext` commands print a hint to restart
+the daemon (or reopen the project) whenever they change `node_modules`.
 
 ## No trust model
 
@@ -235,7 +262,7 @@ hand-edited config in sync, the daemon also runs a **reconcile** pass that
 installs any `npm:` package listed under `"extensions"` that is not yet present
 under the scope's `packages/node_modules/` prefix (local-path entries are skipped
 — they load in place). So after you add an `npm:` entry to a `settings.json` by
-hand — or `autosk install` records one — the next daemon start (re)spawns and
+hand — or `autosk ext add` records one — the next daemon start (re)spawns and
 installs it for you, no manual `npm install` step.
 
 - **What runs when.** The **global** `~/.autosk/settings.json` is reconciled once

@@ -158,7 +158,7 @@ export function resolvePackageEntries(packagesDir: string, packageName: string):
   const nodeModules = join(packagesDir, "node_modules");
   const packageDir = join(nodeModules, packageName);
   if (!existsSync(packageDir)) {
-    return { entries: [], error: `not installed under ${nodeModules} (run \`autosk install npm:${packageName}\`?)` };
+    return { entries: [], error: `not installed under ${nodeModules} (run \`autosk ext add npm:${packageName}\`?)` };
   }
   const resolved = resolveExtensionEntries(packageDir);
   if (!resolved) {

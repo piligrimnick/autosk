@@ -135,9 +135,10 @@ iPad, see [docs/gui-release.md](docs/gui-release.md).
    autosk enroll "$id" --workflow my-flow
    ```
    To pull in a published or local extension package instead, use
-   `autosk install npm:@scope/pkg` (or `autosk install ./my-ext`); add
-   `-l/--local` to scope it to the current project, and `autosk install list` /
-   `autosk install remove` to inspect or drop entries. See
+   `autosk ext add npm:@scope/pkg` (or `autosk ext add ./my-ext`); add
+   `-l/--local` to scope it to the current project, and `autosk ext list` /
+   `autosk ext remove` to inspect or drop entries, or `autosk ext update` to
+   bump floating npm extensions to their latest registry version. See
    [docs/extensions.md](docs/extensions.md) for the extension contract and
    [docs/workflows.md](docs/workflows.md) for full workflows.
 

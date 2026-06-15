@@ -62,6 +62,10 @@ function paramsFor(method: string, cwd: string, initDir: string): unknown {
       return { cwd, name: "nope" };
     case "extension.list":
       return { cwd };
+    case "extension.update":
+      // No floating npm entries are listed in the test home/project, so a
+      // dry-run enumerates nothing and never reaches the registry/network.
+      return { cwd, dry_run: true };
     case "extension.install":
     case "extension.remove":
       // A bare token is rejected (INVALID_PARAMS) BEFORE any npm install — so the

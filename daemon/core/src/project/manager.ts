@@ -19,6 +19,7 @@ import type {
   ExtensionInstallResult,
   ExtensionListResult,
   ExtensionRemoveResult,
+  ExtensionUpdateResult,
   ProjectInfo,
 } from "@autosk/sdk";
 
@@ -27,17 +28,21 @@ import { join } from "node:path";
 import {
   ensureGlobalBootstrap,
   ensureExtensionsInstalled,
+  InvalidExtensionSourceError,
   installExtension,
   listExtensionEntries,
   loadProjectRegistry,
   parseInstallSource,
   removeExtensionFromSettings,
   settingsEntryFor,
+  updateExtensions,
   validateInFlightTasks,
   type BootstrapInstaller,
   type BootstrapOptions,
   type ExtensionEnv,
   type ExtensionRegistry,
+  type ExtensionSource,
+  type NpmViewVersion,
 } from "../extensions/index.ts";
 import { systemClock, type Clock } from "../store/clock.ts";
 import { KeyedMutex } from "../store/lock.ts";
@@ -148,9 +153,17 @@ export class ProjectManager {
     return this.extensionsEnv.home ?? process.env.HOME ?? "";
   }
 
-  /** npm binary + installer override for explicit/reconcile installs (from bootstrap config). */
-  private installerConfig(): { npmBin?: string; install?: BootstrapInstaller } {
-    return { npmBin: this.bootstrapConfig?.npmBin, install: this.bootstrapConfig?.install };
+  /**
+   * npm binary + installer/registry overrides for explicit installs and updates
+   * (from the bootstrap config). The `view` seam lets tests inject a fake
+   * registry so `extension.update` never hits the network.
+   */
+  private installerConfig(): { npmBin?: string; install?: BootstrapInstaller; view?: NpmViewVersion } {
+    return {
+      npmBin: this.bootstrapConfig?.npmBin,
+      install: this.bootstrapConfig?.install,
+      view: this.bootstrapConfig?.view,
+    };
   }
 
   /**
@@ -287,7 +300,7 @@ export class ProjectManager {
     return initProject(dir);
   }
 
-  // -- extension management (autosk install) -------------------------------
+  // -- extension management (autosk ext) -----------------------------------
 
   /**
    * Installs an extension into a scope. `local` → the project resolved from
@@ -345,6 +358,69 @@ export class ProjectManager {
       projectRoot = undefined; // no project at cwd → global scope only
     }
     return { entries: listExtensionEntries({ projectRoot, home: this.homeDir() }) };
+  }
+
+  /**
+   * Updates installed npm extensions to newer registry versions in place. Scope
+   * selection mirrors how a project loads extensions:
+   *  - `scope:"global"` → the global home only (no project required);
+   *  - `scope:"project"` → the project resolved from `cwd` only (PROJECT_NOT_FOUND
+   *    if none — same contract as `-l/--local`);
+   *  - omitted ⇒ the UNION of global + project inside a project, or global only
+   *    outside one.
+   *
+   * An optional `source` targets a single extension by npm name; a local-path
+   * `source` is rejected (local entries load in place — nothing to update). Like
+   * an explicit install, an update is NOT gated by `AUTOSK_NO_AUTO_INSTALL`, and
+   * there is no hot-reload (callers surface a restart hint when anything changed).
+   */
+  async updateExtensions(
+    cwd: string,
+    opts: { source?: string; scope?: "global" | "project"; dryRun?: boolean },
+  ): Promise<ExtensionUpdateResult> {
+    // `scope:"project"` requires a project; otherwise resolve tolerantly so a
+    // global/auto update works outside any project (auto → global only there).
+    let projectRoot: string | undefined;
+    if (opts.scope === "project") {
+      projectRoot = await resolveProjectRoot(cwd);
+    } else {
+      try {
+        projectRoot = await resolveProjectRoot(cwd);
+      } catch {
+        projectRoot = undefined;
+      }
+    }
+    const home = this.homeDir();
+    if (opts.scope !== "project" && !home) {
+      throw new Error("cannot resolve home directory for a global extension update");
+    }
+
+    let source: ExtensionSource | undefined;
+    if (opts.source) {
+      const parsed = parseInstallSource(opts.source, { cwd, home });
+      if (parsed.kind !== "npm") {
+        throw new InvalidExtensionSourceError(
+          `cannot update a local-path extension (${opts.source}); local extensions load in place — nothing to update`,
+        );
+      }
+      source = parsed;
+    }
+
+    const { npmBin, install, view } = this.installerConfig();
+    return updateExtensions({
+      home,
+      projectRoot,
+      scopeFilter: opts.scope,
+      source,
+      dryRun: opts.dryRun ?? false,
+      npmBin,
+      install,
+      view,
+      // Serialise each scope's install under the same per-packages-dir lock as
+      // install/remove so a concurrent add/remove/update can't corrupt the dir.
+      runExclusive: (packagesDir, fn) => this.installLocks.run(packagesDir, fn),
+      logger: this.logger,
+    });
   }
 
   /**

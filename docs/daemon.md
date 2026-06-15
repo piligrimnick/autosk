@@ -81,8 +81,8 @@ Environment knobs:
 | `AUTOSK_SOCK` | UDS path (when `--sock` is not passed). |
 | `AUTOSK_IDLE_SECS` | Idle-shutdown window in seconds (default `1800`; `0` or negative disables; ignored in TCP mode). |
 | `AUTOSK_TOKEN_FILE` | Path to the TCP auth token file (default `~/.autosk/daemon-token`). |
-| `AUTOSK_NPM_BIN` | `npm` binary used for every extension install — the first-run bootstrap, the auto-install reconcile, and an explicit `autosk install npm:<spec>` (default `npm` on `PATH`). |
-| `AUTOSK_NO_AUTO_INSTALL` | When set (to any value other than empty / `0` / `false`), disables the automatic first-run bootstrap *and* the reconcile pass; an explicit `autosk install` still works. |
+| `AUTOSK_NPM_BIN` | `npm` binary used for every extension install — the first-run bootstrap, the auto-install reconcile, the registry version check + re-install behind `autosk ext update`, and an explicit `autosk ext add npm:<spec>` (default `npm` on `PATH`). |
+| `AUTOSK_NO_AUTO_INSTALL` | When set (to any value other than empty / `0` / `false`), disables the automatic first-run bootstrap *and* the reconcile pass; explicit `autosk ext add` / `autosk ext update` still work. |
 | `AUTOSKD_BIN` | (front-end side) explicit path to the `autoskd` binary for auto-spawn. |
 
 ### One daemon per host, many projects

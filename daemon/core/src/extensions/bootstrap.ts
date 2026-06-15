@@ -57,7 +57,7 @@ export const DEFAULT_BOOTSTRAP_PACKAGES = ["@autosk/feature-dev"] as const;
 /**
  * Entries written to `settings.json#extensions` (the ones LOADED as extensions).
  * Uses the explicit `npm:` source form so first-run settings match what
- * `autosk install` writes. Only `feature-dev` registers a workflow; `pi-agent`
+ * `autosk ext add` writes. Only `feature-dev` registers a workflow; `pi-agent`
  * is a library its steps import, so it is installed (transitively) but not
  * listed here.
  */
@@ -81,6 +81,13 @@ export interface BootstrapOptions {
   logger?: Logger;
   /** Override the install step (tests). Default: shell out to `npm`. */
   install?: BootstrapInstaller;
+  /**
+   * Override the registry version lookup used by `extension.update` (tests).
+   * Default: shell out to `npm view`. Bootstrap/reconcile never call it; it is
+   * threaded through here so the manager's {@link installerConfig} test seam can
+   * inject a fake registry alongside `install`.
+   */
+  view?: NpmViewVersion;
 }
 
 export interface BootstrapResult {
@@ -243,6 +250,91 @@ export function ensurePackagesManifest(packagesDir: string): void {
 /** Writes `settings.json` with the loaded-extension list. */
 function writeSettings(settingsPath: string, extensions: string[]): void {
   writeFileSync(settingsPath, `${JSON.stringify({ extensions }, null, 2)}\n`, "utf8");
+}
+
+/**
+ * Looks up a package's latest registry version. Overridable in tests so the
+ * suite never hits the network (the `view` sibling of {@link BootstrapInstaller}).
+ */
+export type NpmViewVersion = (
+  name: string,
+) => Promise<{ ok: boolean; version?: string; error?: string }>;
+
+/**
+ * The default registry lookup: `npm view <name> version --json` (10s timeout),
+ * a capturing sibling of {@link npmInstaller}. Mirrors pi's update check. A
+ * non-zero exit, spawn failure, timeout, or unparseable output resolves
+ * `{ ok: false }` so callers can fail-open.
+ */
+export function npmViewVersion(npmBin: string | undefined, logger: Logger): NpmViewVersion {
+  const bin = npmBin ?? process.env.AUTOSK_NPM_BIN ?? "npm";
+  return (name) =>
+    new Promise((resolve) => {
+      const args = ["view", name, "version", "--json"];
+      let child;
+      try {
+        child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+      } catch (e) {
+        resolve({ ok: false, error: `spawn ${bin}: ${e instanceof Error ? e.message : String(e)}` });
+        return;
+      }
+      let stdout = "";
+      let stderr = "";
+      const timer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+        resolve({ ok: false, error: `npm view ${name} timed out` });
+      }, 10_000);
+      child.stdout?.on("data", (d: Buffer) => {
+        stdout += d.toString();
+      });
+      child.stderr?.on("data", (d: Buffer) => {
+        stderr += d.toString();
+      });
+      child.on("error", (e) => {
+        clearTimeout(timer);
+        resolve({ ok: false, error: `spawn ${bin}: ${e.message}` });
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        if (code !== 0) {
+          resolve({ ok: false, error: `${bin} view exited ${code}: ${stderr.trim().slice(-600)}` });
+          return;
+        }
+        const version = parseNpmViewVersion(stdout);
+        if (version === undefined) {
+          resolve({ ok: false, error: `could not parse npm view output for ${name}` });
+          return;
+        }
+        resolve({ ok: true, version });
+      });
+      void logger; // reserved for future verbose logging
+    });
+}
+
+/**
+ * Parses `npm view <name> version --json` stdout. A single matching version is a
+ * JSON string (`"1.2.3"`); when several dist-tags/versions match npm emits an
+ * array — take the last (highest) entry. Anything else ⇒ `undefined`.
+ */
+function parseNpmViewVersion(stdout: string): string | undefined {
+  const trimmed = stdout.trim();
+  if (trimmed.length === 0) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed === "string") return parsed;
+  if (Array.isArray(parsed)) {
+    const last = parsed[parsed.length - 1];
+    return typeof last === "string" ? last : undefined;
+  }
+  return undefined;
 }
 
 /** The default installer: `npm install <packages…>` inside the packages prefix. */
