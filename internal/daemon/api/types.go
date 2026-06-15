@@ -185,6 +185,45 @@ type ProjectDiagnostics struct {
 }
 
 // ---------------------------------------------------------------------------
+// Extension management (autosk install) — proto.ts extension.* methods.
+// ---------------------------------------------------------------------------
+
+// ExtensionInstallResult is the extension.install result. Scope is
+// "global"|"project"; Source is the canonical settings entry written
+// (npm:<spec> | <abs-path>); Installed reports whether an npm install ran
+// (false for a local-path source).
+type ExtensionInstallResult struct {
+	Scope        string `json:"scope"`
+	Source       string `json:"source"`
+	SettingsPath string `json:"settings_path"`
+	Installed    bool   `json:"installed"`
+}
+
+// ExtensionRemoveResult is the extension.remove result. Removed reports whether
+// a matching settings entry was dropped (node_modules is left untouched).
+type ExtensionRemoveResult struct {
+	Scope        string `json:"scope"`
+	Source       string `json:"source"`
+	SettingsPath string `json:"settings_path"`
+	Removed      bool   `json:"removed"`
+}
+
+// ExtensionEntryInfo is one classified settings.json#extensions entry
+// (extension.list). Kind is "npm"|"local"|"invalid"; Resolved reports whether it
+// currently resolves to a loadable extension.
+type ExtensionEntryInfo struct {
+	Source   string `json:"source"`
+	Scope    string `json:"scope"`
+	Kind     string `json:"kind"`
+	Resolved bool   `json:"resolved"`
+}
+
+// ExtensionListResult is the extension.list result.
+type ExtensionListResult struct {
+	Entries []ExtensionEntryInfo `json:"entries"`
+}
+
+// ---------------------------------------------------------------------------
 // Notification payloads (proto.ts §4).
 // ---------------------------------------------------------------------------
 

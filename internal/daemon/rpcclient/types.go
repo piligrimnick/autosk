@@ -25,6 +25,11 @@ type (
 	ProjectDiagnostics = api.ProjectDiagnostics
 	TranscriptLine     = api.TranscriptLine
 	TranscriptResult   = api.SessionTranscriptResult
+
+	ExtensionInstallResult = api.ExtensionInstallResult
+	ExtensionRemoveResult  = api.ExtensionRemoveResult
+	ExtensionEntryInfo     = api.ExtensionEntryInfo
+	ExtensionListResult    = api.ExtensionListResult
 )
 
 // TaskListFilter narrows Tasks. A nil OR empty Statuses sends no status filter

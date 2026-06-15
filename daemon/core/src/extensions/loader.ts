@@ -22,9 +22,10 @@ import { pathToFileURL } from "node:url";
 import type { AutoskAPI, ExtensionFactory, ExtensionLoadError } from "@autosk/sdk";
 
 import { AUTOSK_DIR } from "../store/paths.ts";
-import { discoverDir, resolvePackageEntries, type ExtensionEntry } from "./discovery.ts";
+import { discoverDir, resolveLocalPath, resolvePackageEntries, type ExtensionEntry } from "./discovery.ts";
 import { ExtensionRegistry } from "./registry.ts";
 import { readSettingsExtensions } from "./settings.ts";
+import { classifySettingsEntry } from "./source.ts";
 
 /** Loader environment — where the global sources live. */
 export interface ExtensionEnv {
@@ -57,8 +58,13 @@ export interface ResolvedProjectEntries {
  * first-registered wins on a name collision, so this ordering IS the priority):
  *   1. project-local dir   `<root>/.autosk/extensions/`
  *   2. global dir          `<home>/.autosk/extensions/`
- *   3. npm packages from `settings.json#extensions`, project settings before
- *      global settings, resolved under `<home>/.autosk/packages/node_modules/`.
+ *   3. settings packages from `settings.json#extensions`, project settings
+ *      before global settings. Each entry is classified: an `npm:<spec>` entry
+ *      resolves under the SAME-SCOPE packages dir (project settings →
+ *      `<root>/.autosk/packages/`, global settings → `<home>/.autosk/packages/`);
+ *      a local-path entry resolves the file/dir in place; an unrecognised entry
+ *      becomes a diagnostic (never crashes the load). Dedup: npm by name, local
+ *      by path; project beats global.
  *
  * There is no daemon-bundled source: the reference `feature-dev` workflow is an
  * ordinary npm package provisioned into source (3) on first run (see
@@ -70,11 +76,10 @@ export function resolveProjectEntries(
 ): ResolvedProjectEntries {
   const home = env.home ?? process.env.HOME ?? "";
 
-  const projectExtDir = join(projectRoot, AUTOSK_DIR, "extensions");
-  const projectSettings = join(projectRoot, AUTOSK_DIR, "settings.json");
-  const globalExtDir = home ? join(home, AUTOSK_DIR, "extensions") : "";
-  const globalSettings = home ? join(home, AUTOSK_DIR, "settings.json") : "";
-  const packagesDir = home ? join(home, AUTOSK_DIR, "packages") : "";
+  const projectAutosk = join(projectRoot, AUTOSK_DIR);
+  const projectExtDir = join(projectAutosk, "extensions");
+  const globalAutosk = home ? join(home, AUTOSK_DIR) : "";
+  const globalExtDir = globalAutosk ? join(globalAutosk, "extensions") : "";
 
   const ordered: ExtensionEntry[] = [];
 
@@ -82,27 +87,45 @@ export function resolveProjectEntries(
   ordered.push(...discoverDir(projectExtDir));
   if (globalExtDir) ordered.push(...discoverDir(globalExtDir));
 
-  // (3) npm packages: project settings first, then global; dedup by name.
-  const pkgNames: string[] = [];
-  const seenPkg = new Set<string>();
-  const settingsLists = [readSettingsExtensions(projectSettings)];
-  if (globalSettings) settingsLists.push(readSettingsExtensions(globalSettings));
-  for (const list of settingsLists) {
-    for (const name of list) {
-      if (seenPkg.has(name)) continue;
-      seenPkg.add(name);
-      pkgNames.push(name);
-    }
-  }
+  // (3) settings packages: project settings first, then global. An npm entry
+  // resolves under its own scope's packages dir; a local entry resolves in place.
   // An operator that LISTS a package but never installs it (typo, forgot to
   // install) gets a diagnostic rather than silence — this is the one source with
   // no load-time error surface, so we give it a discovery-time one.
   const packageDiagnostics: ExtensionLoadError[] = [];
-  if (packagesDir) {
-    for (const name of pkgNames) {
-      const res = resolvePackageEntries(packagesDir, name);
-      ordered.push(...res.entries);
-      if (res.error) packageDiagnostics.push({ source: name, error: res.error });
+  const seenNpm = new Set<string>();
+  const seenLocal = new Set<string>();
+  const settingsScopes: { settings: string; baseDir: string; packagesDir: string }[] = [
+    { settings: join(projectAutosk, "settings.json"), baseDir: projectAutosk, packagesDir: join(projectAutosk, "packages") },
+  ];
+  if (globalAutosk) {
+    settingsScopes.push({
+      settings: join(globalAutosk, "settings.json"),
+      baseDir: globalAutosk,
+      packagesDir: join(globalAutosk, "packages"),
+    });
+  }
+  for (const { settings, baseDir, packagesDir } of settingsScopes) {
+    for (const entry of readSettingsExtensions(settings)) {
+      const classified = classifySettingsEntry(entry, { baseDir, home });
+      if (classified.kind === "invalid") {
+        packageDiagnostics.push({ source: entry, error: classified.reason });
+        continue;
+      }
+      if (classified.kind === "npm") {
+        if (seenNpm.has(classified.name)) continue; // project beats global
+        seenNpm.add(classified.name);
+        const res = resolvePackageEntries(packagesDir, classified.name);
+        // Source label is the operator-facing settings entry (`npm:<spec>`).
+        for (const e of res.entries) ordered.push({ entryPath: e.entryPath, source: entry });
+        if (res.error) packageDiagnostics.push({ source: entry, error: res.error });
+      } else {
+        if (seenLocal.has(classified.path)) continue; // project beats global
+        seenLocal.add(classified.path);
+        const res = resolveLocalPath(classified.path);
+        ordered.push(...res.entries);
+        if (res.error) packageDiagnostics.push({ source: classified.path, error: res.error });
+      }
     }
   }
 

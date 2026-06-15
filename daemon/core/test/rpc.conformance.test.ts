@@ -60,6 +60,13 @@ function paramsFor(method: string, cwd: string, initDir: string): unknown {
       return { cwd, task_id: "ask-zzzzzz", comment_id: "cm-aaaaaa" };
     case "registry.workflow.get":
       return { cwd, name: "nope" };
+    case "extension.list":
+      return { cwd };
+    case "extension.install":
+    case "extension.remove":
+      // A bare token is rejected (INVALID_PARAMS) BEFORE any npm install — so the
+      // round-trip never touches the network, only proves the method is wired.
+      return { cwd, source: "not-a-valid-source" };
     case "session.get":
     case "session.transcript":
     case "session.subscribe":

@@ -29,7 +29,7 @@ plain files the daemon writes atomically (tmp + rename):
   sessions/<session-id>.json  # session meta (one agent run for one step)
   sessions/<session-id>.jsonl # the session transcript (pi-format; see "Sessions" below)
   extensions/                 # (optional) project-local extensions: workflows + agents as code
-  settings.json               # (optional) npm extension packages to load
+  settings.json               # (optional) extension entries to load (npm:<spec> or a local path)
 ```
 
 Because tasks are files, you can read or hand-edit them. The daemon picks up
@@ -81,7 +81,8 @@ Environment knobs:
 | `AUTOSK_SOCK` | UDS path (when `--sock` is not passed). |
 | `AUTOSK_IDLE_SECS` | Idle-shutdown window in seconds (default `1800`; `0` or negative disables; ignored in TCP mode). |
 | `AUTOSK_TOKEN_FILE` | Path to the TCP auth token file (default `~/.autosk/daemon-token`). |
-| `AUTOSK_NPM_BIN` | `npm` binary used by the first-run bootstrap to install the default extensions (default `npm` on `PATH`). |
+| `AUTOSK_NPM_BIN` | `npm` binary used for every extension install — the first-run bootstrap, the auto-install reconcile, and an explicit `autosk install npm:<spec>` (default `npm` on `PATH`). |
+| `AUTOSK_NO_AUTO_INSTALL` | When set (to any value other than empty / `0` / `false`), disables the automatic first-run bootstrap *and* the reconcile pass; an explicit `autosk install` still works. |
 | `AUTOSKD_BIN` | (front-end side) explicit path to the `autoskd` binary for auto-spawn. |
 
 ### One daemon per host, many projects

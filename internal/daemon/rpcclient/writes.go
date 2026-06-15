@@ -144,6 +144,40 @@ func (c *Client) Shutdown(ctx context.Context) error {
 	return c.call(ctx, "meta.shutdown", nil, nil)
 }
 
+// InstallExtension installs an extension (`npm:<spec>` or a local path) into the
+// global scope, or the project (`-l/--local`). A global install does not require
+// an open project; the {cwd} selector is still sent so a relative local path
+// resolves against the caller's directory.
+func (c *Client) InstallExtension(ctx context.Context, source string, local bool) (ExtensionInstallResult, error) {
+	extra := map[string]any{"source": source}
+	if local {
+		extra["local"] = true
+	}
+	var out ExtensionInstallResult
+	err := c.call(ctx, "extension.install", c.selector(extra), &out)
+	return out, err
+}
+
+// RemoveExtension drops an extension entry from the right scope's settings.json
+// (match by name for npm, by path for local). node_modules is left untouched.
+func (c *Client) RemoveExtension(ctx context.Context, source string, local bool) (ExtensionRemoveResult, error) {
+	extra := map[string]any{"source": source}
+	if local {
+		extra["local"] = true
+	}
+	var out ExtensionRemoveResult
+	err := c.call(ctx, "extension.remove", c.selector(extra), &out)
+	return out, err
+}
+
+// ListExtensions lists the global + project settings entries (classified, with a
+// resolved flag). Tolerant of a cwd outside any project (global scope only).
+func (c *Client) ListExtensions(ctx context.Context) (ExtensionListResult, error) {
+	var out ExtensionListResult
+	err := c.call(ctx, "extension.list", c.selector(nil), &out)
+	return out, err
+}
+
 // stepTargetParam renders a StepTarget into its wire object ({step} XOR
 // {status}).
 func stepTargetParam(t api.StepTarget) map[string]any {

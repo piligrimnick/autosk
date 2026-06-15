@@ -30,7 +30,8 @@ export interface ExtensionEntry {
   source: string;
 }
 
-function isExtensionFile(name: string): boolean {
+/** Whether a filename is an importable extension module (`.ts` / `.js`). */
+export function isExtensionFile(name: string): boolean {
   return name.endsWith(".ts") || name.endsWith(".js");
 }
 
@@ -157,7 +158,7 @@ export function resolvePackageEntries(packagesDir: string, packageName: string):
   const nodeModules = join(packagesDir, "node_modules");
   const packageDir = join(nodeModules, packageName);
   if (!existsSync(packageDir)) {
-    return { entries: [], error: `not installed under ${nodeModules} (run the package install?)` };
+    return { entries: [], error: `not installed under ${nodeModules} (run \`autosk install npm:${packageName}\`?)` };
   }
   const resolved = resolveExtensionEntries(packageDir);
   if (!resolved) {
@@ -167,4 +168,41 @@ export function resolvePackageEntries(packagesDir: string, packageName: string):
     };
   }
   return { entries: resolved.map((entryPath) => ({ entryPath, source: packageName })) };
+}
+
+/**
+ * Resolves a LOCAL extension source (a `settings.json` absolute path that points
+ * at a file or directory in place — pi-style, never copied) to its entry points.
+ * A `.ts`/`.js` file is itself the entry; a directory resolves via
+ * {@link resolveExtensionEntries} (package.json#autosk.extensions / index). The
+ * `source` label of every entry is the absolute path.
+ *
+ * A path that does not exist, a non-extension file, or a directory declaring no
+ * extension yields no entries AND an `error`, so the loader records a
+ * `project.diagnostics` entry reflecting the operator's stated intent.
+ */
+export function resolveLocalPath(absPath: string): PackageResolution {
+  let st;
+  try {
+    st = statSync(absPath);
+  } catch {
+    return { entries: [], error: `local path not found: ${absPath}` };
+  }
+  if (st.isFile()) {
+    if (!isExtensionFile(absPath)) {
+      return { entries: [], error: `local path is not a .ts/.js extension file: ${absPath}` };
+    }
+    return { entries: [{ entryPath: absPath, source: absPath }] };
+  }
+  if (st.isDirectory()) {
+    const resolved = resolveExtensionEntries(absPath);
+    if (!resolved) {
+      return {
+        entries: [],
+        error: "directory declares no extension (no package.json#autosk.extensions entry or index.ts/js)",
+      };
+    }
+    return { entries: resolved.map((entryPath) => ({ entryPath, source: absPath })) };
+  }
+  return { entries: [], error: `local path is neither a file nor a directory: ${absPath}` };
 }

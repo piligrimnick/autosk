@@ -64,7 +64,7 @@ describe("first-run bootstrap", () => {
 
     const settingsPath = join(home.path, ".autosk", "settings.json");
     expect(existsSync(settingsPath)).toBe(true);
-    expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({ extensions: ["@autosk/feature-dev"] });
+    expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({ extensions: ["npm:@autosk/feature-dev"] });
     expect(calls()).toBe(1);
 
     // settings.json is the "already initialised" marker → a second run is a no-op.
