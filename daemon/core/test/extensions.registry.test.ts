@@ -164,7 +164,6 @@ describe("renderWorkflowInfo (proto-v2 projection)", () => {
           async acquire() {
             return { cwd: "/tmp" };
           },
-          async release() {},
         },
       }),
     );

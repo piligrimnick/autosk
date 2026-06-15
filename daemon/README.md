@@ -52,7 +52,7 @@ for the full design.
 - **`extensions/worktree/`** — `@autosk/worktree`: the shipped **isolation
   provider** `worktreeIsolation()` — per-task git-worktree isolation attachable
   to any workflow (deterministic `~/.autosk/worktrees/<slug>/<task-id>` path on
-  branch `autosk/<task-id>`, branch-preserving terminal release, dir-kept on
+  branch `autosk/<task-id>`, branch-preserving terminal reap, dir-kept on
   sibling/human-park, missing-dir re-allocation). See
   [`extensions/worktree/README.md`](extensions/worktree/README.md).
 

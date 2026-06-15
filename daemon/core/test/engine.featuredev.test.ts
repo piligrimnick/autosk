@@ -21,13 +21,16 @@ import { DEV_VISIT_CAP, featureDevWorkflow } from "@autosk/feature-dev";
 import { makeEngine, makeProject, type TestProject } from "./engineHarness.ts";
 import { waitForComplete } from "./helpers.ts";
 
-/** An isolation double that hands back the project root (no git, no worktrees). */
+/**
+ * An isolation double that hands back the project root (no git, no worktrees).
+ * Mirrors the real worktree provider's `{ tag, acquire }` shape — no `release`
+ * (a worktree has nothing to quiesce) and no `reap` needed for this stub.
+ */
 const fakeIsolation: IsolationProvider = {
   tag: "worktree",
   async acquire({ projectRoot }) {
     return { cwd: projectRoot, meta: {} };
   },
-  async release() {},
 };
 
 function scripted(decide: () => StepTarget): AgentDefinition {

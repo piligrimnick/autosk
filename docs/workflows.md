@@ -190,43 +190,80 @@ the on-disk format and the steer/abort surface.
 ## Isolation (pluggable, per workflow)
 
 Worktree isolation is a pluggable provider attached to a workflow (the
-sandcastle pattern), not a hard-wired engine feature:
+sandcastle pattern), not a hard-wired engine feature. Isolation is scoped to a
+task's **active run** — the contiguous time it spends in `work` — and driven by
+the task's status machine, **not** by step-session boundaries:
 
 ```ts
 interface IsolationProvider {
   tag: string;                        // "worktree" | "none" | future: "docker", …
+  // ensure-ready (create | start | reuse). Mandatory; idempotent + recovery-safe.
   acquire(ctx: { projectRoot: string; taskId: string }): Promise<IsolationHandle>;
-  // Session-bound cleanup for a LIVE handle. `terminal: true` on done/cancel;
-  // the engine passes `force: true` so it always reaps on a terminal transition.
-  release(handle: IsolationHandle, opts: { terminal: boolean; force: boolean }): Promise<void>;
-  // Session-FREE cleanup, keyed by (projectRoot, taskId) — used when a task
-  // reaches a terminal status OUTSIDE the engine (a manual done/cancel after a
-  // human-park, where no live handle exists). `force: false` leaves a dirty env
-  // in place and reports `{ dirty: true }`; `force: true` removes it regardless.
+  // quiesce-on-exit: stop a LIVE env but keep it cheaply resumable. No
+  // destruction here (that is `reap`), so NO `terminal`/`force`. Optional — a
+  // provider with nothing to stop (e.g. worktree) omits it entirely.
+  release?(handle: IsolationHandle): Promise<void>;
+  // destroy-on-terminal, keyed by (projectRoot, taskId) so it needs no live
+  // handle. `force: false` leaves a dirty env in place and reports
+  // `{ dirty: true }`; `force: true` removes it regardless (branches preserved).
+  // Optional: a provider with no out-of-band identity omits it (caller skips reaping).
   reap?(ctx: { projectRoot: string; taskId: string }, opts: { force: boolean }):
     Promise<{ removed: boolean; dirty: boolean; detail?: string }>;
 }
 interface IsolationHandle { cwd: string; meta?: Record<string, unknown> }
 ```
 
-The engine `acquire`s before scheduling a session (the returned `cwd` becomes
-`ctx.cwd`) and `release`s on every transition (`terminal: true` on done/cancel).
-On a provider failure it parks the task to `human` with the provider's message.
+The environment moves through a small state machine, advanced by the task's
+status transitions:
+
+```text
+ ABSENT ──acquire(create)──▶ RUNNING ──release(stop)──▶ DORMANT
+                               ▲   │                        │
+                               │   └──acquire(reuse)         │
+                               └────acquire(resume/start)────┘
+                            (any) ──reap(force)──▶ GONE
+```
+
+The three methods map to three distinct roles:
+
+- **`acquire` = ensure-ready** (create | start | reuse). Mandatory. Called on
+  entering `work` (enroll / resume) and re-entered **per step**; MUST be
+  idempotent and recovery-safe (create when ABSENT, resume when DORMANT, re-use
+  when RUNNING). The returned `cwd` becomes the session's `ctx.cwd`.
+- **`release` = quiesce-on-exit** (optional). Called **only when the task LEAVES
+  `work`** — a `human` park, or a `done`/`cancel` terminal. It stops a live env
+  but keeps it cheaply resumable; it carries no `terminal`/`force` and performs
+  no destruction. It **NEVER fires on step→step**. A provider with nothing to
+  stop (keeping the dir IS the absence of teardown) omits it entirely.
+- **`reap` = destroy-on-terminal** (optional). Called **only on a TERMINAL
+  transition** (`done`/`cancel`), keyed by `(projectRoot, taskId)` so it works
+  with no live handle. `force: false` refuses to discard uncommitted changes and
+  reports `{ dirty: true }`; `force: true` removes the env regardless (branches
+  the env created are always preserved).
+
+The engine `acquire`s before scheduling each session (per step). On a step→step
+transition it does **nothing** — the env stays RUNNING. On a `human` park it
+calls `release` only; on `done`/`cancel` it calls `release` then `reap({force:
+true})`. A provider failure parks the task to `human` with the provider's
+message.
 
 A **manual** terminal (a `task.done`/`task.cancel` RPC issued while no session is
-live — e.g. after a human-park) runs no `release`, so the daemon calls `reap`
-instead to clean up an env a prior step left on disk. By default `reap` refuses
-to discard uncommitted changes (the verb is rejected with `ENVIRONMENT_DIRTY`); pass
-`--force` (`autosk done -f` / `cancel -f`, or the TUI/GUI force-confirm prompt) to
-remove the env and discard them — the branch is always preserved.
+live — e.g. after a human-park) has no live handle to `release`, so the daemon
+calls `reap` only to clean up an env a prior step left on disk. By default `reap`
+refuses to discard uncommitted changes (the verb is rejected with
+`ENVIRONMENT_DIRTY`); pass `--force` (`autosk done -f` / `cancel -f`, or the
+TUI/GUI force-confirm prompt) to remove the env and discard them — the branch is
+always preserved.
 
 The shipped [`worktreeIsolation()`](../daemon/extensions/worktree/README.md)
 provider runs each task in its own git worktree at
-`~/.autosk/worktrees/<slug>/<task-id>` on branch `autosk/<task-id>`, preserving
-the branch on terminal release/reap (so the work survives for review/merge) and
-keeping the checkout across sibling/human-park steps. Attach it with
-`isolation: worktreeIsolation()`; a workflow without an `isolation` field runs
-every step in the project root (`tag: "none"`).
+`~/.autosk/worktrees/<slug>/<task-id>` on branch `autosk/<task-id>`. It **omits
+`release`** (keeping the checkout on disk across sibling/human-park steps is
+exactly the absence of teardown) and implements `reap` to remove the worktree on
+a terminal transition while **preserving the branch** (so the work survives for
+review/merge). Attach it with `isolation: worktreeIsolation()`; a workflow
+without an `isolation` field runs every step in the project root (`tag:
+"none"`).
 
 ## Driving a workflow from the CLI
 

@@ -1,6 +1,7 @@
 /**
- * Real git-backed worktree provider tests (P6 acceptance #1): the acquire/release
- * matrix, branch preservation on terminal, dir-kept on human-park/sibling,
+ * Real git-backed worktree provider tests (P6 acceptance #1): the acquire/reap
+ * matrix, branch preservation on terminal, dir-kept across steps/human-park (the
+ * provider has no `release` — keeping the dir IS the absence of teardown),
  * missing-dir re-allocation, and the throw paths (stranded dir, non-git root).
  *
  * The slug formula is cross-checked against the v1 derivation (basename-8hex of
@@ -90,8 +91,8 @@ describe("worktreeIsolation — path/branch derivation", () => {
   });
 });
 
-describe("worktreeIsolation — acquire/release matrix (real git)", () => {
-  test("acquire allocates dir on a fresh branch; terminal release removes dir, preserves branch", async () => {
+describe("worktreeIsolation — acquire/reap matrix (real git)", () => {
+  test("acquire allocates dir on a fresh branch; provider exposes no release", async () => {
     if (!gitOk) return;
     const home = mkTemp("wt-home-");
     const root = makeRepo();
@@ -104,12 +105,17 @@ describe("worktreeIsolation — acquire/release matrix (real git)", () => {
     expect(handle.meta?.branch).toBe("autosk/ask-deadbe");
     expect(branchListed(root, "autosk/ask-deadbe")).toBe(true);
 
-    await prov.release(handle, { terminal: true, force: true });
+    // A worktree has nothing to quiesce — the provider omits `release` entirely.
+    expect(prov.release).toBeUndefined();
+
+    // Terminal teardown is `reap`: removes the dir, PRESERVES the branch.
+    const r = await prov.reap!({ projectRoot: root, taskId }, { force: true });
+    expect(r.removed).toBe(true);
     expect(existsSync(handle.cwd)).toBe(false); // dir removed
     expect(branchListed(root, "autosk/ask-deadbe")).toBe(true); // branch PRESERVED
   });
 
-  test("non-terminal release keeps the dir (human-park / sibling step) and re-acquire reuses it", async () => {
+  test("the dir is KEPT across steps/human-park (no teardown) and re-acquire reuses it", async () => {
     if (!gitOk) return;
     const home = mkTemp("wt-home-");
     const root = makeRepo();
@@ -117,7 +123,7 @@ describe("worktreeIsolation — acquire/release matrix (real git)", () => {
     const taskId = "ask-keepit";
 
     const h1 = await prov.acquire({ projectRoot: root, taskId });
-    await prov.release(h1, { terminal: false, force: false });
+    // No `release` runs on a sibling step / human-park, so the dir simply stays.
     expect(existsSync(h1.cwd)).toBe(true); // dir kept
 
     // Re-acquire (next sibling step): same path, still healthy, dir untouched.
@@ -125,7 +131,7 @@ describe("worktreeIsolation — acquire/release matrix (real git)", () => {
     expect(h2.cwd).toBe(h1.cwd);
     expect(existsSync(h2.cwd)).toBe(true);
 
-    await prov.release(h2, { terminal: true, force: true });
+    await prov.reap!({ projectRoot: root, taskId }, { force: true });
     expect(existsSync(h2.cwd)).toBe(false);
   });
 
@@ -199,24 +205,6 @@ describe("worktreeIsolation — reap (session-free cleanup) + dirty handling", (
     expect(forced.dirty).toBe(true);
     expect(existsSync(handle.cwd)).toBe(false); // removed
     expect(branchListed(root, "autosk/ask-dirty1")).toBe(true); // branch PRESERVED
-  });
-
-  test("release({terminal,force:false}) throws on a dirty worktree; force:true removes it", async () => {
-    if (!gitOk) return;
-    const home = mkTemp("wt-home-");
-    const root = makeRepo();
-    const prov = worktreeIsolation({ home });
-    const taskId = "ask-dirty2";
-
-    const handle = await prov.acquire({ projectRoot: root, taskId });
-    writeFileSync(join(handle.cwd, "scratch.txt"), "uncommitted");
-
-    await expect(prov.release(handle, { terminal: true, force: false })).rejects.toThrow(/worktree_dirty/);
-    expect(existsSync(handle.cwd)).toBe(true); // not removed
-
-    await prov.release(handle, { terminal: true, force: true });
-    expect(existsSync(handle.cwd)).toBe(false); // removed
-    expect(branchListed(root, "autosk/ask-dirty2")).toBe(true);
   });
 });
 
