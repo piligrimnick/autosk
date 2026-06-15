@@ -24,7 +24,9 @@
   font-size: 14px;
   line-height: 1.4;
   resize: none;
+  overflow-x: hidden; /* never scroll sideways; JS toggles overflow-y only */
   overflow-y: hidden;
+  overflow-wrap: break-word; /* wrap long unbreakable strings (e.g. URLs) */
 }
 .composer-input:focus {
   outline: none;

@@ -225,6 +225,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installs on first run (see **first-run bootstrap**).
 
 ### Fixed
+- **composer horizontal scroll:** the desktop GUI's shared chat-style input
+  (the *Add a comment* and *Steer the agent* composers) no longer shows a stray
+  horizontal scrollbar. The auto-growing textarea only had its `overflow-y`
+  managed, leaving `overflow-x` at the `<textarea>` default of `auto`, so a long
+  unbreakable string (e.g. a URL) — or the vertical scrollbar appearing past 10
+  lines — could trigger a sideways scroll. The field now pins `overflow-x:
+  hidden` and wraps long words (`overflow-wrap: break-word`).
 - **orphaned worktree on a manual done/cancel:** marking a task `done`/`cancel`
   by hand (CLI `autosk done`/`cancel`, the `autosk lazy` Tasks panel, or the
   desktop GUI) used to leave its git worktree (e.g. one a human-park step had
