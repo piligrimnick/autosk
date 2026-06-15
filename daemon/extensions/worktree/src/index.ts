@@ -2,12 +2,15 @@
  * `@autosk/worktree` — the shipped `worktreeIsolation()` provider (plan §3.5).
  *
  * Ports v1's per-task git worktree isolation onto the v2
- * {@link IsolationProvider} contract. The
- * engine (`daemon/core/src/engine/session.ts`) calls `acquire` before scheduling
- * an isolated session and `release` on every transition; FAILURES ARE WRAPPED BY
- * THE ENGINE (`acquire` throw → `isolation_acquire_failed: <msg>`, happy-path
- * `release` throw → `isolation_release_failed: <msg>`), so this provider just
- * throws descriptive messages — it never parks or formats those prefixes itself.
+ * {@link IsolationProvider} contract. The engine
+ * (`daemon/core/src/engine/session.ts`) calls `acquire` before scheduling an
+ * isolated session (idempotently re-used across the run's steps) and `reap` on a
+ * terminal transition (`done`/`cancel`). A worktree has nothing to "stop", so
+ * this provider omits `release` entirely — keeping the dir across a step→step or
+ * a human-park IS the absence of teardown. FAILURES ARE WRAPPED BY THE ENGINE
+ * (`acquire` throw → `isolation_acquire_failed: <msg>`, `reap` throw →
+ * `isolation_reap_failed: <msg>`), so this provider just throws descriptive
+ * messages — it never parks or formats those prefixes itself.
  *
  * Deterministic mapping (byte-identical to the v1 Go/Rust slug so a worktree
  * allocated by either stack resolves to the same place):
@@ -42,7 +45,7 @@ export const WORKTREE_TAG = "worktree";
 /** Provider-internal bookkeeping carried on every {@link IsolationHandle}. */
 interface WorktreeMeta extends Record<string, unknown> {
   branch: string;
-  /** The canonical project root — `release` needs it to drive `git -C <root>`. */
+  /** The canonical project root the worktree was checked out from. */
   projectRoot: string;
 }
 
@@ -50,9 +53,9 @@ interface WorktreeMeta extends Record<string, unknown> {
  * Builds the shipped worktree {@link IsolationProvider}. Attach it to a workflow
  * via `isolation: worktreeIsolation()` (plan §3.6). `acquire` allocates (or
  * re-uses / re-allocates) the per-task worktree and hands the engine its path as
- * `ctx.cwd`; `release({terminal:true})` removes the dir but PRESERVES the
- * `autosk/<task>` branch, `release({terminal:false})` keeps the dir so the next
- * sibling step re-uses it.
+ * `ctx.cwd`; `reap` removes the dir on a terminal transition but PRESERVES the
+ * `autosk/<task>` branch. There is no `release`: the dir is simply kept across
+ * step→step and human-park (the env is reused on the next `acquire`).
  */
 export function worktreeIsolation(opts: WorktreeIsolationOptions = {}): IsolationProvider {
   const gitBin = opts.gitBin ?? "git";
@@ -93,23 +96,6 @@ export function worktreeIsolation(opts: WorktreeIsolationOptions = {}): Isolatio
         if (r.code !== 0) throw new Error(`worktree add (new branch ${branch}): ${gitErr(r)}`);
       }
       return { cwd: path, meta };
-    },
-
-    async release(handle, { terminal, force }): Promise<void> {
-      // Non-terminal (sibling step / human-park): keep the dir so the next step
-      // re-uses the same checkout. Nothing to do.
-      if (!terminal) return;
-      const meta = (handle.meta ?? {}) as Partial<WorktreeMeta>;
-      const path = handle.cwd;
-      const canon = meta.projectRoot ? canonRoot(meta.projectRoot) : "";
-      await ensureGitAvailable(gitBin);
-      const r = await cleanupTerminal(gitBin, canon, path, force);
-      // The engine drives a terminal `release` with `force:true`, so this never
-      // fires there; an explicit `force:false` caller gets a descriptive throw it
-      // can surface (the engine would wrap it as `isolation_release_failed:`).
-      if (r.dirty && !r.removed) {
-        throw new Error(`worktree_dirty: ${path}${r.detail ? ` (${r.detail})` : ""}`);
-      }
     },
 
     async reap({ projectRoot, taskId }, { force }): Promise<IsolationReapResult> {
@@ -186,8 +172,8 @@ async function verifyHealthy(gitBin: string, canon: string, path: string): Promi
 }
 
 /**
- * The shared terminal-cleanup core for both {@link IsolationProvider.release}
- * (live handle) and {@link IsolationProvider.reap} (session-free identity).
+ * The terminal-cleanup core behind {@link IsolationProvider.reap} (session-free,
+ * keyed by identity).
  *
  * Removes the worktree dir while PRESERVING its branch, gated on `force`:
  * `force:false` leaves a dirty checkout in place and reports `{dirty:true}` so

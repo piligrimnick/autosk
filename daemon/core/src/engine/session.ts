@@ -23,9 +23,9 @@
  * Commit ordering rule (plan deviation #4): the scheduler scan runs CONCURRENTLY
  * with workers, so a closing session stays `running` (i.e. "live", which makes
  * the scan skip the task) until AFTER the task's new position and the isolation
- * release are committed — only then is the meta flipped to its terminal status.
- * This is what prevents a double-dispatch and an isolation acquire-vs-release
- * race on the same task.
+ * lifecycle (quiesce / reap) are committed — only then is the meta flipped to its
+ * terminal status. This is what prevents a double-dispatch and an isolation
+ * acquire-vs-release race on the same task.
  */
 
 import type {
@@ -77,8 +77,10 @@ export class SessionRuntime {
   private cwd: string;
   /** The acquired isolation handle, or `null` until {@link run} acquires one. */
   private isolation: IsolationHandle | null = null;
-  /** Idempotency guard: the isolation handle is released at most once. */
-  private isolationReleased = false;
+  /** Idempotency guard: the live env is quiesced (`release`d) at most once. */
+  private isolationQuiesced = false;
+  /** Idempotency guard: durable env artifacts are reaped at most once. */
+  private isolationReaped = false;
 
   private readonly controller = new AbortController();
   private readonly transcript: TranscriptWriter;
@@ -153,9 +155,10 @@ export class SessionRuntime {
         return;
       }
       // An abort could have landed during the acquire await; the session is then
-      // already sealed, so release the just-acquired handle and bail.
+      // already sealed, so quiesce the just-acquired handle and bail (no reap —
+      // the env stays DORMANT for a resume, exactly like a park).
       if (this.settled) {
-        await this.releaseIsolation(false, { parkOnFailure: false });
+        await this.quiesceIsolation({ parkOnFailure: false });
         return;
       }
     }
@@ -187,7 +190,7 @@ export class SessionRuntime {
       return;
     }
     if (!applied || this.settled) {
-      await this.releaseIsolation(false, { parkOnFailure: false });
+      await this.quiesceIsolation({ parkOnFailure: false });
       return;
     }
     this.started = true;
@@ -270,11 +273,23 @@ export class SessionRuntime {
     this.transcript.sessionEnd("done");
     await this.transcript.flush();
 
-    // 3. Isolation release — also while still live, so a sibling/self transition
-    //    cannot re-acquire before this release completes. On the happy path a
-    //    release failure DOES park (parkOnFailure:true).
-    const terminal = "status" in to && (to.status === "done" || to.status === "cancel");
-    await this.releaseIsolation(terminal, { parkOnFailure: true });
+    // 3. Isolation lifecycle, branched on the transition TARGET (plan §5.2) and
+    //    driven while still live so a sibling/self transition cannot re-acquire
+    //    before this completes. On the happy path a failure DOES park
+    //    (parkOnFailure:true).
+    //      - sibling step: keep the env RUNNING for the next step's acquire to
+    //        reuse — NEITHER release NOR reap (no per-step churn).
+    //      - →human: quiesce (release) only — the env stays DORMANT for a resume.
+    //      - →done/cancel: quiesce (release) THEN reap(force:true) — destroy the
+    //        durable artifacts (worktree dir; branch preserved).
+    if ("step" in to) {
+      // sibling step: nothing to do.
+    } else if (to.status === "human") {
+      await this.quiesceIsolation({ parkOnFailure: true });
+    } else {
+      await this.quiesceIsolation({ parkOnFailure: true });
+      await this.reapIsolationTerminal({ parkOnFailure: true });
+    }
 
     // 4. Now seal the session (non-live) and fan out.
     const done = await this.project.store.sessions.patchMeta(this.id, {
@@ -371,7 +386,8 @@ export class SessionRuntime {
     this.transcript.error(error);
     this.transcript.sessionEnd("failed", error);
     await this.transcript.flush();
-    await this.releaseIsolation(false, { parkOnFailure: false });
+    // Park to `human` ⇒ quiesce only (no reap): the env stays DORMANT for a resume.
+    await this.quiesceIsolation({ parkOnFailure: false });
     const meta = await this.project.store.sessions.patchMeta(this.id, {
       status: "failed",
       error,
@@ -390,7 +406,8 @@ export class SessionRuntime {
     }
     this.transcript.sessionEnd("aborted");
     await this.transcript.flush();
-    await this.releaseIsolation(false, { parkOnFailure: false });
+    // Park to `human` ⇒ quiesce only (no reap): the env stays DORMANT for a resume.
+    await this.quiesceIsolation({ parkOnFailure: false });
     const meta = await this.project.store.sessions.patchMeta(this.id, {
       status: "aborted",
       ended_at: this.host.clock(),
@@ -409,25 +426,55 @@ export class SessionRuntime {
   }
 
   /**
-   * Releases the isolation handle if the workflow has a provider (idempotent —
-   * at most one release per handle). On the happy-path commit a release failure
-   * parks the task to `human` with the provider error (plan §3.5); a finaliser
-   * passes `parkOnFailure:false` because it already parks the task itself, so a
-   * release failure there must NOT double-park (ISSUE #7).
+   * Quiesces (releases) the LIVE isolation handle when the task leaves `work`
+   * (a park or terminal). Idempotent — at most one quiesce per session. A
+   * provider without a `release` (e.g. the worktree provider, where keeping the
+   * dir IS the absence of teardown) is a no-op. On the happy-path commit a
+   * release failure parks the task to `human` with the provider error (plan
+   * §3.5); a finaliser passes `parkOnFailure:false` because it already parks the
+   * task itself, so a release failure there must NOT double-park (ISSUE #7).
    */
-  private async releaseIsolation(terminal: boolean, opts: { parkOnFailure: boolean }): Promise<void> {
-    if (!this.wf.isolation || !this.isolation || this.isolationReleased) return;
-    this.isolationReleased = true;
+  private async quiesceIsolation(opts: { parkOnFailure: boolean }): Promise<void> {
+    if (!this.isolation || this.isolationQuiesced) return;
+    this.isolationQuiesced = true;
+    const release = this.wf.isolation?.release;
+    if (!release) return; // provider has nothing to quiesce
     try {
-      // The engine owns the close decision, so a terminal release force-removes
-      // the env (the worktree provider preserves the branch regardless); a
-      // non-terminal release keeps the dir, so `force` is moot there.
-      await this.wf.isolation.release(this.isolation, { terminal, force: terminal });
+      await release.call(this.wf.isolation, this.isolation);
     } catch (e) {
       this.host.logger.warn(`session ${this.id}: isolation release failed (${errMsg(e)})`);
       if (opts.parkOnFailure) {
         await this.host
           .park(this.project, this.taskId, `isolation_release_failed: ${errMsg(e)}`)
+          .catch(() => {});
+      }
+    }
+  }
+
+  /**
+   * Destroys the durable isolation artifacts by IDENTITY on a TERMINAL
+   * transition (`done`/`cancel`). Idempotent — at most one reap per session. The
+   * engine owns the close decision, so it reaps with `force:true` (the worktree
+   * provider preserves the branch regardless). A provider without a `reap` is a
+   * no-op. On the happy-path commit a reap failure parks the task to `human`
+   * with the provider error.
+   */
+  private async reapIsolationTerminal(opts: { parkOnFailure: boolean }): Promise<void> {
+    if (this.isolationReaped) return;
+    this.isolationReaped = true;
+    const reap = this.wf.isolation?.reap;
+    if (!reap) return;
+    try {
+      await reap.call(
+        this.wf.isolation,
+        { projectRoot: this.project.root, taskId: this.taskId },
+        { force: true },
+      );
+    } catch (e) {
+      this.host.logger.warn(`session ${this.id}: isolation reap failed (${errMsg(e)})`);
+      if (opts.parkOnFailure) {
+        await this.host
+          .park(this.project, this.taskId, `isolation_reap_failed: ${errMsg(e)}`)
           .catch(() => {});
       }
     }

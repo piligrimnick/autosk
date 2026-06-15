@@ -110,8 +110,10 @@ For each such task:
 3. The agent must call `ctx.transit(target)` exactly once — a sibling step, or a
    terminal/park status (`done` / `cancel` / `human`). `transit` validates the
    target through the workflow's `onTransit` hook, atomically updates `task.json`,
-   fires the isolation lifecycle (`release({terminal})`), and emits
-   notifications.
+   fires the status-driven isolation lifecycle (nothing on step→step; `release`
+   when the task leaves `work`; `reap` on a `done`/`cancel` terminal — see
+   [workflows.md → Isolation](workflows.md#isolation-pluggable-per-workflow)),
+   and emits notifications.
 4. If `onRun` returns **without** transiting, the session fails
    (`error="agent_did_not_transit"`) and the task is parked to `human`.
 

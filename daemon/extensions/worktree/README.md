@@ -22,8 +22,11 @@ autosk.registerWorkflow({
 ```
 
 Each isolated task runs in its own checkout so concurrent tasks never collide on
-the working tree. The engine calls `acquire` before scheduling a session (its
-returned `cwd` becomes `ctx.cwd`) and `release` on every transition.
+the working tree. The engine calls `acquire` before scheduling each session (its
+returned `cwd` becomes `ctx.cwd`) and `reap` only on a terminal transition
+(`done`/`cancel`). This provider has no live env to stop, so it **omits**
+`release` entirely — keeping the checkout on disk across sibling/human-park steps
+is exactly the absence of teardown.
 
 ## Behaviour
 
@@ -35,22 +38,27 @@ either stack resolves to the same place:
 branch = autosk/<task-id>
 ```
 
-- **acquire** — allocates the per-task worktree on branch `autosk/<task-id>`
-  (off `HEAD`), or re-uses it when a prior step kept it. A **missing** dir is
-  re-allocated on the *existing* branch (v1 "missing worktree auto-recovery").
-  Returns `{ cwd, meta: { branch, projectRoot } }`.
-- **release(`{terminal:true}`)** (done / cancel) — removes the worktree dir but
+- **acquire** (ensure-ready) — allocates the per-task worktree on branch
+  `autosk/<task-id>` (off `HEAD`), or re-uses it when a prior step kept it. A
+  **missing** dir is re-allocated on the *existing* branch (v1 "missing worktree
+  auto-recovery"). Idempotent and re-entered per step. Returns
+  `{ cwd, meta: { branch, projectRoot } }`.
+- **(no `release`)** — sibling step and human-park keep the dir on disk
+  untouched, so the next `acquire` re-uses the same checkout. There is nothing to
+  quiesce, so the method is omitted.
+- **reap** (destroy-on-terminal, done / cancel) — keyed by `(projectRoot,
+  taskId)`, so it works with no live handle (engine terminal, a manual
+  `done`/`cancel` after a park, or crash recovery). Removes the worktree dir but
   **preserves** the `autosk/<task-id>` branch (so the work survives for review /
-  merge).
-- **release(`{terminal:false}`)** (sibling step / human-park) — keeps the dir so
-  the next step re-uses the same checkout.
+  merge). With `force:false` it refuses to discard uncommitted changes and
+  reports `{ removed:false, dirty:true }`; `force:true` removes regardless.
 
 ### Failure handling
 
 The provider **only throws descriptive messages** — the engine wraps them
-(`isolation_acquire_failed: …` on acquire, `isolation_release_failed: …` on a
-happy-path release) and parks the task to `human`. It never parks or formats
-those prefixes itself. Throw cases:
+(`isolation_acquire_failed: …` on acquire, `isolation_reap_failed: …` on a
+terminal reap) and parks the task to `human`. It never parks or formats those
+prefixes itself. Throw cases:
 
 - **non-git root** — `not a git repository: <root>` (the project root isn't a
   git repo).

@@ -103,31 +103,58 @@ export interface IsolationReapResult {
 
 /**
  * A pluggable isolation provider attached to a workflow (sandcastle pattern,
- * plan §3.5). The engine calls `acquire` before scheduling a session and
- * `release` on transitions (`terminal=true` on done/cancel).
+ * plan §3.5). Isolation is scoped to a task's ACTIVE RUN (the contiguous time it
+ * spends in `work`) and driven by the task's status machine, not by step-session
+ * boundaries. The environment moves through a small state machine:
  *
- * Cleanup honours a `force` flag: `force:false` refuses to discard an env that
- * still has uncommitted changes, `force:true` removes it regardless (branches
- * created by the env are always preserved — only the working dir is reaped).
+ * ```text
+ *  ABSENT ──acquire(create)──▶ RUNNING ──release(stop)──▶ DORMANT
+ *                                ▲   │                        │
+ *                                │   └──acquire(reuse)         │
+ *                                └────acquire(resume/start)────┘
+ *                             (any) ──reap(force)──▶ GONE
+ * ```
+ *
+ * The three methods map to three distinct roles:
+ *  - **`acquire` = ensure-ready** (create | start | reuse). Mandatory, called on
+ *    entering `work` (enroll / resume) and re-entered per step; MUST be
+ *    idempotent and recovery-safe.
+ *  - **`release` = quiesce-on-exit**. Optional; called only when the task LEAVES
+ *    `work` (`human` park, or `done`/`cancel`). Stops a live env but keeps it
+ *    cheaply resumable. NEVER fires on step→step.
+ *  - **`reap` = destroy-on-terminal**. Optional; called only on a TERMINAL
+ *    transition (`done`/`cancel`), keyed by identity so it works with no live
+ *    handle. `force:false` refuses to discard uncommitted changes, `force:true`
+ *    removes regardless (branches created by the env are always preserved).
  */
 export interface IsolationProvider {
   /** `"worktree"` | `"none"` | future: `"docker"`, … */
   tag: string;
+  /**
+   * Ensure the environment for `(projectRoot, taskId)` exists AND is ready to
+   * run, returning the handle the session runs in. MUST be idempotent and
+   * recovery-safe: create when ABSENT, resume when DORMANT, re-use when RUNNING.
+   * Called on entering `work` (enroll / resume) and re-entered per step.
+   */
   acquire(ctx: { projectRoot: string; taskId: string }): Promise<IsolationHandle>;
   /**
-   * Session-bound cleanup for a LIVE handle. The engine passes `force:true` on a
-   * terminal transition (it owns the decision to close the task); a provider may
-   * still honour `force:false` by throwing if the env is dirty.
+   * Quiesce a LIVE environment when the task LEAVES `work` (park or terminal):
+   * stop it but keep it cheaply resumable by a later `acquire`. NO destruction
+   * happens here (that is `reap`), so there is no `terminal`/`force`. NEVER
+   * called on step→step. Optional — a provider with nothing to stop (e.g. the
+   * worktree provider, where keeping the dir IS the absence of teardown) omits
+   * it.
    */
-  release(handle: IsolationHandle, opts: { terminal: boolean; force: boolean }): Promise<void>;
+  release?(handle: IsolationHandle): Promise<void>;
   /**
-   * Session-FREE cleanup, keyed by the deterministic `(projectRoot, taskId)`
-   * identity rather than a live handle. Called when a task reaches a terminal
-   * status OUTSIDE the engine (a manual `task.done`/`task.cancel` after the task
-   * was parked), where no in-memory handle exists. With `force:false` a dirty env
-   * is left in place and reported via {@link IsolationReapResult.dirty}; with
-   * `force:true` it is removed regardless. Optional: providers with no
-   * out-of-band identity may omit it (the caller then skips reaping).
+   * Destroy the durable artifacts for `(projectRoot, taskId)` on a TERMINAL
+   * transition (`done`/`cancel`), keyed by the deterministic identity rather
+   * than a live handle so it works with no in-memory handle (the engine path on
+   * a workflow-driven terminal, a manual `task.done`/`task.cancel` after a park,
+   * or crash recovery). With `force:false` a dirty env is left in place and
+   * reported via {@link IsolationReapResult.dirty}; with `force:true` it is
+   * removed regardless (branches are always preserved). Optional: providers with
+   * no out-of-band identity may omit it (the caller then skips reaping).
    */
   reap?(ctx: { projectRoot: string; taskId: string }, opts: { force: boolean }): Promise<IsolationReapResult>;
 }

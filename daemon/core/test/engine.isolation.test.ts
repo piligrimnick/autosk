@@ -1,7 +1,11 @@
 /**
- * Isolation lifecycle (plan §3.5): a fake provider asserts acquire/release
- * ordering + the terminal flag for done, cancel, human-park, and a sibling
- * transition, plus park-on-acquire-failure.
+ * Status-driven isolation lifecycle (plan §§2,5): a fake provider records every
+ * acquire/release/reap and asserts the per-status sequences —
+ *   - →done / →cancel: acquire, release, reap{force:true}
+ *   - →human (park):   acquire, release (no reap)
+ *   - multi-step do→next→done: acquire, [no release at do→next], acquire,
+ *     release, reap{force:true} — proving step→step NEVER releases or reaps
+ *   - acquire failure: acquire (throws) ⇒ no release/reap, task parked
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -17,13 +21,14 @@ import { gate, makeEngine, makeProject, transitAgent, type TestProject } from ".
 import { waitFor, waitForComplete } from "./helpers.ts";
 
 interface IsoEvent {
-  op: "acquire" | "release";
+  op: "acquire" | "release" | "reap";
   taskId?: string;
-  terminal?: boolean;
   cwd?: string;
+  /** Present only on `reap`. */
+  force?: boolean;
 }
 
-/** A provider that records every acquire/release with its terminal flag. */
+/** A provider that records every acquire/release/reap. */
 function recordingProvider(events: IsoEvent[], opts: { failAcquire?: boolean } = {}): IsolationProvider {
   return {
     tag: "fake",
@@ -32,8 +37,12 @@ function recordingProvider(events: IsoEvent[], opts: { failAcquire?: boolean } =
       if (opts.failAcquire) throw new Error("no worktree for you");
       return { cwd: `/iso/${taskId}`, meta: {} } satisfies IsolationHandle;
     },
-    async release(handle, { terminal }) {
-      events.push({ op: "release", terminal, cwd: handle.cwd });
+    async release(handle) {
+      events.push({ op: "release", cwd: handle.cwd });
+    },
+    async reap({ taskId }, { force }) {
+      events.push({ op: "reap", taskId, force });
+      return { removed: true, dirty: false };
     },
   };
 }
@@ -72,40 +81,42 @@ describe("engine — isolation lifecycle", () => {
     const task = await p.store.createTask({ title: "iso" });
     await engine.enroll(p.root, task.id, { workflow: "iso" });
     const finalStatus = "status" in to ? to.status : "work";
-    // Settle on the session seal + isolation release (step 4), not the task-status
-    // flip (step 1) — the `release` event is recorded at step 3, AFTER the status
-    // flip, so a bare status wait would assert on `events` before the final
-    // release lands.
+    // Settle on the session seal + isolation lifecycle (step 4), not the
+    // task-status flip (step 1) — the `release`/`reap` events are recorded at
+    // step 3, AFTER the status flip, so a bare status wait would assert on
+    // `events` before the final reap lands.
     await waitForComplete(p.store, task.id, finalStatus);
     return { events, p, taskId: task.id, cwdSeen };
   }
 
-  test("done releases with terminal:true; ctx.cwd is the handle path", async () => {
+  test("done: acquire, release, reap{force:true}; ctx.cwd is the handle path", async () => {
     const { events, taskId, cwdSeen } = await runOneStep({ status: "done" });
     expect(cwdSeen).toBe(`/iso/${taskId}`);
     expect(events).toEqual([
       { op: "acquire", taskId },
-      { op: "release", terminal: true, cwd: `/iso/${taskId}` },
+      { op: "release", cwd: `/iso/${taskId}` },
+      { op: "reap", taskId, force: true },
     ]);
   });
 
-  test("cancel releases with terminal:true", async () => {
+  test("cancel: acquire, release, reap{force:true}", async () => {
     const { events, taskId } = await runOneStep({ status: "cancel" });
     expect(events).toEqual([
       { op: "acquire", taskId },
-      { op: "release", terminal: true, cwd: `/iso/${taskId}` },
+      { op: "release", cwd: `/iso/${taskId}` },
+      { op: "reap", taskId, force: true },
     ]);
   });
 
-  test("human-park releases with terminal:false", async () => {
+  test("human-park: acquire, release (no reap)", async () => {
     const { events, taskId } = await runOneStep({ status: "human" });
     expect(events).toEqual([
       { op: "acquire", taskId },
-      { op: "release", terminal: false, cwd: `/iso/${taskId}` },
+      { op: "release", cwd: `/iso/${taskId}` },
     ]);
   });
 
-  test("a sibling step transition releases with terminal:false and re-acquires", async () => {
+  test("a sibling step transition NEVER releases or reaps; the next step re-acquires", async () => {
     const events: IsoEvent[] = [];
     const dev = transitAgent({ step: "review" });
     const review = transitAgent({ status: "done" });
@@ -125,14 +136,15 @@ describe("engine — isolation lifecycle", () => {
     await waitForComplete(p.store, task.id, "done");
 
     expect(events).toEqual([
-      { op: "acquire", taskId: task.id },
-      { op: "release", terminal: false, cwd: `/iso/${task.id}` }, // sibling: non-terminal
-      { op: "acquire", taskId: task.id },
-      { op: "release", terminal: true, cwd: `/iso/${task.id}` }, // review → done: terminal
+      { op: "acquire", taskId: task.id }, // dev: ensure-ready
+      // dev → review is a sibling step: NEITHER release NOR reap (env stays hot).
+      { op: "acquire", taskId: task.id }, // review: re-use the running env
+      { op: "release", cwd: `/iso/${task.id}` }, // review → done: quiesce
+      { op: "reap", taskId: task.id, force: true }, // review → done: destroy
     ]);
   });
 
-  test("an acquire failure parks the task to human and seals the session failed; never releases", async () => {
+  test("an acquire failure parks the task to human and seals the session failed; never releases/reaps", async () => {
     const events: IsoEvent[] = [];
     let ran = false;
     const ag: AgentDefinition = {
@@ -156,7 +168,7 @@ describe("engine — isolation lifecycle", () => {
     await engine.enroll(p.root, task.id, { workflow: "iso" });
     await waitForComplete(p.store, task.id, "human");
 
-    expect(events).toEqual([{ op: "acquire", taskId: task.id }]); // acquire threw; never released
+    expect(events).toEqual([{ op: "acquire", taskId: task.id }]); // acquire threw; never released/reaped
     expect(ran).toBe(false); // onRun never started
     // Acquire now runs in the worker (bounded by the pool), so the session was
     // created as the claim BEFORE the acquire failed: the failure is recorded as

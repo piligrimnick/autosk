@@ -633,13 +633,14 @@ export class Daemon {
    * Rejected with CONFLICT while a session is live (let the agent transit or be
    * aborted first). Idempotent.
    *
-   * Isolation reaping: the engine releases the env on a workflow-driven terminal,
-   * but a MANUAL terminal (this path) runs with no live session — so the env
-   * (e.g. a worktree a prior step or human-park kept on disk) would otherwise be
-   * orphaned. We reap it here by the deterministic `(projectRoot, taskId)`
-   * identity. `force:false` REFUSES to discard uncommitted changes (rejecting
-   * with ENVIRONMENT_DIRTY before the status flips); `force:true` removes the env
-   * regardless (branches are always preserved).
+   * Isolation reaping: on a workflow-driven terminal the engine itself quiesces
+   * (`release`) then reaps the env, but a MANUAL terminal (this path) runs with
+   * no live session — the env is already DORMANT (a prior step or the human-park
+   * `release` quiesced it), so this path is REAP-ONLY (no `release`). We reap by
+   * the deterministic `(projectRoot, taskId)` identity. `force:false` REFUSES to
+   * discard uncommitted changes (rejecting with ENVIRONMENT_DIRTY before the
+   * status flips); `force:true` removes the env regardless (branches are always
+   * preserved).
    */
   private async taskTerminal(params: unknown, status: "done" | "cancel"): Promise<TaskView> {
     const o = asObj(params);
