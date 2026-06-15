@@ -206,13 +206,15 @@ export function taskReopen(cwd: string, id: string): Promise<TaskView> {
   return daemonRequest<TaskView>("task.reopen", sel(cwd, { id }));
 }
 
-/** Enroll a task into a named workflow (workflow-only in v2). */
+/** Enroll a task into a named workflow, optionally starting at a specific step
+ *  (omitted ⇒ the workflow's first step). Allowed from new / cancel / human. */
 export function taskEnroll(
   cwd: string,
   id: string,
-  target: { workflow: string },
+  target: { workflow: string; step?: string },
 ): Promise<TaskView> {
-  return daemonRequest<TaskView>("task.enroll", sel(cwd, { id, ...target }));
+  const params = target.step ? { id, workflow: target.workflow, step: target.step } : { id, workflow: target.workflow };
+  return daemonRequest<TaskView>("task.enroll", sel(cwd, params));
 }
 
 /** Resume a parked (`human`) task, optionally to a specific step/status target. */

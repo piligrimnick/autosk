@@ -69,7 +69,7 @@ If --description is "-", the description is read from stdin.`,
 			}
 			// Optional enrollment.
 			if workflowArg != "" {
-				if t, err = cl.EnrollWorkflow(cmd.Context(), t.ID, workflowArg); err != nil {
+				if t, err = cl.EnrollWorkflow(cmd.Context(), t.ID, workflowArg, ""); err != nil {
 					return err
 				}
 			}

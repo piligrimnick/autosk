@@ -22,7 +22,7 @@ describe("engine — enroll / resume / statusStep parking", () => {
     return p;
   }
 
-  test("enroll rejects an unknown workflow / non-new task", async () => {
+  test("enroll rejects an unknown workflow / a done task", async () => {
     const solo = transitAgent({ status: "done" });
     const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: solo } };
     const p = track(await makeProject({ workflows: [wf] }));
@@ -35,8 +35,10 @@ describe("engine — enroll / resume / statusStep parking", () => {
 
     await engine.enroll(p.root, task.id, { workflow: "w" });
     await waitForComplete(p.store, task.id, "done");
-    // Re-enrolling a non-new task is a conflict.
-    await expect(engine.enroll(p.root, task.id, { workflow: "w" })).rejects.toThrow(/expected new/);
+    // A `done` task is terminal (reopen, don't enroll): re-enrolling is a conflict.
+    await expect(engine.enroll(p.root, task.id, { workflow: "w" })).rejects.toThrow(
+      /expected new, cancel, or human/,
+    );
   });
 
   test("onTransit can reject the enroll → firstStep edge", async () => {
@@ -196,7 +198,7 @@ describe("engine — enroll / resume / statusStep parking", () => {
     expect(p.store.sessions.sessionsForTask(task.id)).toHaveLength(2);
   });
 
-  test("resume rejects a task that is not parked at human", async () => {
+  test("resume rejects a fresh (new, unenrolled) task", async () => {
     const solo = transitAgent({ status: "done" });
     const wf: WorkflowDefinition = { name: "w", firstStep: "do", steps: { do: solo } };
     const p = track(await makeProject({ workflows: [wf] }));
@@ -205,7 +207,7 @@ describe("engine — enroll / resume / statusStep parking", () => {
     await engine.addProject(p.project);
 
     const task = await p.store.createTask({ title: "fresh" });
-    await expect(engine.resume(p.root, task.id)).rejects.toThrow(/expected human/);
+    await expect(engine.resume(p.root, task.id)).rejects.toThrow(/expected human or cancel/);
   });
 
   test("a workflow can cap re-runs via ctx.visits()", async () => {

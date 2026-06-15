@@ -3,12 +3,12 @@
 // and the selected workflow's step list on the right (no dropdowns). Single
 // agents are intentionally excluded (synthetic single:<agent> workflows).
 //
-// The cursor is seeded to the task's current workflow + step, but any workflow
-// and step can be chosen. The confirm verb is routed by task status:
-//   - human + same workflow → task.resume(to_step)   (continue the run)
-//   - otherwise (new / done / cancel, or human switching workflow) → task.enroll
-// (enroll accepts new/human/done/cancel directly; it is rejected only on `work`,
-// which is why the Enroll button is hidden while the task is enrolled.)
+// The cursor is seeded to the task's current workflow + step (the natural
+// "continue where it left off" default), but any workflow and step can be
+// chosen. Confirm always calls task.enroll({ workflow, step }) — enroll honors
+// the picked step and is accepted from new / cancel / human. It is rejected on
+// `work` (a live run, abort first) and `done` (terminal — reopen it), which is
+// why the Enroll button is hidden while the task is in `work`.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -19,15 +19,14 @@ import { Modal } from "@/components/Modal";
 import type { TaskView, WorkflowInfo } from "@/types";
 
 /** The Enroll button + its modal. Rendered in the task header; hidden while the
- *  task is enrolled (status `work`), where enroll would conflict. */
+ *  task is in `work` (a live run), where enroll would conflict. */
 export function EnrollButton({ task }: { task: TaskView }) {
   const [open, setOpen] = useState(false);
   if (task.status === "work") return null;
-  const label = task.status === "human" ? "Resume" : "Enroll";
   return (
     <>
       <button className="btn btn-sm btn-primary task-view-enroll-btn" onClick={() => setOpen(true)}>
-        {label}
+        Enroll
       </button>
       {open && createPortal(<EnrollModal task={task} onClose={() => setOpen(false)} />, document.body)}
     </>
@@ -69,22 +68,13 @@ function EnrollModal({ task, onClose }: { task: TaskView; onClose: () => void })
     boxRef.current?.focus();
   }, []);
 
-  const sameWf = !!task.workflow && wf?.name === task.workflow;
-  const isResume = task.status === "human" && sameWf;
-  const confirmLabel = isResume ? "Resume" : "Enroll";
-
   const confirm = useCallback(async () => {
     if (!wf || busy) return;
     const stepName = steps[stepIdx]?.name ?? "";
     setBusy(true);
     try {
-      if (isResume) {
-        // Resume continues the run; jump to the chosen step only if it differs.
-        await ipc.taskResume(cwd, task.id, stepName && stepName !== task.step ? { step: stepName } : undefined);
-      } else {
-        // Enroll always starts at the workflow's first step (no step arg in v2).
-        await ipc.taskEnroll(cwd, task.id, { workflow: wf.name });
-      }
+      // Enroll honors the picked step (omitted ⇒ the workflow's first step).
+      await ipc.taskEnroll(cwd, task.id, stepName ? { workflow: wf.name, step: stepName } : { workflow: wf.name });
       await effects.refreshTask(task.id);
       await effects.refreshTasks();
       onClose();
@@ -93,7 +83,7 @@ function EnrollModal({ task, onClose }: { task: TaskView; onClose: () => void })
     } finally {
       setBusy(false);
     }
-  }, [wf, busy, steps, stepIdx, isResume, cwd, task.id, task.step, effects, onClose]);
+  }, [wf, busy, steps, stepIdx, cwd, task.id, effects, onClose]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
@@ -126,7 +116,7 @@ function EnrollModal({ task, onClose }: { task: TaskView; onClose: () => void })
       onClose={onClose}
       footer={
         <button className="btn btn-primary" disabled={busy || !wf} onClick={() => void confirm()}>
-          {confirmLabel}
+          Enroll
         </button>
       }
     >

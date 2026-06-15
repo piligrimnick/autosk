@@ -54,10 +54,15 @@ func (c *Client) UpdateTask(ctx context.Context, id string, title, description *
 	return out, err
 }
 
-// EnrollWorkflow enrolls a task into a named workflow at its first step.
-func (c *Client) EnrollWorkflow(ctx context.Context, id, workflow string) (Task, error) {
+// EnrollWorkflow enrolls a task into a named workflow. An empty step enrolls at
+// the workflow's first step; a non-empty step starts the task there.
+func (c *Client) EnrollWorkflow(ctx context.Context, id, workflow, step string) (Task, error) {
+	extra := map[string]any{"id": id, "workflow": workflow}
+	if step != "" {
+		extra["step"] = step
+	}
 	var out Task
-	err := c.call(ctx, "task.enroll", c.selector(map[string]any{"id": id, "workflow": workflow}), &out)
+	err := c.call(ctx, "task.enroll", c.selector(extra), &out)
 	return out, err
 }
 

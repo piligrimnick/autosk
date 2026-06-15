@@ -306,7 +306,7 @@ func (r *RPC) UpdateTask(ctx context.Context, id string, title, description *str
 }
 
 func (r *RPC) EnrollWorkflow(ctx context.Context, id, workflow string) error {
-	_, err := r.cli.EnrollWorkflow(ctx, id, workflow)
+	_, err := r.cli.EnrollWorkflow(ctx, id, workflow, "")
 	return err
 }
 

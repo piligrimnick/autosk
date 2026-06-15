@@ -131,6 +131,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the throwaway worktree to the wrong (or no) `.autosk/`.
 
 ### Changed
+- **enroll / resume — looser status gates + GUI consolidation:** `task.enroll`
+  is now accepted from `new`, `cancel`, **and** `human` (previously `new` only)
+  and takes an optional starting `step` (default: the workflow's first step), so
+  it can place a task at any step of any workflow; `task.resume` is now accepted
+  from `human` **and** `cancel` (previously `human` only). `work` (abort the live
+  run first) and `done` (use `reopen`) are still rejected. The desktop GUI drops
+  the separate **Resume** button: a single **Enroll** button opens the picker
+  pre-seeded to the task's current workflow + step (continue where it left off)
+  and always calls `task.enroll` with the picked step. The CLI `autosk enroll`
+  gains a `--step STEP` flag.
 - **`@autosk/feature-dev`:** the shipped reference workflow's `validator` step
   now performs mandatory **release hygiene** on success (updates `CHANGELOG.md`
   `[Unreleased]` per Keep a Changelog, then commits a clean worktree with

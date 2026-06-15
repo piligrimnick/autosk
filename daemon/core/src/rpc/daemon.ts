@@ -410,8 +410,9 @@ export class Daemon {
         const o = asObj(params);
         const id = reqString(o, "id");
         const workflow = reqString(o, "workflow");
+        const step = optString(o, "step");
         const handle = await this.resolveHandle(reqCwd(o));
-        return this.engine.enroll(handle.root, id, { workflow });
+        return this.engine.enroll(handle.root, id, step !== undefined ? { workflow, step } : { workflow });
       },
       "task.resume": async (params) => {
         const o = asObj(params);

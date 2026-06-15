@@ -60,8 +60,9 @@ export interface EngineOptions {
   logger?: Logger;
 }
 
-/** What `enroll` accepts: a named workflow. */
-export type EnrollTarget = { workflow: string };
+/** What `enroll` accepts: a named workflow and an optional starting step
+ *  (defaults to the workflow's first step). */
+export type EnrollTarget = { workflow: string; step?: string };
 
 export class Engine implements SessionHost {
   readonly clock: Clock;
@@ -172,9 +173,14 @@ export class Engine implements SessionHost {
   // -- enroll / resume (client-driven transitions) -------------------------
 
   /**
-   * Enrolls a `new` task into a workflow (`{ workflow }`), transitioning it to
-   * the workflow's first step. Runs `onTransit` for the enroll → firstStep edge
-   * (a throw rejects the enroll).
+   * Enrolls a non-`work` task into a workflow (`{ workflow, step? }`),
+   * transitioning it to `step` (default: the workflow's first step). Allowed
+   * from `new`, `cancel`, and `human` — `work` (a live run) and `done` (use
+   * `reopen`) are rejected. Runs `onTransit` for the entry edge (a throw rejects
+   * the enroll). When re-enrolling a task that is already on THIS workflow the
+   * step it sits at is the `onTransit` leaving step (so `onTransit` sees the
+   * continued edge, matching `resume`); a fresh enroll (or a switch to another
+   * workflow) leaves the empty pre-enrolment step `""`.
    */
   async enroll(root: string, taskId: string, target: EnrollTarget): Promise<TaskView> {
     const project = this.requireProject(root);
@@ -183,27 +189,33 @@ export class Engine implements SessionHost {
     const workflowName = target.workflow;
 
     const view = await this.requireTask(project, taskId);
-    if (view.status !== "new") {
-      throw EngineError.conflict(`cannot enroll ${taskId}: status is ${view.status}, expected new`);
+    if (view.status !== "new" && view.status !== "cancel" && view.status !== "human") {
+      throw EngineError.conflict(
+        `cannot enroll ${taskId}: status is ${view.status} (expected new, cancel, or human)`,
+      );
     }
 
-    const to: StepTarget = { step: wf.firstStep };
-    await this.runOnTransit(project, wf, taskId, workflowName, "", to);
-    const updated = await project.store.setPosition(taskId, positionFor(wf, "", to));
+    const to: StepTarget = { step: target.step ?? wf.firstStep };
+    const leavingStep = view.workflow === workflowName ? (view.step ?? "") : "";
+    await this.runOnTransit(project, wf, taskId, workflowName, leavingStep, to);
+    const updated = await project.store.setPosition(taskId, positionFor(wf, leavingStep, to));
     this.emitTask(project, updated);
     this.kickScan();
     return updated;
   }
 
   /**
-   * Re-enters a parked (`human`) task into its workflow. Defaults to the same
-   * step the task was parked at; `to` overrides the target. Runs `onTransit`.
+   * Re-enters a parked (`human`) or closed (`cancel`) task into its workflow.
+   * Defaults to the same step the task was parked at; `to` overrides the target.
+   * Runs `onTransit`. The task must already be enrolled (have a workflow + step).
    */
   async resume(root: string, taskId: string, to?: StepTarget): Promise<TaskView> {
     const project = this.requireProject(root);
     const view = await this.requireTask(project, taskId);
-    if (view.status !== "human") {
-      throw EngineError.conflict(`cannot resume ${taskId}: status is ${view.status}, expected human`);
+    if (view.status !== "human" && view.status !== "cancel") {
+      throw EngineError.conflict(
+        `cannot resume ${taskId}: status is ${view.status} (expected human or cancel)`,
+      );
     }
     if (view.workflow === null || view.step === null) {
       throw EngineError.conflict(`cannot resume ${taskId}: task is not enrolled`);

@@ -180,10 +180,15 @@ export interface TaskUpdateParams extends ProjectSelector {
   title?: string;
   description?: string;
 }
-/** Enroll a `new` task into a named workflow, transitioning it to the first step. */
+/**
+ * Enroll a non-`work` task into a named workflow, transitioning it to `step`
+ * (default: the workflow's first step). Allowed from `new`/`cancel`/`human`.
+ */
 export interface TaskEnrollParams extends ProjectSelector {
   id: string;
   workflow: string;
+  /** Starting step name; omitted ⇒ the workflow's first step. */
+  step?: string;
 }
 export interface TaskResumeParams extends ProjectSelector {
   id: string;

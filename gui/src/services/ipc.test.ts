@@ -89,6 +89,7 @@ const cases: Array<{ name: string; run: () => unknown; method: string; params: R
   { name: "taskCancel(force)", run: () => ipc.taskCancel(cwd, "ask-1", true), method: "task.cancel", params: { cwd, id: "ask-1", force: true } },
   { name: "taskReopen", run: () => ipc.taskReopen(cwd, "ask-1"), method: "task.reopen", params: { cwd, id: "ask-1" } },
   { name: "taskEnroll(workflow)", run: () => ipc.taskEnroll(cwd, "ask-1", { workflow: "wf" }), method: "task.enroll", params: { cwd, id: "ask-1", workflow: "wf" } },
+  { name: "taskEnroll(workflow, step)", run: () => ipc.taskEnroll(cwd, "ask-1", { workflow: "wf", step: "dev" }), method: "task.enroll", params: { cwd, id: "ask-1", workflow: "wf", step: "dev" } },
   { name: "taskResume", run: () => ipc.taskResume(cwd, "ask-1"), method: "task.resume", params: { cwd, id: "ask-1" } },
   { name: "taskResume(to)", run: () => ipc.taskResume(cwd, "ask-1", { step: "dev" }), method: "task.resume", params: { cwd, id: "ask-1", to: { step: "dev" } } },
   { name: "taskBlock", run: () => ipc.taskBlock(cwd, "ask-1", "ask-2"), method: "task.block", params: { cwd, id: "ask-1", blocked_by: "ask-2" } },

@@ -1,6 +1,6 @@
 /**
  * Error envelope mapping (plan §4 acceptance): EngineError codes pass straight
- * through (enroll on a non-`new` task → CONFLICT 1004; unknown id → NOT_FOUND
+ * through (enroll on a `done` task → CONFLICT 1004; unknown id → NOT_FOUND
  * 1003), malformed params → INVALID_PARAMS, the project selector errors map to
  * INVALID_PROJECT / PROJECT_NOT_FOUND, and a malformed line never kills the
  * connection.
@@ -41,11 +41,16 @@ describe("RPC error mapping", () => {
     }
   });
 
-  test("enroll on an already-enrolled task → CONFLICT (1004)", async () => {
+  test("enroll re-enrolls a parked (human) task; a done task → CONFLICT (1004)", async () => {
     const client = await td.client();
     const task = await client.call<{ id: string; status: string }>("task.create", { cwd, title: "t" });
     const enrolled = await client.call<{ status: string }>("task.enroll", { cwd, id: task.id, workflow: "wf" });
     expect(enrolled.status).toBe("human"); // human first step parks it, no session
+    // `human` is re-enrollable now (relaxed guard): a second enroll succeeds.
+    const reEnrolled = await client.call<{ status: string }>("task.enroll", { cwd, id: task.id, workflow: "wf" });
+    expect(reEnrolled.status).toBe("human");
+    // `done` is terminal (use reopen) → enroll is a CONFLICT.
+    await client.call("task.done", { cwd, id: task.id });
     const frame = await client.callRaw("task.enroll", { cwd, id: task.id, workflow: "wf" });
     expect(frame.error?.code).toBe(ErrorCodes.CONFLICT);
   });
