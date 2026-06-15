@@ -23,8 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Surfaced in all three front ends: the CLI flag, a force-confirm prompt in the
   `autosk lazy` Tasks panel, and a force-confirm dialog in the desktop GUI. New
   proto-v2 error code `ENVIRONMENT_DIRTY` (1005) backs the warn-then-force flow, and
-  the `IsolationProvider` SDK contract gains an optional `reap()` (session-free
-  cleanup) method plus a `force` flag on `release()`.
+  the `IsolationProvider` SDK contract gains an optional, identity-keyed `reap()`
+  (session-free cleanup) method.
 - **daemon (`autoskd`):** a brand-new Bun/TypeScript daemon that owns each
   project's `.autosk/` directory and drives tasks through their workflows. It is
   auto-spawned on first use over a Unix socket (single-instance bind; opt-in TCP
@@ -121,6 +121,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the throwaway worktree to the wrong (or no) `.autosk/`.
 
 ### Changed
+- **`@autosk/sdk` isolation lifecycle:** the `IsolationProvider` contract is now
+  status-driven — `acquire` stays per-step (idempotent ensure-ready), `release`
+  becomes an optional, no-arg quiesce-on-exit hook fired only when a task LEAVES
+  `work` (never step→step), and durable teardown moves to the optional `reap` on
+  a terminal transition. No operator-visible change — the worktree provider
+  behaves identically end-to-end (dir kept across steps/park, removed on
+  terminal, branch preserved) (ask-35186d).
 - **`@autosk/feature-dev`:** the shipped reference workflow's `validator` step
   now performs mandatory **release hygiene** on success (updates `CHANGELOG.md`
   `[Unreleased]` per Keep a Changelog, then commits a clean worktree with
