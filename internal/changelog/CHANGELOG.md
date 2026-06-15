@@ -131,6 +131,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the throwaway worktree to the wrong (or no) `.autosk/`.
 
 ### Changed
+- **desktop GUI — calmer typography:** status badges (Tasks / Sessions panels
+  and the center task/session views) now render lowercase (`work`, `running`,
+  `done`, …) and are centered in their fixed-width gutter; panel titles, section
+  headers, field labels, menu labels, transcript role labels, and the task
+  comments header drop the all-caps treatment for sentence case (`Tasks`,
+  `Sessions`, `Workflows`, `Comments`, `Assistant`, …).
 - **enroll / resume — looser status gates + GUI consolidation:** `task.enroll`
   is now accepted from `new`, `cancel`, **and** `human` (previously `new` only)
   and takes an optional starting `step` (default: the workflow's first step), so

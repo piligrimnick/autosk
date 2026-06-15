@@ -10,6 +10,7 @@
   flex: 0 0 68px;
   display: flex;
   align-items: center;
+  justify-content: center;
 }
 .task-status-gutter .badge {
   flex-shrink: 0;

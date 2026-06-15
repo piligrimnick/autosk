@@ -40,7 +40,6 @@
 }
 .menu-label {
   font-size: 11px;
-  text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--fg-mute);
   padding: 6px 10px 2px;

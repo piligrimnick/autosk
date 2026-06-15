@@ -11,7 +11,6 @@
 }
 .msg-role {
   font-size: 11px;
-  text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--fg-mute);
   margin-bottom: 4px;

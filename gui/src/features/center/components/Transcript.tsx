@@ -75,7 +75,7 @@ function MessageRow({ entry }: { entry: MessageEntry }) {
 function AssistantRow({ message }: { message: AssistantMessage }) {
   return (
     <div className="msg msg-assistant">
-      <div className="msg-role">assistant</div>
+      <div className="msg-role">Assistant</div>
       <div className="msg-body">
         {message.content.map((block, i) => (
           <ContentBlockView key={i} block={block} />
@@ -88,7 +88,7 @@ function AssistantRow({ message }: { message: AssistantMessage }) {
 function UserRow({ message }: { message: UserMessage }) {
   return (
     <div className="msg msg-user">
-      <div className="msg-role">user</div>
+      <div className="msg-role">User</div>
       <div className="msg-body">
         {typeof message.content === "string" ? (
           <Markdown text={message.content} />
@@ -107,7 +107,7 @@ function ToolResultRow({ message }: { message: ToolResultMessage }) {
   return (
     <div className={`msg msg-toolresult ${message.isError ? "msg-error" : ""}`}>
       <div className="msg-role">
-        result · {message.toolName}
+        Result · {message.toolName}
         {message.isError ? " · error" : ""}
       </div>
       {text && <pre className="msg-code">{text}</pre>}
@@ -123,14 +123,14 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
     case "thinking":
       return (
         <div className="msg msg-thinking">
-          <div className="msg-role">thinking</div>
+          <div className="msg-role">Thinking</div>
           <div className="msg-body msg-dim">{block.thinking}</div>
         </div>
       );
     case "toolCall":
       return (
         <div className="msg msg-tool">
-          <div className="msg-role">tool · {block.name}</div>
+          <div className="msg-role">Tool · {block.name}</div>
           <pre className="msg-code">{safeJson(block.arguments)}</pre>
         </div>
       );

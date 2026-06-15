@@ -18,7 +18,7 @@ export function WorkflowsPanel() {
   return (
     <section className={`sidebar-panel${active ? " is-active" : ""}`}>
       <PanelHeader
-        title="workflows"
+        title="Workflows"
         active={active}
         onActivate={() => effects.setSidebarPanel("workflows")}
         actions={

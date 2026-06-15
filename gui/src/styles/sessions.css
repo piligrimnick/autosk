@@ -49,6 +49,7 @@
   flex: 0 0 var(--session-gutter);
   display: flex;
   align-items: center;
+  justify-content: center;
   min-width: 0;
 }
 .session-gutter-time {

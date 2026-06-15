@@ -184,7 +184,6 @@ button {
 .field-label {
   font-size: 12px;
   color: var(--fg-dim);
-  text-transform: uppercase;
   letter-spacing: 0.03em;
 }
 .field-row {
@@ -219,7 +218,7 @@ button {
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
-  text-transform: uppercase;
+  text-transform: lowercase;
   letter-spacing: 0.03em;
   background: var(--bg-3);
   color: var(--fg-dim);
@@ -299,7 +298,6 @@ button {
 }
 .section-title {
   font-size: 12px;
-  text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--fg-mute);
 }
