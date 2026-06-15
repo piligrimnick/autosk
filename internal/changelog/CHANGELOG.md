@@ -17,6 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > rows or installed npm-package agents.
 
 ### Added
+- **GUI: browse & install `autosk-extension` npm packages from the Workflows
+  panel.** A new `＋` action in the Workflows header (shown only when a project is
+  active) opens a browser listing npm packages published with the
+  `autosk-extension` keyword, sorted by weekly downloads; each row shows
+  name+version, description, weekly downloads, publisher, and last-updated date.
+  Clicking a row opens the package's npmjs.com page in the default browser;
+  already-installed packages show an "Installed (global/project)" badge. Install
+  asks where to put it (Globally / To this project → `extension.install`
+  `{ local: false | true }`) and then hints to reopen the project for the new
+  workflow(s) to appear. The npm search runs in the Tauri backend (new
+  `extension_search` command, scoped to the npm registry); opening pages uses the
+  official `@tauri-apps/plugin-opener`, restricted to `https://www.npmjs.com/*`.
 - **`--force`/`-f` on `autosk done` & `autosk cancel`:** force-reaps the task's
   isolation env (git worktree) even when it has uncommitted changes — the branch
   is always preserved, only the working dir + its uncommitted edits are dropped.

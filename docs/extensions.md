@@ -198,6 +198,16 @@ project open** — there is deliberately no in-process hot-reload (it would risk
 active sessions and the engine). The `ext` commands print a hint to restart
 the daemon (or reopen the project) whenever they change `node_modules`.
 
+**From the GUI.** The desktop app offers an equivalent install path for npm
+extensions: the **Workflows** panel header has a `＋` action (shown when a
+project is active) that opens a browser of npm packages published with the
+`autosk-extension` keyword, sorted by weekly downloads. Picking **Install** asks
+whether to install **Globally** or **To this project**, then calls the same
+`extension.install` RPC (`{ local: false | true }`) these `autosk ext add` /
+`autosk ext add -l` commands use. Like the CLI, it shows a restart hint —
+the new workflow(s) appear only after the project is reopened. The GUI install
+covers `npm:` packages only; local-path sources are still CLI-only.
+
 ## No trust model
 
 An installed/discovered extension is **loaded, period** — there is no

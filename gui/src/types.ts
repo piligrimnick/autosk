@@ -398,6 +398,53 @@ export interface SessionChangedParams {
   session: SessionMeta;
 }
 
+// ---------------------------------------------------------------------------
+// Extension management (sdk/proto.ts §extension.*). Workflows are code, shipped
+// as npm packages; the GUI browses + installs them from the Workflows panel.
+// ---------------------------------------------------------------------------
+
+/**
+ * A normalised npm package surfaced by the Rust `extension_search` command
+ * (mirror of the `NpmExtension` struct in `gui/src-tauri/src/npm.rs`). This is
+ * NOT an autoskd RPC type — it crosses the bridge as a plain Tauri command
+ * result. `updated` is RFC3339 UTC (rendered local in the row).
+ */
+export interface NpmExtension {
+  name: string;
+  version: string;
+  description: string;
+  publisher: string;
+  weekly_downloads: number;
+  updated: string;
+  npm_url: string;
+}
+
+/** One classified `settings.json#extensions` entry (`extension.list`). */
+export interface ExtensionEntryInfo {
+  /** The raw entry (`npm:<spec>` | `<abs-path>` | unrecognised). */
+  source: string;
+  scope: "global" | "project";
+  kind: "npm" | "local" | "invalid";
+  /** Whether it resolves to a loadable extension right now. */
+  resolved: boolean;
+}
+
+/** `extension.list` result. */
+export interface ExtensionListResult {
+  entries: ExtensionEntryInfo[];
+}
+
+/** `extension.install` result. */
+export interface ExtensionInstallResult {
+  scope: "global" | "project";
+  /** The canonical `settings.json` entry written (`npm:<spec>` | `<abs-path>`). */
+  source: string;
+  /** The `settings.json` the entry was written to. */
+  settings_path: string;
+  /** Whether an npm install ran (false for a local-path source). */
+  installed: boolean;
+}
+
 // ---- frontend-only types --------------------------------------------------
 
 /** Backend transport mode (an app setting). */

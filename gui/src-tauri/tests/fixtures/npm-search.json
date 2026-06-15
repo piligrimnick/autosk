@@ -1,0 +1,88 @@
+{
+  "objects": [
+    {
+      "downloads": { "monthly": 684, "weekly": 171 },
+      "updated": "2026-06-15T15:13:36.234Z",
+      "searchScore": 32.45,
+      "package": {
+        "name": "@autosk/worktree",
+        "version": "0.1.1",
+        "description": "Shipped autoskd v2 isolation provider: per-task git worktree isolation.",
+        "publisher": { "email": "wb@xff.pw", "username": "wierdbytes" },
+        "date": "2026-06-15T15:13:05.565Z",
+        "links": {
+          "npm": "https://www.npmjs.com/package/@autosk/worktree"
+        }
+      }
+    },
+    {
+      "downloads": { "monthly": 800, "weekly": 200 },
+      "updated": "2026-06-15T15:13:36.234Z",
+      "searchScore": 40.1,
+      "package": {
+        "name": "@autosk/feature-dev",
+        "version": "0.1.2",
+        "description": "Reference feature-dev workflow.",
+        "publisher": { "email": "wb@xff.pw", "username": "wierdbytes" },
+        "date": "2026-06-15T15:13:05.565Z",
+        "links": {
+          "npm": "https://www.npmjs.com/package/@autosk/feature-dev"
+        }
+      }
+    },
+    {
+      "downloads": { "monthly": 700, "weekly": 175 },
+      "updated": "2026-03-10T09:00:00.000Z",
+      "searchScore": 12.0,
+      "package": {
+        "name": "high-rollers",
+        "version": "2.0.0",
+        "description": "An unscoped extension with a high download count.",
+        "publisher": { "username": "someone" },
+        "date": "2026-03-09T09:00:00.000Z",
+        "links": {
+          "npm": "https://www.npmjs.com/package/high-rollers"
+        }
+      }
+    },
+    {
+      "downloads": { "monthly": 360, "weekly": 90 },
+      "updated": "2026-02-01T00:00:00.000Z",
+      "searchScore": 5.0,
+      "package": {
+        "name": "tie-zebra",
+        "version": "1.0.0",
+        "description": "Tie-break probe: equal weekly downloads, name sorts AFTER tie-apple.",
+        "publisher": { "username": "ziggy" },
+        "date": "2026-02-01T00:00:00.000Z",
+        "links": { "npm": "https://www.npmjs.com/package/tie-zebra" }
+      }
+    },
+    {
+      "downloads": { "monthly": 360, "weekly": 90 },
+      "updated": "2026-02-01T00:00:00.000Z",
+      "searchScore": 4.5,
+      "package": {
+        "name": "tie-apple",
+        "version": "1.0.0",
+        "description": "Tie-break probe: equal weekly downloads, name sorts BEFORE tie-zebra.",
+        "publisher": { "username": "adam" },
+        "date": "2026-02-01T00:00:00.000Z",
+        "links": { "npm": "https://www.npmjs.com/package/tie-apple" }
+      }
+    },
+    {
+      "searchScore": 1.0,
+      "package": {
+        "name": "no-downloads-ext",
+        "version": "0.0.1",
+        "description": "An extension with no downloads block and no npm link.",
+        "publisher": { "username": "nobody" },
+        "date": "2026-01-02T00:00:00.000Z",
+        "links": {}
+      }
+    }
+  ],
+  "total": 6,
+  "time": "Mon Jun 15 2026 15:14:00 GMT+0000"
+}

@@ -15,7 +15,10 @@ import type {
   AppSettings,
   Comment,
   DaemonStatus,
+  ExtensionInstallResult,
+  ExtensionListResult,
   Health,
+  NpmExtension,
   ProjectDiagnostics,
   ProjectInfo,
   SessionMeta,
@@ -265,6 +268,28 @@ export function workflowList(cwd: string): Promise<WorkflowInfo[]> {
 
 export function workflowGet(cwd: string, name: string): Promise<WorkflowInfo> {
   return daemonRequest<WorkflowInfo>("registry.workflow.get", sel(cwd, { name }));
+}
+
+// ---- extensions (browse + install) ---------------------------------------
+
+/**
+ * Search the npm registry for `autosk-extension` packages. This is a LOCAL
+ * Tauri command (`extension_search` in src-tauri/src/npm.rs), NOT an autoskd
+ * RPC: the search always runs on the machine hosting the GUI, even in
+ * remote-daemon mode. Results arrive sorted by weekly downloads (descending).
+ */
+export function extensionSearch(): Promise<NpmExtension[]> {
+  return invoke<NpmExtension[]>("extension_search");
+}
+
+/** List the extensions installed for a project (+ global), to flag installed rows. */
+export function extensionList(cwd: string): Promise<ExtensionListResult> {
+  return daemonRequest<ExtensionListResult>("extension.list", sel(cwd));
+}
+
+/** Install an npm extension (`source` is the package name). `local` → project scope. */
+export function extensionInstall(cwd: string, source: string, local: boolean): Promise<ExtensionInstallResult> {
+  return daemonRequest<ExtensionInstallResult>("extension.install", sel(cwd, { source, local }));
 }
 
 // ---- sessions ------------------------------------------------------------
