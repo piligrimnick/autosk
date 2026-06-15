@@ -225,6 +225,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installs on first run (see **first-run bootstrap**).
 
 ### Fixed
+- **overlapping session status badge:** in the desktop GUI's Sessions panel, a
+  row that transitioned `queued → running` briefly showed both badges stacked on
+  top of each other until you hovered the row. React reused the same `<span>`
+  for the badge across the status change, and the `running` badge's `.is-live`
+  pulse animation promotes that node to its own WebKit (WKWebView) compositing
+  layer — leaving the previous badge's pixels painted on top until a repaint
+  (e.g. the row's hover background) cleared them. The badge is now keyed on the
+  status, so React mounts a fresh node on each status change and the pulse
+  starts on a clean layer.
 - **composer horizontal scroll:** the desktop GUI's shared chat-style input
   (the *Add a comment* and *Steer the agent* composers) no longer shows a stray
   horizontal scrollbar. The auto-growing textarea only had its `overflow-y`

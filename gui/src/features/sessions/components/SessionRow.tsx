@@ -37,7 +37,13 @@ export function SessionRow({ session }: { session: SessionMeta }) {
     >
       <div className="session-row-top">
         <span className="session-gutter">
-          <StatusBadge status={session.status} className={badgeCls} />
+          {/* key on the status forces React to mount a fresh <span> on a
+           * status change (e.g. queued → running) rather than reusing the
+           * node. Reusing it makes WebKit (WKWebView) leave the previous
+           * badge's pixels composited on top of the new one once the
+           * `.is-live` pulse animation promotes the node to its own layer —
+           * the "two overlapping badges until you hover" glitch. */}
+          <StatusBadge key={session.status} status={session.status} className={badgeCls} />
         </span>
         <span className="session-id">{session.id}</span>
         <span className="session-task-id">{session.task_id}</span>
