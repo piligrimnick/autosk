@@ -262,8 +262,8 @@ type ProjectChangedParams struct {
 	Project ProjectInfo `json:"project"`
 }
 
-// SessionEventParams is the `session-event` payload. Kind mirrors the v1 SSE
-// frames: message | status | done | error.
+// SessionEventParams is the `session-event` payload. Kind names the frame
+// variant: message | status | done | error.
 type SessionEventParams struct {
 	Root      string          `json:"root"`
 	SessionID string          `json:"session_id"`

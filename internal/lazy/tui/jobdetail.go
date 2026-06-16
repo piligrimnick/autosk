@@ -1,5 +1,5 @@
 // Package tui — sessiondetail.go is the Detail-pane side of the
-// post-Inspector world: it owns the per-session SSE subscription
+// post-Inspector world: it owns the per-session live-subscription
 // lifecycle, the input-textarea editor + dispatch handlers, and the
 // scroll helpers shared by Session Detail and Task Detail. The
 // per-event cache + box rendering lives in sessiontranscript.go.
@@ -30,7 +30,7 @@ func hydrateContext(parent context.Context, refresh time.Duration) (context.Cont
 }
 
 // isSessionRunning reports whether s is currently in the running enum
-// state. Drives the SSE subscription (we stream transcript events
+// state. Drives the live subscription (we stream transcript events
 // for any running session, even when pi is idle between turns).
 func isSessionRunning(s datasource.Session) bool {
 	return s.Status == runstore.StatusRunning
@@ -87,9 +87,9 @@ func (gu *Gui) detailEffectiveInnerH() int {
 	return h
 }
 
-// ---- SSE lifecycle ------------------------------------------------------
+// ---- live-subscription lifecycle ----------------------------------------
 
-// scheduleSessionLive (re)arms the debounce timer for opening an SSE
+// scheduleSessionLive (re)arms the debounce timer for opening a live
 // subscription on sessionID. Calling this on every cursor move + every
 // refresh-driven status update keeps the timer pinned to the latest
 // selection, so a burst of j/k presses collapses into one StreamSession
@@ -126,7 +126,7 @@ func (gu *Gui) scheduleSessionLive(sessionID string, running bool) {
 	})
 }
 
-// openSessionLive opens the SSE subscription for sessionID after the debounce
+// openSessionLive opens the live subscription for sessionID after the debounce
 // fires. Runs on the timer goroutine; re-checks selection so a cursor
 // move that overlapped the timer doesn't open a stream for a
 // no-longer-selected session.
@@ -149,7 +149,7 @@ func (gu *Gui) openSessionLive(sessionID string) {
 	}
 
 	// Cancel previous handle, then open the new one. We open BEFORE
-	// taking the write lock so the StreamSession HTTP roundtrip
+	// taking the write lock so the StreamSession subscribe roundtrip
 	// doesn't block other state writes.
 	gu.stopSessionLive()
 	ctx, cancel := context.WithCancel(gu.ctx)
@@ -167,7 +167,7 @@ func (gu *Gui) openSessionLive(sessionID string) {
 	go gu.pumpSessionLive(ctx, sessionID, handle)
 }
 
-// stopSessionLive cancels the debounce timer + active SSE handle. Safe
+// stopSessionLive cancels the debounce timer + active live handle. Safe
 // to call when nothing is active. Called from quit, from
 // afterCursorMove when cursor leaves panelSessions / lands on a terminal
 // session, and from applyRefreshLocked when the streamed session vanishes
@@ -201,10 +201,10 @@ func (gu *Gui) stopSessionLive() { // renamed from stopJobLive
 	}
 }
 
-// pumpSessionLive consumes SSE events for sessionID and appends them to the
-// per-session transcript cache. Mirrors the previous Inspector pumpLive
-// but routes events into state.sessionTranscript (a per-sessionID cache of
-// rendered boxes) instead of the inspector's flat liveBuf slice.
+// pumpSessionLive consumes session-event frames for sessionID and appends
+// them to the per-session transcript cache. Mirrors the previous Inspector
+// pumpLive but routes events into state.sessionTranscript (a per-sessionID
+// cache of rendered boxes) instead of the inspector's flat liveBuf slice.
 //
 // Risk #4 mitigation: coalesce sub-30ms bursts into a single
 // g.Update via pumpLiveLoop. Owner-check on flush guards against the
@@ -320,7 +320,7 @@ func timerC(t *time.Timer) <-chan time.Time {
 //   - Miss            → stale (need fetch).
 //   - Hit, loadedAt zero (cleared by refresh.go's running→terminal
 //     transition path, or never loaded yet) → stale.
-//   - Hit, running    → fresh (SSE keeps it current; no TTL refetch).
+//   - Hit, running    → fresh (the live tail keeps it current; no TTL refetch).
 //   - Hit, terminal   → stale only if older than sessionTranscriptTerminalTTL.
 func (gu *Gui) sessionArchiveStale(sessionID string, running bool) bool {
 	var stale bool

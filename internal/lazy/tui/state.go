@@ -16,12 +16,12 @@ const sessionTranscriptCacheMax = 32 // renamed from jobTranscriptCacheMax
 
 // sessionTranscriptTerminalTTL is the per-entry TTL for terminal sessions:
 // after this window the next selection refetches the archive (so
-// late-flushed events appear). Running sessions are kept fresh by SSE
-// alone, no TTL refetch.
+// late-flushed events appear). Running sessions are kept fresh by the
+// live tail alone, no TTL refetch.
 const sessionTranscriptTerminalTTL = 30 * time.Second // renamed from jobTranscriptTerminalTTL
 
 // sessionLiveDebounce is the keystroke-debounce window before
-// scheduleSessionLive actually opens an SSE subscription. j/k-spam across
+// scheduleSessionLive actually opens a live subscription. j/k-spam across
 // running sessions within this window collapses into one StreamSession call
 // against the final-resting cursor row.
 const sessionLiveDebounce = 2 * time.Second // renamed from jobLiveDebounce
@@ -393,8 +393,8 @@ type flashState struct {
 //
 // Most writes are funnelled through g.Update closures (which run on
 // the gocui main thread), but a handful of OnWorker-spawned
-// goroutines also mutate state directly — see jobdetail.go's SSE
-// pump, which writes into state.jobTranscript from a worker
+// goroutines also mutate state directly — see jobdetail.go's live
+// pump, which writes into state.sessionTranscript from a worker
 // goroutine. The RWMutex is what makes that safe; do NOT drop it
 // without untangling the worker writes first.
 type state struct {
@@ -448,7 +448,7 @@ type state struct {
 	// minimum-stamp victim when the cap is hit.
 	sessionTranscript map[string]*sessionTranscriptEntry // renamed from jobTranscript
 
-	// sessionLive* hold the single active SSE subscription. Exactly one
+	// sessionLive* hold the single active live subscription. Exactly one
 	// session at a time may be streaming into the Detail pane;
 	// switching selection to a different running session cancels the
 	// current handle after the sessionLiveDebounce timer expires.

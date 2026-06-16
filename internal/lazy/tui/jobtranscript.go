@@ -1,6 +1,6 @@
 // Package tui — sessiontranscript.go is the per-sessionID transcript cache
-// + per-event box rendering. The SSE lifecycle that feeds events
-// into here lives in sessiondetail.go; the renderer that joins the
+// + per-event box rendering. The live-subscription lifecycle that feeds
+// events into here lives in sessiondetail.go; the renderer that joins the
 // per-event boxes into the Detail pane body lives in render.go.
 
 package tui

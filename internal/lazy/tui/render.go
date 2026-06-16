@@ -962,7 +962,7 @@ func renderSessionDetail(s datasource.Session, te *sessionTranscriptEntry, width
 		return b.String()
 	}
 
-	// renderedBoxes is the cache the SSE pump appends into; rebuild
+	// renderedBoxes is the cache the live pump appends into; rebuild
 	// if the pane width changed (resize) OR the slice is missing /
 	// stale. rebuildTranscriptBoxes folds the joinedBody rebuild
 	// into the same pass.
@@ -973,8 +973,8 @@ func renderSessionDetail(s datasource.Session, te *sessionTranscriptEntry, width
 		// Append-only path: boxes are current at contentW but the
 		// joined body is stale (one or more new boxes since the
 		// last join). One O(N) pass over the box slice rebuilds
-		// the body — but only once per SSE burst, not once per
-		// frame.
+		// the body — but only once per live-event burst, not
+		// once per frame.
 		rebuildJoinedBody(te)
 	}
 

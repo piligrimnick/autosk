@@ -48,7 +48,7 @@ func (gu *Gui) layout(g *gocui.Gui) error {
 	// Snapshot every state field we touch in this layout pass under
 	// the RLock. After the snapshot we don't read st.* directly:
 	// concurrent g.Update closures + worker-side mutations (jobdetail
-	// SSE pump) would otherwise race against these reads under -race.
+	// live pump) would otherwise race against these reads under -race.
 	var (
 		focusedWin       string
 		focusedSide      string
