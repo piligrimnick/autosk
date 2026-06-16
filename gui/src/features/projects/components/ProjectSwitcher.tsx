@@ -6,11 +6,13 @@
 import { useState } from "react";
 import { useStore } from "@/state/store";
 import * as ipc from "@/services/ipc";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Menu, MenuDivider, MenuItem, MenuLabel } from "@/features/shared/Menu";
 import { AddProjectModal } from "./AddProjectModal";
 
 export function ProjectSwitcher() {
   const { state, effects } = useStore();
+  const confirm = useConfirm();
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const [adding, setAdding] = useState(false);
   const activeName = state.projects.find((p) => p.root === state.activeProject)?.name ?? "No project";
@@ -22,7 +24,13 @@ export function ProjectSwitcher() {
 
   const remove = async (root: string, name: string) => {
     close();
-    if (!confirm(`Remove ${name} from the registry? (the project's .autosk/ directory is left untouched)`)) return;
+    const ok = await confirm({
+      title: "Remove project",
+      message: `Remove ${name} from the registry?\n\nThe project's .autosk/ directory is left untouched.`,
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await ipc.projectRemove(root);
       await effects.refreshProjects();

@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { StoreProvider } from "@/state/store";
+import { ConfirmProvider } from "@/components/ConfirmDialog";
 import "./styles/base.css";
 import "./styles/ds-tokens.css";
 import "./styles/shell.css";
@@ -21,7 +22,9 @@ import "./styles/modal.css";
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <StoreProvider>
-      <App />
+      <ConfirmProvider>
+        <App />
+      </ConfirmProvider>
     </StoreProvider>
   </React.StrictMode>,
 );

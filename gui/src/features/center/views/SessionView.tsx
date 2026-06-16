@@ -7,6 +7,7 @@ import { useStore } from "@/state/store";
 import * as ipc from "@/services/ipc";
 import { selectedSession } from "@/state/selectors";
 import { EmptyState, StatusBadge } from "@/components/common";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Transcript } from "../components/Transcript";
 import { useStickToBottom } from "../useStickToBottom";
 import type { SessionMeta } from "@/types";
@@ -76,12 +77,19 @@ export function SessionView() {
 function SessionControls({ session }: { session: SessionMeta }) {
   const { state, effects } = useStore();
   const cwd = state.activeProject ?? "";
+  const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
   const live = session.status === "running" || session.status === "queued";
   if (!live) return null;
 
-  const abort = () => {
-    if (!confirm(`Abort session ${session.id.slice(0, 8)}?`)) return;
+  const abort = async () => {
+    const ok = await confirm({
+      title: "Abort session",
+      message: `Abort session ${session.id.slice(0, 8)}?`,
+      confirmLabel: "Abort",
+      danger: true,
+    });
+    if (!ok) return;
     setBusy(true);
     void (async () => {
       try {
@@ -100,7 +108,7 @@ function SessionControls({ session }: { session: SessionMeta }) {
       className="btn btn-sm btn-danger"
       disabled={busy}
       title="Abort this session (queued or running)"
-      onClick={abort}
+      onClick={() => void abort()}
     >
       Abort
     </button>

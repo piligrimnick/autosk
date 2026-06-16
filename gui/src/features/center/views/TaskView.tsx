@@ -13,6 +13,7 @@ import { activeTask } from "@/state/selectors";
 import { EmptyState, StatusBadge, localTime } from "@/components/common";
 import { Markdown } from "@/components/Markdown";
 import { useTaskRowMenu } from "@/features/tasks/components/TaskRowMenu";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { EnrollButton } from "../components/EnrollModal";
 import { useStickToBottom } from "../useStickToBottom";
 import type { Comment, TaskView as TaskData } from "@/types";
@@ -108,6 +109,7 @@ function TaskMenuButton({ task }: { task: TaskData }) {
 function CommentItem({ task, comment }: { task: TaskData; comment: Comment }) {
   const { state, effects } = useStore();
   const cwd = state.activeProject ?? "";
+  const confirm = useConfirm();
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(comment.text);
   const [busy, setBusy] = useState(false);
@@ -127,7 +129,13 @@ function CommentItem({ task, comment }: { task: TaskData; comment: Comment }) {
   };
 
   const remove = async () => {
-    if (!confirm("Delete this comment?")) return;
+    const ok = await confirm({
+      title: "Delete comment",
+      message: "Delete this comment?",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await ipc.commentDelete(cwd, task.id, comment.id);

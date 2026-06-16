@@ -40,6 +40,14 @@
   border-top: 1px solid var(--border);
 }
 
+/* ---- confirm dialog (useConfirm) ----------------------------------------- */
+.confirm-message {
+  font-size: 14px;
+  line-height: 1.5;
+  /* preserve author-supplied line breaks (`\n`) in the message */
+  white-space: pre-line;
+}
+
 /* ---- enroll picker: lazy-style two panes (workflows | steps) -------------- */
 .enroll-panes {
   display: flex;

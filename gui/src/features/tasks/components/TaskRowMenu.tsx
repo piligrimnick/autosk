@@ -19,6 +19,7 @@ import { useStore } from "@/state/store";
 import * as ipc from "@/services/ipc";
 import type { TaskView } from "@/types";
 import { Modal } from "@/components/Modal";
+import { useConfirm } from "@/components/ConfirmDialog";
 
 const TERMINAL = new Set(["done", "cancel"]);
 
@@ -33,6 +34,7 @@ export function useTaskRowMenu(task: TaskView): {
 } {
   const { state, effects } = useStore();
   const cwd = state.activeProject ?? "";
+  const confirm = useConfirm();
   const [modal, setModal] = useState<"edit" | "block" | null>(null);
 
   const run = useCallback(
@@ -64,7 +66,13 @@ export function useTaskRowMenu(task: TaskView): {
         } catch (err) {
           if (err instanceof ipc.DaemonError && err.code === ipc.ErrorCode.EnvironmentDirty) {
             const label = verb === "done" ? "Mark done" : "Cancel";
-            if (!confirm(`${task.id}: isolation environment has uncommitted changes.\n${label} with force (discards them)?`)) {
+            const ok = await confirm({
+              title: `${label} (force)`,
+              message: `${task.id}: isolation environment has uncommitted changes.\n${label} with force? This discards them.`,
+              confirmLabel: label,
+              danger: true,
+            });
+            if (!ok) {
               return; // declined — leave the task as-is
             }
             await call(true);
@@ -74,7 +82,7 @@ export function useTaskRowMenu(task: TaskView): {
         }
       });
     },
-    [cwd, run, task.id],
+    [confirm, cwd, run, task.id],
   );
 
   const [popover, setPopover] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);

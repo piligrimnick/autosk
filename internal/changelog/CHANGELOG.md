@@ -251,6 +251,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installs on first run (see **first-run bootstrap**).
 
 ### Fixed
+- **GUI: confirmation dialogs did nothing.** The project switcher's remove
+  (×) button, comment delete, session abort, and force done/cancel relied on
+  the native `window.confirm()`, which this Tauri/wry build never shows on macOS
+  (it returns `false` with no dialog) — so the actions silently bailed out. They
+  now use an in-app confirm modal that works on every platform.
 - **overlapping session status badge:** in the desktop GUI's Sessions panel, a
   row that transitioned `queued → running` briefly showed both badges stacked on
   top of each other until you hovered the row. React reused the same `<span>`
