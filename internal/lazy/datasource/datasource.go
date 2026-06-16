@@ -148,7 +148,7 @@ type LiveHandle struct {
 	close  func() error
 }
 
-// Close terminates the SSE stream. Idempotent.
+// Close terminates the session-event subscription. Idempotent.
 func (h *LiveHandle) Close() error {
 	if h == nil || h.close == nil {
 		return nil

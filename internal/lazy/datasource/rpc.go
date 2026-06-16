@@ -164,7 +164,7 @@ func (r *RPC) Reconnect(ctx context.Context) error { return nil }
 // SessionTranscript fetches a session's full archived transcript (every line)
 // and adapts each pi-format line to a LiveEvent, oldest first. Used by the
 // Detail pane's archive load for both running (initial snapshot) and terminal
-// (no SSE) sessions.
+// (no live tail) sessions.
 func (r *RPC) SessionTranscript(ctx context.Context, sessionID string) ([]LiveEvent, error) {
 	res, err := r.cli.Transcript(ctx, sessionID, 0, 0)
 	if err != nil {

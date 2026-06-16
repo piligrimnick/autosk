@@ -288,7 +288,7 @@ func (gu *Gui) applyRefreshLocked(r refreshResult) {
 			}
 			// If the streamed session vanished from the slice (e.g. a
 			// filter just removed it), tear down the subscription so
-			// we're not holding an open SSE for a session the operator
+			// we're not holding an open live tail for a session the operator
 			// can't see.
 			if gu.st.sessionLiveSessionID != "" {
 				found := false
