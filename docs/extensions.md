@@ -44,13 +44,16 @@ export default function (autosk: AutoskAPI) {
 }
 ```
 
-`AutoskAPI` has exactly one method:
+`AutoskAPI` has two methods:
 
 - `registerWorkflow(workflow: WorkflowDefinition)` — adds a workflow to the
   calling project's registry. The workflow's agents are declared **inline** as
   step values (an `AgentDefinition` per agent step, the step key being the agent
-  name), so registering the workflow registers its agents — there is no separate
-  `registerAgent`.
+  name), so registering a workflow registers its inline agents.
+- `registerAgent({ name, description?, agent })` — registers a **named,
+  standalone agent** that can back an interactive (taskless) chat session (the
+  agent picker lists every registered agent, via `registry.agent.list`). See
+  [docs/workflows.md → Named agents](workflows.md#named-agents--interactive-sessions).
 
 It writes into **that project's** registry. The daemon imports TypeScript
 natively (it runs on Bun), so an extension can be plain `.ts` — no build step.
@@ -222,8 +225,8 @@ recorded, and the rest of the registry stays usable:
 
 - the module fails to import;
 - it has no default-export factory;
-- the factory throws (e.g. a stale extension calling the removed `registerAgent`);
-- it registers a name that collides with an already-registered one;
+- the factory throws;
+- it registers a workflow or agent name that collides with an already-registered one;
 - a workflow step is neither an inline agent (`onRun`) nor a `statusStep`;
 - a `settings.json` entry is listed but not installed / declares no extension, or
   is neither `npm:`-prefixed nor a path (an invalid entry).

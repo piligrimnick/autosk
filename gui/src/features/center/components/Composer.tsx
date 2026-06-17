@@ -1,7 +1,10 @@
 // Composer — the input pinned at the bottom of the center panel. Mode is
 // resolved by `composerMode(state)`:
-//   steer   → running/queued session selected → steer the agent (the abort
-//             control lives in the session header, not here)
+//   chat    → running/queued INTERACTIVE session selected → chat with the model
+//             (each message is a followup turn; the End control lives in the
+//             session header)
+//   steer   → running/queued workflow session selected → steer the agent (the
+//             abort control lives in the session header, not here)
 //   comment → a task selected (any status) → add a comment; enroll / resume /
 //             reopen moved to the Enroll button in the task header
 //   none    → nothing renders (also covers a terminal, read-only session)
@@ -14,6 +17,8 @@ import { ComposerInput } from "./ComposerInput";
 export function Composer() {
   const { state } = useStore();
   switch (composerMode(state)) {
+    case "chat":
+      return <ChatComposer />;
     case "steer":
       return <SteerComposer />;
     case "comment":
@@ -46,6 +51,29 @@ function SteerComposer() {
   return (
     <div className="composer">
       <ComposerInput placeholder="Steer the agent…" sendTitle="Steer" onSubmit={send} />
+    </div>
+  );
+}
+
+// ---- running/queued interactive session: chat with the model --------------
+
+function ChatComposer() {
+  const { state, effects } = useStore();
+  const cwd = useCwd();
+  const session = selectedSession(state)!;
+
+  const send = async (text: string) => {
+    try {
+      // A followup on an idle interactive session starts a fresh turn.
+      await ipc.sessionInput(cwd, session.id, text, "followup");
+    } catch (err) {
+      effects.setNotice({ kind: "error", text: String((err as Error).message ?? err) });
+    }
+  };
+
+  return (
+    <div className="composer">
+      <ComposerInput placeholder="Message the agent…" sendTitle="Send" onSubmit={send} />
     </div>
   );
 }

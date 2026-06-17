@@ -41,6 +41,30 @@ describe("ExtensionRegistry registration", () => {
     expect(r.diagnostics).toEqual([{ source: "second", error: "duplicate workflow name: alpha" }]);
   });
 
+  test("registers named agents, resolves + renders them sorted, and rejects bad/duplicate ones", () => {
+    const r = new ExtensionRegistry();
+    r.addAgent("src", { name: "pi", description: "chat", agent: agentStep() });
+    r.addAgent("src", { name: "alpha", agent: agentStep() });
+    // An empty name and a missing onRun are each a skipped diagnostic.
+    r.addAgent("bad", { name: "", agent: agentStep() });
+    r.addAgent("bad", { name: "noRun", agent: {} as unknown as AgentDefinition });
+    // First-registered wins on a duplicate (surfaced via diagnostics).
+    r.addAgent("second", { name: "pi", description: "loser", agent: agentStep() });
+
+    expect(r.listAgents()).toEqual([
+      { name: "alpha" },
+      { name: "pi", description: "chat" },
+    ]);
+    expect(r.getAgentInfo("pi")).toEqual({ name: "pi", description: "chat" });
+    expect(typeof r.resolveAgent("pi")?.onRun).toBe("function");
+    expect(r.resolveAgent("nope")).toBeUndefined();
+    expect(r.diagnostics.map((d) => d.error)).toEqual([
+      "registerAgent: registration.name must be a non-empty string",
+      'registerAgent: "noRun" agent must define an onRun function',
+      "duplicate agent name: pi",
+    ]);
+  });
+
   test("rejects an empty name and a firstStep that is not a declared step", () => {
     const r = new ExtensionRegistry();
     r.addWorkflow("s", { name: "", firstStep: "do", steps: { do: agentStep() } });

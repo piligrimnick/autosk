@@ -51,6 +51,7 @@ const PLAN_SECTION_4_METHODS = [
   // registry
   "registry.workflow.list",
   "registry.workflow.get",
+  "registry.agent.list",
   // extension management (autosk ext)
   "extension.install",
   "extension.list",
@@ -66,6 +67,8 @@ const PLAN_SECTION_4_METHODS = [
   "session.unsubscribeProject",
   "session.input",
   "session.abort",
+  "session.create",
+  "session.end",
 ].sort();
 
 const PLAN_SECTION_4_NOTIFICATIONS = [

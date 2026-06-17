@@ -44,7 +44,8 @@ gui/
 │   │   └── types.ts            # AppState shape + action union
 │   ├── features/               # one folder per UI domain
 │   │   ├── layout/             # AppShell, Titlebar, WindowCaptionControls, PanelHeader
-│   │   ├── sessions/           # SessionsPanel, SessionRow (SessionMeta, not jobs)
+│   │   ├── sessions/           # SessionsPanel (＋ → NewSessionModal), SessionRow,
+│   │   │                       #   NewSessionModal (start an interactive chat)
 │   │   ├── center/             # CenterPanel, Composer, Transcript (pi-format),
 │   │   │                       #   views/ (Session | Task | Workflow | Empty)
 │   │   ├── tasks/              # TasksPanel, TaskRow, TaskRowMenu, NewTaskModal
@@ -123,6 +124,18 @@ The design mirrors the CodexMonitor blueprint ("shared core + thin adapters"):
   switcher (switch / add / init /
   remove) also surfaces a ⚠ **diagnostics** badge + list when an extension fails
   to load (`project.diagnostics`).
+- **Interactive sessions.** The Sessions panel header carries a `＋` action
+  (shown when a project is active) that opens a **NewSessionModal** — a single
+  agent dropdown populated from `registry.agent.list` (`agentList(cwd)`).
+  Confirming creates a **taskless chat session** (`sessionCreate(cwd, agent)` →
+  `session.create`) against the chosen registered agent, upserts it into state,
+  and selects it so its live transcript opens. You then talk to the model
+  turn-by-turn from the composer — `composerMode` returns a `"chat"` mode for a
+  selected interactive session and submit sends `sessionInput(cwd, id, text,
+  "followup")`. An interactive session shows an **End** button (graceful close →
+  `done`, via `sessionEnd(cwd, id)`) where a workflow session shows **Abort**,
+  and its header shows the agent name instead of `task_id`/`workflow:step`. See
+  [docs/daemon.md → Interactive sessions](../docs/daemon.md#interactive-taskless-sessions).
 
 Both invariants are enforced by `scripts/check-ipc-discipline.mjs` (run as part
 of `npm run typecheck`) and an eslint `no-restricted-imports` rule, so a stray

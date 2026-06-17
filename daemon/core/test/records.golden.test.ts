@@ -183,6 +183,7 @@ const SESSION_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 
 const GOLDEN_SESSION_QUEUED: SessionMeta = {
   id: SESSION_ID,
+  kind: "task",
   task_id: "ask-3f9b2c",
   workflow: "feature-dev",
   step: "dev",
@@ -194,6 +195,7 @@ const GOLDEN_SESSION_QUEUED: SessionMeta = {
 
 const GOLDEN_SESSION_QUEUED_JSON = `{
   "id": "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+  "kind": "task",
   "task_id": "ask-3f9b2c",
   "workflow": "feature-dev",
   "step": "dev",
@@ -206,6 +208,7 @@ const GOLDEN_SESSION_QUEUED_JSON = `{
 
 const GOLDEN_SESSION_FAILED_JSON = `{
   "id": "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+  "kind": "task",
   "task_id": "ask-3f9b2c",
   "workflow": "feature-dev",
   "step": "dev",
@@ -242,6 +245,7 @@ const GOLDEN_HEADER: SessionHeader = {
   type: "session",
   version: 1,
   id: SESSION_ID,
+  kind: "task",
   task_id: "ask-3f9b2c",
   workflow: "feature-dev",
   step: "dev",
@@ -252,7 +256,7 @@ const GOLDEN_HEADER: SessionHeader = {
 
 const GOLDEN_HEADER_LINE =
   '{"type":"session","version":1,"id":"0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",' +
-  '"task_id":"ask-3f9b2c","workflow":"feature-dev","step":"dev","agent":"@autosk/pi-agent/dev",' +
+  '"kind":"task","task_id":"ask-3f9b2c","workflow":"feature-dev","step":"dev","agent":"@autosk/pi-agent/dev",' +
   '"timestamp":"2026-06-12T09:00:00Z","cwd":"/repo"}';
 
 const GOLDEN_TRANSIT: TransitEntry = {

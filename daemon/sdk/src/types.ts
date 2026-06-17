@@ -65,11 +65,24 @@ export interface TaskFilter {
 export type SessionStatus = "queued" | "running" | "done" | "failed" | "aborted";
 
 /**
+ * Session origin (plan §2). A `"task"` session is created by the scheduler when
+ * a `status=work` task hits an agent step; an `"interactive"` session is a
+ * taskless chat opened directly against a registered agent. For interactive
+ * sessions `task_id`/`workflow`/`step` are the empty-string sentinel (`""`).
+ */
+export type SessionKind = "task" | "interactive";
+
+/**
  * Session metadata (`./.autosk/sessions/<id>.json`, plan §3.2). Listing a
  * task's sessions = filtering metas by `task_id`.
+ *
+ * For an interactive (taskless) session `kind` is `"interactive"` and
+ * `task_id`/`workflow`/`step` are `""` (the unset sentinel); `agent` is the
+ * registered agent name.
  */
 export interface SessionMeta {
   id: string;
+  kind: SessionKind;
   task_id: string;
   workflow: string;
   step: string;
@@ -78,6 +91,16 @@ export interface SessionMeta {
   error?: string;
   started_at: string | null;
   ended_at: string | null;
+}
+
+/**
+ * A registered agent, rendered for `registry.agent.*` (plan §3.2, parallels
+ * {@link WorkflowInfo}). An agent registered via `AutoskAPI.registerAgent` can
+ * back an interactive (taskless) chat session.
+ */
+export interface AgentInfo {
+  name: string;
+  description?: string;
 }
 
 /** One step of a workflow as rendered from code for `registry.workflow.*`. */

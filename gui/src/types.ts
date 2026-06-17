@@ -67,9 +67,16 @@ export interface TaskFilter {
 /** Session lifecycle status. */
 export type SessionStatus = "queued" | "running" | "done" | "failed" | "aborted";
 
+/**
+ * Session origin: a scheduler-claimed task/workflow step, or an interactive
+ * (taskless) chat. For `"interactive"`, `task_id`/`workflow`/`step` are `""`.
+ */
+export type SessionKind = "task" | "interactive";
+
 /** Session record (`./.autosk/sessions/<id>.json`). */
 export interface SessionMeta {
   id: string;
+  kind: SessionKind;
   task_id: string;
   workflow: string;
   step: string;
@@ -78,6 +85,12 @@ export interface SessionMeta {
   error?: string;
   started_at: string | null;
   ended_at: string | null;
+}
+
+/** A registered agent rendered for `registry.agent.list` (interactive sessions). */
+export interface AgentInfo {
+  name: string;
+  description?: string;
 }
 
 // ---------------------------------------------------------------------------

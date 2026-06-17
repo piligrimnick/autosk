@@ -16,6 +16,7 @@
  */
 
 import type { StepTarget } from "./workflow.ts";
+import type { SessionKind } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // pi message schema (reused unchanged — see pi-ai `types.ts`).
@@ -127,8 +128,13 @@ export interface SessionHeader {
   type: "session";
   version: 1;
   id: string;
+  /** Mirrors {@link SessionMeta.kind}: `"task"` or `"interactive"`. */
+  kind: SessionKind;
+  /** `""` for an interactive (taskless) session. */
   task_id: string;
+  /** `""` for an interactive (taskless) session. */
   workflow: string;
+  /** `""` for an interactive (taskless) session. */
   step: string;
   agent: string;
   /** RFC3339 UTC. */

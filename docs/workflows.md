@@ -147,6 +147,7 @@ no pi knowledge — pi-based agents are an extension on top of `ctx.spawn` +
 ```ts
 interface AgentRunContext {
   session: { id: string };
+  mode: "task" | "interactive";       // "task" = workflow step (must transit); "interactive" = chat (never transits)
   cwd: string;                        // run dir: project root, or the isolation handle's path
   projectRoot: string;                // canonical project root (`.autosk/`), regardless of isolation
   signal: AbortSignal;                // fired on abort / daemon shutdown
@@ -186,6 +187,45 @@ One `onRun` for one task step = one **session** (`./.autosk/sessions/<id>.json`
 meta + `<id>.jsonl` transcript). Sessions replace v1's jobs; see
 [docs/daemon.md → Sessions & transcripts](daemon.md#sessions--transcripts) for
 the on-disk format and the steer/abort surface.
+
+## Named agents & interactive sessions
+
+A workflow registers its agents **inline** (the step key is the agent name). An
+extension can also publish a **named, standalone agent** so a user can chat with
+it directly, outside any workflow:
+
+```ts
+import { type AutoskAPI } from "@autosk/sdk";
+import { piAgent } from "@autosk/pi-agent";
+
+export default function (autosk: AutoskAPI) {
+  autosk.registerAgent({
+    name: "pi",
+    description: "Interactive chat backed by `pi --mode rpc`.",
+    agent: piAgent(),          // an AgentDefinition, run with its default options
+  });
+}
+```
+
+A registered agent backs an **interactive (taskless) session** — a chat the user
+opens directly (no task, no workflow). The engine runs the same
+`AgentDefinition.onRun`, but with `ctx.mode === "interactive"`:
+
+- `ctx.transit(...)` is **unavailable** (it throws) and `ctx.tasks` /
+  `ctx.workflows` are stub views — an interactive agent must not touch them.
+- The agent runs a chat loop and **returns when `ctx.signal` fires** (rather than
+  transiting). Returning is normal: a graceful end seals the session `done`, an
+  abort seals it `aborted`, a crash seals it `failed` — **none park a task**
+  (there is none). The `agent_did_not_transit` failure does not apply.
+
+`@autosk/pi-agent` registers the `"pi"` agent and branches `onRun` on `ctx.mode`:
+`"task"` runs the workflow transit loop; `"interactive"` runs a chat loop that
+spawns `pi --mode rpc` **without** the `autosk_transit` tool (transit is not
+offered in chat) and forwards each composer message as a follow-up.
+
+See [docs/daemon.md → Interactive sessions](daemon.md#interactive-taskless-sessions)
+for the session lifecycle and the `registry.agent.list` / `session.create` /
+`session.end` RPC surface.
 
 ## Isolation (pluggable, per workflow)
 

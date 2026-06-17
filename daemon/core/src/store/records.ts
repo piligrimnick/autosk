@@ -167,6 +167,7 @@ export function parseComments(text: string): Comment[] {
 export function serializeSessionMeta(m: SessionMeta): string {
   const ordered: Record<string, unknown> = {
     id: m.id,
+    kind: m.kind,
     task_id: m.task_id,
     workflow: m.workflow,
     step: m.step,
@@ -188,6 +189,9 @@ export function parseSessionMeta(text: string): SessionMeta {
   }
   const meta: SessionMeta = {
     id: String(raw.id ?? ""),
+    // Sessions written before the interactive-session work have no `kind`;
+    // default such legacy metas to `"task"`.
+    kind: raw.kind === "interactive" ? "interactive" : "task",
     task_id: String(raw.task_id ?? ""),
     workflow: typeof raw.workflow === "string" ? raw.workflow : "",
     step: typeof raw.step === "string" ? raw.step : "",
@@ -218,6 +222,7 @@ export function serializeSessionHeader(h: SessionHeader): string {
     type: h.type,
     version: h.version,
     id: h.id,
+    kind: h.kind,
     task_id: h.task_id,
     workflow: h.workflow,
     step: h.step,

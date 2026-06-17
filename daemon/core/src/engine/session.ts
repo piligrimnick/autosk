@@ -31,20 +31,30 @@
 import type {
   AgentDefinition,
   AgentRunContext,
+  ExecOptions,
   IsolationHandle,
+  SessionKind,
   SessionMeta,
+  SpawnOptions,
   StepTarget,
+  TranscriptMessage,
   WorkflowDefinition,
 } from "@autosk/sdk";
 
-import { buildTasksApi, buildWorkflowsApi } from "./context.ts";
+import {
+  buildInteractiveTasksApi,
+  buildInteractiveWorkflowsApi,
+  buildTasksApi,
+  buildWorkflowsApi,
+} from "./context.ts";
 import { TranscriptWriter } from "./transcript.ts";
 import { execOneShot, spawnChild } from "./child.ts";
 import { buildTransitContext, positionFor, validateTarget } from "./transition.ts";
 import { ENGINE_COMMENT_AUTHOR, errMsg, type EngineProject, type SessionHost } from "./types.ts";
 
-/** Everything the engine hands a session at dispatch. */
-export interface SessionRuntimeInit {
+/** A task/workflow session (the scheduler-claimed run for a `work` task step). */
+export interface TaskSessionRuntimeInit {
+  kind?: "task";
   host: SessionHost;
   project: EngineProject;
   workflow: WorkflowDefinition;
@@ -57,13 +67,32 @@ export interface SessionRuntimeInit {
   step: string;
 }
 
+/**
+ * An interactive (taskless) chat session (plan §4.3): no workflow, no task, no
+ * isolation — just a named agent run in chat mode until the user ends or aborts.
+ */
+export interface InteractiveSessionRuntimeInit {
+  kind: "interactive";
+  host: SessionHost;
+  project: EngineProject;
+  agent: AgentDefinition;
+  agentName: string;
+  sessionId: string;
+}
+
+/** Everything the engine hands a session at dispatch. */
+export type SessionRuntimeInit = TaskSessionRuntimeInit | InteractiveSessionRuntimeInit;
+
 export class SessionRuntime {
   readonly id: string;
   readonly taskId: string;
 
+  /** `"task"` (scheduler-claimed) or `"interactive"` (taskless chat). */
+  private readonly runtimeKind: SessionKind;
   private readonly host: SessionHost;
   private readonly project: EngineProject;
-  private readonly wf: WorkflowDefinition;
+  /** The workflow the task is enrolled under, or `null` for an interactive session. */
+  private readonly wf: WorkflowDefinition | null;
   private readonly workflowName: string;
   private readonly agent: AgentDefinition;
   private readonly agentName: string;
@@ -93,6 +122,8 @@ export class SessionRuntime {
   private transiting = false;
   /** An abort was requested. */
   private aborted = false;
+  /** A graceful end was requested (interactive sessions only → seals `done`). */
+  private ending = false;
   /** `onRun` has actually started (the queued→running transition applied). */
   private started = false;
   /** The session has reached a terminal state (set once by {@link settleOnce}). */
@@ -100,15 +131,24 @@ export class SessionRuntime {
 
   constructor(init: SessionRuntimeInit) {
     this.id = init.sessionId;
-    this.taskId = init.taskId;
     this.host = init.host;
     this.project = init.project;
-    this.wf = init.workflow;
-    this.workflowName = init.workflowName;
     this.agent = init.agent;
     this.agentName = init.agentName;
-    this.step = init.step;
     this.cwd = init.project.root;
+    if (init.kind === "interactive") {
+      this.runtimeKind = "interactive";
+      this.taskId = "";
+      this.wf = null;
+      this.workflowName = "";
+      this.step = "";
+    } else {
+      this.runtimeKind = "task";
+      this.taskId = init.taskId;
+      this.wf = init.workflow;
+      this.workflowName = init.workflowName;
+      this.step = init.step;
+    }
 
     this.transcript = new TranscriptWriter(
       this.project.store.sessions,
@@ -122,6 +162,11 @@ export class SessionRuntime {
   /** The project root this session belongs to (defence-in-depth for routing). */
   get projectRoot(): string {
     return this.project.root;
+  }
+
+  /** Whether this is a `"task"` (scheduler) or `"interactive"` (chat) session. */
+  get kind(): SessionKind {
+    return this.runtimeKind;
   }
 
   /** Whether the session has reached a terminal state. */
@@ -142,8 +187,9 @@ export class SessionRuntime {
 
     // Isolation is acquired HERE, in the worker (bounded by the pool), not in the
     // scan: queued sessions hold no worktree, and a slow acquire occupies one
-    // worker slot instead of stalling every project's dispatch (plan §3.5).
-    if (this.wf.isolation) {
+    // worker slot instead of stalling every project's dispatch (plan §3.5). An
+    // interactive session has no workflow (so no isolation): cwd stays the root.
+    if (this.wf?.isolation) {
       try {
         this.isolation = await this.wf.isolation.acquire({
           projectRoot: this.project.root,
@@ -215,6 +261,21 @@ export class SessionRuntime {
       await this.finalizeAborted();
       return;
     }
+    if (this.runtimeKind === "interactive") {
+      // Returning from an interactive `onRun` is NORMAL: the chat loop exits when
+      // the signal fires (a graceful `end()`) or the agent returns. No transit is
+      // required — a clean return seals `done`, a throw seals `failed` (no park).
+      //
+      // A graceful `end()` already requested `done` (it sets `ending` before
+      // firing the signal): seal `done` regardless of whether `onRun` then
+      // returned cleanly or threw while winding down, so End deterministically
+      // wins the settle race against this path (a throwing cleanup must not flip
+      // a user-requested End to `failed`).
+      if (this.ending) await this.finalizeDone();
+      else if (threw) await this.finalizeFailed(errMsg(error));
+      else await this.finalizeDone();
+      return;
+    }
     await this.finalizeFailed(threw ? errMsg(error) : "agent_did_not_transit");
   }
 
@@ -227,6 +288,11 @@ export class SessionRuntime {
    * transit after a committed one throws.
    */
   private async transit(to: StepTarget): Promise<void> {
+    const wf = this.wf;
+    if (!wf) {
+      // Defence-in-depth: an interactive ctx.transit rejects before reaching here.
+      throw new Error("transit is not available in an interactive session");
+    }
     if (this.transited) {
       throw new Error("transit already called for this session");
     }
@@ -235,7 +301,7 @@ export class SessionRuntime {
     }
     this.transiting = true;
     try {
-      validateTarget(this.wf, to);
+      validateTarget(wf, to);
       const tctx = buildTransitContext({
         store: this.project.store,
         taskId: this.taskId,
@@ -243,8 +309,8 @@ export class SessionRuntime {
         leavingStep: this.step,
         author: ENGINE_COMMENT_AUTHOR,
       });
-      if (this.wf.onTransit) {
-        await this.wf.onTransit(tctx, to); // may throw → propagate (retryable)
+      if (wf.onTransit) {
+        await wf.onTransit(tctx, to); // may throw → propagate (retryable)
       }
       // onTransit approved — claim the single settle now. If an abort landed
       // during onTransit's await, the claim fails and the transit is rejected
@@ -261,11 +327,12 @@ export class SessionRuntime {
 
   /** Commits an approved transit (task position, transcript, session meta, isolation). */
   private async commitTransit(to: StepTarget): Promise<void> {
+    const wf = this.wf!; // only reachable for a task session (transit() guarded wf)
     const from = { workflow: this.workflowName, step: this.step };
 
     // 1. Task position first — while the session is still `running` (live), so a
     //    concurrent scan sees the live session and skips re-dispatching.
-    const pos = positionFor(this.wf, this.step, to);
+    const pos = positionFor(wf, this.step, to);
     await this.project.store.setPosition(this.taskId, pos);
 
     // 2. Structural transcript entries.
@@ -360,6 +427,31 @@ export class SessionRuntime {
   }
 
   /**
+   * Gracefully ends a live INTERACTIVE session (plan §4.3): fire the signal so
+   * the agent's chat loop unblocks and `pi` winds down, run `onAbort` (best
+   * effort — it asks `pi` to stop cleanly), then seal the session `done` (NOT
+   * `aborted`, and never parking — there is no task). Idempotent: a no-op once
+   * settled. Sets the `ending` flag BEFORE firing the signal so that if `onRun`
+   * returns (or throws while winding down) and reaches {@link onRunSettled} first,
+   * it too seals `done` — making End deterministic regardless of which path wins
+   * the {@link settleOnce} race.
+   */
+  async end(): Promise<{ handled: boolean }> {
+    if (this.settled) return { handled: false };
+    this.ending = true;
+    this.controller.abort();
+    if (this.started && this.agent.onAbort && this.ctx) {
+      try {
+        await this.agent.onAbort(this.ctx);
+      } catch (e) {
+        this.host.logger.warn(`session ${this.id}: onAbort threw during end (${errMsg(e)})`);
+      }
+    }
+    await this.finalizeDone();
+    return { handled: true };
+  }
+
+  /**
    * Detaches a session from a stopping engine WITHOUT writing terminal state:
    * marks it settled (so any late `onRun` unwind is a no-op) and fires the
    * signal so a well-behaved agent unblocks. The persisted meta is left
@@ -377,11 +469,13 @@ export class SessionRuntime {
     if (!this.settleOnce()) return;
     // Seal the session meta even if parking throws (e.g. the task was deleted
     // out-of-band): a half-finalised session left `running` is worse than a
-    // failed park (ISSUE #7).
-    try {
-      await this.host.park(this.project, this.taskId, error);
-    } catch (e) {
-      this.host.logger.warn(`session ${this.id}: park after failure threw (${errMsg(e)})`);
+    // failed park (ISSUE #7). An interactive session has no task to park.
+    if (this.runtimeKind === "task") {
+      try {
+        await this.host.park(this.project, this.taskId, error);
+      } catch (e) {
+        this.host.logger.warn(`session ${this.id}: park after failure threw (${errMsg(e)})`);
+      }
     }
     this.transcript.error(error);
     this.transcript.sessionEnd("failed", error);
@@ -399,10 +493,13 @@ export class SessionRuntime {
 
   private async finalizeAborted(): Promise<void> {
     if (!this.settleOnce()) return;
-    try {
-      await this.host.park(this.project, this.taskId, "aborted");
-    } catch (e) {
-      this.host.logger.warn(`session ${this.id}: park after abort threw (${errMsg(e)})`);
+    // An interactive session has no task to park.
+    if (this.runtimeKind === "task") {
+      try {
+        await this.host.park(this.project, this.taskId, "aborted");
+      } catch (e) {
+        this.host.logger.warn(`session ${this.id}: park after abort threw (${errMsg(e)})`);
+      }
     }
     this.transcript.sessionEnd("aborted");
     await this.transcript.flush();
@@ -415,6 +512,23 @@ export class SessionRuntime {
     // An aborted session reads truer as `error` than `done` for the proto-v2
     // session-event mapping (ISSUE #9a).
     this.host.emitSession(this.project, meta, "error");
+    this.host.kickScan();
+  }
+
+  /**
+   * Seals an interactive (taskless) session as `done` (plan §4.3): the chat
+   * agent returned normally or the user ended the session. No park, no transit,
+   * no isolation — there is no task or workflow behind an interactive session.
+   */
+  private async finalizeDone(): Promise<void> {
+    if (!this.settleOnce()) return;
+    this.transcript.sessionEnd("done");
+    await this.transcript.flush();
+    const meta = await this.project.store.sessions.patchMeta(this.id, {
+      status: "done",
+      ended_at: this.host.clock(),
+    });
+    this.host.emitSession(this.project, meta, "done");
     this.host.kickScan();
   }
 
@@ -437,7 +551,7 @@ export class SessionRuntime {
   private async quiesceIsolation(opts: { parkOnFailure: boolean }): Promise<void> {
     if (!this.isolation || this.isolationQuiesced) return;
     this.isolationQuiesced = true;
-    const release = this.wf.isolation?.release;
+    const release = this.wf?.isolation?.release;
     if (!release) return; // provider has nothing to quiesce
     try {
       await release.call(this.wf.isolation, this.isolation);
@@ -462,11 +576,11 @@ export class SessionRuntime {
   private async reapIsolationTerminal(opts: { parkOnFailure: boolean }): Promise<void> {
     if (this.isolationReaped) return;
     this.isolationReaped = true;
-    const reap = this.wf.isolation?.reap;
+    const reap = this.wf?.isolation?.reap;
     if (!reap) return;
     try {
       await reap.call(
-        this.wf.isolation,
+        this.wf!.isolation,
         { projectRoot: this.project.root, taskId: this.taskId },
         { force: true },
       );
@@ -484,7 +598,8 @@ export class SessionRuntime {
 
   private buildContext(): AgentRunContext {
     const store = this.project.store;
-    return {
+    // The slices shared by both modes (transcript log + child spawning).
+    const base = {
       session: { id: this.id },
       cwd: this.cwd,
       // The canonical project root, independent of any acquired isolation handle
@@ -492,17 +607,34 @@ export class SessionRuntime {
       // project regardless of where it runs.
       projectRoot: this.project.root,
       signal: this.controller.signal,
-      tasks: buildTasksApi(store, this.taskId),
-      workflows: buildWorkflowsApi(this.project.registry, this.wf, this.step),
       log: {
-        message: (m) => this.transcript.message(m),
-        custom: (t, d) => this.transcript.custom(t, d),
+        message: (m: TranscriptMessage) => this.transcript.message(m),
+        custom: (t: string, d: unknown) => this.transcript.custom(t, d),
       },
+      exec: (cmd: string[], opts?: ExecOptions) =>
+        execOneShot(cmd, { ...opts, defaultCwd: this.cwd, defaultSignal: this.controller.signal }),
+      spawn: (cmd: string[], opts?: SpawnOptions) =>
+        spawnChild(cmd, { ...opts, defaultCwd: this.cwd, signal: this.controller.signal }),
+    };
+    if (this.runtimeKind === "interactive") {
+      // No task, no workflow, no transit (plan §4.3): stub the task/workflow
+      // slices and reject transit/comment so a chat agent can't reach a task.
+      return {
+        ...base,
+        mode: "interactive",
+        tasks: buildInteractiveTasksApi(),
+        workflows: buildInteractiveWorkflowsApi(this.project.registry, this.agentName),
+        comment: () => Promise.reject(new Error("no task in an interactive session")),
+        transit: () => Promise.reject(new Error("transit is not available in an interactive session")),
+      };
+    }
+    return {
+      ...base,
+      mode: "task",
+      tasks: buildTasksApi(store, this.taskId),
+      workflows: buildWorkflowsApi(this.project.registry, this.wf!, this.step),
       comment: (text) => store.addComment(this.taskId, { author: this.agentName, text }).then(() => {}),
       transit: (to) => this.transit(to),
-      exec: (cmd, opts) =>
-        execOneShot(cmd, { ...opts, defaultCwd: this.cwd, defaultSignal: this.controller.signal }),
-      spawn: (cmd, opts) => spawnChild(cmd, { ...opts, defaultCwd: this.cwd, signal: this.controller.signal }),
     };
   }
 }

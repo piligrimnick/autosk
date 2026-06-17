@@ -178,6 +178,7 @@ async function loadEntry(registry: ExtensionRegistry, entry: ExtensionEntry): Pr
 
   const api: AutoskAPI = {
     registerWorkflow: (workflow) => registry.addWorkflow(entry.source, workflow),
+    registerAgent: (registration) => registry.addAgent(entry.source, registration),
   };
   try {
     await (factory as ExtensionFactory)(api);

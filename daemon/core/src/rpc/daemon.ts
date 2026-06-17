@@ -512,6 +512,10 @@ export class Daemon {
         if (!info) throw new RpcError(ErrorCodes.NOT_FOUND, `workflow not found: ${reqString(o, "name")}`);
         return info;
       },
+      "registry.agent.list": async (params) => {
+        const handle = await this.resolveHandle(reqCwd(asObj(params)));
+        return handle.extensions.listAgents();
+      },
 
       // ---- extension management (autosk ext) -----------------------------
       // A GLOBAL install/update does NOT require an open project (only `cwd`,
@@ -627,6 +631,20 @@ export class Daemon {
         // abort ALWAYS acts on a live session; `handled:false` means only
         // "already settled, nothing to abort" — never unsupported_by_agent (plan §3.4).
         const { handled } = await this.engine.sessionAbort(handle.root, reqString(o, "id"));
+        return { ok: handled };
+      },
+      "session.create": async (params) => {
+        const o = asObj(params);
+        const handle = await this.resolveHandle(reqCwd(o));
+        // An unknown agent throws EngineError.invalidParams → INVALID_PARAMS.
+        return this.engine.createInteractiveSession(handle.root, reqString(o, "agent"));
+      },
+      "session.end": async (params) => {
+        const o = asObj(params);
+        const handle = await this.resolveHandle(reqCwd(o));
+        // end ALWAYS acts on a live interactive session; `handled:false` means
+        // only "already settled, nothing to end".
+        const { handled } = await this.engine.sessionEnd(handle.root, reqString(o, "id"));
         return { ok: handled };
       },
     };

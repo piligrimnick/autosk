@@ -104,6 +104,15 @@ export interface TranscriptAPI {
 /** The context the engine hands `onRun` / `onSteer` / `onFollowup` / `onAbort` (plan §3.4). */
 export interface AgentRunContext {
   session: { id: string };
+  /**
+   * The run discriminator (plan §3.3):
+   *  - `"task"` — a workflow step. The agent MUST call `ctx.transit(...)` exactly
+   *    once before returning.
+   *  - `"interactive"` — a taskless chat. `ctx.transit` is unavailable (it throws),
+   *    and `ctx.tasks` / `ctx.workflows` are stub views (no real task/workflow).
+   *    The agent runs a chat loop and returns when `ctx.signal` fires.
+   */
+  mode: "task" | "interactive";
   /** The run directory: the project root, or — under isolation — the handle's path. */
   cwd: string;
   /**

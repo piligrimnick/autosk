@@ -46,12 +46,22 @@ export function SessionRow({ session }: { session: SessionMeta }) {
           <StatusBadge key={session.status} status={session.status} className={badgeCls} />
         </span>
         <span className="session-id">{session.id}</span>
-        <span className="session-task-id">{session.task_id}</span>
+        {/* An interactive (chat) session has no task id; surface the backing
+         * agent on the right edge instead, mirroring SessionView's header. */}
+        {session.kind === "interactive" ? (
+          <span className="session-agent-name">{session.agent || "—"}</span>
+        ) : (
+          <span className="session-task-id">{session.task_id}</span>
+        )}
       </div>
       <div className="session-row-bottom">
         <span className="session-gutter session-gutter-time">{sessionWorkTime(session)}</span>
         <span className="session-wfstep">
-          {session.workflow ? (
+          {session.kind === "interactive" ? (
+            // A taskless chat shows a "chat" marker where a workflow session
+            // shows workflow:step (consistent with SessionView).
+            <span className="session-kind-chat">chat</span>
+          ) : session.workflow ? (
             <>
               <span className="session-workflow-name">{session.workflow}</span>
               {session.step && (

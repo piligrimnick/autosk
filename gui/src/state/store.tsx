@@ -291,7 +291,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         const cwd = cwdOf();
         if (!cwd) return;
-        const session = stateRef.current.sessions[sessionId];
+        // The session may not be mirrored into state yet (e.g. just created from
+        // the New-session modal, whose `session/upsert` dispatch has not
+        // committed); fetch its meta so a freshly-created live session still
+        // opens its live tail instead of a one-shot snapshot.
+        let session: SessionMeta | undefined = stateRef.current.sessions[sessionId];
+        if (!session) {
+          session = await ipc.sessionGet(cwd, sessionId).catch(() => undefined);
+        }
         if (session && (session.status === "running" || session.status === "queued")) {
           await subscribeToSession(cwd, sessionId);
         } else {

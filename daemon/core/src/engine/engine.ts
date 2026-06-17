@@ -252,6 +252,93 @@ export class Engine implements SessionHost {
     return rt.abort();
   }
 
+  // -- interactive (taskless) sessions -------------------------------------
+
+  /**
+   * Creates + dispatches an interactive (taskless) chat session for a registered
+   * agent (plan §4.2). Unknown agent → {@link EngineError.invalidParams}. The
+   * session is `kind:"interactive"` with empty `task_id`/`workflow`/`step`, runs
+   * at the project root with no isolation, and is dispatched DIRECTLY here — the
+   * task scanner is never involved (it has no task to claim).
+   *
+   * Crucially the run is dispatched OFF the bounded task-worker pool (it does NOT
+   * go through `queue`+`pump`+`this.active`). A chat's `onRun` blocks on the
+   * abort signal for the WHOLE session lifetime — idle between turns and during
+   * turns (composer turns arrive out-of-band via `onFollowup`/`driver.input`,
+   * they do not unblock `onRun`). Occupying a `this.active` slot for that whole
+   * time would starve task dispatch: the pool is global across projects and
+   * capped at `--workers` (default 4), so a handful of idle chats would deadlock
+   * every project's task scheduler. Interactive sessions acquire no isolation, so
+   * they need none of the pool's `acquire` back-pressure either. Returns the
+   * freshly-created `queued` meta; the queued→running flip and the terminal
+   * settle emit their own session-events.
+   */
+  async createInteractiveSession(root: string, agentName: string): Promise<SessionMeta> {
+    const project = this.requireProject(root);
+    const agent = project.registry.resolveAgent(agentName);
+    if (!agent) throw EngineError.invalidParams(`unknown agent: ${agentName}`);
+
+    const sessionId = newSessionId();
+    const meta = await project.store.sessions.create({
+      id: sessionId,
+      kind: "interactive",
+      task_id: "",
+      workflow: "",
+      step: "",
+      agent: agentName,
+      cwd: project.root,
+      timestamp: this.clock(),
+    });
+    // Announce the freshly-created (queued) interactive session on the project
+    // session channel so subscribers see it appear immediately.
+    this.emitSession(project, meta, "status");
+
+    const runtime = new SessionRuntime({
+      kind: "interactive",
+      host: this,
+      project,
+      agent,
+      agentName,
+      sessionId,
+    });
+    this.running.set(sessionId, runtime);
+    // Run directly, OFF the bounded task-worker pool (see the doc above): no
+    // `queue.push` / `pump()` / `this.active` accounting, so an indefinitely-idle
+    // chat never consumes a task-worker slot.
+    void this.runInteractive(runtime);
+    return meta;
+  }
+
+  /**
+   * Drives an interactive runtime to completion off the bounded pool. Mirrors
+   * {@link runJob} (de-register + kick a scan when it settles) MINUS the
+   * `this.active`/`pump()` accounting, which interactive sessions deliberately
+   * never participate in.
+   */
+  private async runInteractive(rt: SessionRuntime): Promise<void> {
+    try {
+      await rt.run();
+    } catch (e) {
+      this.logger.error(`session ${rt.id} crashed: ${errMsg(e)}`);
+    } finally {
+      this.running.delete(rt.id);
+      this.kickScan();
+    }
+  }
+
+  /**
+   * Gracefully ends a live interactive session → status `done` (plan §4.2). A
+   * `task` session cannot be ended this way (use `session.abort`); an unknown or
+   * already-settled session is `not found`.
+   */
+  async sessionEnd(root: string, sessionId: string): Promise<{ handled: boolean }> {
+    const rt = this.requireSession(root, sessionId);
+    if (rt.kind !== "interactive") {
+      throw EngineError.conflict(`cannot end ${sessionId}: not an interactive session`);
+    }
+    return rt.end();
+  }
+
   // -- scheduler -----------------------------------------------------------
 
   /** Requests a coalesced scan (no-op while stopped). */
@@ -397,6 +484,9 @@ export class Engine implements SessionHost {
         ended_at: this.clock(),
       });
       await this.appendRecoveryEntries(project, meta.id);
+      // Interactive sessions have no task to park (v1: not auto-resumed after a
+      // restart, plan §4.4/§8). Only a task session parks its `work` task.
+      if (meta.kind === "interactive") continue;
       const view = await project.store.taskView(meta.task_id).catch(() => null);
       if (view && view.status === "work") {
         await this.park(project, meta.task_id, "daemon_restart");

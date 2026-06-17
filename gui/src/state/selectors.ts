@@ -76,20 +76,24 @@ function tsMillis(ts: string | null | undefined, fallback = 0): number {
 
 /**
  * The unified composer mode, driven by the SELECTED ENTITY:
- *   - session selected + running/queued session → "steer" (steer + abort; abort
- *     lives in the session header, the composer is just the input)
- *   - session selected + terminal session        → "none" (read-only transcript)
- *   - task selected (any status)                  → "comment" (a single comment box;
+ *   - interactive session selected + running/queued → "chat" (a chat composer;
+ *     each message is a followup turn, ended via the End button in the header)
+ *   - workflow session selected + running/queued     → "steer" (steer + abort;
+ *     abort lives in the session header, the composer is just the input)
+ *   - session selected + terminal session            → "none" (read-only transcript)
+ *   - task selected (any status)                     → "comment" (a single comment box;
  *     enroll/resume/reopen moved to the Enroll button in the task header)
- *   - nothing (or workflow) selected              → "none"
+ *   - nothing (or workflow) selected                 → "none"
  */
-export type ComposerMode = "steer" | "comment" | "none";
+export type ComposerMode = "chat" | "steer" | "comment" | "none";
 
 export function composerMode(state: AppState): ComposerMode {
   const sel = state.selection;
   if (sel.kind === "session") {
     const session = state.sessions[sel.sessionId];
-    if (session && (session.status === "running" || session.status === "queued")) return "steer";
+    if (session && (session.status === "running" || session.status === "queued")) {
+      return session.kind === "interactive" ? "chat" : "steer";
+    }
     return "none";
   }
   if (sel.kind === "task") {

@@ -26,6 +26,7 @@ function mkWorkflow(name: string): WorkflowInfo {
 
 function mkSession(p: Partial<SessionMeta> & Pick<SessionMeta, "id" | "task_id">): SessionMeta {
   return {
+    kind: "task",
     workflow: "wf",
     step: "dev",
     agent: "a",
@@ -72,12 +73,26 @@ describe("composerMode (entity-driven)", () => {
     expect(composerMode(initialState())).toBe("none");
   });
 
-  it("session + running/queued session → 'steer'", () => {
+  it("workflow session + running/queued session → 'steer'", () => {
     const m = mkSession({ id: "s1", task_id: "t1", status: "running" });
     const s: AppState = { ...initialState(), sessions: { s1: m }, selection: { kind: "session", sessionId: "s1" } };
     expect(composerMode(s)).toBe("steer");
     const queued: AppState = { ...s, sessions: { s1: { ...m, status: "queued" } } };
     expect(composerMode(queued)).toBe("steer");
+  });
+
+  it("interactive session + running/queued session → 'chat'", () => {
+    const m = mkSession({ id: "s1", task_id: "", kind: "interactive", workflow: "", step: "", status: "running" });
+    const s: AppState = { ...initialState(), sessions: { s1: m }, selection: { kind: "session", sessionId: "s1" } };
+    expect(composerMode(s)).toBe("chat");
+    const queued: AppState = { ...s, sessions: { s1: { ...m, status: "queued" } } };
+    expect(composerMode(queued)).toBe("chat");
+  });
+
+  it("interactive session + terminal session → 'none' (read-only transcript)", () => {
+    const m = mkSession({ id: "s1", task_id: "", kind: "interactive", status: "done" });
+    const s: AppState = { ...initialState(), sessions: { s1: m }, selection: { kind: "session", sessionId: "s1" } };
+    expect(composerMode(s)).toBe("none");
   });
 
   it("session + terminal session → 'none' (read-only transcript, no composer)", () => {

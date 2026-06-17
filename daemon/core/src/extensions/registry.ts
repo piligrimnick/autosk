@@ -17,6 +17,9 @@
 
 import {
   isStatusStep,
+  type AgentDefinition,
+  type AgentInfo,
+  type AgentRegistration,
   type ExtensionLoadError,
   type StepDef,
   type StepTarget,
@@ -34,6 +37,8 @@ export interface PositionValidation {
 
 export class ExtensionRegistry {
   private readonly workflows = new Map<string, WorkflowDefinition>();
+  /** Named agents registered via `AutoskAPI.registerAgent` (interactive sessions). */
+  private readonly agents = new Map<string, AgentRegistration>();
   private readonly loadErrors: ExtensionLoadError[] = [];
 
   // -- diagnostics ---------------------------------------------------------
@@ -90,11 +95,41 @@ export class ExtensionRegistry {
     this.workflows.set(name, workflow);
   }
 
+  /**
+   * Registers a named agent on behalf of `source` (plan §3.3, §4.1). An empty
+   * name, a missing `onRun`, or a duplicate name are each recorded as a
+   * diagnostic and skip the registration (never throw — the factory keeps
+   * running). First-registered wins on a collision, so the higher-priority
+   * source (project beats global) keeps the name.
+   */
+  addAgent(source: string, registration: AgentRegistration): void {
+    const name = registration?.name;
+    if (typeof name !== "string" || name.length === 0) {
+      this.recordDiagnostic(source, "registerAgent: registration.name must be a non-empty string");
+      return;
+    }
+    const agent = registration.agent;
+    if (!agent || typeof agent.onRun !== "function") {
+      this.recordDiagnostic(source, `registerAgent: "${name}" agent must define an onRun function`);
+      return;
+    }
+    if (this.agents.has(name)) {
+      this.recordDiagnostic(source, `duplicate agent name: ${name}`);
+      return;
+    }
+    this.agents.set(name, registration);
+  }
+
   // -- resolution (engine-facing) ------------------------------------------
 
   /** Resolves a registered workflow by name. Unknown ⇒ `undefined`. */
   resolveWorkflow(name: string): WorkflowDefinition | undefined {
     return this.workflows.get(name);
+  }
+
+  /** Resolves a registered agent's definition by name. Unknown ⇒ `undefined`. */
+  resolveAgent(name: string): AgentDefinition | undefined {
+    return this.agents.get(name)?.agent;
   }
 
   // -- live-code hazard validation -----------------------------------------
@@ -128,10 +163,30 @@ export class ExtensionRegistry {
     return wf ? renderWorkflowInfo(wf) : undefined;
   }
 
+  /** A single registered agent rendered for `registry.agent.*`. Unknown ⇒ `undefined`. */
+  getAgentInfo(name: string): AgentInfo | undefined {
+    const reg = this.agents.get(name);
+    return reg ? renderAgentInfo(reg) : undefined;
+  }
+
+  /** Registered agents rendered for `registry.agent.list`, sorted by name. */
+  listAgents(): AgentInfo[] {
+    return [...this.agents.values()]
+      .map(renderAgentInfo)
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  }
+
   /** Registered workflow names (sorted) — the deterministic merge result. */
   workflowNames(): string[] {
     return [...this.workflows.keys()].sort();
   }
+}
+
+/** Renders an {@link AgentRegistration} to its {@link AgentInfo} wire projection. */
+function renderAgentInfo(reg: AgentRegistration): AgentInfo {
+  const info: AgentInfo = { name: reg.name };
+  if (reg.description !== undefined) info.description = reg.description;
+  return info;
 }
 
 /**

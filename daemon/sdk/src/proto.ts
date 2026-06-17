@@ -24,6 +24,7 @@
  */
 
 import type {
+  AgentInfo,
   Comment,
   SessionMeta,
   TaskFilter,
@@ -335,6 +336,15 @@ export interface SessionInputParams extends ProjectSelector {
 export interface SessionAbortParams extends ProjectSelector {
   id: string;
 }
+/** Creates an interactive (taskless) chat session for a registered agent. */
+export interface SessionCreateParams extends ProjectSelector {
+  /** A registered agent name (see `registry.agent.list`). */
+  agent: string;
+}
+/** Gracefully ends a live interactive session → status `done`. */
+export interface SessionEndParams extends ProjectSelector {
+  id: string;
+}
 
 // ---------------------------------------------------------------------------
 // Method map (plan §4). Keyed by the fully-qualified method name.
@@ -378,6 +388,7 @@ export interface RpcMethodMap {
   // registry
   "registry.workflow.list": { params: ProjectSelector; result: WorkflowInfo[] };
   "registry.workflow.get": { params: WorkflowGetParams; result: WorkflowInfo };
+  "registry.agent.list": { params: ProjectSelector; result: AgentInfo[] };
 
   // extension management (autosk ext)
   "extension.install": { params: ExtensionInstallParams; result: ExtensionInstallResult };
@@ -396,6 +407,10 @@ export interface RpcMethodMap {
   "session.unsubscribeProject": { params: ProjectSelector; result: OkResult };
   "session.input": { params: SessionInputParams; result: OkResult };
   "session.abort": { params: SessionAbortParams; result: OkResult };
+  /** Creates + dispatches an interactive (taskless) chat session. */
+  "session.create": { params: SessionCreateParams; result: SessionMeta };
+  /** Gracefully ends a live interactive session (status → `done`). */
+  "session.end": { params: SessionEndParams; result: OkResult };
 }
 
 /** A valid proto-v2 method name. */
@@ -442,6 +457,7 @@ export const RPC_METHODS = [
   "task.unsubscribe",
   "registry.workflow.list",
   "registry.workflow.get",
+  "registry.agent.list",
   "extension.install",
   "extension.list",
   "extension.remove",
@@ -455,6 +471,8 @@ export const RPC_METHODS = [
   "session.unsubscribeProject",
   "session.input",
   "session.abort",
+  "session.create",
+  "session.end",
 ] as const satisfies readonly RpcMethod[];
 
 // ---------------------------------------------------------------------------

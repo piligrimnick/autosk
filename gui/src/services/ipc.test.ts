@@ -102,9 +102,10 @@ const cases: Array<{ name: string; run: () => unknown; method: string; params: R
   { name: "commentAdd", run: () => ipc.commentAdd(cwd, "ask-1", "hi"), method: "task.comment.add", params: { cwd, task_id: "ask-1", text: "hi" } },
   { name: "commentEdit", run: () => ipc.commentEdit(cwd, "ask-1", "c1", "hi"), method: "task.comment.edit", params: { cwd, task_id: "ask-1", comment_id: "c1", text: "hi" } },
   { name: "commentDelete", run: () => ipc.commentDelete(cwd, "ask-1", "c1"), method: "task.comment.delete", params: { cwd, task_id: "ask-1", comment_id: "c1" } },
-  // registry.* (workflows are code; read-only)
+  // registry.* (workflows + agents are code; read-only)
   { name: "workflowList", run: () => ipc.workflowList(cwd), method: "registry.workflow.list", params: { cwd } },
   { name: "workflowGet", run: () => ipc.workflowGet(cwd, "wf"), method: "registry.workflow.get", params: { cwd, name: "wf" } },
+  { name: "agentList", run: () => ipc.agentList(cwd), method: "registry.agent.list", params: { cwd } },
   // session.* run lifecycle (the v1 run methods were renamed under this namespace)
   { name: "sessionList", run: () => ipc.sessionList(cwd), method: "session.list", params: { cwd } },
   { name: "sessionList(task)", run: () => ipc.sessionList(cwd, "ask-1"), method: "session.list", params: { cwd, task_id: "ask-1" } },
@@ -118,6 +119,8 @@ const cases: Array<{ name: string; run: () => unknown; method: string; params: R
   { name: "sessionInput(steer)", run: () => ipc.sessionInput(cwd, "s1", "go", "steer"), method: "session.input", params: { cwd, id: "s1", message: "go", kind: "steer" } },
   { name: "sessionInput(followup)", run: () => ipc.sessionInput(cwd, "s1", "go", "followup"), method: "session.input", params: { cwd, id: "s1", message: "go", kind: "followup" } },
   { name: "sessionAbort", run: () => ipc.sessionAbort(cwd, "s1"), method: "session.abort", params: { cwd, id: "s1" } },
+  { name: "sessionCreate", run: () => ipc.sessionCreate(cwd, "pi"), method: "session.create", params: { cwd, agent: "pi" } },
+  { name: "sessionEnd", run: () => ipc.sessionEnd(cwd, "s1"), method: "session.end", params: { cwd, id: "s1" } },
 ];
 
 describe("ipc v2 method rewire", () => {

@@ -32,7 +32,10 @@ export function SessionView() {
           <StatusBadge status={session.status} />
           <span className="session-view-id">{session.id}</span>
           <span className="meta-sep">·</span>
-          {session.workflow ? (
+          {session.kind === "interactive" ? (
+            // An interactive (taskless) session has no workflow:step or task id.
+            <span className="session-kind-chat">chat</span>
+          ) : session.workflow ? (
             <span className="session-wfstep">
               <span className="session-workflow-name">{session.workflow}</span>
               {session.step && (
@@ -49,7 +52,9 @@ export function SessionView() {
           <span className="session-agent-name">{session.agent || "—"}</span>
           <span className="session-view-right">
             <SessionControls session={session} />
-            <span className="session-view-task-id">{session.task_id}</span>
+            {session.kind !== "interactive" && (
+              <span className="session-view-task-id">{session.task_id}</span>
+            )}
           </span>
         </div>
       </div>
@@ -64,16 +69,18 @@ export function SessionView() {
   );
 }
 
-// SessionControls — the live session's Abort button, shown in the session
-// header (the steer composer below is just the input).
+// SessionControls — the live session's End/Abort button, shown in the session
+// header (the composer below is just the input).
 //
-//   Abort — interrupt the live session: the daemon asks the running agent to
-//     stop (`session.abort`). It needs a live session, so it is shown only for
-//     a running/queued session; `ok:false` just means "already settled".
+//   End   — for an INTERACTIVE (chat) session: wind the agent down gracefully
+//     and seal the session `done` (`session.end`).
+//   Abort — for a workflow session: interrupt the live run (`session.abort`),
+//     parking the task to `human`.
 //
-// The abort kicks off asynchronously, so we surface an immediate info notice
-// (the status itself flips a moment later when the daemon pushes the terminal
-// session).
+// Both need a live session, so the control is shown only for a running/queued
+// session; `ok:false` just means "already settled". The action kicks off
+// asynchronously, so we surface an immediate info notice (the status itself
+// flips a moment later when the daemon pushes the terminal session).
 function SessionControls({ session }: { session: SessionMeta }) {
   const { state, effects } = useStore();
   const cwd = state.activeProject ?? "";
@@ -82,19 +89,27 @@ function SessionControls({ session }: { session: SessionMeta }) {
   const live = session.status === "running" || session.status === "queued";
   if (!live) return null;
 
-  const abort = async () => {
+  const interactive = session.kind === "interactive";
+  const short = session.id.slice(0, 8);
+
+  const act = async () => {
     const ok = await confirm({
-      title: "Abort session",
-      message: `Abort session ${session.id.slice(0, 8)}?`,
-      confirmLabel: "Abort",
-      danger: true,
+      title: interactive ? "End session" : "Abort session",
+      message: interactive ? `End chat session ${short}?` : `Abort session ${short}?`,
+      confirmLabel: interactive ? "End" : "Abort",
+      danger: !interactive,
     });
     if (!ok) return;
     setBusy(true);
     void (async () => {
       try {
-        await ipc.sessionAbort(cwd, session.id);
-        effects.setNotice({ kind: "info", text: `Abort sent to session ${session.id.slice(0, 8)}.` });
+        if (interactive) {
+          await ipc.sessionEnd(cwd, session.id);
+          effects.setNotice({ kind: "info", text: `End sent to session ${short}.` });
+        } else {
+          await ipc.sessionAbort(cwd, session.id);
+          effects.setNotice({ kind: "info", text: `Abort sent to session ${short}.` });
+        }
       } catch (err) {
         effects.setNotice({ kind: "error", text: String((err as Error).message ?? err) });
       } finally {
@@ -105,12 +120,12 @@ function SessionControls({ session }: { session: SessionMeta }) {
 
   return (
     <button
-      className="btn btn-sm btn-danger"
+      className={interactive ? "btn btn-sm" : "btn btn-sm btn-danger"}
       disabled={busy}
-      title="Abort this session (queued or running)"
-      onClick={() => void abort()}
+      title={interactive ? "End this chat session" : "Abort this session (queued or running)"}
+      onClick={() => void act()}
     >
-      Abort
+      {interactive ? "End" : "Abort"}
     </button>
   );
 }

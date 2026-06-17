@@ -21,7 +21,13 @@ export {
   type Position,
   type TransitContextInput,
 } from "./transition.ts";
-export { buildTasksApi, buildWorkflowsApi, declaredTargets } from "./context.ts";
+export {
+  buildTasksApi,
+  buildWorkflowsApi,
+  buildInteractiveTasksApi,
+  buildInteractiveWorkflowsApi,
+  declaredTargets,
+} from "./context.ts";
 export {
   EngineError,
   ENGINE_COMMENT_AUTHOR,

@@ -129,8 +129,12 @@ interrupted work is never silently resumed.
 One invocation of an agent's `onRun` for one task step = one **session**.
 Sessions replace v1's "jobs".
 
-- **Meta** (`sessions/<id>.json`): `{ id, task_id, workflow, step, agent,
-  status: queued|running|done|failed|aborted, error?, started_at, ended_at }`.
+- **Meta** (`sessions/<id>.json`): `{ id, kind: task|interactive, task_id,
+  workflow, step, agent, status: queued|running|done|failed|aborted, error?,
+  started_at, ended_at }`. A `task` session is created by the scheduler for a
+  workflow step; an `interactive` session is a taskless chat (see [Interactive
+  sessions](#interactive-taskless-sessions) below) whose
+  `task_id`/`workflow`/`step` are the empty-string sentinel (`""`).
 - **Transcript** (`sessions/<id>.jsonl`): a line 1 header followed by typed
   entries, in a format that **deliberately mirrors pi's session format** so
   pi-based agents can pipe pi entries through verbatim and pi renderers stay
@@ -151,6 +155,43 @@ You can steer or abort a **live** session:
   agent (if the agent supports it);
 - `session.abort` fires the session's `AbortSignal`, seals the meta `aborted`,
   and parks the task to `human`.
+
+## Interactive (taskless) sessions
+
+Not every session belongs to a task. An **interactive session** is a taskless
+chat you open directly against a registered agent (the GUI's Sessions panel `＋`
+button) and drive turn-by-turn — there is no workflow, no synthetic task, and no
+`ctx.transit`. It reuses the same `Session` entity, transcript format, and
+steer/subscribe surface as a task session; only `kind: "interactive"` and the
+`""` sentinels for `task_id`/`workflow`/`step` distinguish it.
+
+**Agent registry.** An extension publishes a named agent with
+`AutoskAPI.registerAgent({ name, description?, agent })` (see
+[docs/workflows.md → Named agents](workflows.md#named-agents--interactive-sessions)).
+`registry.agent.list` returns every registered agent; the GUI picker lists them.
+The shipped `@autosk/pi-agent` registers a `"pi"` agent (chat backed by
+`pi --mode rpc`).
+
+**Lifecycle.**
+
+1. `session.create {agent}` resolves the named agent (unknown name → invalid
+   params), creates a `kind:interactive` session with `cwd = projectRoot` (no
+   isolation), and dispatches it **directly** — interactive sessions run **off**
+   the bounded task-worker pool, so an idle chat never occupies a slot a task
+   session needs, and the scheduler is never involved.
+2. The session opens **empty** (no first prompt); the first composer message
+   starts the first turn. `session.input {kind:"followup"}` delivers each turn —
+   idle → a fresh turn, streaming → a mid-turn follow-up.
+3. `session.end` winds the agent down gracefully and seals the session `done`
+   (distinct from `session.abort`, which seals `aborted`). Neither parks a task —
+   there is none. An interrupted interactive session is sealed
+   `failed: daemon_restart` on the next daemon start (again, no park); v1 does
+   **not** auto-resume it.
+
+A live interactive session counts as pending work, so an idle (waiting-for-user)
+chat keeps the daemon from idle-shutting-down until the chat is ended or aborted.
+(Interactive sessions run off the worker pool, so they are **not** reflected in
+`meta.healthz`'s `running` counter, which reports task-pool jobs only.)
 
 ## Hybrid file ownership
 
@@ -176,8 +217,8 @@ RFC3339 UTC. The wire types are defined once in
 | meta | `version`, `auth`, `healthz`, `shutdown` |
 | project | `list`, `add`, `remove`, `init`, `diagnostics` (extension load errors), `subscribe`/`unsubscribe` |
 | task | `list`, `get`, `create`, `update`, `enroll {workflow}`, `resume {to?}`, `done`, `cancel`, `reopen`, `block`/`unblock`, `comment.add/list/edit/delete`, `subscribe`/`unsubscribe` |
-| registry | `workflow.list`, `workflow.get` (rendered from code — read-only) |
-| session | `list {task_id?}`, `get`, `transcript {from_line?, limit?}`, `subscribe`/`unsubscribe` (replay-then-tail), `input {message, kind}`, `abort` |
+| registry | `workflow.list`, `workflow.get`, `agent.list` (rendered from code — read-only) |
+| session | `list {task_id?}`, `get`, `transcript {from_line?, limit?}`, `subscribe`/`unsubscribe` (replay-then-tail), `input {message, kind}`, `abort`, `create {agent}` (open an interactive session), `end` (gracefully end one → `done`) |
 
 Notifications (server→client push): `task-changed`, `project-changed`,
 `session-event` (`message`|`status`|`done`|`error`). These are fed by engine

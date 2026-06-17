@@ -105,6 +105,12 @@
 .session-no-wf {
   color: var(--fg-mute);
 }
+/* Interactive (taskless) chat session marker, shown where a workflow session
+   shows workflow:step. */
+.session-kind-chat {
+  color: var(--fg-mute);
+  font-style: italic;
+}
 .session-agent-name {
   color: var(--agent-name);
 }

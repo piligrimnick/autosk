@@ -49,3 +49,37 @@ export function buildWorkflowsApi(
     list: () => registry.listWorkflows(),
   };
 }
+
+/** Message for the stub task/transit slices of an interactive (taskless) session. */
+const NO_TASK = "no task in an interactive session";
+
+/**
+ * A stub {@link TasksAPI} for an interactive (taskless) session (plan §4.3).
+ * There is no current task, so every accessor rejects — a chat agent must not
+ * call them (pi-agent's chat loop does not).
+ */
+export function buildInteractiveTasksApi(): TasksAPI {
+  return {
+    currentId: "",
+    current: () => Promise.reject(new Error(NO_TASK)),
+    get: () => Promise.reject(new Error(NO_TASK)),
+    list: () => Promise.reject(new Error(NO_TASK)),
+    comments: () => Promise.reject(new Error(NO_TASK)),
+  };
+}
+
+/**
+ * A stub {@link WorkflowsAPI} for an interactive (taskless) session (plan §4.3):
+ * `current` reports no workflow (the agent name is its `step`); `get` / `list`
+ * still proxy the live registry so a chat agent can read it.
+ */
+export function buildInteractiveWorkflowsApi(
+  registry: ExtensionRegistry,
+  agentName: string,
+): WorkflowsAPI {
+  return {
+    current: { workflow: "", step: agentName, targets: [] },
+    get: (name) => registry.getWorkflowInfo(name),
+    list: () => registry.listWorkflows(),
+  };
+}

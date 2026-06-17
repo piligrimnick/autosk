@@ -11,7 +11,14 @@
 
 import { readFile, readdir, stat } from "node:fs/promises";
 
-import type { SessionHeader, SessionMeta, SessionStatus, TranscriptEntry, TranscriptLine } from "@autosk/sdk";
+import type {
+  SessionHeader,
+  SessionKind,
+  SessionMeta,
+  SessionStatus,
+  TranscriptEntry,
+  TranscriptLine,
+} from "@autosk/sdk";
 import { appendLine, atomicWrite, fileSig, statSig } from "./atomic.ts";
 import { KeyedMutex } from "./lock.ts";
 import { consoleLogger, type Logger } from "./logger.ts";
@@ -28,6 +35,8 @@ const LIVE_STATUSES: ReadonlySet<SessionStatus> = new Set(["queued", "running"])
 
 export interface CreateSessionInput {
   id: string;
+  /** `"task"` (default) or `"interactive"`; interactive tolerates empty task_id/workflow/step. */
+  kind?: SessionKind;
   task_id: string;
   workflow: string;
   step: string;
@@ -162,8 +171,10 @@ export class SessionStore {
    */
   async create(input: CreateSessionInput): Promise<SessionMeta> {
     return this.locks.run(`session::${input.id}`, async () => {
+      const kind: SessionKind = input.kind ?? "task";
       const meta: SessionMeta = {
         id: input.id,
+        kind,
         task_id: input.task_id,
         workflow: input.workflow,
         step: input.step,
@@ -176,6 +187,7 @@ export class SessionStore {
         type: "session",
         version: 1,
         id: input.id,
+        kind,
         task_id: input.task_id,
         workflow: input.workflow,
         step: input.step,

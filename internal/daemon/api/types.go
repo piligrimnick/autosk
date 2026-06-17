@@ -88,10 +88,22 @@ const (
 	SessionAborted SessionStatus = "aborted"
 )
 
+// SessionKind is a session's origin: a scheduler-claimed task/workflow step, or
+// an interactive (taskless) chat. For an interactive session TaskID/Workflow/
+// Step are the empty-string sentinel.
+type SessionKind string
+
+const (
+	SessionTask        SessionKind = "task"
+	SessionInteractive SessionKind = "interactive"
+)
+
 // SessionMeta is one session's metadata (replaces the v1 Job). Listing a task's
 // sessions = filtering metas by task_id.
 type SessionMeta struct {
-	ID        string        `json:"id"`
+	ID   string      `json:"id"`
+	Kind SessionKind `json:"kind"`
+	// TaskID/Workflow/Step are "" for an interactive (taskless) session.
 	TaskID    string        `json:"task_id"`
 	Workflow  string        `json:"workflow"`
 	Step      string        `json:"step"`

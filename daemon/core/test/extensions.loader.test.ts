@@ -204,12 +204,13 @@ describe("extension loader — error isolation (daemon stays up)", () => {
     expect(registry.diagnostics).toHaveLength(3);
   });
 
-  test("an extension using the removed registerAgent or a string agent step surfaces a diagnostic", async () => {
+  test("a malformed agent registration or a string agent step surfaces a diagnostic", async () => {
     const ext = (p: string) => join(proj, ".autosk/extensions", p);
-    // (a) Calls the removed registerAgent → the AutoskAPI handle has no such
-    //     method, so the factory throws and is recorded (daemon stays up).
+    // (a) registerAgent with no valid agent definition (the registration's
+    //     `agent` is missing) → recorded as a diagnostic, the registration is
+    //     skipped, the daemon stays up.
     write(
-      ext("a-legacy-agent.ts"),
+      ext("a-bad-agent.ts"),
       [
         "export default function (autosk) {",
         '  autosk.registerAgent({ name: "x", async onRun() {} });',
@@ -234,11 +235,32 @@ describe("extension loader — error isolation (daemon stays up)", () => {
     const registry = await loadProjectRegistry(proj, { home });
 
     expect(registry.workflowNames()).toEqual(["good"]);
+    // The malformed agent was not registered.
+    expect(registry.listAgents()).toEqual([]);
     const bySource = Object.fromEntries(registry.diagnostics.map((d) => [d.source, d.error]));
-    expect(bySource[ext("a-legacy-agent.ts")]).toMatch(/factory threw:/);
+    expect(bySource[ext("a-bad-agent.ts")]).toBe(
+      'registerAgent: "x" agent must define an onRun function',
+    );
     expect(bySource[ext("b-string-step.ts")]).toBe(
       'registerWorkflow: "legacy" step "do" must be an agent (with onRun) or a statusStep',
     );
+  });
+
+  test("registerAgent registers a named agent the picker can list", async () => {
+    const ext = (p: string) => join(proj, ".autosk/extensions", p);
+    write(
+      ext("chat.ts"),
+      [
+        "export default function (autosk) {",
+        '  autosk.registerAgent({ name: "chat", description: "A chat agent", agent: { async onRun() {} } });',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const registry = await loadProjectRegistry(proj, { home });
+    expect(registry.diagnostics).toEqual([]);
+    expect(registry.listAgents()).toEqual([{ name: "chat", description: "A chat agent" }]);
+    expect(typeof registry.resolveAgent("chat")?.onRun).toBe("function");
   });
 
   test("a malformed extension module is recorded as a failed import, not thrown", async () => {

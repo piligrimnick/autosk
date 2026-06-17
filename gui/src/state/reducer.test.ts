@@ -28,6 +28,7 @@ function sessionRow(
 ): SessionMeta {
   return {
     id,
+    kind: "task",
     task_id: "t1",
     workflow: "wf",
     step: "dev",

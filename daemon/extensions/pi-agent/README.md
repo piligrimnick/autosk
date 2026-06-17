@@ -63,6 +63,23 @@ On each `onRun` the agent:
 `onAbort` asks pi to wind down gracefully (the engine's abort signal already
 terminates the child).
 
+## Interactive (chat) mode
+
+Besides backing a workflow step, this package's **default export** registers a
+named agent, `"pi"`, via `autosk.registerAgent(...)`, so the daemon can open an
+**interactive (taskless) chat session** against it (see
+[docs/daemon.md → Interactive sessions](../../../docs/daemon.md#interactive-taskless-sessions)).
+`onRun` branches on `ctx.mode`:
+
+- `"task"` — the workflow transit loop above (unchanged).
+- `"interactive"` — a chat loop: spawn `pi --mode rpc` **without** the
+  `autosk_transit` extension (transit is unavailable in a chat, so the tool is
+  not offered), send **no** initial prompt (the session is empty until the user
+  types), then await `ctx.signal`. Each composer message arrives via `onFollowup`
+  and is forwarded to the live pi (idle → a fresh turn, streaming → a follow-up).
+  The agent returns when the signal fires; the engine seals the session `done`
+  (graceful end), `aborted` (abort), or `failed` (crash) — no transit, no park.
+
 ## Configuration — `PiAgentOptions`
 
 The agent name is **not** an option — it is the workflow step key the `piAgent`
@@ -104,8 +121,12 @@ extension (not injected here) — workflow transitions stay on the in-process
 ## Exports
 
 - `piAgent(options)` → `AgentDefinition`
-- `buildPiCommand(options)`, `PiDriver`, `parseTarget`, the prompt renderers
+- `buildPiCommand(options, { interactive? })` (the `interactive` flag skips the
+  injected `autosk_transit` extension), `PiDriver`, `parseTarget`, the prompt
+  renderers
   (`renderInitialPrompt`, `kickbackMessage`, `rejectionMessage`, `targetLabels`)
   — exported for tooling / tests.
-- default export — a no-op extension factory (roles are registered by the
-  consuming extension, e.g. `@autosk/feature-dev`).
+- default export — an extension factory that registers the named `"pi"` agent for
+  interactive chat sessions. (Workflow roles are still registered separately, by
+  the consuming extension, e.g. `@autosk/feature-dev`, as inline `piAgent({...})`
+  step values.)

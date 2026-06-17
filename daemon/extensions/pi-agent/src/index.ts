@@ -18,7 +18,7 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import type { AgentDefinition, AgentRunContext, StepTarget } from "@autosk/sdk";
+import type { AgentDefinition, AgentRunContext, AutoskAPI, StepTarget } from "@autosk/sdk";
 
 import { PiDriver } from "./driver.ts";
 import { kickbackMessage, renderInitialPrompt, rejectionMessage } from "./prompt.ts";
@@ -90,6 +90,11 @@ export function piAgent(opts: PiAgentOptions = {}): AgentDefinition {
 
   return {
     async onRun(ctx: AgentRunContext): Promise<void> {
+      // Interactive (taskless) chat: a separate loop with no transit (plan §5).
+      if (ctx.mode === "interactive") {
+        await runChat(ctx, opts);
+        return;
+      }
       const cmd = buildPiCommand(opts);
       // Spawn pi in the run directory (the worktree under isolation), but tell any
       // `autosk` CLI it invokes — directly or via a pi tool like @autosk/pi-tools'
@@ -183,6 +188,44 @@ async function runTurns(
   }
 }
 
+/**
+ * The interactive (taskless) chat loop (plan §5): spawn `pi --mode rpc` WITHOUT
+ * the `autosk_transit` extension (transit is not offered in chat mode), send NO
+ * initial prompt (the session opens idle), register the driver before the first
+ * `await`, then wait for `ctx.signal`. Each composer message arrives via
+ * `onFollowup` → `driver.input("followup", msg)`: idle → a fresh `pi` turn,
+ * streaming → a `follow_up`. The runtime seals the session (`done` on a graceful
+ * `end()`, `aborted` on an `abort()`); `onAbort` winds the driver down.
+ */
+async function runChat(ctx: AgentRunContext, opts: PiAgentOptions): Promise<void> {
+  const cmd = buildPiCommand(opts, { interactive: true });
+  const child = ctx.spawn(cmd, { cwd: ctx.cwd, env: autoskEnv(ctx) });
+  const driver = new PiDriver(child, {
+    onMessage: (m) => ctx.log.message(m),
+    onCustom: (t, d) => ctx.log.custom(t, d),
+    signal: ctx.signal,
+    warn: (message) => ctx.log.custom("pi-agent:warn", { message }),
+  });
+  // Register the live driver BEFORE the first `await` so the very first composer
+  // message (delivered via onFollowup) reaches this driver and starts a turn.
+  liveSessions.set(ctx.session.id, driver);
+  try {
+    // No initial prompt: an interactive session is empty until the user types.
+    await waitForSignal(ctx.signal);
+  } finally {
+    liveSessions.delete(ctx.session.id);
+    await driver.shutdown().catch(() => {});
+  }
+}
+
+/** Resolves when the abort signal fires (the user ended or aborted the session). */
+function waitForSignal(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
 /** Commits a transit; returns `null` on success or the rejection message string. */
 async function commitTransit(ctx: AgentRunContext, target: StepTarget): Promise<string | null> {
   try {
@@ -219,14 +262,21 @@ export function autoskEnv(ctx: AgentRunContext): Record<string, string> {
   };
 }
 
-/** Builds the `pi --mode rpc …` argv (v1 `buildPiExtraArgs` + the daemon flags). */
-export function buildPiCommand(opts: PiAgentOptions): string[] {
+/**
+ * Builds the `pi --mode rpc …` argv (v1 `buildPiExtraArgs` + the daemon flags).
+ *
+ * In `interactive` (chat) mode the `autosk_transit` pi extension is NOT injected:
+ * transit is unavailable in an interactive session, so the model must not be
+ * offered a tool that would throw (plan §5, §9).
+ */
+export function buildPiCommand(opts: PiAgentOptions, flags: { interactive?: boolean } = {}): string[] {
   const bin = opts.piBin ?? process.env.AUTOSK_PI_BIN ?? "pi";
   const args = [bin, "--mode", "rpc"];
   if (opts.model) args.push("--model", opts.model);
   if (opts.thinking) args.push("--thinking", opts.thinking);
-  // Inject the autosk_transit tool first so it is always available.
-  args.push("-e", TRANSIT_EXTENSION_PATH);
+  // Inject the autosk_transit tool first so it is always available — except in
+  // interactive (chat) mode, where transit is not offered.
+  if (!flags.interactive) args.push("-e", TRANSIT_EXTENSION_PATH);
   for (const ext of opts.piExtensions ?? []) args.push("-e", ext);
   for (const skill of opts.piSkills ?? []) args.push("--skill", skill);
   args.push(...(opts.extraArgs ?? []));
@@ -234,11 +284,15 @@ export function buildPiCommand(opts: PiAgentOptions): string[] {
 }
 
 /**
- * Default extension factory. P6 ships no pre-registered roles here — roles are
- * registered by `@autosk/feature-dev` (and any operator extension) via
- * `piAgent({...})`. Kept as a no-op default export so the package is a valid,
- * discoverable extension on its own.
+ * Default extension factory. Workflow roles are still registered by
+ * `@autosk/feature-dev` (and any operator extension) via `piAgent({...})` as
+ * inline step values. Here we register a single NAMED agent, `"pi"`, so an
+ * interactive (taskless) chat session can be opened against it (plan §5).
  */
-export default function piAgentExtension(): void {
-  /* roles are registered by consuming extensions via piAgent({...}). */
+export default function piAgentExtension(autosk: AutoskAPI): void {
+  autosk.registerAgent({
+    name: "pi",
+    description: "Interactive chat backed by `pi --mode rpc`.",
+    agent: piAgent(), // default options (model from pi's own defaults)
+  });
 }

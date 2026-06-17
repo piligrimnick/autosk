@@ -31,8 +31,13 @@ function paramsFor(method: string, cwd: string, initDir: string): unknown {
     case "task.subscribe":
     case "task.unsubscribe":
     case "registry.workflow.list":
+    case "registry.agent.list":
     case "session.list":
       return { cwd };
+    case "session.create":
+      // An unknown agent is rejected (INVALID_PARAMS) — proves the method is
+      // wired without dispatching a real interactive session.
+      return { cwd, agent: "no-such-agent" };
     case "project.init":
       return { cwd: initDir };
     case "task.get":
@@ -76,6 +81,7 @@ function paramsFor(method: string, cwd: string, initDir: string): unknown {
     case "session.subscribe":
     case "session.unsubscribe":
     case "session.abort":
+    case "session.end":
       return { cwd, id: ABSENT_SESSION_ID };
     case "session.input":
       return { cwd, id: ABSENT_SESSION_ID, message: "x", kind: "steer" };
@@ -105,6 +111,13 @@ describe("proto-v2 conformance (live daemon over UDS)", () => {
     expect(registered.sort()).toEqual(expected.sort());
   });
 
+  test("the interactive-session methods are registered (registry.agent.list, session.create, session.end)", () => {
+    const registered = new Set(td.runtime.daemon.registeredMethods() as string[]);
+    expect(registered.has("registry.agent.list")).toBe(true);
+    expect(registered.has("session.create")).toBe(true);
+    expect(registered.has("session.end")).toBe(true);
+  });
+
   test("the 'deliberately absent' v1 methods are unregistered", async () => {
     const absent = [
       "sql.query",
@@ -123,8 +136,6 @@ describe("proto-v2 conformance (live daemon over UDS)", () => {
       "workflow.updateIsolation",
       "agent.install",
       "agent.uninstall",
-      // v2 removed the agent registry: agents are inline step values now.
-      "registry.agent.list",
     ];
     const registered = new Set(td.runtime.daemon.registeredMethods());
     const client = await td.client();

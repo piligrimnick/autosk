@@ -12,6 +12,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AgentInfo,
   AppSettings,
   Comment,
   DaemonStatus,
@@ -270,6 +271,11 @@ export function workflowGet(cwd: string, name: string): Promise<WorkflowInfo> {
   return daemonRequest<WorkflowInfo>("registry.workflow.get", sel(cwd, { name }));
 }
 
+/** Registered agents that can back an interactive (taskless) chat session. */
+export function agentList(cwd: string): Promise<AgentInfo[]> {
+  return daemonRequest<AgentInfo[]>("registry.agent.list", sel(cwd));
+}
+
 // ---- extensions (browse + install) ---------------------------------------
 
 /**
@@ -359,4 +365,14 @@ export function sessionInput(
 
 export function sessionAbort(cwd: string, id: string): Promise<{ ok: boolean }> {
   return daemonRequest("session.abort", sel(cwd, { id }));
+}
+
+/** Creates an interactive (taskless) chat session for a registered agent. */
+export function sessionCreate(cwd: string, agent: string): Promise<SessionMeta> {
+  return daemonRequest<SessionMeta>("session.create", sel(cwd, { agent }));
+}
+
+/** Gracefully ends a live interactive session (status → done). */
+export function sessionEnd(cwd: string, id: string): Promise<{ ok: boolean }> {
+  return daemonRequest("session.end", sel(cwd, { id }));
 }
