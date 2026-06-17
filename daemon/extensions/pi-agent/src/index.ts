@@ -294,8 +294,8 @@ export function buildPiCommand(opts: PiAgentOptions, flags: { interactive?: bool
  */
 export default function piAgentExtension(autosk: AutoskAPI): void {
   autosk.registerAgent({
-    name: "pi",
-    description: "Interactive chat backed by `pi --mode rpc`.",
+    name: "@autosk/pi-agent",
+    description: "system-wide pi.dev agent",
     agent: piAgent(), // default options (model from pi's own defaults)
   });
 }
