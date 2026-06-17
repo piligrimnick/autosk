@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > rows or installed npm-package agents.
 
 ### Added
+- **Interactive (taskless) chat sessions.** Open a session from the GUI Sessions
+  panel (`＋` → NewSessionModal), pick a registered agent, and chat with the model
+  turn-by-turn — the session is tied to no task and no workflow. Backed by a new
+  first-class agent registry (`AutoskAPI.registerAgent`; `@autosk/pi-agent`
+  registers the `pi` agent) and three new proto-v2 RPC methods
+  `registry.agent.list` / `session.create` / `session.end`; a graceful End seals
+  the session `done` (vs Abort → `aborted`) (ask-f330c1).
 - **GUI: browse & install `autosk-extension` npm packages from the Workflows
   panel.** A new `＋` action in the Workflows header (shown only when a project is
   active) opens a browser listing npm packages published with the
