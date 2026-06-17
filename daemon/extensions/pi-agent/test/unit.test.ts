@@ -283,6 +283,22 @@ describe("PiDriver — diagnostics (R1)", () => {
     expect(warnings).toEqual(["pi:stderr: Error: bad -e extension at mod.ts:10"]);
   });
 
+  test("drops pi's terminal-teardown escape burst instead of surfacing it", () => {
+    const { f, warnings } = driverWithWarnSink();
+    // The exact teardown line pi writes to stderr on exit (mouse off, leave
+    // alt-screen, end synchronized output, …) — all control bytes, no text.
+    f.emitStderr(
+      "\u001b[?2026h\u001b[r\u001b[?1006l\u001b[?1002l\u001b[?1000l\u001b[?1007h\u001b[?1049l\u001b[<999u\u001b[>4;0m\u001b[?2026l",
+    );
+    expect(warnings).toEqual([]);
+  });
+
+  test("keeps real stderr text while stripping embedded escape codes", () => {
+    const { f, warnings } = driverWithWarnSink();
+    f.emitStderr("\u001b[31mError: boom\u001b[0m at mod.ts:10");
+    expect(warnings).toEqual(["pi:stderr: Error: boom at mod.ts:10"]);
+  });
+
   test("warns when autosk_transit is called with no usable target", () => {
     const { f, warnings } = driverWithWarnSink();
     f.emitStdout(JSON.stringify({ type: "tool_execution_start", toolName: "autosk_transit", args: { junk: 1 } }));

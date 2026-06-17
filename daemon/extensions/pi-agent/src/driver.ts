@@ -172,8 +172,12 @@ export class PiDriver {
 
   /** Forwards a (bounded count of) pi stderr lines through the `warn` sink. */
   private onStderrLine(line: string): void {
-    const trimmed = line.trim();
-    if (trimmed === "") return; // still drained, just nothing to surface
+    // Strip ANSI/terminal control sequences first: pi writes a burst of these to
+    // stderr on teardown (disable mouse tracking, leave the alt-screen, end
+    // synchronized output, …) even under `--mode rpc`, and they'd otherwise land
+    // verbatim as an unreadable final `pi:stderr:` line in the transcript.
+    const trimmed = stripAnsi(line).trim();
+    if (trimmed === "") return; // pure-control teardown / blank → drained, not surfaced
     if (this.stderrForwarded >= STDERR_FORWARD_CAP) return;
     this.stderrForwarded++;
     this.hooks.warn?.(`pi:stderr: ${trimmed}`);
@@ -348,4 +352,22 @@ export function isStateMismatch(error: string | undefined): boolean {
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * Matches ANSI / terminal control sequences:
+ *  - CSI: `ESC [` + parameter bytes (`0x30-0x3f`, covers `?`/`<`/`>`/`=`/digits/`;`)
+ *    + intermediate bytes (`0x20-0x2f`) + a final byte (`0x40-0x7e`);
+ *  - OSC: `ESC ]` … terminated by BEL (`0x07`) or ST (`ESC \`);
+ *  - bare two-byte escapes: `ESC` + a single byte in `0x40-0x5f`.
+ * pi emits a teardown burst of these (mouse tracking off, leave alt-screen, end
+ * synchronized output) on exit; the example `\u001b[?2026h…\u001b[?2026l` is all CSI.
+ */
+const ANSI_CONTROL =
+  // eslint-disable-next-line no-control-regex
+  /\u001b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[@-_]/g;
+
+/** Removes ANSI/terminal control sequences from a (stderr) line. */
+export function stripAnsi(s: string): string {
+  return s.replace(ANSI_CONTROL, "");
 }

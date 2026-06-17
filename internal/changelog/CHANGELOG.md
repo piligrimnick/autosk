@@ -251,6 +251,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installs on first run (see **first-run bootstrap**).
 
 ### Fixed
+- **pi-agent: garbled final transcript line on session end.** When a `pi`
+  session exited it left an unreadable `pi-agent:warn` entry
+  (`pi:stderr: \u001b[?2026h\u001b[r…`) as the last line of the transcript. `pi`
+  writes a burst of terminal-teardown control sequences to stderr on exit (mouse
+  tracking off, leave the alt-screen, end synchronized output) even under
+  `--mode rpc`, and the driver forwarded that line verbatim. pi-agent now strips
+  ANSI/terminal control sequences from forwarded stderr and drops a line that is
+  pure control noise, while still surfacing real stderr text (e.g. crash stack
+  traces).
 - **GUI: confirmation dialogs did nothing.** The project switcher's remove
   (×) button, comment delete, session abort, and force done/cancel relied on
   the native `window.confirm()`, which this Tauri/wry build never shows on macOS
