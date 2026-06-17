@@ -153,6 +153,39 @@ Sessions replace v1's "jobs".
 There is **no retention/GC** in this version: session files accumulate, and
 cleanup is manual (`rm .autosk/sessions/…`).
 
+### Streaming partial messages
+
+While an agent streams a model turn, the daemon can push the **in-progress**
+assistant message live, before it commits the durable transcript line. This is
+the `session-event` `kind:"partial"` frame (carried in `partial?:
+TranscriptMessage` on the wire). It rides the same per-session
+`session.subscribe` replay-then-tail subscription as committed lines, so a client
+renders a growing assistant bubble (text / thinking / tool-call blocks) as the
+turn is produced — today the Tauri GUI does this; `autosk lazy` only tolerates
+(ignores) the frame for now.
+
+The frame is deliberately minimal and **ephemeral**:
+
+- **Cumulative snapshot.** Each frame carries the full current message snapshot,
+  not a delta. A client just *replaces* its current partial — idempotent,
+  loss-tolerant, and correct for a client that joins mid-stream (it replays the
+  committed lines, then receives the next whole snapshot, with no delta backlog
+  to reconstruct). The producer coalesces frames (~40 ms) so the rate is bounded.
+- **Never persisted.** A partial is **not** written to `.jsonl`, carries no
+  `line`, and does **not** advance the subscription's monotonic line cursor. The
+  eventual `message_end` commits the one durable line exactly as before, and that
+  committed line supersedes (and clears) the live bubble.
+- **Ordered against commits.** Partial emission is funnelled through the same
+  serial transcript chain as durable appends, so a partial of message *N+1* can
+  never overtake the commit of message *N*.
+- **Per-session only.** Partials are delivered to per-session subscribers and are
+  excluded from the project-scope `session-changed` broadcast (which carries only
+  the `status`/`done`/`error` lifecycle frames).
+
+An agent produces partials via the SDK's ephemeral `ctx.partial(message)` (see
+[docs/workflows.md → The run context](workflows.md#the-run-context)); the shipped
+`@autosk/pi-agent` wires pi's `message_update` events into it.
+
 You can steer or abort a **live** session:
 
 - `session.input {kind: "steer"|"followup"}` injects a message into the running
@@ -232,8 +265,11 @@ RFC3339 UTC. The wire types are defined once in
 | session | `list {task_id?}`, `get`, `transcript {from_line?, limit?}`, `subscribe`/`unsubscribe` (replay-then-tail), `input {message, kind}`, `abort`, `create {agent}` (open an interactive session), `end` (gracefully end one → `done`) |
 
 Notifications (server→client push): `task-changed`, `project-changed`,
-`session-event` (`message`|`status`|`done`|`error`). These are fed by engine
-events and the fs watcher (so external file edits surface too).
+`session-event` (`message`|`status`|`done`|`error`|`partial`). These are fed by
+engine events and the fs watcher (so external file edits surface too). The
+`partial` frame is the ephemeral live-streaming channel — see [Streaming partial
+messages](#streaming-partial-messages) below; it is delivered only to
+per-session subscribers and is **not** broadcast on `session-changed`.
 
 **Error codes.** The reserved JSON-RPC range carries protocol failures; the
 domain errors live in the `1xxx` range: `PROJECT_NOT_FOUND` (1001),

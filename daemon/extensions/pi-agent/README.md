@@ -49,7 +49,11 @@ On each `onRun` the agent:
 2. seeds pi with the rendered step prompt (role first-message + task context +
    the available transitions + "call `autosk_transit`");
 3. mirrors pi's session entries (messages / custom) into the autosk transcript
-   1:1, so existing pi renderers stay reusable;
+   1:1, so existing pi renderers stay reusable; while a turn streams it also
+   forwards pi's `message_update` events as **ephemeral partial snapshots** via
+   `ctx.partial(m)` (coalesced ~40 ms), so a client renders the in-progress
+   assistant message live before the durable line commits (see [docs/daemon.md →
+   Streaming partial messages](../../../docs/daemon.md#streaming-partial-messages));
 4. **observes the `autosk_transit` tool call** on pi's RPC event stream and
    translates it into `ctx.transit(...)` (the transit channel — core stays
    closed, no session-scoped daemon RPC);

@@ -155,6 +155,7 @@ interface AgentRunContext {
   tasks: TasksAPI;                    // live task access (current/get/list/comments)
   workflows: WorkflowsAPI;            // live registry + current { workflow, step, targets }
   log: TranscriptAPI;                 // pi-format transcript writer (message / custom)
+  partial(message: TranscriptMessage): void;  // ephemeral live snapshot (NOT persisted)
 
   comment(text: string): Promise<void>;    // shorthand: comment on the current task
   transit(to: StepTarget): Promise<void>;  // validate via onTransit, then commit (once)
@@ -169,6 +170,15 @@ interface AgentRunContext {
   second `transit` in the same session throws.
 - **`log`** writes the pi-format transcript: `log.message(...)` for a pi message
   entry, `log.custom(type, data)` for the generic logging channel.
+- **`partial`** streams an in-progress assistant message snapshot to live
+  subscribers. It is **ephemeral**: never written to the transcript, carries no
+  line, never advances the line cursor, and is superseded by the next committed
+  `log.message`. Send the full **cumulative** snapshot each time — the client
+  just replaces its current partial. It rides the same per-session subscription
+  as committed lines; see [docs/daemon.md → Streaming partial
+  messages](daemon.md#streaming-partial-messages) for the wire frame and the
+  ordering/persistence guarantees. (`@autosk/pi-agent` drives this from pi's
+  `message_update` events.)
 - **`exec`** / **`spawn`** run child processes; `spawn` is how the pi-agent
   extension drives `pi --mode rpc` over JSON-lines stdio.
 - **`cwd` vs `projectRoot`:** `cwd` is where the agent runs — under worktree
