@@ -393,11 +393,12 @@ export interface ProjectChangedParams {
   project: ProjectInfo;
 }
 
-/** `session-event` payload. `kind` mirrors the v1 SSE frames. */
+/** `session-event` payload. `kind` mirrors the v1 SSE frames, plus the
+ * ephemeral `partial` streaming frame. */
 export interface SessionEventParams {
   root: string;
   session_id: string;
-  kind: "message" | "status" | "done" | "error";
+  kind: "message" | "status" | "done" | "error" | "partial";
   /** Present on `message` (a single transcript line) — also used for replay. */
   event?: TranscriptLine;
   /** Present on `status` / `done` (the decorated session meta). */
@@ -406,6 +407,12 @@ export interface SessionEventParams {
   error?: string;
   /** Monotonic replay cursor (the line number of `event`). */
   line?: number;
+  /**
+   * Present on `partial`: a non-persisted, CUMULATIVE in-progress assistant
+   * message snapshot. Ephemeral — carries no `line`, never advances the cursor,
+   * and is superseded by the eventual committed `message` frame.
+   */
+  partial?: TranscriptMessage;
 }
 
 /**

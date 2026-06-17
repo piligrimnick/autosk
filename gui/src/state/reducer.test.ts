@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest";
 import { rootReducer } from "./reducer";
 import { emptyProjectSlice, initialState, type AppState } from "./types";
-import type { ProjectInfo, SessionMeta, TranscriptLine } from "@/types";
+import type { AssistantMessage, ProjectInfo, SessionMeta, TranscriptLine, TranscriptMessage } from "@/types";
 
 function entry(id: string, text: string): TranscriptLine {
   return {
@@ -15,6 +15,29 @@ function entry(id: string, text: string): TranscriptLine {
     timestamp: "2024-01-01T00:00:00Z",
     message: { role: "user", content: text, timestamp: 0 },
   };
+}
+
+/** A committed assistant message line (supersedes a live partial bubble). */
+function assistantEntry(id: string, text: string): TranscriptLine {
+  return {
+    type: "message",
+    id,
+    timestamp: "2024-01-01T00:00:00Z",
+    message: assistantMsg(text),
+  };
+}
+
+/** A minimal cumulative assistant snapshot (the partial frame payload). */
+function assistantMsg(text: string): TranscriptMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    provider: "p",
+    model: "m",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "stop",
+    timestamp: 0,
+  } satisfies AssistantMessage;
 }
 
 function project(root: string): ProjectInfo {
@@ -79,6 +102,62 @@ describe("transcriptSlice", () => {
     expect(s.transcriptBySession["s1"]).toHaveLength(3);
     // seen stays at the highest real line seen.
     expect(s.seenLineBySession["s1"]).toBe(3);
+  });
+});
+
+describe("transcriptSlice partial streaming", () => {
+  it("session/partial sets the live snapshot; a later partial replaces it", () => {
+    let s = initialState();
+    s = rootReducer(s, { type: "session/partial", sessionId: "s1", message: assistantMsg("hel") });
+    expect((s.partialBySession["s1"] as AssistantMessage).content).toEqual([{ type: "text", text: "hel" }]);
+    s = rootReducer(s, { type: "session/partial", sessionId: "s1", message: assistantMsg("hello") });
+    expect((s.partialBySession["s1"] as AssistantMessage).content).toEqual([{ type: "text", text: "hello" }]);
+  });
+
+  it("a committed assistant line clears the partial and appends the durable line (no duplication)", () => {
+    let s = initialState();
+    s = rootReducer(s, { type: "session/partial", sessionId: "s1", message: assistantMsg("hello") });
+    s = rootReducer(s, {
+      type: "session/transcriptAppended",
+      sessionId: "s1",
+      line: 2,
+      entry: assistantEntry("a2", "hello world"),
+    });
+    expect(s.partialBySession["s1"]).toBeNull(); // live bubble superseded
+    expect(s.transcriptBySession["s1"]).toHaveLength(1); // exactly the committed line
+    expect(s.seenLineBySession["s1"]).toBe(2);
+  });
+
+  it("a committed NON-assistant line leaves the partial in place", () => {
+    let s = initialState();
+    s = rootReducer(s, { type: "session/partial", sessionId: "s1", message: assistantMsg("streaming") });
+    s = rootReducer(s, {
+      type: "session/transcriptAppended",
+      sessionId: "s1",
+      line: 2,
+      entry: entry("u2", "a user turn"),
+    });
+    expect(s.partialBySession["s1"]).not.toBeNull();
+  });
+
+  it("a terminal session/upsert clears the partial; a running upsert does not", () => {
+    let s = initialState();
+    s = rootReducer(s, { type: "session/partial", sessionId: "s1", message: assistantMsg("x") });
+    s = rootReducer(s, { type: "session/upsert", session: sessionRow("s1", null, "running") });
+    expect(s.partialBySession["s1"]).not.toBeNull(); // still live
+    s = rootReducer(s, { type: "session/upsert", session: sessionRow("s1", null, "done") });
+    expect(s.partialBySession["s1"]).toBeNull(); // terminal drops the live bubble
+  });
+
+  it("transcriptReset and (re)subscribe clear a stale partial", () => {
+    let s = initialState();
+    s = rootReducer(s, { type: "session/partial", sessionId: "s1", message: assistantMsg("x") });
+    s = rootReducer(s, { type: "session/transcriptReset", sessionId: "s1", entries: [], nextLine: 1 });
+    expect(s.partialBySession["s1"]).toBeNull();
+
+    s = rootReducer(s, { type: "session/partial", sessionId: "s1", message: assistantMsg("y") });
+    s = rootReducer(s, { type: "session/subscribed", sessionId: "s1" });
+    expect(s.partialBySession["s1"]).toBeNull();
   });
 });
 

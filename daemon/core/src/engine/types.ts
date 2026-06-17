@@ -8,7 +8,13 @@
  * `session.ts` can import them without a cycle.
  */
 
-import { ErrorCodes, type SessionMeta, type TaskView, type TranscriptEntry } from "@autosk/sdk";
+import {
+  ErrorCodes,
+  type SessionMeta,
+  type TaskView,
+  type TranscriptEntry,
+  type TranscriptMessage,
+} from "@autosk/sdk";
 
 import type { Clock } from "../store/clock.ts";
 import type { Logger } from "../store/logger.ts";
@@ -41,10 +47,12 @@ export type EngineEvent =
       type: "session-event";
       root: string;
       session_id: string;
-      kind: "status" | "done" | "error" | "message";
+      kind: "status" | "done" | "error" | "message" | "partial";
       meta?: SessionMeta;
       entry?: TranscriptEntry;
       error?: string;
+      /** Present on `partial`: the ephemeral, cumulative message snapshot. */
+      partial?: TranscriptMessage;
     };
 
 /** A subscriber to {@link EngineEvent}s. */
@@ -66,6 +74,8 @@ export interface SessionHost {
   emitSession(project: EngineProject, meta: SessionMeta, kind: "status" | "done" | "error"): void;
   /** Emits a transcript `message` event for one appended entry. */
   emitSessionMessage(project: EngineProject, sessionId: string, entry: TranscriptEntry): void;
+  /** Emits an ephemeral `partial` (in-progress) message snapshot (no disk, no cursor). */
+  emitSessionPartial(project: EngineProject, sessionId: string, message: TranscriptMessage): void;
   /** Requests a scheduler scan (coalesced). */
   kickScan(): void;
 }

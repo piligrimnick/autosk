@@ -497,6 +497,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               });
             }
             break;
+          case "partial":
+            // Ephemeral in-progress assistant snapshot: render it as a trailing
+            // live bubble. It carries no line and is superseded by the committed
+            // `message` frame (which clears it in the reducer).
+            dispatch({
+              type: "session/partial",
+              sessionId: evt.session_id,
+              message: evt.partial ?? null,
+            });
+            break;
           case "status":
           case "done":
             if (evt.session) {

@@ -38,6 +38,11 @@ export class TranscriptWriter {
     private readonly logger: Logger,
     /** Called after each entry is durably appended (the engine's message fan-out). */
     private readonly onEntry?: (entry: TranscriptEntry) => void,
+    /**
+     * Called for an EPHEMERAL partial snapshot (the engine's partial fan-out).
+     * Fired on the serial {@link chain} but never persisted (no disk, no cursor).
+     */
+    private readonly onPartial?: (message: TranscriptMessage) => void,
   ) {}
 
   // -- agent channels (ctx.log) -------------------------------------------
@@ -52,6 +57,26 @@ export class TranscriptWriter {
     const entry: CustomEntry = { type: "custom", id: this.id(), timestamp: this.now(), customType };
     if (data !== undefined) entry.data = data;
     this.append(entry);
+  }
+
+  /**
+   * Emits an EPHEMERAL partial (in-progress) message snapshot (`ctx.partial`).
+   * Unlike {@link message}, this writes NOTHING to disk and consumes no entry
+   * id or line cursor — it only fires {@link onPartial}. It is enqueued on the
+   * same serial {@link chain} as the durable appends so engine-emission order
+   * stays equal to the producer's event order (a partial(N+1) can never be
+   * emitted before commit(N)).
+   */
+  partial(message: TranscriptMessage): void {
+    this.chain = this.chain.then(() => {
+      try {
+        this.onPartial?.(message);
+      } catch (e) {
+        this.logger.warn(
+          `transcript ${this.sessionId}: partial emit failed (${e instanceof Error ? e.message : String(e)})`,
+        );
+      }
+    });
   }
 
   // -- engine structural channels (autosk:*) ------------------------------

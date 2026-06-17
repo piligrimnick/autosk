@@ -287,15 +287,21 @@ type ProjectChangedParams struct {
 }
 
 // SessionEventParams is the `session-event` payload. Kind names the frame
-// variant: message | status | done | error.
+// variant: message | status | done | error | partial. A `partial` frame carries
+// an ephemeral, cumulative in-progress assistant snapshot in Partial; it is
+// never persisted, carries no Line, and does not advance the subscription
+// cursor (the eventual committed `message` frame supersedes it). Live rendering
+// of partials in the lazy TUI is a follow-up; for now an unknown-to-render
+// partial frame is simply ignored.
 type SessionEventParams struct {
-	Root      string          `json:"root"`
-	SessionID string          `json:"session_id"`
-	Kind      string          `json:"kind"`
-	Event     *TranscriptLine `json:"event,omitempty"`
-	Session   *SessionMeta    `json:"session,omitempty"`
-	Error     string          `json:"error,omitempty"`
-	Line      int             `json:"line,omitempty"`
+	Root      string             `json:"root"`
+	SessionID string             `json:"session_id"`
+	Kind      string             `json:"kind"`
+	Event     *TranscriptLine    `json:"event,omitempty"`
+	Session   *SessionMeta       `json:"session,omitempty"`
+	Error     string             `json:"error,omitempty"`
+	Line      int                `json:"line,omitempty"`
+	Partial   *TranscriptMessage `json:"partial,omitempty"`
 }
 
 // SessionChangedParams is the `session-changed` payload: a project-scoped push

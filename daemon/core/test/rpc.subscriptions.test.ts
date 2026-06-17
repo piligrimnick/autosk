@@ -9,7 +9,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { AgentDefinition, SessionChangedParams, SessionEventParams } from "@autosk/sdk";
+import type {
+  AgentDefinition,
+  SessionChangedParams,
+  SessionEventParams,
+  TranscriptMessage,
+} from "@autosk/sdk";
 
 import { canonicalize } from "../src/index.ts";
 import { gate } from "./engineHarness.ts";
@@ -146,6 +151,86 @@ describe("session.subscribe replay-then-tail", () => {
     expect(ev(lateFrame).kind).toBe("message");
   });
 
+  test("delivers ephemeral partial frames: no line, no cursor advance, ordered after the prior commit", async () => {
+    const release = gate();
+    const partialMsg = {
+      role: "assistant",
+      content: [{ type: "text", text: "LIVE_SNAPSHOT" }],
+      provider: "stub",
+      model: "stub-model",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "stop",
+      timestamp: 0,
+    } as unknown as TranscriptMessage;
+    const agent: AgentDefinition = {
+      onRun: async (ctx) => {
+        await release.wait;
+        ctx.log.custom("test:commitA", { n: 1 }); // durable commit N
+        ctx.partial(partialMsg); // ephemeral partial between commit N and N+1
+        ctx.log.custom("test:commitB", { n: 2 }); // durable commit N+1
+        await ctx.transit({ status: "done" });
+      },
+    };
+    const handle = await td.handle(cwd);
+    handle.extensions.addWorkflow("test", { name: "partials", firstStep: "partials", steps: { partials: agent } });
+
+    const client = await td.client();
+    const task = await client.call<{ id: string }>("task.create", { cwd, title: "streamed" });
+    await client.call("task.enroll", { cwd, id: task.id, workflow: "partials" });
+
+    // Wait until the session exists (it is parked on the gate inside onRun).
+    let sessionId = "";
+    await waitFor(async () => {
+      const sessions = await client.call<{ id: string }[]>("session.list", { cwd });
+      if (sessions.length === 0) return false;
+      sessionId = sessions[0]!.id;
+      return true;
+    });
+
+    // Subscribe BEFORE releasing the gate so every commit/partial is tailed live.
+    await client.call("session.subscribe", { cwd, id: sessionId, from_line: 1 });
+    release.open();
+
+    // The committed line that follows the partial proves the cursor was untouched.
+    const commitBFrame = await client.waitForNotification(
+      (n) =>
+        n.method === "session-event" &&
+        ev(n).event?.type === "custom" &&
+        (ev(n).event as { customType?: string }).customType === "test:commitB",
+    );
+
+    const isEvent = (n: { method: string }) => n.method === "session-event";
+    const commitAIdx = client.notifications.findIndex(
+      (n) => isEvent(n) && (ev(n).event as { customType?: string } | undefined)?.customType === "test:commitA",
+    );
+    const partialIdx = client.notifications.findIndex((n) => isEvent(n) && ev(n).kind === "partial");
+
+    // (#4) Ordering via the writer serial chain: the partial never reorders
+    // AHEAD of the preceding commit N — that is the only ordering the contract
+    // guarantees. We deliberately do NOT assert the partial precedes commit N+1:
+    // `pump()` reads the transcript file WITHOUT a lock against `appendEntry`, so
+    // commit N+1's line can already be on disk by the time the prior pump reads,
+    // letting commit N+1 surface before the (separately enqueued) partial. In the
+    // real pi-agent flow a partial(N) is always followed by ITS OWN commit(N),
+    // whose line is not yet on disk when the partial is emitted, so no such
+    // read-ahead occurs — but this artificial "commitA, partial, commitB"
+    // interleaving can, and asserting partial-before-commitB here is flaky.
+    expect(commitAIdx).toBeGreaterThanOrEqual(0);
+    expect(partialIdx).toBeGreaterThan(commitAIdx);
+
+    // (#3) The partial carries the cumulative snapshot, no `line`, no `session`.
+    const partialFrame = client.notifications[partialIdx]!;
+    expect(ev(partialFrame).kind).toBe("partial");
+    expect(ev(partialFrame).partial?.role).toBe("assistant");
+    expect(ev(partialFrame).line).toBeUndefined();
+    expect(ev(partialFrame).session).toBeUndefined();
+
+    // (#1/#3) The partial did NOT advance the cursor: commit N+1 lands at the
+    // very next line after commit N.
+    const commitALine = ev(client.notifications[commitAIdx]!).line!;
+    expect(ev(commitBFrame).line).toBe(commitALine + 1);
+  });
+
   test("subscribing to an unknown session → NOT_FOUND", async () => {
     const client = await td.client();
     const frame = await client.callRaw("session.subscribe", {
@@ -250,6 +335,67 @@ describe("session-changed project channel", () => {
         sc(n).session.status === "done",
     );
     expect(sc(doneFrame).session.status).toBe("done");
+  });
+
+  test("a partial is delivered per-session only and never on the session-changed channel", async () => {
+    const release = gate();
+    const partialMsg = {
+      role: "assistant",
+      content: [{ type: "text", text: "LIVE" }],
+      provider: "stub",
+      model: "stub-model",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "stop",
+      timestamp: 0,
+    } as unknown as TranscriptMessage;
+    const agent: AgentDefinition = {
+      onRun: async (ctx) => {
+        await release.wait;
+        ctx.partial(partialMsg);
+        ctx.log.custom("test:marker", {});
+        await ctx.transit({ status: "done" });
+      },
+    };
+    const handle = await td.handle(cwd);
+    handle.extensions.addWorkflow("test", { name: "partchan", firstStep: "partchan", steps: { partchan: agent } });
+
+    const client = await td.client();
+    await client.call("session.subscribeProject", { cwd });
+
+    const taskRow = await client.call<{ id: string }>("task.create", { cwd, title: "p" });
+    await client.call("task.enroll", { cwd, id: taskRow.id, workflow: "partchan" });
+
+    // Learn the session id from the running frame, then attach a per-session
+    // subscriber BEFORE releasing the gate so the partial is caught live.
+    const runningFrame = await client.waitForNotification(
+      (n) =>
+        n.method === "session-changed" &&
+        sc(n).session.task_id === taskRow.id &&
+        sc(n).session.status === "running",
+    );
+    const sessionId = sc(runningFrame).session.id;
+    await client.call("session.subscribe", { cwd, id: sessionId, from_line: 1 });
+
+    release.open();
+
+    // The partial arrives on the per-session channel …
+    const partialFrame = await client.waitForNotification(
+      (n) => n.method === "session-event" && ev(n).kind === "partial",
+    );
+    expect(ev(partialFrame).partial?.role).toBe("assistant");
+
+    // … and the session reaches terminal so every lifecycle frame has landed.
+    const doneFrame = await client.waitForNotification(
+      (n) =>
+        n.method === "session-changed" && sc(n).session.id === sessionId && sc(n).session.status === "done",
+    );
+    expect(sc(doneFrame).session.status).toBe("done");
+
+    // (#5) The project channel carried ONLY the lifecycle frames (queued,
+    // running, done) — the partial was excluded from session-changed entirely.
+    const changed = client.notifications.filter((n) => n.method === "session-changed");
+    expect(changed.every((n) => ["queued", "running", "done"].includes(sc(n).session.status))).toBe(true);
+    expect(changed.length).toBe(3);
   });
 
   test("session.unsubscribeProject stops the pushes", async () => {

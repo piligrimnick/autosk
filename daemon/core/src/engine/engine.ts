@@ -22,6 +22,7 @@ import {
   type StepTarget,
   type TaskView,
   type TranscriptEntry,
+  type TranscriptMessage,
   type WorkflowDefinition,
 } from "@autosk/sdk";
 
@@ -533,6 +534,10 @@ export class Engine implements SessionHost {
 
   emitSessionMessage(project: EngineProject, sessionId: string, entry: TranscriptEntry): void {
     this.emit({ type: "session-event", root: project.root, session_id: sessionId, kind: "message", entry });
+  }
+
+  emitSessionPartial(project: EngineProject, sessionId: string, message: TranscriptMessage): void {
+    this.emit({ type: "session-event", root: project.root, session_id: sessionId, kind: "partial", partial: message });
   }
 
   // -- internals -----------------------------------------------------------

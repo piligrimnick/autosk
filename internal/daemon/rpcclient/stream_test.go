@@ -197,6 +197,67 @@ func TestSessionSubscribe_DemuxOrder(t *testing.T) {
 		"server never received session.unsubscribe after Close")
 }
 
+// TestSessionSubscribe_PartialFrame asserts an ephemeral `partial` session-event
+// frame decodes into a SessionEvent (Kind=="partial", Partial populated, no Line)
+// and is forwarded on the channel without breaking the tail that follows.
+func TestSessionSubscribe_PartialFrame(t *testing.T) {
+	srv := newStreamServer(t, func(enc *json.Encoder, subID uint64) {
+		_ = enc.Encode(map[string]any{"id": subID, "result": map[string]any{"ok": true}})
+		// A partial (no line), then a normal committed message + terminal done.
+		_ = enc.Encode(map[string]any{"method": "session-event", "params": map[string]any{
+			"kind": "partial", "session_id": "se-1",
+			"partial": map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "LIVE"}}}}})
+		_ = enc.Encode(sessionEventFrame("message", "se-1", 1, map[string]any{
+			"event": map[string]any{"type": "message", "message": map[string]any{
+				"role": "assistant", "content": []map[string]any{{"type": "text", "text": "done text"}}}}}))
+		_ = enc.Encode(sessionEventFrame("done", "se-1", 0, map[string]any{
+			"session": map[string]any{"id": "se-1", "status": "done"}}))
+	})
+	cli := mustClient(t, srv.sock)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	stream, err := cli.SessionSubscribe(ctx, "se-1", 0)
+	if err != nil {
+		t.Fatalf("SessionSubscribe: %v", err)
+	}
+
+	// Frame 1: the partial decodes with its cumulative snapshot and no line.
+	select {
+	case ev := <-stream.Events():
+		if ev.Kind != "partial" {
+			t.Fatalf("frame 0 kind = %q, want partial", ev.Kind)
+		}
+		if ev.Partial == nil || ev.Partial.Role != "assistant" || ev.Partial.Text() != "LIVE" {
+			t.Errorf("frame 0 partial = %+v, want assistant snapshot \"LIVE\"", ev.Partial)
+		}
+		if ev.Line != 0 {
+			t.Errorf("frame 0 line = %d, want 0 (partials carry no line)", ev.Line)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the partial frame")
+	}
+
+	// Frames 2/3: tailing is unaffected — the committed message then done follow.
+	select {
+	case ev := <-stream.Events():
+		if ev.Kind != "message" || ev.Line != 1 {
+			t.Errorf("frame 1 = %+v, want message/1", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the message frame after a partial")
+	}
+	select {
+	case ev := <-stream.Events():
+		if ev.Kind != "done" {
+			t.Errorf("frame 2 = %+v, want done", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the done frame after a partial")
+	}
+	_ = stream.Close()
+}
+
 // TestJobSubscribe_SubscribeError asserts an error response to the subscribe
 // surfaces as a synthetic Kind=="error" frame, the channel then closes, AND the
 // stream self-reaps the underlying connection (readLoop's deferred Close) so the

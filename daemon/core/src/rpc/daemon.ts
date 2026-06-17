@@ -178,15 +178,16 @@ export class Daemon {
     for (const conn of this.connections) {
       const sub = conn.sessionSubs.get(ev.session_id);
       if (sub && sub.root === ev.root) {
-        sub.onEvent({ kind: ev.kind, meta: ev.meta, error: ev.error });
+        sub.onEvent({ kind: ev.kind, meta: ev.meta, error: ev.error, partial: ev.partial });
       }
     }
     // 2. Project-scoped session lifecycle channel (session.subscribeProject):
-    //    every non-`message` frame carries the decorated meta, so a subscriber
-    //    sees a session appear (queued), start (running), and finish (terminal)
-    //    live — WITHOUT having to know a session id to subscribe per-session.
-    //    `message` frames are the transcript tail and belong only to §1.
-    if (ev.kind !== "message" && ev.meta) {
+    //    only the lifecycle frames (status/done/error) carry the decorated meta,
+    //    so a subscriber sees a session appear (queued), start (running), and
+    //    finish (terminal) live — WITHOUT having to know a session id to
+    //    subscribe per-session. `message` (transcript tail) and `partial`
+    //    (high-frequency, no meta) frames belong only to §1.
+    if ((ev.kind === "status" || ev.kind === "done" || ev.kind === "error") && ev.meta) {
       this.emitSessionChanged(ev.root, ev.meta);
     }
   }

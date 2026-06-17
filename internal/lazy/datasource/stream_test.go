@@ -137,6 +137,57 @@ func TestStreamSession_MapsAndTearsDownOnDone(t *testing.T) {
 	}
 }
 
+// TestStreamSession_ToleratesPartialFrame asserts that an ephemeral `partial`
+// session-event frame (Phase 1: not rendered in the lazy TUI yet) is decoded
+// without error and IGNORED by the adapter — it must not break tailing: the
+// message before it and the terminal `done` after it still flow through, and the
+// channel closes on `done`.
+func TestStreamSession_ToleratesPartialFrame(t *testing.T) {
+	ds, _ := streamDaemon(t, []map[string]any{
+		notifyFrame("message", map[string]any{
+			"line": 3, "event": map[string]any{"type": "message", "message": map[string]any{"role": "assistant", "content": "hi"}}}),
+		// An unknown-to-render partial snapshot lands mid-stream (no line).
+		notifyFrame("partial", map[string]any{
+			"partial": map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "LIVE"}}}}),
+		notifyFrame("done", map[string]any{
+			"session": map[string]any{"id": "session-1", "status": "done"}}),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	h, err := ds.StreamSession(ctx, "session-1")
+	if err != nil {
+		t.Fatalf("StreamSession: %v", err)
+	}
+	defer h.Close()
+
+	var got []LiveEvent
+	closed := false
+	for !closed {
+		select {
+		case ev, ok := <-h.Events:
+			if !ok {
+				closed = true
+				break
+			}
+			got = append(got, ev)
+		case <-time.After(2 * time.Second):
+			t.Fatal("a partial frame broke tailing (channel never closed) — leak")
+		}
+	}
+
+	// The partial is dropped: only the message + done survive, in order.
+	if len(got) != 2 {
+		t.Fatalf("got %d events, want 2 (partial must be ignored): %+v", len(got), got)
+	}
+	if got[0].Kind != "message" || got[0].LineNum != 3 {
+		t.Errorf("event 0 = %+v, want message/3", got[0])
+	}
+	if got[1].Kind != "done" {
+		t.Errorf("event 1 = %+v, want done", got[1])
+	}
+}
+
 // TestStreamSession_ReleasesConnOnDone asserts that the terminal `done` frame does
 // not just close the LiveEvent channel but actually RELEASES the underlying
 // connection: the streamDaemon keeps its socket open, so the server only sees

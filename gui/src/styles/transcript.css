@@ -19,6 +19,21 @@
   background: var(--bg-1);
   border: 1px solid var(--border);
 }
+/* The trailing live bubble: an in-progress (ephemeral) assistant turn streaming
+ * before the durable line commits. A subtle accent + a blinking cursor mark it
+ * as not-yet-final; it is replaced in place by the committed message. */
+.msg-live {
+  border-color: rgba(76, 141, 255, 0.45);
+}
+.msg-live-cursor {
+  color: var(--accent, #4c8dff);
+  animation: msg-live-blink 1s steps(2, start) infinite;
+}
+@keyframes msg-live-blink {
+  to {
+    opacity: 0;
+  }
+}
 .msg-user {
   background: rgba(76, 141, 255, 0.08);
   border: 1px solid rgba(76, 141, 255, 0.25);

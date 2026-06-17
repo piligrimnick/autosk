@@ -99,8 +99,17 @@ The design mirrors the CodexMonitor blueprint ("shared core + thin adapters"):
   transcript tail follows either the selected session or, when a task is
   selected, the task's newest running session (one `session.subscribe` at a
   time); the transcript is the pi-format `session.transcript` / `session-event`
-  line stream, deduped by the transcript line cursor. `task-changed` carries the
-  full `TaskView`, so the router upserts it directly instead of refetching.
+  line stream, deduped by the transcript line cursor. While an agent turn
+  streams, the `session-event` `kind:"partial"` frame feeds a `partialBySession`
+  slice that renders a trailing **live** assistant bubble (text / thinking /
+  tool-call blocks growing in place); it is cleared the moment the durable line
+  commits (or the session goes terminal / is re-subscribed), so there is no
+  flicker or duplication. Partials are ephemeral — they reuse the same
+  `session-event` channel (no new `listen`/`invoke` site) and never advance the
+  line cursor (see [docs/daemon.md → Streaming partial
+  messages](../docs/daemon.md#streaming-partial-messages)). `task-changed`
+  carries the full `TaskView`, so the router upserts it directly instead of
+  refetching.
 - **UI shell.** A frameless window (macOS `titleBarStyle: Overlay`; Windows
   `decorations:false` + custom caption controls) over a two-panel layout: a
   left **sidebar** that stacks **Tasks**, **Sessions** (all agent runs, animated
