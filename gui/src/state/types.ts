@@ -13,6 +13,7 @@ import type {
   SessionMeta,
   TaskView,
   TranscriptLine,
+  TranscriptMessage,
   WorkflowInfo,
 } from "@/types";
 import type { Selection } from "./selection";
@@ -89,6 +90,12 @@ export interface AppState {
   sessionOrderByProject: Record<string, string[]>;
   /** Live transcript per session (ordered pi-format lines). */
   transcriptBySession: Record<string, TranscriptLine[]>;
+  /**
+   * The current in-progress (ephemeral) assistant snapshot per session, rendered
+   * as a trailing live bubble. Set on a `partial` frame; cleared when the
+   * durable assistant line commits, on a terminal session, and on a tail reset.
+   */
+  partialBySession: Record<string, TranscriptMessage | null>;
   /** Highest transcript line number applied per session, for replay-then-tail dedup. */
   seenLineBySession: Record<string, number>;
   /** The session currently subscribed for a live tail (one at a time). */
@@ -139,6 +146,7 @@ export function initialState(): AppState {
     sessions: {},
     sessionOrderByProject: {},
     transcriptBySession: {},
+    partialBySession: {},
     seenLineBySession: {},
     subscribedSession: null,
     ui: {
@@ -186,4 +194,5 @@ export type Action =
   // transcript / live tail
   | { type: "session/subscribed"; sessionId: string | null }
   | { type: "session/transcriptReset"; sessionId: string; entries: TranscriptLine[]; nextLine: number }
-  | { type: "session/transcriptAppended"; sessionId: string; line: number; entry: TranscriptLine };
+  | { type: "session/transcriptAppended"; sessionId: string; line: number; entry: TranscriptLine }
+  | { type: "session/partial"; sessionId: string; message: TranscriptMessage | null };

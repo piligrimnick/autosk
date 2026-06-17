@@ -157,6 +157,7 @@ export class SessionRuntime {
       this.host.clock,
       this.host.logger,
       (entry) => this.host.emitSessionMessage(this.project, this.id, entry),
+      (message) => this.host.emitSessionPartial(this.project, this.id, message),
     );
   }
 
@@ -638,6 +639,9 @@ export class SessionRuntime {
         message: (m: TranscriptMessage) => this.transcript.message(m),
         custom: (t: string, d: unknown) => this.transcript.custom(t, d),
       },
+      // EPHEMERAL partial channel: routed through the same transcript serial
+      // chain as durable appends so a partial(N+1) can never overtake commit(N).
+      partial: (m: TranscriptMessage) => this.transcript.partial(m),
       exec: (cmd: string[], opts?: ExecOptions) =>
         execOneShot(cmd, { ...opts, defaultCwd: this.cwd, defaultSignal: this.controller.signal }),
       spawn: (cmd: string[], opts?: SpawnOptions) =>

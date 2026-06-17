@@ -14,17 +14,28 @@ import type {
   SessionHeader,
   ToolResultMessage,
   TranscriptLine,
+  TranscriptMessage,
   UserMessage,
 } from "@/types";
 import { isAutoskCustomType } from "@/types";
 import { Markdown } from "@/components/Markdown";
 
-export function Transcript({ lines }: { lines: TranscriptLine[] }) {
+export function Transcript({
+  lines,
+  partial,
+}: {
+  lines: TranscriptLine[];
+  /** Ephemeral in-progress assistant snapshot rendered as a trailing live row. */
+  partial?: TranscriptMessage | null;
+}) {
   return (
     <div className="transcript">
       {lines.map((line, idx) => (
         <TranscriptRow key={lineKey(line, idx)} line={line} />
       ))}
+      {partial && partial.role === "assistant" && (
+        <AssistantRow key="partial-live" message={partial} live />
+      )}
     </div>
   );
 }
@@ -72,10 +83,17 @@ function MessageRow({ entry }: { entry: MessageEntry }) {
   }
 }
 
-function AssistantRow({ message }: { message: AssistantMessage }) {
+function AssistantRow({ message, live = false }: { message: AssistantMessage; live?: boolean }) {
   return (
-    <div className="msg msg-assistant">
-      <div className="msg-role">Assistant</div>
+    <div className={`msg msg-assistant${live ? " msg-live" : ""}`}>
+      <div className="msg-role">
+        Assistant
+        {live && (
+          <span className="msg-live-cursor" aria-label="streaming" title="streaming">
+            {" ▌"}
+          </span>
+        )}
+      </div>
       <div className="msg-body">
         {message.content.map((block, i) => (
           <ContentBlockView key={i} block={block} />

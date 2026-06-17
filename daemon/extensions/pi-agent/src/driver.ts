@@ -35,8 +35,95 @@ export interface PiDriverHooks {
    * chat loop wires this to `ctx.setActivity` so a client shows idle vs working.
    */
   onActivity?(busy: boolean): void;
+  /**
+   * Streams an EPHEMERAL, cumulative assistant-message snapshot as pi generates
+   * a turn (from pi's `message_update`). Coalesced (~40ms) on the producer side;
+   * never written to the transcript and always superseded by the committed
+   * {@link onMessage}. The agent wires this to `ctx.partial`.
+   */
+  onPartial?(message: TranscriptMessage): void;
   /** Optional diagnostic sink. */
   warn?(message: string): void;
+}
+
+/** Min interval (ms) between coalesced partial snapshots emitted to subscribers. */
+export const PARTIAL_COALESCE_MS = 40;
+
+/**
+ * Coalesces a high-frequency stream of cumulative snapshots into bounded-rate
+ * emissions: the first snapshot fires immediately (leading edge) and opens a
+ * min-interval window; further snapshots within the window are buffered as the
+ * single latest value and flushed on the trailing edge. Loss-tolerant by design
+ * — each snapshot is the whole message, so dropping an intermediate one only
+ * costs a frame of freshness.
+ */
+export class Coalescer<T> {
+  private latest: T | null = null;
+  private hasLatest = false;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(
+    private readonly intervalMs: number,
+    private readonly emit: (value: T) => void,
+  ) {}
+
+  /** Offers a new snapshot (leading-edge immediate, then trailing-edge coalesced). */
+  push(value: T): void {
+    if (this.timer === null) {
+      this.emit(value); // leading edge
+      this.arm();
+    } else {
+      this.latest = value; // keep only the freshest for the trailing edge
+      this.hasLatest = true;
+    }
+  }
+
+  private arm(): void {
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      if (this.hasLatest) {
+        const v = this.latest as T;
+        this.latest = null;
+        this.hasLatest = false;
+        this.emit(v);
+        this.arm(); // keep coalescing while snapshots keep arriving
+      }
+    }, this.intervalMs);
+  }
+
+  /**
+   * Emits any buffered trailing snapshot NOW and stops the timer. Called at a
+   * message/turn boundary so the last partial never lingers past — nor fires
+   * after — the committed durable line.
+   */
+  flush(): void {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (this.hasLatest) {
+      const v = this.latest as T;
+      this.latest = null;
+      this.hasLatest = false;
+      this.emit(v);
+    }
+  }
+
+  /**
+   * Cancels the timer and DROPS any buffered snapshot WITHOUT emitting. Called on
+   * teardown (child exit / abort) so an armed trailing-edge timer can never fire
+   * `emit` after the session is sealed and its terminal frame delivered — which
+   * would otherwise re-set a stale live bubble on the client. Unlike `flush`,
+   * this emits nothing.
+   */
+  stop(): void {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.latest = null;
+    this.hasLatest = false;
+  }
 }
 
 /** pi RPC extension-UI methods that expect no response (fire-and-forget). */
@@ -71,10 +158,17 @@ export class PiDriver {
   /** How many pi stderr lines have already been forwarded through `warn`. */
   private stderrForwarded = 0;
 
+  /** Coalesces `message_update` snapshots into bounded-rate `onPartial` calls. */
+  private readonly partials: Coalescer<TranscriptMessage>;
+
   constructor(
     private readonly child: ChildHandle,
     private readonly hooks: PiDriverHooks,
   ) {
+    this.partials = new Coalescer<TranscriptMessage>(
+      PARTIAL_COALESCE_MS,
+      (m) => this.hooks.onPartial?.(m),
+    );
     child.onStdout((line) => this.onLine(line));
     // Always subscribe (so the pipe is drained and never fills), but forward the
     // bytes through `warn` instead of black-holing them: when pi dies on a
@@ -83,6 +177,10 @@ export class PiDriver {
     void child.exited.then(({ code }) => {
       this.exitCode = code;
       this.exited = true;
+      // Drop any buffered/armed partial WITHOUT emitting: the session is being
+      // torn down, so a late trailing-edge frame must not fire after its terminal
+      // done/error (see Coalescer.stop). `flush` would emit one more stale frame.
+      this.partials.stop();
       for (const p of this.pending.values()) p.resolve({ success: false, error: "pi exited" });
       this.pending.clear();
       this.emitTurn(this.aborted ? "aborted" : "exited");
@@ -212,15 +310,25 @@ export class PiDriver {
         return;
       case "agent_end":
         this.streaming = false;
+        // Stop coalescing at the turn boundary so no buffered partial fires after
+        // the turn's committed line (message_end already flushed within-message).
+        this.partials.flush();
         this.hooks.onActivity?.(false);
         this.emitTurn("ended");
         return;
       case "tool_execution_start":
         this.observeToolCall(msg);
         return;
+      case "message_update":
+        this.observePartial(msg.message);
+        return;
       case "message_start":
+        return;
       case "message_end":
-        if (type === "message_end") this.mirrorMessage(msg.message);
+        // Flush any buffered partial, then commit the durable line: the committed
+        // message supersedes the live bubble and no partial follows it.
+        this.partials.flush();
+        this.mirrorMessage(msg.message);
         return;
       case "extension_ui_request":
         this.replyToExtensionUi(msg);
@@ -247,6 +355,19 @@ export class PiDriver {
     const target = parseTarget(msg.args);
     if (target) this.pendingTarget = target;
     else this.hooks.warn?.(`pi-agent: ${TRANSIT_TOOL_NAME} call had no usable target (${JSON.stringify(msg.args)})`);
+  }
+
+  /**
+   * Feeds a cumulative `message_update` snapshot into the partial coalescer. Only
+   * assistant snapshots stream (user/toolResult messages have no in-progress
+   * form); a missing `onPartial` hook makes this inert.
+   */
+  private observePartial(message: unknown): void {
+    if (!this.hooks.onPartial) return;
+    if (message === null || typeof message !== "object") return;
+    const m = message as Record<string, unknown>;
+    if (m.role !== "assistant") return;
+    this.partials.push(m as unknown as TranscriptMessage);
   }
 
   private mirrorMessage(message: unknown): void {
@@ -281,6 +402,9 @@ export class PiDriver {
 
   private onAbort(): void {
     this.aborted = true;
+    // Same teardown guard as child-exit: cancel + drop any buffered partial so an
+    // armed timer cannot emit after the aborted session is sealed.
+    this.partials.stop();
     this.emitTurn("aborted");
   }
 

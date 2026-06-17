@@ -11,7 +11,7 @@
 
 import type net from "node:net";
 
-import { ErrorCodes, type SessionEventParams, type SessionMeta } from "@autosk/sdk";
+import { ErrorCodes, type SessionEventParams, type SessionMeta, type TranscriptMessage } from "@autosk/sdk";
 
 import type { Logger } from "../store/logger.ts";
 import type { SessionStore } from "../store/sessionStore.ts";
@@ -32,9 +32,11 @@ export interface ConnectionDeps {
 
 /** The engine `session-event` slice a {@link SessionSubscription} reacts to. */
 export interface SessionEventInput {
-  kind: "status" | "done" | "error" | "message";
+  kind: "status" | "done" | "error" | "message" | "partial";
   meta?: SessionMeta;
   error?: string;
+  /** Present on `partial`: the ephemeral, cumulative message snapshot. */
+  partial?: TranscriptMessage;
 }
 
 export class Connection {
@@ -207,12 +209,27 @@ export class SessionSubscription {
 
   /** Reacts to one engine `session-event`: pump new lines, then forward the frame. */
   onEvent(ev: SessionEventInput): void {
+    // A `partial` is EPHEMERAL: forward the cumulative snapshot directly WITHOUT
+    // a pump and WITHOUT advancing the cursor (it carries no transcript line).
+    // Still enqueued on the serial chain so it stays ordered relative to the
+    // committed lines a sibling `message` event will pump.
+    if (ev.kind === "partial") {
+      const partial = ev.partial;
+      if (!partial) return;
+      this.enqueue(async () => {
+        this.partialFrame(partial);
+      });
+      return;
+    }
+    // Capture the (narrowed) kind as a const so it survives into the async
+    // closure (control-flow narrowing on `ev.kind` does not cross the closure).
+    const kind = ev.kind;
     this.enqueue(async () => {
       await this.pump();
-      if (ev.kind === "message") return;
+      if (kind === "message") return;
       const meta = ev.meta ?? (await this.sessions.getMeta(this.sessionId)) ?? undefined;
       if (!meta) return;
-      this.frame(ev.kind, meta);
+      this.frame(kind, meta);
     });
   }
 
@@ -262,6 +279,21 @@ export class SessionSubscription {
       session: meta,
     };
     if (kind === "error" && meta.error !== undefined) params.error = meta.error;
+    this.conn.send({ method: "session-event", params });
+  }
+
+  /**
+   * Sends an EPHEMERAL `partial` frame: a cumulative message snapshot with NO
+   * `line` and NO `session`. It never advances {@link cursor}, so a following
+   * committed `message` still arrives at the expected line number.
+   */
+  private partialFrame(message: TranscriptMessage): void {
+    const params: SessionEventParams = {
+      root: this.root,
+      session_id: this.sessionId,
+      kind: "partial",
+      partial: message,
+    };
     this.conn.send({ method: "session-event", params });
   }
 }

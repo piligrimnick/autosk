@@ -130,6 +130,18 @@ export interface AgentRunContext {
   workflows: WorkflowsAPI;
   log: TranscriptAPI;
 
+  /**
+   * Streams a partial (in-progress) message snapshot to live subscribers.
+   * EPHEMERAL: never written to the transcript, best-effort, superseded by the
+   * next committed `log.message`. Cumulative — send the full current snapshot.
+   *
+   * Kept on `ctx` (a sibling of {@link log}), NOT inside {@link TranscriptAPI},
+   * to make the "not durable" contract explicit: partials ride the same
+   * per-session subscription as committed lines but carry no transcript line and
+   * never advance the line cursor.
+   */
+  partial(message: TranscriptMessage): void;
+
   /** Shorthand: comment on the current task. */
   comment(text: string): Promise<void>;
   /** Validates via `workflow.onTransit`, then commits. A second call throws. */

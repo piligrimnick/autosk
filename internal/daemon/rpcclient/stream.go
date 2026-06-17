@@ -11,17 +11,21 @@ import (
 )
 
 // SessionEvent is one `session-event` notification frame (api.SessionEventParams).
-// Kind is "message" | "status" | "done" | "error":
+// Kind is "message" | "status" | "done" | "error" | "partial":
 //   - message: Event carries one pi-format transcript line (also used for replay).
 //   - status / done: Session carries the decorated session meta.
 //   - error: Error carries the message.
+//   - partial: Partial carries an ephemeral, cumulative in-progress assistant
+//     snapshot (no Line, no cursor advance). Tolerated/ignored for now (live
+//     render is a follow-up); decoding it must not break tailing.
 type SessionEvent struct {
-	Kind      string              `json:"kind"`
-	SessionID string              `json:"session_id"`
-	Event     *api.TranscriptLine `json:"event,omitempty"`
-	Session   *api.SessionMeta    `json:"session,omitempty"`
-	Error     string              `json:"error,omitempty"`
-	Line      int                 `json:"line,omitempty"`
+	Kind      string                 `json:"kind"`
+	SessionID string                 `json:"session_id"`
+	Event     *api.TranscriptLine    `json:"event,omitempty"`
+	Session   *api.SessionMeta       `json:"session,omitempty"`
+	Error     string                 `json:"error,omitempty"`
+	Line      int                    `json:"line,omitempty"`
+	Partial   *api.TranscriptMessage `json:"partial,omitempty"`
 }
 
 // SessionStream is an active session.subscribe tail over a dedicated persistent

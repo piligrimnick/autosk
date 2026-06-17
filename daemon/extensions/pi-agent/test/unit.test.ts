@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { ChildHandle, Comment, StepTarget, TaskView } from "@autosk/sdk";
+import type { ChildHandle, Comment, StepTarget, TaskView, TranscriptMessage } from "@autosk/sdk";
 
 import type { AgentRunContext } from "@autosk/sdk";
 
@@ -22,6 +22,9 @@ import {
   rejectionMessage,
   targetLabels,
 } from "../src/index.ts";
+// `Coalescer` is an internal driver helper (not part of the extension's public
+// index surface); the test reaches into it directly to exercise the timer path.
+import { Coalescer } from "../src/driver.ts";
 
 describe("parseTarget", () => {
   test("maps `to` to a step or terminal status", () => {
@@ -317,6 +320,159 @@ describe("PiDriver — diagnostics (R1)", () => {
     f.emitStdout(JSON.stringify({ type: "agent_start" })); // turn begins → busy
     f.emitStdout(JSON.stringify({ type: "agent_end" })); // turn ends → idle
     expect(activity).toEqual([true, false]);
+  });
+});
+
+describe("PiDriver — partial streaming (message_update coalescing)", () => {
+  function fakeChild(): { child: ChildHandle; emitStdout(line: string): void } {
+    let stdoutCb: ((l: string) => void) | null = null;
+    const stdin = {
+      write: async () => {},
+      close: async () => {},
+    } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+    const child: ChildHandle = {
+      stdin,
+      onStdout: (cb) => void (stdoutCb = cb),
+      onStderr: () => {},
+      kill: () => {},
+      exited: new Promise(() => {}),
+    };
+    return { child, emitStdout: (l) => stdoutCb?.(l) };
+  }
+
+  /** A minimal cumulative assistant snapshot carrying one text block. */
+  function assistantSnap(text: string): unknown {
+    return { role: "assistant", content: [{ type: "text", text }], provider: "stub", model: "m" };
+  }
+  function snapText(m: TranscriptMessage): string {
+    const blocks = (m as { content: { type: string; text?: string }[] }).content;
+    return blocks.map((b) => (b.type === "text" ? (b.text ?? "") : "")).join("");
+  }
+
+  /** A driver that records the ordered partial/commit event log. */
+  function recordingDriver(): { f: ReturnType<typeof fakeChild>; events: string[] } {
+    const f = fakeChild();
+    const events: string[] = [];
+    new PiDriver(f.child, {
+      onMessage: (m) => events.push(`commit:${snapText(m)}`),
+      onCustom: () => {},
+      onPartial: (m) => events.push(`partial:${snapText(m)}`),
+      signal: new AbortController().signal,
+    });
+    return { f, events };
+  }
+
+  const mu = (text: string) => JSON.stringify({ type: "message_update", message: assistantSnap(text) });
+  const me = (text: string) => JSON.stringify({ type: "message_end", message: assistantSnap(text) });
+
+  test("leading-edge emits the first snapshot; intermediates coalesce to the latest on message_end flush", () => {
+    const { f, events } = recordingDriver();
+    f.emitStdout(mu("a")); // leading edge → emitted immediately
+    f.emitStdout(mu("ab")); // buffered within the window
+    f.emitStdout(mu("abc")); // overwrites the buffered snapshot
+    f.emitStdout(me("abc")); // flush the buffered "abc" then commit the durable line
+    expect(events).toEqual(["partial:a", "partial:abc", "commit:abc"]);
+  });
+
+  test("message_end stops partial emission: no partial frame follows the committed message", () => {
+    const { f, events } = recordingDriver();
+    f.emitStdout(mu("x"));
+    f.emitStdout(me("x")); // commit
+    // A new turn's message starts a fresh leading-edge partial (proves the
+    // coalescer reset), but nothing partial fires AFTER a commit within a cycle.
+    f.emitStdout(mu("y"));
+    f.emitStdout(me("y"));
+    // The exact sequence proves that within each turn the committed line is the
+    // LAST frame (no partial trails it); a new turn's leading-edge partial is a
+    // fresh cycle, not a late partial for the prior committed message.
+    expect(events).toEqual(["partial:x", "commit:x", "partial:y", "commit:y"]);
+  });
+
+  test("a message_end with no preceding updates commits without emitting any partial", () => {
+    const { f, events } = recordingDriver();
+    f.emitStdout(me("only"));
+    expect(events).toEqual(["commit:only"]);
+  });
+
+  test("non-assistant message_update snapshots are ignored (no in-progress form)", () => {
+    const { f, events } = recordingDriver();
+    f.emitStdout(JSON.stringify({ type: "message_update", message: { role: "user", content: "hi" } }));
+    f.emitStdout(JSON.stringify({ type: "message_update", message: null }));
+    expect(events).toEqual([]);
+  });
+
+  test("with no onPartial hook, message_update is inert (mirrors only the commit)", () => {
+    const f = fakeChild();
+    const events: string[] = [];
+    new PiDriver(f.child, {
+      onMessage: (m) => events.push(`commit:${snapText(m)}`),
+      onCustom: () => {},
+      signal: new AbortController().signal,
+    });
+    f.emitStdout(mu("a"));
+    f.emitStdout(me("a"));
+    expect(events).toEqual(["commit:a"]);
+  });
+});
+
+// The five tests above drive `message_end` (or no updates), so they only exercise
+// the synchronous leading-edge + `flush()` paths. These cover the timer-based
+// trailing edge in `Coalescer.arm()`: the re-arm loop that bounds the frame rate
+// in production. Bun has no built-in timer mocking (its `useFakeTimers` only fakes
+// `Date`, not `setTimeout`), so we use real timers with generous windows; the
+// assertions are chosen to be robust to scheduling slack (each lands far from a
+// timer boundary, or where a boundary firing is a no-op).
+describe("Coalescer — trailing-edge timer (re-arm loop)", () => {
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+  const WINDOW = 50;
+
+  test("re-arms across windows, each trailing flush emits the LATEST snapshot, far fewer than the pushes", async () => {
+    const emitted: number[] = [];
+    const c = new Coalescer<number>(WINDOW, (v) => emitted.push(v));
+
+    // Drive a steady stream several times faster than the window for a handful of
+    // windows: the leading edge fires once, then the timer must re-arm and flush
+    // the trailing LATEST value once per window while input keeps arriving.
+    let pushed = 0;
+    const deadline = Date.now() + WINDOW * 5;
+    while (Date.now() < deadline) {
+      c.push(++pushed);
+      await sleep(8);
+    }
+
+    // BEFORE any flush(): a leading edge PLUS at least one timer-driven trailing
+    // emit (the re-arm loop ran), yet far fewer emissions than pushes (coalescing).
+    expect(emitted.length).toBeGreaterThan(1);
+    expect(emitted.length).toBeLessThan(pushed);
+    expect(emitted[0]).toBe(1); // the leading edge is the first push
+
+    c.flush(); // settle the final buffered snapshot deterministically
+    expect(emitted.at(-1)).toBe(pushed); // the latest cumulative value, never an intermediate
+    // Every emission is the latest-at-flush-time, so they strictly increase.
+    for (let i = 1; i < emitted.length; i++) expect(emitted[i]!).toBeGreaterThan(emitted[i - 1]!);
+  });
+
+  test("goes idle after an empty window so the next push is a fresh leading edge", async () => {
+    const emitted: number[] = [];
+    const c = new Coalescer<number>(WINDOW, (v) => emitted.push(v));
+
+    c.push(1); // leading edge → emitted immediately; timer armed
+    expect(emitted).toEqual([1]);
+    await sleep(WINDOW * 3); // a window passes EMPTY → timer fires with no buffer → idle
+    expect(emitted).toEqual([1]); // nothing emitted while idle (no trailing flush)
+    c.push(2); // timer is null again → a FRESH leading edge, emitted immediately
+    expect(emitted).toEqual([1, 2]);
+  });
+
+  test("stop() cancels an armed trailing timer and drops the buffer WITHOUT emitting", async () => {
+    const emitted: number[] = [];
+    const c = new Coalescer<number>(WINDOW, (v) => emitted.push(v));
+    c.push(1); // leading edge → emit 1; timer armed
+    c.push(2); // buffered for the trailing edge
+    c.stop(); // teardown: cancel the timer and drop the buffered 2 WITHOUT emitting
+    expect(emitted).toEqual([1]);
+    await sleep(WINDOW * 2); // the cancelled timer must NOT fire the dropped 2
+    expect(emitted).toEqual([1]);
   });
 });
 

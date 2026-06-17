@@ -24,6 +24,7 @@ export function SessionView() {
     return <EmptyState title="Session not found" hint="It may have been removed." />;
   }
   const lines = state.transcriptBySession[session.id] ?? [];
+  const partial = state.partialBySession[session.id] ?? null;
 
   return (
     <div className="session-view">
@@ -59,10 +60,10 @@ export function SessionView() {
         </div>
       </div>
       <div className="session-view-transcript" ref={containerRef} onScroll={onScroll}>
-        {lines.length === 0 ? (
+        {lines.length === 0 && !partial ? (
           <EmptyState title="No transcript yet" hint="Waiting for the agent to produce output." />
         ) : (
-          <Transcript lines={lines} />
+          <Transcript lines={lines} partial={partial} />
         )}
       </div>
     </div>

@@ -105,6 +105,9 @@ export function piAgent(opts: PiAgentOptions = {}): AgentDefinition {
       const driver = new PiDriver(child, {
         onMessage: (m) => ctx.log.message(m),
         onCustom: (t, d) => ctx.log.custom(t, d),
+        // Stream in-progress assistant snapshots live (ephemeral; superseded by
+        // the committed onMessage line).
+        onPartial: (m) => ctx.partial(m),
         signal: ctx.signal,
         warn: (message) => ctx.log.custom("pi-agent:warn", { message }),
       });
@@ -203,6 +206,9 @@ async function runChat(ctx: AgentRunContext, opts: PiAgentOptions): Promise<void
   const driver = new PiDriver(child, {
     onMessage: (m) => ctx.log.message(m),
     onCustom: (t, d) => ctx.log.custom(t, d),
+    // Stream in-progress assistant snapshots live (ephemeral; superseded by the
+    // committed onMessage line).
+    onPartial: (m) => ctx.partial(m),
     signal: ctx.signal,
     // Surface the chat's turn boundaries as session activity so a client shows
     // `idle` (waiting for the user) vs `working` (streaming a turn).

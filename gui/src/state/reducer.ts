@@ -207,28 +207,57 @@ function sessionsSlice(state: AppState, action: Action): AppState {
   }
 }
 
+/** Whether a transcript line is a committed assistant message (which supersedes
+ *  a live partial bubble). */
+function isCommittedAssistant(entry: { type: string; message?: { role: string } }): boolean {
+  return entry.type === "message" && entry.message?.role === "assistant";
+}
+
+/** Clears a session's live partial bubble (no-op churn if already null). */
+function clearPartial(state: AppState, sessionId: string): AppState {
+  if (state.partialBySession[sessionId] == null) return state;
+  return { ...state, partialBySession: { ...state.partialBySession, [sessionId]: null } };
+}
+
 /** Live transcript tail (keyed by session id), deduped by transcript line number. */
 function transcriptSlice(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "session/subscribed":
-      return { ...state, subscribedSession: action.sessionId };
+      // A (re)subscribe resets the tail — drop any stale live partial too.
+      return { ...clearPartial(state, action.sessionId ?? ""), subscribedSession: action.sessionId };
     case "session/transcriptReset":
       return {
-        ...state,
+        ...clearPartial(state, action.sessionId),
         transcriptBySession: { ...state.transcriptBySession, [action.sessionId]: action.entries },
         // The snapshot covers up to `nextLine - 1`; tail from there.
         seenLineBySession: { ...state.seenLineBySession, [action.sessionId]: Math.max(0, action.nextLine - 1) },
       };
+    case "session/partial":
+      return {
+        ...state,
+        partialBySession: { ...state.partialBySession, [action.sessionId]: action.message },
+      };
+    case "session/upsert": {
+      // A terminal session can have no in-progress turn: drop the live bubble so
+      // a tail that ended mid-stream does not leave a dangling partial.
+      const status = action.session.status;
+      if (status === "done" || status === "failed" || status === "aborted") {
+        return clearPartial(state, action.session.id);
+      }
+      return state;
+    }
     case "session/transcriptAppended": {
       const seen = state.seenLineBySession[action.sessionId] ?? 0;
       if (action.line !== 0 && action.line <= seen) {
         return state; // replayed line already applied
       }
       const cur = state.transcriptBySession[action.sessionId] ?? [];
+      // The committed durable assistant line supersedes the live partial bubble.
+      const base = isCommittedAssistant(action.entry) ? clearPartial(state, action.sessionId) : state;
       return {
-        ...state,
-        transcriptBySession: { ...state.transcriptBySession, [action.sessionId]: [...cur, action.entry] },
-        seenLineBySession: { ...state.seenLineBySession, [action.sessionId]: Math.max(seen, action.line) },
+        ...base,
+        transcriptBySession: { ...base.transcriptBySession, [action.sessionId]: [...cur, action.entry] },
+        seenLineBySession: { ...base.seenLineBySession, [action.sessionId]: Math.max(seen, action.line) },
       };
     }
     default:
