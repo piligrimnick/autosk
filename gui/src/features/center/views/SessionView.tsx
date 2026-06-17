@@ -79,8 +79,8 @@ export function SessionView() {
 //
 // Both need a live session, so the control is shown only for a running/queued
 // session; `ok:false` just means "already settled". The action kicks off
-// asynchronously, so we surface an immediate info notice (the status itself
-// flips a moment later when the daemon pushes the terminal session).
+// asynchronously; the status flips a moment later when the daemon pushes the
+// terminal session. Errors still surface via an error notice.
 function SessionControls({ session }: { session: SessionMeta }) {
   const { state, effects } = useStore();
   const cwd = state.activeProject ?? "";
@@ -105,10 +105,8 @@ function SessionControls({ session }: { session: SessionMeta }) {
       try {
         if (interactive) {
           await ipc.sessionEnd(cwd, session.id);
-          effects.setNotice({ kind: "info", text: `End sent to session ${short}.` });
         } else {
           await ipc.sessionAbort(cwd, session.id);
-          effects.setNotice({ kind: "info", text: `Abort sent to session ${short}.` });
         }
       } catch (err) {
         effects.setNotice({ kind: "error", text: String((err as Error).message ?? err) });

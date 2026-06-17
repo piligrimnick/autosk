@@ -161,6 +161,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the throwaway worktree to the wrong (or no) `.autosk/`.
 
 ### Changed
+- **desktop GUI — quieter session controls:** End/Abort no longer raise an info
+  notice (`End sent to session …` / `Abort sent to session …`); the session
+  status flips once the daemon settles it, and errors still surface.
 - **desktop GUI — wider sidebar resize:** the sidebar can now be dragged out to
   half the window width (the cap is dynamic instead of a fixed 480px), so the
   Tasks / Sessions / Workflows lists get more room on wide displays.
