@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > rows or installed npm-package agents.
 
 ### Added
+- **GUI: streaming partial agent messages.** An active pi-agent turn now renders
+  live in the Tauri GUI — assistant text, thinking, and tool-call blocks grow as
+  the model produces them, instead of appearing only after the step commits. Built
+  on a new ephemeral `session-event` `kind:"partial"` frame (a cumulative,
+  never-persisted snapshot that carries no transcript line and never advances the
+  subscription cursor) and an SDK `ctx.partial(message)` channel; the committed
+  durable line supersedes the live bubble with no flicker or duplication
+  (ask-b9258c).
 - **Interactive (taskless) chat sessions.** Open a session from the GUI Sessions
   panel (`＋` → NewSessionModal), pick a registered agent, and chat with the model
   turn-by-turn — the session is tied to no task and no workflow. Backed by a new
