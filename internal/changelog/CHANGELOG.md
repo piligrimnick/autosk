@@ -23,7 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first-class agent registry (`AutoskAPI.registerAgent`; `@autosk/pi-agent`
   registers the `pi` agent) and three new proto-v2 RPC methods
   `registry.agent.list` / `session.create` / `session.end`; a graceful End seals
-  the session `done` (vs Abort → `aborted`) (ask-f330c1).
+  the session `done` (vs Abort → `aborted`) (ask-f330c1). A live chat now also
+  surfaces its **turn activity**: the session badge reads `working` while the
+  agent is streaming a turn and `idle` when it is waiting for your next message
+  (instead of a bare `running`). Backed by a new `SessionMeta.activity`
+  (`idle`|`busy`) field, an `AgentRunContext.setActivity` hook the chat agent
+  drives from pi's `agent_start`/`agent_end`, and a `session-changed` push so
+  both the Sessions panel rows and the open session view update live.
 - **GUI: browse & install `autosk-extension` npm packages from the Workflows
   panel.** A new `＋` action in the Workflows header (shown only when a project is
   active) opens a browser listing npm packages published with the

@@ -204,6 +204,9 @@ async function runChat(ctx: AgentRunContext, opts: PiAgentOptions): Promise<void
     onMessage: (m) => ctx.log.message(m),
     onCustom: (t, d) => ctx.log.custom(t, d),
     signal: ctx.signal,
+    // Surface the chat's turn boundaries as session activity so a client shows
+    // `idle` (waiting for the user) vs `working` (streaming a turn).
+    onActivity: (busy) => ctx.setActivity(busy ? "busy" : "idle"),
     warn: (message) => ctx.log.custom("pi-agent:warn", { message }),
   });
   // Register the live driver BEFORE the first `await` so the very first composer

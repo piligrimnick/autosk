@@ -12,6 +12,7 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 
 import type {
+  SessionActivity,
   SessionHeader,
   SessionKind,
   SessionMeta,
@@ -41,6 +42,8 @@ export interface CreateSessionInput {
   workflow: string;
   step: string;
   agent: string;
+  /** Initial live turn activity (interactive sessions open `idle`); omitted for task sessions. */
+  activity?: SessionActivity;
   /** The cwd recorded in the transcript header (project root or isolation path). */
   cwd: string;
   /** The header timestamp (RFC3339 UTC). */
@@ -183,6 +186,7 @@ export class SessionStore {
         started_at: null,
         ended_at: null,
       };
+      if (input.activity !== undefined) meta.activity = input.activity;
       const header: SessionHeader = {
         type: "session",
         version: 1,
@@ -203,10 +207,10 @@ export class SessionStore {
     });
   }
 
-  /** Patches a session meta (status/error/timestamps). Returns the new meta. */
+  /** Patches a session meta (status/activity/error/timestamps). Returns the new meta. */
   async patchMeta(
     id: string,
-    patch: Partial<Pick<SessionMeta, "status" | "error" | "started_at" | "ended_at">>,
+    patch: Partial<Pick<SessionMeta, "status" | "activity" | "error" | "started_at" | "ended_at">>,
   ): Promise<SessionMeta> {
     return this.locks.run(`session::${id}`, async () => {
       const current = this.metaCache.get(id)?.value ?? (await this.getMeta(id));
@@ -233,7 +237,7 @@ export class SessionStore {
   async patchMetaIf(
     id: string,
     expect: SessionStatus,
-    patch: Partial<Pick<SessionMeta, "status" | "error" | "started_at" | "ended_at">>,
+    patch: Partial<Pick<SessionMeta, "status" | "activity" | "error" | "started_at" | "ended_at">>,
   ): Promise<{ meta: SessionMeta; applied: boolean }> {
     return this.locks.run(`session::${id}`, async () => {
       const current = this.metaCache.get(id)?.value ?? (await this.getMeta(id));

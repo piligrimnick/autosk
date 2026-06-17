@@ -29,6 +29,12 @@ export interface PiDriverHooks {
   onCustom(customType: string, data: unknown): void;
   /** The session's abort signal (`ctx.signal`). */
   signal: AbortSignal;
+  /**
+   * Turn-boundary activity callback: `true` when pi starts streaming a turn
+   * (`agent_start`), `false` when the turn ends (`agent_end`). The interactive
+   * chat loop wires this to `ctx.setActivity` so a client shows idle vs working.
+   */
+  onActivity?(busy: boolean): void;
   /** Optional diagnostic sink. */
   warn?(message: string): void;
 }
@@ -202,9 +208,11 @@ export class PiDriver {
         return;
       case "agent_start":
         this.streaming = true;
+        this.hooks.onActivity?.(true);
         return;
       case "agent_end":
         this.streaming = false;
+        this.hooks.onActivity?.(false);
         this.emitTurn("ended");
         return;
       case "tool_execution_start":

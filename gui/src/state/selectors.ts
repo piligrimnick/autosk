@@ -45,6 +45,21 @@ export function selectedWorkflow(state: AppState): WorkflowInfo | null {
   return activeSlice(state).workflows.find((w) => w.name === name) ?? null;
 }
 
+/**
+ * The badge label for a session. A live (`running`) interactive (chat) session
+ * surfaces its turn activity instead of the bare lifecycle `"running"`:
+ * `"working"` while the agent streams a turn, `"idle"` (the default when activity
+ * is unset) when it waits for the next message. Every other session — task
+ * sessions, and interactive sessions in any non-running state — shows its
+ * lifecycle status verbatim.
+ */
+export function sessionBadgeStatus(session: SessionMeta): string {
+  if (session.kind === "interactive" && session.status === "running") {
+    return session.activity === "busy" ? "working" : "idle";
+  }
+  return session.status;
+}
+
 /** All sessions of the active project, newest first (Sessions panel). */
 export function sessionsForProject(state: AppState): SessionMeta[] {
   const root = state.activeProject;

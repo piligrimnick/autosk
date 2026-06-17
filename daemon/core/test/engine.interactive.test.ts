@@ -8,7 +8,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import type { AgentDefinition } from "@autosk/sdk";
+import type { AgentDefinition, AgentRunContext } from "@autosk/sdk";
 
 import { CapturingLogger, Engine, ExtensionRegistry, Store, type EngineProject } from "../src/index.ts";
 import { gate, makeEngine, makeProject, oneStep, type TestProject } from "./engineHarness.ts";
@@ -233,6 +233,71 @@ describe("engine — interactive (taskless) sessions", () => {
     const sealed = await p.store.sessions.getMeta(meta.id);
     expect(sealed?.status).toBe("done");
     expect(sealed?.error).toBeUndefined();
+  });
+
+  test("ctx.setActivity reports idle/busy on the interactive session meta", async () => {
+    // A live chat opens `idle`; the agent flips it `busy` while a turn streams
+    // and back to `idle` when the turn ends. The runtime persists each onto the
+    // meta and fans it out (status session-event / session-changed) WITHOUT
+    // touching the lifecycle `status`, which stays `running` throughout.
+    let ctxRef: AgentRunContext | undefined;
+    const agent: AgentDefinition = {
+      async onRun(ctx) {
+        ctxRef = ctx;
+        await new Promise<void>((resolve) => {
+          if (ctx.signal.aborted) return resolve();
+          ctx.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    };
+    const { p, engine } = await setup(agent);
+    const meta = await engine.createInteractiveSession(p.root, "chat");
+    await waitForStatus(p, meta.id, "running");
+    // Opened idle.
+    expect((await p.store.sessions.getMeta(meta.id))?.activity).toBe("idle");
+
+    ctxRef!.setActivity("busy");
+    await waitFor(async () => (await p.store.sessions.getMeta(meta.id))?.activity === "busy", 5000);
+    // The lifecycle status is unchanged by an activity flip.
+    expect((await p.store.sessions.getMeta(meta.id))?.status).toBe("running");
+
+    ctxRef!.setActivity("idle");
+    await waitFor(async () => (await p.store.sessions.getMeta(meta.id))?.activity === "idle", 5000);
+
+    await engine.sessionEnd(p.root, meta.id);
+    await waitForStatus(p, meta.id, "done");
+  });
+
+  test("ctx.setActivity is a no-op for a TASK session (interactive-only feature)", async () => {
+    // setActivity is scoped to interactive sessions: a task agent calling it must
+    // not write an `activity` onto its session meta.
+    const started = gate();
+    let ctxRef: AgentRunContext | undefined;
+    const taskAgent: AgentDefinition = {
+      onRun: (ctx) =>
+        new Promise<void>((resolve) => {
+          ctxRef = ctx;
+          started.open();
+          ctx.signal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    };
+    const p = await makeProject({ workflows: [oneStep("w", taskAgent)] });
+    cleanups.push(p.cleanup);
+    const { engine } = makeEngine();
+    engines.push(engine);
+    await engine.addProject(p.project);
+
+    const task = await p.store.createTask({ title: "task session" });
+    await engine.enroll(p.root, task.id, { workflow: "w" });
+    await started.wait;
+    await waitFor(() => p.store.sessions.liveSessionsForTask(task.id).length === 1, 5000);
+    const sessionId = p.store.sessions.liveSessionsForTask(task.id)[0]!.id;
+
+    ctxRef!.setActivity("busy");
+    await new Promise((r) => setTimeout(r, 25)); // let any (erroneous) patch land
+    expect((await p.store.sessions.getMeta(sessionId))?.activity).toBeUndefined();
+
+    await engine.sessionAbort(p.root, sessionId);
   });
 
   test("recovery: an interrupted interactive session → failed:daemon_restart, no task parked", async () => {

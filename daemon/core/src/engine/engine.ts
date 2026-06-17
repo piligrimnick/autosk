@@ -286,6 +286,9 @@ export class Engine implements SessionHost {
       workflow: "",
       step: "",
       agent: agentName,
+      // An interactive session opens idle (empty, waiting for the first user
+      // message); the chat agent flips it to busy/idle on each turn boundary.
+      activity: "idle",
       cwd: project.root,
       timestamp: this.clock(),
     });

@@ -130,8 +130,12 @@ One invocation of an agent's `onRun` for one task step = one **session**.
 Sessions replace v1's "jobs".
 
 - **Meta** (`sessions/<id>.json`): `{ id, kind: task|interactive, task_id,
-  workflow, step, agent, status: queued|running|done|failed|aborted, error?,
-  started_at, ended_at }`. A `task` session is created by the scheduler for a
+  workflow, step, agent, status: queued|running|done|failed|aborted,
+  activity?: idle|busy, error?, started_at, ended_at }`. `activity` is the live
+  **turn** state (orthogonal to the lifecycle `status`): `busy` while the agent
+  is streaming a turn, `idle` when it is waiting for the next user message. It is
+  set for interactive (chat) sessions only and is absent on task sessions and
+  once a session is terminal. A `task` session is created by the scheduler for a
   workflow step; an `interactive` session is a taskless chat (see [Interactive
   sessions](#interactive-taskless-sessions) below) whose
   `task_id`/`workflow`/`step` are the empty-string sentinel (`""`).
@@ -187,6 +191,13 @@ The shipped `@autosk/pi-agent` registers a `"pi"` agent (chat backed by
    there is none. An interrupted interactive session is sealed
    `failed: daemon_restart` on the next daemon start (again, no park); v1 does
    **not** auto-resume it.
+
+While a chat is live the agent reports its **turn activity** via `ctx.setActivity`
+(`busy` on the turn's `agent_start`, `idle` on `agent_end`). The runtime writes it
+to `meta.activity` and pushes a `status` session-event / `session-changed`, so a
+client can show *idle* (waiting for you) vs *working* (streaming a turn) without
+the lifecycle `status` ever leaving `running`. The GUI renders this as the
+session badge: `idle` / `working` instead of a bare `running`.
 
 A live interactive session counts as pending work, so an idle (waiting-for-user)
 chat keeps the daemon from idle-shutting-down until the chat is ended or aborted.

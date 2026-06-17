@@ -174,6 +174,7 @@ export function serializeSessionMeta(m: SessionMeta): string {
     agent: m.agent,
     status: m.status,
   };
+  if (m.activity !== undefined) ordered.activity = m.activity;
   if (m.error !== undefined) ordered.error = m.error;
   ordered.started_at = m.started_at;
   ordered.ended_at = m.ended_at;
@@ -200,6 +201,7 @@ export function parseSessionMeta(text: string): SessionMeta {
     started_at: typeof raw.started_at === "string" ? raw.started_at : null,
     ended_at: typeof raw.ended_at === "string" ? raw.ended_at : null,
   };
+  if (raw.activity === "idle" || raw.activity === "busy") meta.activity = raw.activity;
   if (typeof raw.error === "string") meta.error = raw.error;
   return meta;
 }

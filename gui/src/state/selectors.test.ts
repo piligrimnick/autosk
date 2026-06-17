@@ -8,6 +8,7 @@ import {
   composerMode,
   selectedSession,
   selectedWorkflow,
+  sessionBadgeStatus,
   sessionsForProject,
   tasksByRecency,
 } from "./selectors";
@@ -67,6 +68,27 @@ function taskState(taskId: string, status: TaskView["status"], sessions: Session
     selection: { kind: "task", taskId },
   };
 }
+
+describe("sessionBadgeStatus (interactive turn activity)", () => {
+  it("a live interactive session surfaces idle/working from activity (idle is the default)", () => {
+    const base = mkSession({ id: "s1", task_id: "", kind: "interactive", status: "running" });
+    expect(sessionBadgeStatus({ ...base, activity: undefined })).toBe("idle");
+    expect(sessionBadgeStatus({ ...base, activity: "idle" })).toBe("idle");
+    expect(sessionBadgeStatus({ ...base, activity: "busy" })).toBe("working");
+  });
+
+  it("a non-running interactive session shows its lifecycle status, not activity", () => {
+    const queued = mkSession({ id: "s", task_id: "", kind: "interactive", status: "queued" });
+    expect(sessionBadgeStatus(queued)).toBe("queued");
+    const done = mkSession({ id: "s", task_id: "", kind: "interactive", status: "done", activity: "busy" });
+    expect(sessionBadgeStatus(done)).toBe("done");
+  });
+
+  it("a task session always shows its lifecycle status (activity ignored)", () => {
+    const running = mkSession({ id: "s", task_id: "t1", status: "running", activity: "busy" });
+    expect(sessionBadgeStatus(running)).toBe("running");
+  });
+});
 
 describe("composerMode (entity-driven)", () => {
   it("returns 'none' when nothing is selected", () => {

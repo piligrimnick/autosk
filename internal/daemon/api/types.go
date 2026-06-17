@@ -98,20 +98,32 @@ const (
 	SessionInteractive SessionKind = "interactive"
 )
 
+// SessionActivity is the live turn state of an interactive session: "busy" while
+// the agent streams a turn, "idle" when it waits for the next user message.
+// Empty for task sessions and once the session is terminal. Orthogonal to
+// SessionStatus (the lifecycle); only meaningful while Status == "running".
+type SessionActivity string
+
+const (
+	SessionIdle SessionActivity = "idle"
+	SessionBusy SessionActivity = "busy"
+)
+
 // SessionMeta is one session's metadata (replaces the v1 Job). Listing a task's
 // sessions = filtering metas by task_id.
 type SessionMeta struct {
 	ID   string      `json:"id"`
 	Kind SessionKind `json:"kind"`
 	// TaskID/Workflow/Step are "" for an interactive (taskless) session.
-	TaskID    string        `json:"task_id"`
-	Workflow  string        `json:"workflow"`
-	Step      string        `json:"step"`
-	Agent     string        `json:"agent"`
-	Status    SessionStatus `json:"status"`
-	Error     string        `json:"error,omitempty"`
-	StartedAt *time.Time    `json:"started_at"`
-	EndedAt   *time.Time    `json:"ended_at"`
+	TaskID    string          `json:"task_id"`
+	Workflow  string          `json:"workflow"`
+	Step      string          `json:"step"`
+	Agent     string          `json:"agent"`
+	Status    SessionStatus   `json:"status"`
+	Activity  SessionActivity `json:"activity,omitempty"`
+	Error     string          `json:"error,omitempty"`
+	StartedAt *time.Time      `json:"started_at"`
+	EndedAt   *time.Time      `json:"ended_at"`
 }
 
 // ---------------------------------------------------------------------------

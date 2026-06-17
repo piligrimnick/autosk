@@ -231,6 +231,10 @@ button {
 .badge-running { background: rgba(76, 141, 255, 0.2); color: var(--status-work); }
 .badge-queued { background: rgba(242, 193, 78, 0.16); color: var(--status-human); }
 .badge-failed { background: rgba(239, 83, 80, 0.18); color: var(--danger); }
+/* Interactive-session turn activity (derived from SessionMeta.activity): a live
+ * chat reads `working` while the agent streams a turn, `idle` when waiting. */
+.badge-working { background: rgba(76, 141, 255, 0.2); color: var(--status-work); }
+.badge-idle { background: rgba(138, 160, 198, 0.16); color: var(--fg-dim); }
 
 .chip {
   display: inline-block;

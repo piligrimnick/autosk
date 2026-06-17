@@ -13,13 +13,17 @@
 
 import { useStore } from "@/state/store";
 import { StatusBadge, sessionWorkTime } from "@/components/common";
+import { sessionBadgeStatus } from "@/state/selectors";
 import type { SessionMeta } from "@/types";
 
 export function SessionRow({ session }: { session: SessionMeta }) {
   const { state, effects } = useStore();
   const selected = state.selection.kind === "session" && state.selection.sessionId === session.id;
+  const badgeStatus = sessionBadgeStatus(session);
   const live = session.status === "running";
-  const badgeCls = live ? "is-live" : undefined;
+  // An idle interactive chat is live but quiescent: drop the pulse so only an
+  // actively-working run (or a task session) animates the chip.
+  const badgeCls = live && badgeStatus !== "idle" ? "is-live" : undefined;
 
   return (
     <li
@@ -43,7 +47,7 @@ export function SessionRow({ session }: { session: SessionMeta }) {
            * badge's pixels composited on top of the new one once the
            * `.is-live` pulse animation promotes the node to its own layer —
            * the "two overlapping badges until you hover" glitch. */}
-          <StatusBadge key={session.status} status={session.status} className={badgeCls} />
+          <StatusBadge key={badgeStatus} status={badgeStatus} className={badgeCls} />
         </span>
         <span className="session-id">{session.id}</span>
         {/* An interactive (chat) session has no task id; surface the backing

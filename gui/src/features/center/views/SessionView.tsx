@@ -5,7 +5,7 @@
 import { useState } from "react";
 import { useStore } from "@/state/store";
 import * as ipc from "@/services/ipc";
-import { selectedSession } from "@/state/selectors";
+import { selectedSession, sessionBadgeStatus } from "@/state/selectors";
 import { EmptyState, StatusBadge } from "@/components/common";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { Transcript } from "../components/Transcript";
@@ -29,7 +29,7 @@ export function SessionView() {
     <div className="session-view">
       <div className="session-view-head">
         <div className="session-view-title">
-          <StatusBadge status={session.status} />
+          <StatusBadge status={sessionBadgeStatus(session)} />
           <span className="session-view-id">{session.id}</span>
           <span className="meta-sep">·</span>
           {session.kind === "interactive" ? (

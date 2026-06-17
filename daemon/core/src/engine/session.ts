@@ -33,6 +33,7 @@ import type {
   AgentRunContext,
   ExecOptions,
   IsolationHandle,
+  SessionActivity,
   SessionKind,
   SessionMeta,
   SpawnOptions,
@@ -392,6 +393,32 @@ export class SessionRuntime {
   }
 
   /**
+   * `ctx.setActivity` (plan §4.3): records the agent's live turn activity
+   * (`busy` while streaming a turn, `idle` while waiting for the next user
+   * message) on the session meta and fans it out as a `status` session-event /
+   * `session-changed` so a client renders idle vs working WITHOUT touching the
+   * lifecycle `status`. Scoped to INTERACTIVE sessions (the feature surface),
+   * and inert before the run starts or once the session has settled — a terminal
+   * settle owns the final emit, so a late activity write must neither resurrect
+   * a live state nor fan out a stale frame.
+   */
+  private async setActivity(activity: SessionActivity): Promise<void> {
+    if (this.runtimeKind !== "interactive") return; // interactive-only (v1 scope)
+    if (!this.started || this.settled) return;
+    let meta: SessionMeta;
+    try {
+      meta = await this.project.store.sessions.patchMeta(this.id, { activity });
+    } catch (e) {
+      this.host.logger.warn(`session ${this.id}: setActivity failed (${errMsg(e)})`);
+      return;
+    }
+    // A terminal settle may have raced us while patchMeta awaited; its own emit
+    // carries the authoritative meta, so don't fan out a now-stale `status`.
+    if (this.settled) return;
+    this.host.emitSession(this.project, meta, "status");
+  }
+
+  /**
    * Handles `session.abort` (plan §3.4): fire the `AbortSignal`, call `onAbort`
    * if the run had started, then finalise the session as `aborted` and park the
    * task to `human` (deviation #3: prevents the scheduler instantly re-dispatching
@@ -615,6 +642,9 @@ export class SessionRuntime {
         execOneShot(cmd, { ...opts, defaultCwd: this.cwd, defaultSignal: this.controller.signal }),
       spawn: (cmd: string[], opts?: SpawnOptions) =>
         spawnChild(cmd, { ...opts, defaultCwd: this.cwd, signal: this.controller.signal }),
+      // Fire-and-forget: the agent reports turn boundaries synchronously; the
+      // meta patch + fan-out happen off the call. Inert for task sessions.
+      setActivity: (a: SessionActivity) => void this.setActivity(a),
     };
     if (this.runtimeKind === "interactive") {
       // No task, no workflow, no transit (plan §4.3): stub the task/workflow

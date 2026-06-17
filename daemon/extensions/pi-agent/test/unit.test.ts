@@ -304,6 +304,20 @@ describe("PiDriver — diagnostics (R1)", () => {
     f.emitStdout(JSON.stringify({ type: "tool_execution_start", toolName: "autosk_transit", args: { junk: 1 } }));
     expect(warnings.some((w) => w.includes("had no usable target"))).toBe(true);
   });
+
+  test("reports activity busy on agent_start and idle on agent_end (chat turn boundaries)", () => {
+    const f = fakeChild();
+    const activity: boolean[] = [];
+    new PiDriver(f.child, {
+      onMessage: () => {},
+      onCustom: () => {},
+      signal: new AbortController().signal,
+      onActivity: (busy) => activity.push(busy),
+    });
+    f.emitStdout(JSON.stringify({ type: "agent_start" })); // turn begins → busy
+    f.emitStdout(JSON.stringify({ type: "agent_end" })); // turn ends → idle
+    expect(activity).toEqual([true, false]);
+  });
 });
 
 describe("prompt rendering", () => {

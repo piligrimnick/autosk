@@ -68,6 +68,13 @@ export interface TaskFilter {
 export type SessionStatus = "queued" | "running" | "done" | "failed" | "aborted";
 
 /**
+ * Live turn activity of an interactive (`running`) session: `"busy"` while the
+ * agent streams a turn, `"idle"` when it waits for the next message. Absent for
+ * task sessions and once a session is terminal.
+ */
+export type SessionActivity = "idle" | "busy";
+
+/**
  * Session origin: a scheduler-claimed task/workflow step, or an interactive
  * (taskless) chat. For `"interactive"`, `task_id`/`workflow`/`step` are `""`.
  */
@@ -82,6 +89,8 @@ export interface SessionMeta {
   step: string;
   agent: string;
   status: SessionStatus;
+  /** Live turn activity (interactive running sessions): idle vs busy. */
+  activity?: SessionActivity;
   error?: string;
   started_at: string | null;
   ended_at: string | null;

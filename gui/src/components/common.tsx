@@ -12,6 +12,10 @@ const STATUS_LABEL: Record<string, string> = {
   running: "running",
   failed: "failed",
   aborted: "aborted",
+  // Interactive-session turn activity (derived, not a lifecycle status): see
+  // sessionBadgeStatus in state/selectors.ts.
+  idle: "idle",
+  working: "working",
 };
 
 export function StatusBadge({ status, className }: { status: string; className?: string }) {

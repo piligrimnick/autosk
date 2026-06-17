@@ -65,6 +65,15 @@ export interface TaskFilter {
 export type SessionStatus = "queued" | "running" | "done" | "failed" | "aborted";
 
 /**
+ * The live turn activity of a session: `"busy"` while an agent is streaming a
+ * turn, `"idle"` when it has finished and is waiting for the next user message.
+ * Orthogonal to {@link SessionStatus} (the lifecycle): activity is only
+ * meaningful while a session is `running`. v1 surfaces it for interactive (chat)
+ * sessions; it is absent on task sessions and once a session is terminal.
+ */
+export type SessionActivity = "idle" | "busy";
+
+/**
  * Session origin (plan §2). A `"task"` session is created by the scheduler when
  * a `status=work` task hits an agent step; an `"interactive"` session is a
  * taskless chat opened directly against a registered agent. For interactive
@@ -88,6 +97,12 @@ export interface SessionMeta {
   step: string;
   agent: string;
   status: SessionStatus;
+  /**
+   * Live turn activity for an interactive (`running`) session: `"busy"` while the
+   * agent streams a turn, `"idle"` when it waits for the next user message.
+   * Absent for task sessions and once the session is terminal.
+   */
+  activity?: SessionActivity;
   error?: string;
   started_at: string | null;
   ended_at: string | null;

@@ -8,7 +8,7 @@
  * ship as the `@autosk/pi-agent` extension on top of `ctx.spawn` + `ctx.transit`.
  */
 
-import type { Comment, TaskFilter, TaskView, WorkflowInfo } from "./types.ts";
+import type { Comment, SessionActivity, TaskFilter, TaskView, WorkflowInfo } from "./types.ts";
 import type { StepTarget } from "./workflow.ts";
 import type { TranscriptMessage } from "./transcript.ts";
 
@@ -134,6 +134,15 @@ export interface AgentRunContext {
   comment(text: string): Promise<void>;
   /** Validates via `workflow.onTransit`, then commits. A second call throws. */
   transit(to: StepTarget): Promise<void>;
+
+  /**
+   * Reports the agent's live turn activity: `"busy"` while streaming a turn,
+   * `"idle"` when waiting for the next user message. The runtime persists it on
+   * the session meta and pushes a `session-changed`/`session-event` so a client
+   * can show idle vs working WITHOUT changing the lifecycle `status`. Scoped to
+   * interactive (chat) sessions — a no-op in `"task"` mode.
+   */
+  setActivity(activity: SessionActivity): void;
 
   /** One-shot child process. */
   exec(cmd: string[], opts?: ExecOptions): Promise<ExecResult>;

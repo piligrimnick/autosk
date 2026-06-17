@@ -134,7 +134,10 @@ The design mirrors the CodexMonitor blueprint ("shared core + thin adapters"):
   selected interactive session and submit sends `sessionInput(cwd, id, text,
   "followup")`. An interactive session shows an **End** button (graceful close →
   `done`, via `sessionEnd(cwd, id)`) where a workflow session shows **Abort**,
-  and its header shows the agent name instead of `task_id`/`workflow:step`. See
+  and its header shows the agent name instead of `task_id`/`workflow:step`. A live
+  chat's badge reflects its **turn activity** (`SessionMeta.activity`, surfaced by
+  `sessionBadgeStatus`): `working` while the agent is streaming a turn and `idle`
+  when it is waiting for your next message — rather than a bare `running`. See
   [docs/daemon.md → Interactive sessions](../docs/daemon.md#interactive-taskless-sessions).
 
 Both invariants are enforced by `scripts/check-ipc-discipline.mjs` (run as part
