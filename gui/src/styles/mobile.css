@@ -17,11 +17,28 @@
     flex-direction: column;
     height: 100vh;
     height: 100dvh;
+    /* --app-vh is the live visual-viewport height published by MobileShell's
+     * useViewportKeyboard hook. iOS WebKit ignores interactive-widget, so this
+     * is what actually shrinks the shell to fit above the on-screen keyboard;
+     * it falls back to 100dvh on platforms/states where the var is unset. */
+    height: var(--app-vh, 100dvh);
     overflow: hidden;
     background: var(--bg);
     color: var(--fg);
     padding: env(safe-area-inset-top) env(safe-area-inset-right) 0
       env(safe-area-inset-left);
+  }
+
+  /* ---- no input focus-zoom ----------------------------------------------*/
+  /* iOS auto-zooms (and pans the layout sideways) when a focused control
+   * renders below 16px. That zoom also shrinks the visual viewport, which the
+   * --app-vh hook would then mistake for the keyboard and collapse the shell.
+   * Pin every text control to 16px on the phone so focusing it never zooms.
+   * (Backed up by maximum-scale=1 in index.html's viewport meta.) */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
   }
 
   /* ---- top bar -----------------------------------------------------------*/
@@ -183,6 +200,84 @@
    * interactive-widget=resizes-content keeps it above the on-screen keyboard. */
   .mobile-shell.is-detail .composer {
     padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  }
+  /* With the keyboard up the shell already sits flush on the keyboard's top
+   * edge (which covers the home indicator), so the safe-area bottom inset would
+   * just be dead space between the input and the keyboard — drop it. */
+  .mobile-shell.is-keyboard.is-detail .composer {
+    padding-bottom: 10px;
+  }
+
+  /* ---- detail screen: no horizontal scroll + hard-wrap long content ------*/
+  /* A scroll pane with overflow-y:auto computes overflow-x to `auto` too, so a
+   * single long unbreakable token (a path, a URL) opens a sideways scroll on
+   * the whole detail screen. Pin overflow-x:hidden on every detail pane and
+   * hard-wrap long words / code so the content always reflows to the viewport
+   * width instead. */
+  .mobile-shell.is-detail .center-body,
+  .mobile-shell.is-detail .session-view,
+  .mobile-shell.is-detail .task-view,
+  .mobile-shell.is-detail .session-view-transcript,
+  .mobile-shell.is-detail .task-view-body {
+    overflow-x: hidden;
+  }
+  .mobile-shell.is-detail .markdown,
+  .mobile-shell.is-detail .markdown p,
+  .mobile-shell.is-detail .markdown li,
+  .mobile-shell.is-detail .markdown code,
+  .mobile-shell.is-detail .msg-body,
+  .mobile-shell.is-detail .msg-chip,
+  .mobile-shell.is-detail .task-view-title {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  /* Fenced code blocks wrap on the phone instead of scrolling sideways. */
+  .mobile-shell.is-detail .markdown pre,
+  .mobile-shell.is-detail .msg-code {
+    white-space: pre-wrap;
+    overflow-x: hidden;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  /* ---- session detail header: status · workflow:step · agent   task-id ---*/
+  /* The session id already labels the top bar, so drop the duplicate on the
+   * header line: it reads "status · workflow:step · agent" with the task id
+   * pinned (and never truncated) at the right edge, all on a single line. */
+  .mobile-shell.is-detail .session-view-id {
+    display: none;
+  }
+  .mobile-shell.is-detail .session-view-title {
+    flex-wrap: nowrap;
+  }
+  .mobile-shell.is-detail .session-view-title .session-wfstep {
+    min-width: 0;
+  }
+  .mobile-shell.is-detail .session-view-right {
+    flex-shrink: 0;
+  }
+
+  /* ---- sessions list rows: full task id / agent, truncated session id -----*/
+  /* The session id is the least useful column on a phone: let it shrink and
+   * ellipsis so the task id (or, for a chat, the agent name) prints in full on
+   * the right edge — and the row never opens a horizontal scroll. */
+  .mobile-body .panel-body {
+    overflow-x: hidden;
+  }
+  .mobile-body .session-row .session-id {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mobile-body .session-row .session-task-id {
+    flex: 0 0 auto;
+    overflow: visible;
+    text-overflow: clip;
+  }
+  .mobile-body .session-row .session-agent-name {
+    margin-left: auto;
+    flex: 0 0 auto;
   }
 
   /* ---- full-screen modal sheets -----------------------------------------*/

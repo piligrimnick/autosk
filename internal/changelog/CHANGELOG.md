@@ -283,6 +283,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installs on first run (see **first-run bootstrap**).
 
 ### Fixed
+- **GUI (iPhone compact layout): on-screen keyboard handling.** iOS WebKit
+  (Safari / the Tauri WKWebView) ignores the `interactive-widget=resizes-content`
+  viewport hint the compact layout relied on, so the keyboard overlaid the
+  `100dvh` shell: the task/comments scroll body was cut off too early, a large
+  dead gap sat between the composer and the keyboard, an empty scroll region
+  appeared below the input (WKWebView's keyboard contentInset), and focusing the
+  input auto-zoomed the page (the sub-16px field tripped iOS's focus-zoom),
+  panning it sideways. Now: every text control is pinned to 16px (plus
+  `maximum-scale=1` in the viewport meta) so focus never zooms; the document and
+  shell heights are driven off the live `visualViewport.height` (a `--app-vh`
+  custom property) so the content fits exactly above the keyboard with nothing
+  for WKWebView to scroll (the top bar can no longer be dragged off-screen); the
+  window is pinned to the top edge; and the composer drops its home-indicator
+  inset while the keyboard is up. The iOS keyboard's form-accessory bar (the
+  prev/next chevrons + Done checkmark) is also removed in the WKWebView
+  (overriding `WKContentView.inputAccessoryView` to `nil`).
+- **GUI (iPhone compact layout): horizontal scroll & cramped session rows.**
+  On the phone single-pane layout, opening a task or session no longer opens a
+  sideways scroll: a scroll pane's `overflow-y:auto` was computing `overflow-x`
+  to `auto`, so a single long unbreakable token (a path/URL) — or a fenced code
+  block — dragged the whole detail screen sideways. Detail panes now pin
+  `overflow-x:hidden` and hard-wrap long words and code. The Sessions list also
+  stops scrolling sideways and now lets the session id shrink/ellipsis so the
+  task id (or, for a chat, the agent name) prints in full on the right edge.
+  Finally, the open-session header drops the duplicate session id (already shown
+  in the top bar) and reads `status · workflow:step · agent` with the task id
+  pinned to the right edge on one line. Desktop and iPad are unaffected (every
+  rule is gated behind the compact media query).
 - **pi-agent: garbled final transcript line on session end.** When a `pi`
   session exited it left an unreadable `pi-agent:warn` entry
   (`pi:stderr: \u001b[?2026h\u001b[r…`) as the last line of the transcript. `pi`

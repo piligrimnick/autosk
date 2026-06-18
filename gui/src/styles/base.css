@@ -39,7 +39,11 @@
 html,
 body,
 #root {
-  height: 100%;
+  /* --app-vh is the live visual-viewport height published by MobileShell on the
+   * iPhone compact layout; it pins the document to the area above the on-screen
+   * keyboard so WKWebView never adds keyboard scroll/inset (the top bar can't be
+   * dragged off-screen). It is unset elsewhere, so this falls back to 100%. */
+  height: var(--app-vh, 100%);
   margin: 0;
   /* The shell owns all scroll regions; the document itself never scrolls, and
    * overscroll-behavior:none kills the macOS rubber-band bounce of the whole
