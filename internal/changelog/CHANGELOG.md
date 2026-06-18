@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > rows or installed npm-package agents.
 
 ### Added
+- **`@autosk/claude-agent` (Claude Code headless agent).** A second shipped
+  agent that drives Claude Code (`claude -p` stream-json) as an autoskd v2 agent
+  — the structural twin of `@autosk/pi-agent`, with Claude Code as the harness
+  instead of `pi --mode rpc` — plus a new self-contained `autoskd mcp` stdio MCP
+  subcommand exposing the autosk tool surface (`transit` ack-only + `task` +
+  `comment`, the latter two shelling out to `autosk --json`) that the agent
+  points Claude at via `--mcp-config`; it registers `@autosk/claude-agent` for
+  interactive chat and is opt-in (not bootstrap-provisioned) (ask-4f347a).
 - **Editable task metadata.** Every task now carries a free-form `metadata`
   object in `task.json` (always present, omitted on disk when empty), readable
   and editable through a new `autosk metadata show/set/unset` verb group, the
