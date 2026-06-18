@@ -297,8 +297,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for WKWebView to scroll (the top bar can no longer be dragged off-screen); the
   window is pinned to the top edge; and the composer drops its home-indicator
   inset while the keyboard is up. The iOS keyboard's form-accessory bar (the
-  prev/next chevrons + Done checkmark) is also removed in the WKWebView
-  (overriding `WKContentView.inputAccessoryView` to `nil`).
+  prev/next chevrons + Done checkmark) is also removed via the Tauri window
+  config (`disableInputAccessoryView: true`).
 - **GUI (iPhone compact layout): horizontal scroll & cramped session rows.**
   On the phone single-pane layout, opening a task or session no longer opens a
   sideways scroll: a scroll pane's `overflow-y:auto` was computing `overflow-x`
