@@ -82,6 +82,12 @@ type Gui struct {
 	// without a real gocui.Gui.
 	dispatch func(func())
 
+	// editObject opens an external editor on the given seed text and returns the
+	// edited result. Defaults to runEditorJSON (suspend gocui + $VISUAL/$EDITOR
+	// on a temp file + resume); the metadata editor uses it, and tests inject a
+	// fake so the diff/apply path is exercised without spawning an editor.
+	editObject func(initial string) (string, error)
+
 	// lastFetchNS is the wall-clock duration of the most recent
 	// fetchRefresh, in nanoseconds. The tick loop reads it to decide
 	// how long to wait before the next refresh — if the datasource is
@@ -239,6 +245,7 @@ func Run(ctx context.Context, opts Options) error {
 		cancel:      cancel,
 		stopRefresh: make(chan struct{}),
 	}
+	gu.editObject = gu.runEditorJSON
 
 	g.SetManagerFunc(gu.layout)
 	if err := gu.bindKeys(); err != nil {

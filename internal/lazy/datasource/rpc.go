@@ -334,6 +334,16 @@ func (r *RPC) AddComment(ctx context.Context, taskID, text string) error {
 	return err
 }
 
+func (r *RPC) SetTaskMetadata(ctx context.Context, id string, patch map[string]any) error {
+	_, err := r.cli.SetTaskMetadata(ctx, id, patch)
+	return err
+}
+
+func (r *RPC) UnsetTaskMetadata(ctx context.Context, id string, keys []string) error {
+	_, err := r.cli.UnsetTaskMetadata(ctx, id, keys)
+	return err
+}
+
 // NOTE: SetMetadata removed in v2
 
 // NOTE: workflow/agent writes removed in v2 - workflows are read-only
@@ -376,6 +386,7 @@ func mapTask(t rpcclient.Task) Task {
 		BlockedBy:    mapRefs(t.BlockedBy),
 		Blocks:       mapRefs(t.Blocks),
 		CommentCount: t.CommentCount,
+		Metadata:     t.Metadata,
 		CreatedAt:    t.CreatedAt,
 		UpdatedAt:    t.UpdatedAt,
 	}

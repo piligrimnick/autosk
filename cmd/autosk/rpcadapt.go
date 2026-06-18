@@ -22,6 +22,7 @@ func taskFromWire(w rpcclient.Task) store.Task {
 		Status:      store.Status(w.Status),
 		Workflow:    w.Workflow,
 		Step:        w.Step,
+		Metadata:    w.Metadata,
 		CreatedAt:   w.CreatedAt,
 		UpdatedAt:   w.UpdatedAt,
 	}

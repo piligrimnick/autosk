@@ -123,6 +123,25 @@ func (c *Client) Unblock(ctx context.Context, id, blocker string) (Task, error) 
 	return out, err
 }
 
+// SetTaskMetadata merges a dot-path patch into a task's free-form metadata
+// (`task.metadata.set`). Each key of `patch` is a dot-path (e.g.
+// "step_visits.dev"); the value is set at that leaf, creating intermediate
+// objects. Returns the updated task view.
+func (c *Client) SetTaskMetadata(ctx context.Context, id string, patch map[string]any) (Task, error) {
+	var out Task
+	err := c.call(ctx, "task.metadata.set", c.selector(map[string]any{"id": id, "patch": patch}), &out)
+	return out, err
+}
+
+// UnsetTaskMetadata removes dot-path keys from a task's metadata
+// (`task.metadata.unset`), pruning any emptied parent objects. Returns the
+// updated task view.
+func (c *Client) UnsetTaskMetadata(ctx context.Context, id string, keys []string) (Task, error) {
+	var out Task
+	err := c.call(ctx, "task.metadata.unset", c.selector(map[string]any{"id": id, "keys": keys}), &out)
+	return out, err
+}
+
 // AddComment inserts a comment authored by `author` (empty → "human").
 func (c *Client) AddComment(ctx context.Context, taskID, author, text string) (Comment, error) {
 	extra := map[string]any{"task_id": taskID, "text": text}

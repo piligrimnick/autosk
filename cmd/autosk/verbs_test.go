@@ -98,6 +98,73 @@ func TestUpdateTitleDescription(t *testing.T) {
 	}
 }
 
+func TestMetadataShowSetUnset(t *testing.T) {
+	dir := initProject(t)
+	id := createTask(t, dir, "with metadata")
+
+	// A fresh task shows empty metadata.
+	show, err := runRoot(t, dir, "metadata", "show", id, "--json")
+	if err != nil {
+		t.Fatalf("metadata show: %v\n%s", err, show)
+	}
+	var empty map[string]any
+	if err := json.Unmarshal([]byte(show), &empty); err != nil {
+		t.Fatalf("unmarshal metadata show: %v\n%s", err, show)
+	}
+	if len(empty) != 0 {
+		t.Errorf("fresh task metadata should be empty, got: %v", empty)
+	}
+
+	// Set a JSON-typed value (a number under a dot-path) and a bare string.
+	if _, err := runRoot(t, dir, "metadata", "set", id, "step_visits.dev", "3"); err != nil {
+		t.Fatalf("metadata set number: %v", err)
+	}
+	if _, err := runRoot(t, dir, "metadata", "set", id, "note", "hello world"); err != nil {
+		t.Fatalf("metadata set string: %v", err)
+	}
+
+	// show --json reflects both: the number is JSON-typed, the bare word a string.
+	show, _ = runRoot(t, dir, "metadata", "show", id, "--json")
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(show), &meta); err != nil {
+		t.Fatalf("unmarshal metadata: %v\n%s", err, show)
+	}
+	sv, ok := meta["step_visits"].(map[string]any)
+	if !ok || sv["dev"] != float64(3) {
+		t.Errorf("step_visits.dev not set to 3: %v", meta)
+	}
+	if meta["note"] != "hello world" {
+		t.Errorf("note not set to string: %v", meta["note"])
+	}
+
+	// The full metadata object also surfaces in `show --json`.
+	taskShow, _ := runRoot(t, dir, "show", id, "--json")
+	var tv map[string]any
+	_ = json.Unmarshal([]byte(taskShow), &tv)
+	if _, has := tv["metadata"]; !has {
+		t.Errorf("show --json should include metadata: %v", tv)
+	}
+
+	// Unset the leaf → its emptied parent is pruned.
+	if _, err := runRoot(t, dir, "metadata", "unset", id, "step_visits.dev"); err != nil {
+		t.Fatalf("metadata unset: %v", err)
+	}
+	show, _ = runRoot(t, dir, "metadata", "show", id, "--json")
+	meta = map[string]any{}
+	_ = json.Unmarshal([]byte(show), &meta)
+	if _, has := meta["step_visits"]; has {
+		t.Errorf("step_visits should be pruned: %v", meta)
+	}
+	if meta["note"] != "hello world" {
+		t.Errorf("note should survive the unset: %v", meta)
+	}
+
+	// An invalid task id errors non-zero.
+	if _, err := runRoot(t, dir, "metadata", "set", "ask-nope01", "a", "1"); err == nil {
+		t.Errorf("metadata set of an unknown id should error")
+	}
+}
+
 func TestCommentAddListEditDelete(t *testing.T) {
 	dir := initProject(t)
 	id := createTask(t, dir, "with comments")

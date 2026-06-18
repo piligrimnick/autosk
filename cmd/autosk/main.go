@@ -40,6 +40,7 @@ func newRootCmd() *cobra.Command {
 		newBlockCmd(),
 		newUnblockCmd(),
 		newDepCmd(),
+		newMetadataCmd(),
 		newInitCmd(),
 		newExtCmd(),
 		newProjectCmd(),

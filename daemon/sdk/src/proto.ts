@@ -199,6 +199,23 @@ export interface TaskBlockParams extends ProjectSelector {
   id: string;
   blocked_by: string;
 }
+/**
+ * `task.metadata.set` (plan §4): merge a patch into a task's `metadata` tree.
+ * Each KEY of `patch` is a **dot-path** (e.g. `step_visits.dev`); the value is
+ * set at that leaf, creating any intermediate objects. Returns the updated view.
+ */
+export interface TaskMetadataSetParams extends ProjectSelector {
+  id: string;
+  patch: Record<string, unknown>;
+}
+/**
+ * `task.metadata.unset` (plan §4): remove dot-path keys from a task's
+ * `metadata` tree, pruning any parent objects emptied by the removal.
+ */
+export interface TaskMetadataUnsetParams extends ProjectSelector {
+  id: string;
+  keys: string[];
+}
 export interface CommentAddParams extends ProjectSelector {
   task_id: string;
   text: string;
@@ -378,6 +395,8 @@ export interface RpcMethodMap {
   "task.reopen": { params: TaskGetParams; result: TaskView };
   "task.block": { params: TaskBlockParams; result: TaskView };
   "task.unblock": { params: TaskBlockParams; result: TaskView };
+  "task.metadata.set": { params: TaskMetadataSetParams; result: TaskView };
+  "task.metadata.unset": { params: TaskMetadataUnsetParams; result: TaskView };
   "task.comment.add": { params: CommentAddParams; result: Comment };
   "task.comment.list": { params: CommentListParams; result: Comment[] };
   "task.comment.edit": { params: CommentEditParams; result: Comment };
@@ -449,6 +468,8 @@ export const RPC_METHODS = [
   "task.reopen",
   "task.block",
   "task.unblock",
+  "task.metadata.set",
+  "task.metadata.unset",
   "task.comment.add",
   "task.comment.list",
   "task.comment.edit",

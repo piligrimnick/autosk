@@ -234,6 +234,27 @@ export function taskUnblock(cwd: string, id: string, blockedBy: string): Promise
   return daemonRequest<TaskView>("task.unblock", sel(cwd, { id, blocked_by: blockedBy }));
 }
 
+/**
+ * Merge a dot-path patch into a task's free-form metadata (`task.metadata.set`).
+ * Each key of `patch` is a dot-path (e.g. `step_visits.dev`) merged into the
+ * metadata tree. Returns the updated view.
+ */
+export function taskMetadataSet(
+  cwd: string,
+  id: string,
+  patch: Record<string, unknown>,
+): Promise<TaskView> {
+  return daemonRequest<TaskView>("task.metadata.set", sel(cwd, { id, patch }));
+}
+
+/**
+ * Remove dot-path keys from a task's metadata (`task.metadata.unset`), pruning
+ * emptied parent objects. Returns the updated view.
+ */
+export function taskMetadataUnset(cwd: string, id: string, keys: string[]): Promise<TaskView> {
+  return daemonRequest<TaskView>("task.metadata.unset", sel(cwd, { id, keys }));
+}
+
 /** Open this project's task-change push for the live connection (front-end issued). */
 export function taskSubscribe(cwd: string): Promise<{ ok: boolean }> {
   return daemonRequest("task.subscribe", sel(cwd));

@@ -111,6 +111,7 @@ describe("resilience — a corrupt task.json never bricks the project", () => {
       workflow: null,
       step: null,
       blocked_by: [],
+      metadata: {},
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
     };

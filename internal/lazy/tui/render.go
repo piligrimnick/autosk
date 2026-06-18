@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -693,6 +695,9 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, width in
 		} else {
 			b.WriteString("\n" + styleMuted.Render("(no description)") + "\n")
 		}
+		if len(t.Metadata) > 0 {
+			b.WriteString("\nmetadata:\n" + metadataBody(t.Metadata) + "\n")
+		}
 		for _, c := range comments {
 			if strings.TrimSpace(c.Text) == "" {
 				continue
@@ -732,6 +737,12 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, width in
 	}
 	b.WriteString("\n" + drawLabeledBox(styleMuted.Render("Description"), descBody, width) + "\n")
 
+	// ── Metadata box ───────────────────────────────────
+	// The free-form bag, pretty-printed. When it carries the reserved
+	// step_visits counter the box leads with a compact "visits:" summary so the
+	// re-run counts read at a glance. Edited via the 'M' key ($EDITOR).
+	b.WriteString("\n" + drawLabeledBox(styleMuted.Render("Metadata"), metadataBody(t.Metadata), width) + "\n")
+
 	// ── Per-comment boxes ────────────────────────────────────────
 	// Each comment is its own labeled box; the label is
 	// "<smart-time> <author>" where smart-time drops the date for
@@ -758,6 +769,54 @@ func renderTaskDetail(t datasource.Task, comments []datasource.Comment, width in
 	// (v2 has no signals — the kickback-history box was removed.)
 
 	return b.String()
+}
+
+// metadataBody renders a task's free-form metadata for the inspector. When the
+// bag carries the reserved step_visits counter it leads with a compact
+// "visits:" summary line; the full bag follows as pretty-printed JSON (map keys
+// sorted, so the output is deterministic across refreshes). An empty bag shows
+// the muted "(no metadata)" placeholder.
+func metadataBody(meta map[string]any) string {
+	if len(meta) == 0 {
+		return styleMuted.Render("(no metadata)")
+	}
+	var b strings.Builder
+	if summary := stepVisitsSummary(meta); summary != "" {
+		b.WriteString(summary + "\n\n")
+	}
+	pretty, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return styleErr.Render("(unrenderable metadata)")
+	}
+	b.WriteString(string(pretty))
+	return b.String()
+}
+
+// stepVisitsSummary renders the reserved step_visits counter as a compact
+// "visits: dev×2, review×1" line (steps sorted), or "" when the bag carries no
+// (well-formed) step_visits map.
+func stepVisitsSummary(meta map[string]any) string {
+	raw, ok := meta["step_visits"].(map[string]any)
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+	steps := make([]string, 0, len(raw))
+	for k := range raw {
+		steps = append(steps, k)
+	}
+	sort.Strings(steps)
+	parts := make([]string, 0, len(steps))
+	for _, s := range steps {
+		n := 0
+		switch v := raw[s].(type) {
+		case float64:
+			n = int(v)
+		case int:
+			n = v
+		}
+		parts = append(parts, fmt.Sprintf("%s\u00d7%d", s, n))
+	}
+	return styleMuted.Render("visits: ") + strings.Join(parts, ", ")
 }
 
 // drawLabeledBox renders body inside a rounded box of the given

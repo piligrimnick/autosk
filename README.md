@@ -155,6 +155,7 @@ Tasks live as files under `.autosk/` inside your repo
 - An **id** like `ask-3f9b2c` and a **title**.
 - A **status**: `new` (open work), `work` (an agent is on it), `human` (waiting for a person), `done`, or `cancel`.
 - Optional **blockers** — `autosk block <id> <blocker-id>` makes a task wait for another.
+- A free-form **metadata** bag — `autosk metadata show/set/unset <id> …` reads and edits it; the engine keeps each workflow's visit counts under the reserved `step_visits` key (resettable by hand).
 
 `autosk ready` returns the *ready set*: tasks in `new` status with no open blocker. That's what humans and agents pull from.
 

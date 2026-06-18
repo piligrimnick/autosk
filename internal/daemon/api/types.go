@@ -36,22 +36,25 @@ type TaskRef struct {
 	Status TaskStatus `json:"status"`
 }
 
-// TaskView is the enriched task view (plan §3.1). v2 drops priority, author_id,
-// and metadata. `blocked`/`blocks` are derived server-side. `workflow`/`step`
-// are JSON null until the task is enrolled (decoded as "").
+// TaskView is the enriched task view (plan §3.1). v2 drops priority and
+// author_id. `blocked`/`blocks` are derived server-side. `workflow`/`step`
+// are JSON null until the task is enrolled (decoded as ""). Metadata is the
+// free-form, human-editable bag (always present; {} when none); the engine
+// reserves the `step_visits` sub-object inside it.
 type TaskView struct {
-	ID           string     `json:"id"`
-	Title        string     `json:"title"`
-	Description  string     `json:"description"`
-	Status       TaskStatus `json:"status"`
-	Workflow     string     `json:"workflow"`
-	Step         string     `json:"step"`
-	Blocked      bool       `json:"blocked"`
-	BlockedBy    []TaskRef  `json:"blocked_by"`
-	Blocks       []TaskRef  `json:"blocks"`
-	CommentCount int        `json:"comment_count"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID           string         `json:"id"`
+	Title        string         `json:"title"`
+	Description  string         `json:"description"`
+	Status       TaskStatus     `json:"status"`
+	Workflow     string         `json:"workflow"`
+	Step         string         `json:"step"`
+	Blocked      bool           `json:"blocked"`
+	BlockedBy    []TaskRef      `json:"blocked_by"`
+	Blocks       []TaskRef      `json:"blocks"`
+	CommentCount int            `json:"comment_count"`
+	Metadata     map[string]any `json:"metadata"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
 // Comment is one comment on a task (plan §3.1). v2 ids are strings (cm-…) and

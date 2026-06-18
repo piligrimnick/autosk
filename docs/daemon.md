@@ -24,7 +24,7 @@ plain files the daemon writes atomically (tmp + rename):
 
 ```
 .autosk/
-  tasks/<id>/task.json        # one task: title, description, status, workflow, step, blocked_by, timestamps
+  tasks/<id>/task.json        # one task: title, description, status, workflow, step, blocked_by, metadata, timestamps
   tasks/<id>/comments.jsonl   # the task's comments (one JSON object per line)
   sessions/<session-id>.json  # session meta (one agent run for one step)
   sessions/<session-id>.jsonl # the session transcript (pi-format; see "Sessions" below)
@@ -242,11 +242,51 @@ chat keeps the daemon from idle-shutting-down until the chat is ended or aborted
 The daemon is the writer for all RPC-driven mutations, but it also honours
 external (human/script) edits picked up by its startup scan + fs watcher:
 
-- external edits to `title` / `description` / `blocked_by` / comments are
-  accepted as-is;
+- external edits to `title` / `description` / `blocked_by` / `metadata` /
+  comments are accepted as-is;
 - external edits to `status` / `step` / `workflow` of a task **with a live
   session** are rejected (the file is rewritten from engine state and a warning
   is logged) — the engine owns enrolled tasks.
+
+Because `metadata` is human-editable, hand-editing (or `autosk metadata unset`)
+the reserved `step_visits` counter is the supported escape hatch for a workflow
+visit cap (last-writer-wins against a concurrent engine bump). See [Task
+metadata](#task-metadata) below.
+
+## Task metadata
+
+Every task carries a free-form `metadata` object in `task.json` — an opaque,
+human-editable key/value bag (always present, an empty object `{}` when the task
+has none). On disk the key is **omitted entirely when empty**, so pre-metadata
+`task.json` files round-trip byte-for-byte; a non-empty bag serialises in a fixed
+slot (after `blocked_by`, before `created_at`). A missing / corrupt / non-object
+`metadata` parses defensively to `{}`.
+
+The daemon treats the bag as opaque data **except** for one reserved sub-object,
+`step_visits` (a `step name → entry count` map) that the engine auto-maintains
+for workflow visit caps — see [workflows.md → `onTransit`](workflows.md#ontransit--the-only-graph-authority).
+
+Two dedicated RPC methods edit it server-side, under the per-task lock (so
+concurrent edits serialise with no lost updates); both bump `updated_at`, emit
+`task-changed`, and return the updated `TaskView`:
+
+- **`task.metadata.set {id, patch}`** — `patch` keys are **dot-paths** (e.g.
+  `step_visits.dev`); each value is written at that leaf, creating intermediate
+  objects along the way (a merge, not a whole-document replace).
+- **`task.metadata.unset {id, keys}`** — each `keys` entry is a dot-path that is
+  removed; an ancestor object emptied by the removal is pruned.
+
+From the CLI:
+
+```bash
+autosk metadata show <id>                       # pretty JSON (honors --json)
+autosk metadata set <id> step_visits.dev 0      # value parsed as JSON, else a string
+autosk metadata unset <id> step_visits          # reset a workflow's dev visit count
+```
+
+`autosk show <id> --json` also includes the full `metadata` object. There is no
+`task.update` passthrough for metadata — the dedicated `set`/`unset` family is
+the only RPC write path.
 
 ## JSON-RPC v2 surface
 
@@ -260,7 +300,7 @@ RFC3339 UTC. The wire types are defined once in
 | --- | --- |
 | meta | `version`, `auth`, `healthz`, `shutdown` |
 | project | `list`, `add`, `remove`, `init`, `diagnostics` (extension load errors), `subscribe`/`unsubscribe` |
-| task | `list`, `get`, `create`, `update`, `enroll {workflow}`, `resume {to?}`, `done`, `cancel`, `reopen`, `block`/`unblock`, `comment.add/list/edit/delete`, `subscribe`/`unsubscribe` |
+| task | `list`, `get`, `create`, `update`, `enroll {workflow}`, `resume {to?}`, `done`, `cancel`, `reopen`, `block`/`unblock`, `metadata.set`/`metadata.unset`, `comment.add/list/edit/delete`, `subscribe`/`unsubscribe` |
 | registry | `workflow.list`, `workflow.get`, `agent.list` (rendered from code — read-only) |
 | session | `list {task_id?}`, `get`, `transcript {from_line?, limit?}`, `subscribe`/`unsubscribe` (replay-then-tail), `input {message, kind}`, `abort`, `create {agent}` (open an interactive session), `end` (gracefully end one → `done`) |
 

@@ -74,6 +74,12 @@ export function TaskView() {
             <Markdown text={task.description} />
           </div>
         )}
+        {task.metadata && Object.keys(task.metadata).length > 0 && (
+          <div className="task-metadata">
+            <div className="task-comments-head">Metadata</div>
+            <pre className="mono task-metadata-body">{JSON.stringify(task.metadata, null, 2)}</pre>
+          </div>
+        )}
         <div className="task-comments">
           <div className="task-comments-head">Comments ({comments.length})</div>
           {comments.length === 0 ? (

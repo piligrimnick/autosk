@@ -33,6 +33,7 @@ import {
 
 import { systemClock, type Clock } from "./clock.ts";
 import { KeyedMutex } from "./lock.ts";
+import { applyMetadataPatch, applyMetadataUnset, bumpStepVisit } from "./metadata.ts";
 import { consoleLogger, type Logger } from "./logger.ts";
 import { ProjectPaths } from "./paths.ts";
 import type { StoredTask } from "./records.ts";
@@ -371,14 +372,15 @@ export class Store {
           `(live session); restoring engine state`,
       );
       // Restore the engine-owned triple; keep externally-edited human fields
-      // (title/description/blocked_by) so a bundled human edit is not lost
-      // (plan §3.7(2): those fields are accepted, status/step/workflow are not).
-      // When those human fields actually changed, bump `updated_at` so clients
-      // diffing on it notice the accepted half; otherwise keep the engine's.
+      // (title/description/blocked_by/metadata) so a bundled human edit is not
+      // lost (plan §3.7(2)/§4: those fields are accepted, status/step/workflow
+      // are not). When those human fields actually changed, bump `updated_at` so
+      // clients diffing on it notice the accepted half; otherwise keep engine's.
       const humanFieldsChanged =
         disk.task.title !== engine.title ||
         disk.task.description !== engine.description ||
-        !sameIdList(disk.task.blocked_by, engine.blocked_by);
+        !sameIdList(disk.task.blocked_by, engine.blocked_by) ||
+        !sameMetadata(disk.task.metadata, engine.metadata);
       const restored: StoredTask = {
         ...disk.task,
         status: engine.status,
@@ -413,6 +415,7 @@ export class Store {
         workflow: null,
         step: null,
         blocked_by: input.blocked_by ? [...input.blocked_by] : [],
+        metadata: {},
         created_at: now,
         updated_at: now,
       };
@@ -436,18 +439,63 @@ export class Store {
    * Sets the engine-owned position (`status` / `step` / `workflow`). This is
    * the write the scheduler/engine make on enroll/transit (P4); P2 exposes it so
    * tasks can become enrolled (and thus eligible for the ownership policy).
+   *
+   * `opts.countVisit` (a step name) bumps `metadata.step_visits[step]` in the
+   * SAME `mutateTask` write, so a transition INTO a named step records its visit
+   * atomically with the position move (plan §4/§5). The bump runs AFTER
+   * `onTransit` has been consulted at the call site, preserving the prior-entries
+   * semantics of `ctx.visits()`. A `{ status }` flip (and `reopen`/`park`) passes
+   * no `countVisit` and therefore never counts.
    */
   async setPosition(
     id: string,
     pos: { status: TaskStatus; workflow: string | null; step: string | null },
+    opts?: { countVisit?: string },
   ): Promise<TaskView> {
     await this.mutateTask(id, (t) => {
       t.status = pos.status;
       t.workflow = pos.workflow;
       t.step = pos.step;
+      if (opts?.countVisit !== undefined) bumpStepVisit(t.metadata, opts.countVisit);
     });
     this.notifyTaskChange(id);
     return this.taskView(id);
+  }
+
+  /**
+   * Merges a dot-path `patch` into a task's `metadata` (the `task.metadata.set`
+   * RPC). Runs under the per-task lock, bumps `updated_at`, notifies. Throws
+   * `task not found` for an unknown id.
+   */
+  async mergeMetadata(id: string, patch: Record<string, unknown>): Promise<TaskView> {
+    await this.mutateTask(id, (t) => {
+      applyMetadataPatch(t.metadata, patch);
+    });
+    this.notifyTaskChange(id);
+    return this.taskView(id);
+  }
+
+  /**
+   * Removes dot-path `keys` from a task's `metadata`, pruning emptied parents
+   * (the `task.metadata.unset` RPC). Runs under the per-task lock, bumps
+   * `updated_at`, notifies. Throws `task not found` for an unknown id.
+   */
+  async unsetMetadata(id: string, keys: string[]): Promise<TaskView> {
+    await this.mutateTask(id, (t) => {
+      applyMetadataUnset(t.metadata, keys);
+    });
+    this.notifyTaskChange(id);
+    return this.taskView(id);
+  }
+
+  /**
+   * Synchronous, cache-based read of a task's `metadata` (a CLONE), for the
+   * engine's synchronous `ctx.visits()` (plan §5). Returns `{}` when the task is
+   * not cached. Callers must not mutate the result.
+   */
+  peekMetadata(id: string): Record<string, unknown> {
+    const t = this.tasks.peek(id);
+    return t ? structuredClone(t.metadata) : {};
   }
 
   /**
@@ -481,7 +529,13 @@ export class Store {
   private async mutateTask(id: string, apply: (t: StoredTask) => void): Promise<void> {
     await this.locks.run(id, async () => {
       const current = await this.requireLocked(id);
-      const next: StoredTask = { ...current, blocked_by: [...current.blocked_by] };
+      // Deep-copy `metadata` (a plain `{ ...current }` spread would alias the
+      // nested bag, letting an apply() mutate the cached record in place).
+      const next: StoredTask = {
+        ...current,
+        blocked_by: [...current.blocked_by],
+        metadata: structuredClone(current.metadata),
+      };
       apply(next);
       next.id = current.id;
       next.created_at = current.created_at;
@@ -719,6 +773,8 @@ export class Store {
       blocked_by: blockedBy,
       blocks,
       comment_count: commentCount,
+      // Clone so a client/notification consumer cannot mutate the cached record.
+      metadata: structuredClone(task.metadata),
       created_at: task.created_at,
       updated_at: task.updated_at,
     };
@@ -735,6 +791,14 @@ function sameIdList(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
+}
+
+/**
+ * Structural equality of two metadata bags (a cheap JSON compare — metadata is
+ * pure JSON data). Used only to decide whether a restore bumped `updated_at`.
+ */
+function sameMetadata(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /**

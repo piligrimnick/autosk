@@ -176,6 +176,7 @@ func (gu *Gui) bindingSpecs() []bindingSpec {
 		{View: winTasks, Key: 'b', Mod: gocui.ModNone, Handler: gu.taskBlock, Description: "add blocker", Short: "block", DisplayOnScreen: true},
 		{View: winTasks, Key: 'u', Mod: gocui.ModNone, Handler: gu.taskUnblock, Description: "remove blocker", Short: "unblock", DisplayOnScreen: true},
 		{View: winTasks, Key: 'm', Mod: gocui.ModNone, Handler: gu.taskComment, Description: "add comment", Short: "comment", DisplayOnScreen: true},
+		{View: winTasks, Key: 'M', Mod: gocui.ModNone, Handler: gu.taskEditMetadata, Description: "edit metadata ($EDITOR)", Short: "metadata"},
 		{View: winTasks, Key: 'o', Mod: gocui.ModNone, Handler: gu.taskReopen, Description: "reopen task", Short: "reopen", DisplayOnScreen: true},
 		// Note: there is no `c claim` binding. The v0.2 schema has no
 		// claim verb — tasks self-advance via workflow steps. `c` is
@@ -203,6 +204,7 @@ func (gu *Gui) bindingSpecs() []bindingSpec {
 		{View: winDetail, Key: gocui.KeyPgup, Mod: gocui.ModNone, Handler: gu.detailScrollPage(-1), Tag: "navigation"},
 		{View: winDetail, Key: 'g', Mod: gocui.ModNone, Handler: gu.detailScrollTo(false), Description: "top", Tag: "navigation"},
 		{View: winDetail, Key: 'G', Mod: gocui.ModNone, Handler: gu.detailScrollTo(true), Description: "bottom", Tag: "navigation"},
+		{View: winDetail, Key: 'M', Mod: gocui.ModNone, Handler: gu.taskEditMetadata, Description: "edit metadata ($EDITOR)", Short: "metadata"},
 
 		// Session-input bindings (relocated from the old fullscreen-inspector input view).
 		// Bound only on winSessionInput; the view itself only exists when

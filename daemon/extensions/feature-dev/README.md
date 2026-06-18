@@ -30,7 +30,10 @@ registers those agents — there is no separate agent registration.
 - **Visit cap:** `onTransit` rejects a bounce-back into `dev` once the task has
   already entered `dev` `DEV_VISIT_CAP` (5) times — the 6th `dev` entry is
   rejected (via `ctx.visits("dev")`), so a task that keeps failing review/
-  validation parks for a human instead of looping forever.
+  validation parks for a human instead of looping forever. The count is the
+  persistent `metadata.step_visits.dev` the engine maintains; reset it with
+  `autosk metadata unset <id> step_visits` to let a parked task bounce through
+  `dev` again.
 
 The role prompts live under [`prompts/`](./prompts) as `.md` files; the workflow
 reads each one and seeds it into the corresponding pi agent as its `firstMessage`.

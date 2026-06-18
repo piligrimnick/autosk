@@ -59,6 +59,59 @@ describe("task lifecycle + done/cancel/reopen", () => {
     expect(unblocked.blocked).toBe(false);
   });
 
+  test("task.metadata.set / unset: dot-path merge, prune, NOT_FOUND, INVALID_PARAMS", async () => {
+    const t = await client.call<TaskView>("task.create", { cwd, title: "meta" });
+    expect(t.metadata).toEqual({});
+
+    // set creates nested objects + merges sibling keys.
+    const set1 = await client.call<TaskView>("task.metadata.set", {
+      cwd,
+      id: t.id,
+      patch: { "step_visits.dev": 3, note: "keep" },
+    });
+    expect(set1.metadata).toEqual({ step_visits: { dev: 3 }, note: "keep" });
+    expect(set1.updated_at >= t.updated_at).toBe(true);
+
+    const set2 = await client.call<TaskView>("task.metadata.set", {
+      cwd,
+      id: t.id,
+      patch: { "step_visits.review": 1 },
+    });
+    expect(set2.metadata).toEqual({ step_visits: { dev: 3, review: 1 }, note: "keep" });
+
+    // unset removes a leaf and prunes nothing while a sibling remains.
+    const unset1 = await client.call<TaskView>("task.metadata.unset", {
+      cwd,
+      id: t.id,
+      keys: ["step_visits.dev"],
+    });
+    expect(unset1.metadata).toEqual({ step_visits: { review: 1 }, note: "keep" });
+
+    // unsetting the last child prunes the emptied parent.
+    const unset2 = await client.call<TaskView>("task.metadata.unset", {
+      cwd,
+      id: t.id,
+      keys: ["step_visits.review"],
+    });
+    expect(unset2.metadata).toEqual({ note: "keep" });
+
+    // Unknown task id → NOT_FOUND for both.
+    await expect(
+      client.call("task.metadata.set", { cwd, id: "ask-nope01", patch: { a: 1 } }),
+    ).rejects.toMatchObject({ code: ErrorCodes.NOT_FOUND });
+    await expect(
+      client.call("task.metadata.unset", { cwd, id: "ask-nope01", keys: ["a"] }),
+    ).rejects.toMatchObject({ code: ErrorCodes.NOT_FOUND });
+
+    // Malformed params → INVALID_PARAMS.
+    await expect(
+      client.call("task.metadata.set", { cwd, id: t.id, patch: [1, 2] }),
+    ).rejects.toMatchObject({ code: ErrorCodes.INVALID_PARAMS });
+    await expect(
+      client.call("task.metadata.unset", { cwd, id: t.id, keys: "dev" }),
+    ).rejects.toMatchObject({ code: ErrorCodes.INVALID_PARAMS });
+  });
+
   test("done then reopen of a never-enrolled task → new (unenrolled)", async () => {
     const t = await client.call<TaskView>("task.create", { cwd, title: "T" });
     const done = await client.call<TaskView>("task.done", { cwd, id: t.id });

@@ -104,11 +104,12 @@ describe("feature-dev — scripted walk + visit cap", () => {
     expect(steps.reverse()).toEqual(["dev", "review", "dev", "review", "docs", "validator"]);
   }, 15000);
 
-  test("the dev visit-cap fires through the engine's REAL session-counting visits()", async () => {
+  test("the dev visit-cap fires through the engine's REAL metadata-backed visits()", async () => {
     // The unit test below stubs `visits`; this drives enough real review→dev
-    // bounces that the engine's own `visits('dev')` (transition.ts, counts prior
-    // dev sessions) crosses the cap — protecting the prior-vs-inclusive semantics
-    // against a future refactor of how sessions are counted.
+    // bounces that the engine's own `visits('dev')` (transition.ts, reads the
+    // persisted metadata.step_visits counter bumped on each entry into dev)
+    // crosses the cap — protecting the prior-vs-inclusive semantics against a
+    // future refactor of how visits are counted.
     const wf = scriptedFeatureDev({
       dev: () => ({ step: "review" }),
       // `review` always bounces back to `dev` — the loop is bounded ONLY by the cap.
@@ -130,6 +131,9 @@ describe("feature-dev — scripted walk + visit cap", () => {
     // Exactly DEV_VISIT_CAP dev sessions completed; the next dev entry was rejected.
     const devSessions = metas.filter((m) => m.step === "dev");
     expect(devSessions).toHaveLength(DEV_VISIT_CAP);
+    // The persisted dev counter matches the number of dev entries (the cap source).
+    const meta = p.store.peekMetadata(task.id) as { step_visits: Record<string, number> };
+    expect(meta.step_visits.dev).toBe(DEV_VISIT_CAP);
     expect(devSessions.every((m) => m.status === "done")).toBe(true);
     // The rejecting review session failed carrying the cap error; the task parked.
     const failed = metas.find((m) => m.status === "failed");

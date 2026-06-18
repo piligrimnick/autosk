@@ -199,7 +199,11 @@ export class Engine implements SessionHost {
     const to: StepTarget = { step: target.step ?? wf.firstStep };
     const leavingStep = view.workflow === workflowName ? (view.step ?? "") : "";
     await this.runOnTransit(project, wf, taskId, workflowName, leavingStep, to);
-    const updated = await project.store.setPosition(taskId, positionFor(wf, leavingStep, to));
+    // `to` is always a `{ step }` here, so entering it counts a visit (atomically
+    // with the position write); `onTransit` already ran, so the bump is post-read.
+    const updated = await project.store.setPosition(taskId, positionFor(wf, leavingStep, to), {
+      countVisit: to.step,
+    });
     this.emitTask(project, updated);
     this.kickScan();
     return updated;
@@ -229,7 +233,11 @@ export class Engine implements SessionHost {
     // `runOnTransit` validates the target before invoking `onTransit`, so no
     // separate `validateTarget` call is needed here (ISSUE #9c).
     await this.runOnTransit(project, wf, taskId, view.workflow, view.step, target);
-    const updated = await project.store.setPosition(taskId, positionFor(wf, view.step, target));
+    // Only a `{ step }` resume target counts a visit (entering a named step);
+    // a `{ status }` resume flips status without re-entering a step.
+    const updated = await project.store.setPosition(taskId, positionFor(wf, view.step, target), {
+      countVisit: "step" in target ? target.step : undefined,
+    });
     this.emitTask(project, updated);
     this.kickScan();
     return updated;

@@ -173,6 +173,19 @@
   font-size: 13px;
   color: var(--fg-mute);
 }
+.task-metadata {
+  margin-bottom: 16px;
+}
+.task-metadata-body {
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  margin: 0;
+}
 .comment {
   background: rgba(242, 193, 78, 0.06);
   border: 1px solid rgba(242, 193, 78, 0.2);

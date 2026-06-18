@@ -18,6 +18,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useStore } from "@/state/store";
 import * as ipc from "@/services/ipc";
 import type { TaskView } from "@/types";
+import { computeMetadataDiff, metadataToText } from "@/features/tasks/metadataDiff";
 import { Modal } from "@/components/Modal";
 import { useConfirm } from "@/components/ConfirmDialog";
 
@@ -219,13 +220,33 @@ function EditTaskModal({ task, cwd, onClose }: { task: TaskView; cwd: string; on
   const refresh = useRefresh(task.id);
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
+  const [metadataText, setMetadataText] = useState(() => metadataToText(task.metadata));
+  const [metadataError, setMetadataError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const save = async () => {
     if (!title.trim()) return;
+    // Validate + diff the metadata document BEFORE any write, so an invalid
+    // bag aborts cleanly without a half-applied title/description update.
+    let diff: { patch: Record<string, unknown>; unset: string[] };
+    try {
+      diff = computeMetadataDiff(task.metadata ?? {}, metadataText);
+      setMetadataError(null);
+    } catch (err) {
+      setMetadataError(String((err as Error).message ?? err));
+      return;
+    }
     setBusy(true);
     try {
       await ipc.taskUpdate(cwd, task.id, { title, description });
+      // Send only the changed/added top-level keys as a set-patch and the
+      // removed keys as an unset-list — never a whole-document replace.
+      if (Object.keys(diff.patch).length > 0) {
+        await ipc.taskMetadataSet(cwd, task.id, diff.patch);
+      }
+      if (diff.unset.length > 0) {
+        await ipc.taskMetadataUnset(cwd, task.id, diff.unset);
+      }
       await refresh();
       onClose();
     } catch (err) {
@@ -252,6 +273,16 @@ function EditTaskModal({ task, cwd, onClose }: { task: TaskView; cwd: string; on
       <label className="field">
         <span className="field-label">Description</span>
         <textarea className="textarea" rows={8} value={description} onChange={(e) => setDescription(e.target.value)} />
+      </label>
+      <label className="field">
+        <span className="field-label">Metadata (JSON)</span>
+        <textarea
+          className="textarea mono"
+          rows={8}
+          value={metadataText}
+          onChange={(e) => setMetadataText(e.target.value)}
+        />
+        {metadataError && <div className="form-error">{metadataError}</div>}
       </label>
     </Modal>
   );

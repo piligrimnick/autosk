@@ -453,6 +453,20 @@ export class Daemon {
         const handle = await this.resolveHandle(reqCwd(o));
         return mapTaskNotFound(() => handle.store.unblock(id, blocker));
       },
+      "task.metadata.set": async (params) => {
+        const o = asObj(params);
+        const id = reqString(o, "id");
+        const patch = reqObj(o, "patch");
+        const handle = await this.resolveHandle(reqCwd(o));
+        return mapTaskNotFound(() => handle.store.mergeMetadata(id, patch));
+      },
+      "task.metadata.unset": async (params) => {
+        const o = asObj(params);
+        const id = reqString(o, "id");
+        const keys = reqStringArray(o, "keys");
+        const handle = await this.resolveHandle(reqCwd(o));
+        return mapTaskNotFound(() => handle.store.unsetMetadata(id, keys));
+      },
       "task.comment.add": async (params) => {
         const o = asObj(params);
         const taskId = reqString(o, "task_id");
@@ -795,6 +809,28 @@ function parseIdArray(v: unknown, field: string): string[] | undefined {
   if (v === undefined || v === null) return undefined;
   if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) {
     throw new RpcError(ErrorCodes.INVALID_PARAMS, `${field} must be an array of strings`);
+  }
+  return v as string[];
+}
+
+/** A required plain-object param (e.g. the metadata `patch`). */
+function reqObj(o: Record<string, unknown>, field: string): Record<string, unknown> {
+  const v = o[field];
+  if (typeof v !== "object" || v === null || Array.isArray(v)) {
+    throw new RpcError(ErrorCodes.INVALID_PARAMS, `${field} must be an object`);
+  }
+  return v as Record<string, unknown>;
+}
+
+/**
+ * A required array of non-empty strings (e.g. the metadata `keys` to unset).
+ * The array itself may be empty — an empty `keys` is a no-op `unset` (it still
+ * bumps `updated_at` and emits `task-changed`).
+ */
+function reqStringArray(o: Record<string, unknown>, field: string): string[] {
+  const v = o[field];
+  if (!Array.isArray(v) || v.some((x) => typeof x !== "string" || x.length === 0)) {
+    throw new RpcError(ErrorCodes.INVALID_PARAMS, `${field} must be an array of non-empty strings`);
   }
   return v as string[];
 }
