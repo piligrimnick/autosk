@@ -20,12 +20,21 @@ Locked in before planning (do not re-litigate without revisiting):
    is **not** terminal-scraping. (`~/me/dev/fya` — driving the interactive TUI
    over a hidden PTY and tailing the transcript JSONL — was the alternative we
    rejected for v1; see §12 for the tmux/interactive backend as a future option.)
-2. **Transit channel → an MCP tool** `mcp__autosk__transit`. Register a tiny
-   stdio MCP server via `--mcp-config`; the driver **observes the `tool_use`** for
-   that tool on the output stream and translates it into `ctx.transit(...)`. This
-   is the structural twin of `pi-transit-extension.ts` (the tool only acks; the
-   daemon performs the real transit and feeds an `onTransit` rejection back as a
-   corrective message). See §5.
+2. **Tool surface → one stdio `autosk` MCP server** via `--mcp-config`,
+   exposing the full agent toolset (transit + task + comment), not just transit.
+   The model sees `mcp__autosk__transit`, `mcp__autosk__task`,
+   `mcp__autosk__comment`. The tools split into **two mechanics** (see §5):
+   - **`transit`** is *session-scoped* and **observed**: the tool only acks, and
+     the driver observes its `tool_use` on the output stream → `ctx.transit(...)`
+     (an `onTransit` rejection is fed back as a corrective message). Structural
+     twin of `pi-transit-extension.ts`.
+   - **`task` / `comment`** are *project-store* operations the MCP server
+     **executes for real** by **shelling out to `autosk … --json`** (returning
+     the created task id, the task, the comment list, …) — the direct analog of
+     `@autosk/pi-tools`, reusing its tool schemas/descriptions + argv/JSON layer
+     verbatim. The `autosk` CLI is the single place that already handles the env
+     nuances (`AUTOSK_CWD` project selector, `AUTOSK_SOCK` resolution, daemon
+     connect-or-auto-spawn, author attribution), so we never re-implement them.
 3. **Deliverable → this design doc first.** No code until the plan is agreed.
 
 Everything else (kickback loop, prompt rendering, the Coalescer, `AUTOSK_CWD` /
@@ -69,11 +78,18 @@ daemon/extensions/claude-agent/
     driver.ts                   # ClaudeDriver: stream-json wire ↔ PiDriverHooks-shaped hooks
     wire.ts                     # Claude event → pi-format TranscriptMessage mapping
     prompt.ts                   # re-export / thin wrapper over pi-agent's prompt renderers
-    mcp-transit.ts              # the stdio MCP server shim (autosk__transit tool)
+    mcp-server.ts               # the stdio `autosk` MCP server (transit + task + comment)
   test/
     driver.test.ts
     wire.test.ts
+    mcp-server.test.ts
 ```
+
+The `autosk` MCP server itself ships **inside the `autoskd` binary** as an
+`autoskd mcp` subcommand (§5), not as a loose package file — `mcp-server.ts`
+lives in `daemon/core/src` and is wired into the daemon's arg parser, so it is
+self-contained on a clean machine. The extension package only builds the
+`--mcp-config` that points Claude at `autoskd mcp`.
 
 `package.json` copies pi-agent's verbatim, changing `name`/`description`/
 `keywords`; same `"autosk": { "extensions": ["./index.ts"] }`, same
@@ -90,7 +106,7 @@ compiled `autoskd` resolver only honors a root-level `index.ts`).
 | `index.ts` kickback loop + `liveSessions` + `autoskEnv` | **port** from pi-agent `runTurns`/`runChat`/`forward`/`autoskEnv` with the `ClaudeDriver` swapped in for `PiDriver`. |
 | `driver.ts` | **new** — the Claude stream-json wire protocol. |
 | `wire.ts` | **new** — Anthropic content blocks → pi-format message mapping. |
-| `mcp-transit.ts` | **new** — the MCP server shim (and how `autoskd` runs it). |
+| `mcp-server.ts` (in `daemon/core`) | **new** — the stdio `autosk` MCP server (`autoskd mcp`); **reuses** `@autosk/pi-tools`' tool schemas/descriptions + its argv/JSON layer for `task`/`comment`. |
 
 ## 4. The driver (`src/driver.ts`)
 
@@ -205,10 +221,12 @@ Idempotent; called from both `onAbort` and `onRun`'s `finally`. The engine's
 `ctx.signal` already terminates the child on abort/shutdown — this just lets
 Claude wind a turn down first.
 
-## 5. Transit channel — the `autosk` MCP server (`src/mcp-transit.ts`)
+## 5. The `autosk` MCP server (`autoskd mcp`)
 
-The direct analog of `pi-transit-extension.ts`. A **stdio MCP server** exposing a
-single tool, `transit`, registered with Claude via `--mcp-config`:
+One stdio MCP server gives the model the full autosk toolset. It ships **inside
+the `autoskd` binary** as the `autoskd mcp` subcommand (the compiled daemon is
+self-contained — no global `bun`/`node` at runtime), registered with Claude via
+an inline `--mcp-config`:
 
 ```jsonc
 // inline value passed to --mcp-config
@@ -216,41 +234,82 @@ single tool, `transit`, registered with Claude via `--mcp-config`:
   "mcpServers": {
     "autosk": {
       "type": "stdio",
-      "command": "<autoskd binary>",
-      "args": ["mcp-transit"]
+      "command": "<autoskd binary>",     // process.execPath (compiled) / $AUTOSKD_BIN (dev)
+      "args": ["mcp"],
+      "env": { "AUTOSK_CWD": "<projectRoot>", "AUTOSK_AGENT": "<step>", "AUTOSK_SOCK": "<daemon sock>" }
     }
   }
 }
 ```
 
-Claude exposes the tool to the model as `mcp__autosk__transit` with one string
-arg `to` (a sibling step name, or `done` | `cancel` | `human`) — same schema and
-prompt guidance as the pi tool. The tool body **only returns an ack**; the
-daemon's `ClaudeDriver` observes the `tool_use` on the stream and drives the real
-`ctx.transit(...)`, so an `onTransit` rejection is fed back to the model as a
-corrective follow-up (§6). Core stays closed; no session-scoped daemon RPC.
+The driver resolves the binary path from the daemon's own `process.execPath`
+(compiled) / `$AUTOSKD_BIN` (dev) and bakes it + the autosk env (§9) into the
+inline config. `autoskd mcp` is a minimal stdio MCP server (JSON-RPC over stdio:
+`initialize` → `tools/list` → `tools/call`) exposing up to three tools. They
+split into **two mechanics**:
 
-### How `autoskd` runs the MCP server
+### 5.1 `transit` — session-scoped, **observed** (ack-only)
 
-The compiled `autoskd` is self-contained (no global `bun`/`node` at runtime), so
-the MCP server ships **as a subcommand of the daemon binary**, not a loose
-script: `autoskd mcp-transit` starts a minimal stdio MCP server (JSON-RPC over
-stdio: `initialize` → `tools/list` → `tools/call`) that registers `transit` and
-acks. The driver resolves the binary path from the daemon's own
-`process.execPath` (compiled) / `AUTOSKD_BIN` (dev) and bakes it into the inline
-`--mcp-config`. This keeps the transit tool runnable on a clean machine with no
-extra dependency, mirroring how `ensureGlobalBootstrap` keeps the daemon
-self-contained.
-
-- **Alternative considered (not chosen for v1):** an in-process **HTTP/SSE** MCP
-  server per session, whose `transit` handler calls `ctx.transit` directly and
-  returns the `onTransit` rejection text as a tool error. Cleaner rejection
-  ergonomics, but it needs a per-session localhost port + a live handler↔session
-  binding and breaks parity with the proven "observe-the-tool-call + corrective
-  message" pattern. Keep it in reserve.
-
+The direct analog of `pi-transit-extension.ts`. One string arg `to` (a sibling
+step name, or `done` | `cancel` | `human`) — same schema and prompt guidance as
+the pi tool. Exposed to the model as `mcp__autosk__transit`. The tool body **only
+returns an ack**; the daemon's `ClaudeDriver` observes the `tool_use` on the
+stream and drives the real `ctx.transit(...)`, so an `onTransit` rejection is fed
+back to the model as a corrective follow-up (§6). It cannot be done by the MCP
+server itself: transit is session-scoped (it needs the live `SessionRuntime`'s
+`ctx.transit` + `onTransit` validation + the corrective loop), and the MCP server
+is a separate process with no session handle. **Registered only in task mode**
+(an env flag, e.g. `AUTOSK_MCP_TRANSIT=1`, that `runChat` does not set), so an
+interactive chat is never offered a tool that has nothing to transit.
 `parseTarget(input)` reuses pi-agent's logic (`{ to }` primary; `{ step }` /
 `{ status }` accepted for robustness).
+
+### 5.2 `task` / `comment` — project-store ops, **executed for real**
+
+The analog of `@autosk/pi-tools`. `mcp__autosk__task`
+(create/update/show/list) and `mcp__autosk__comment` (add/list) are **not**
+session-scoped — they are plain operations on the project's `.autosk/` store, so
+the MCP server runs them itself and returns the **real result** (the created task
+id, the task object, the comment list) to the model. Reuse `@autosk/pi-tools`
+verbatim where possible:
+
+- **Tool schemas + descriptions + prompt-guidelines** — copy the `autosk_task` /
+  `autosk_comment` JSON shapes and LLM-facing text from
+  `pi-tools/src/{task,comment}.ts` (already battle-tested guidance). MCP
+  `inputSchema` = the same `{ action, args }` object.
+- **Execution — shell out to `autosk … --json`** (decided). `autoskd mcp` spawns
+  the `autosk` CLI and parses its `--json` output, reusing `pi-tools/src/{argv,
+  cli}.ts`' argv builders + JSON parsing verbatim. **Rationale:** the `autosk`
+  CLI is the *single* place that already centralizes a long tail of nuances we
+  must not re-implement — the `AUTOSK_CWD` project selector (walk-up vs override),
+  `AUTOSK_SOCK` socket resolution, daemon **connect-or-auto-spawn**, the
+  RFC3339/JSON wire format, `AUTOSK_AGENT` author attribution, and any future env
+  knobs. An embedded proto-v2 RPC client would duplicate all of that and drift.
+  Cost: `autosk` (the Go CLI) must be on `PATH` — the same requirement
+  `@autosk/pi-tools` already imposes; document it, and honor an optional
+  `$AUTOSK_BIN` override (else `"autosk"`). The pi-tools missing-binary heuristic
+  (`looksLikeMissingBinary` → a clear "build it / put ./bin on PATH" error)
+  ports over unchanged.
+
+`comment add` defaults its author to `$AUTOSK_AGENT` (the step), already set in
+the MCP server env (§9). These tools flow through Claude's normal
+`tool_use`/`tool_result` events, so `wire.ts` mirrors them into the autosk
+transcript with no special handling — only `transit` is special-cased on the
+observe side. **Registered in both task and interactive mode** (creating/listing
+tasks and commenting is useful in a chat too).
+
+### 5.3 Alternative considered (not chosen for v1)
+
+An in-process **HTTP/SSE** MCP server per session, whose `transit` handler calls
+`ctx.transit` directly and returns the `onTransit` rejection text as a tool
+error. Cleaner rejection ergonomics, but it needs a per-session localhost port +
+a live handler↔session binding and would move the corrective loop out of the
+agent extension into core; it breaks parity with the proven
+"observe-the-tool-call + corrective message" pattern. A `session.transit` UDS-RPC
+(now that `task`/`comment` already use an RPC channel) is a related option with
+the same downside (the kickback loop lives in the agent's `onRun`, not core) and
+adds a session-scoped RPC where the CLI shell-out deliberately keeps task/comment
+on the existing `autosk --json` path. Keep both in reserve.
 
 ## 6. The kickback / corrections loop (`src/index.ts`)
 
@@ -274,8 +333,10 @@ Identical to pi-agent's `runTurns`, with `ClaudeDriver` swapped in:
 ## 7. Interactive (chat) mode
 
 Same branch as pi-agent: `onRun` checks `ctx.mode === "interactive"` → `runChat`:
-spawn `claude` **without** `--mcp-config` (no transit tool), send **no** initial
-prompt, register the driver before the first `await`, wire `onActivity` →
+spawn `claude` with the `autosk` MCP server but **without** the transit flag (so
+the model gets `task`/`comment` but not `transit`, which has nothing to transit
+in a chat — §5.1), send **no** initial prompt, register the driver before the
+first `await`, wire `onActivity` →
 `ctx.setActivity("busy"|"idle")`, then `await` the abort signal. Each composer
 message arrives via `onFollowup` → `driver.input("followup", msg)` (idle → fresh
 turn). The runtime seals `done`/`aborted`/`failed`; `onAbort` winds the driver
@@ -304,6 +365,7 @@ Parallels `PiAgentOptions`; harness-specific where Claude differs:
 | `dangerouslySkipPermissions` | `false` | `--dangerously-skip-permissions` (wins over `permissionMode`; intended for worktree isolation). |
 | `allowedTools` / `disallowedTools` | — | `--allowedTools` / `--disallowedTools` (csv). |
 | `bare` | `false` | `--bare` for hermetic runs. |
+| `autoskTools` | `true` | register the `autosk` MCP server (§5). `false` → omit `--mcp-config` (no transit/task/comment tools; transit then never fires → the run always parks). |
 | `extraArgs` | `[]` | forwarded verbatim. |
 | `maxCorrections` | `3` | corrective turns before giving up → park. |
 | `claudeBin` | `$AUTOSK_CLAUDE_BIN` or `"claude"` | binary to spawn (e2e tests point this at a stub). |
@@ -314,19 +376,27 @@ first-class option is warranted.
 
 ## 9. Env / isolation (unchanged from pi-agent)
 
-`autoskEnv(ctx)` sets `AUTOSK_CWD = ctx.projectRoot` and `AUTOSK_AGENT =
-ctx.workflows.current.step`, merged over `process.env` by `ctx.spawn`. Claude
-runs with `cwd = ctx.cwd` (the worktree under isolation). Two Claude-specific
-caveats:
+`autoskEnv(ctx)` sets `AUTOSK_CWD = ctx.projectRoot`, `AUTOSK_AGENT =
+ctx.workflows.current.step`, **and `AUTOSK_SOCK` = the running daemon's UDS
+path** (new vs pi-agent), merged over `process.env` by `ctx.spawn`. The same env
+is baked into the `--mcp-config` so the `autosk` CLI that `autoskd mcp` shells
+out to (§5.2) resolves the right project (`AUTOSK_CWD`) and connects to the
+*same* running daemon (`AUTOSK_SOCK`) instead of auto-spawning a second one —
+letting the CLI handle that resolution is exactly the point of shelling out to it
+rather than re-implementing it. (The daemon knows its own socket via
+`daemon/core/src/rpc/paths.ts`; the Docker-isolation plan sets the same pair for
+the in-container `autosk`.) Claude runs with `cwd = ctx.cwd` (the worktree under
+isolation). Two Claude-specific caveats:
 
 - **Transcript path under isolation.** Claude writes its own JSONL under
   `~/.claude/projects/<encoded-cwd>/`. We do **not** read it (we read stdout), so
   per-worktree cwd encoding is irrelevant to us — but note it so nobody wires a
   transcript tail by mistake.
-- **`AUTOSK_CWD` for `autosk` tool calls.** If the workflow gives Claude an
-  `autosk` CLI surface (e.g. an MCP/`Bash` path to `autosk_task` / `autosk_comment`),
-  `AUTOSK_CWD` makes those target the real project, exactly as in pi-agent.
-  Workflow transitions stay on the in-process `mcp__autosk__transit` channel.
+- **`AUTOSK_CWD` for the `task`/`comment` tools.** `mcp__autosk__task` /
+  `mcp__autosk__comment` (§5.2) resolve the project from `AUTOSK_CWD`, so they
+  target the real project even when Claude runs in a worktree — exactly as
+  pi-tools does for pi. Workflow transitions stay on the observed
+  `mcp__autosk__transit` channel (§5.1).
 
 ## 10. Build / test wiring (the only non-extension touchpoints)
 
@@ -334,10 +404,14 @@ caveats:
   globs; `bun install` symlinks it. Confirm `daemon/package.json` `workspaces`
   covers `extensions/*` (pi-agent/worktree/feature-dev are already there).
 - `bun run typecheck` (root) must pick up the new `tsconfig.json`.
-- `make build-autoskd`: if `autoskd` learns the `mcp-transit` subcommand (§5), it
-  is part of `daemon/core` — wire the subcommand in the daemon's arg parser
-  (`daemon/core/src`), behind a non-default verb so the normal daemon path is
-  untouched.
+- `make build-autoskd`: `autoskd` learns the `mcp` subcommand (§5) in
+  `daemon/core` — wire it in the daemon's arg parser (`daemon/core/src`) behind a
+  non-default verb so the normal daemon path is untouched. The subcommand pulls
+  in an MCP stdio server (hand-rolled JSON-RPC or `@modelcontextprotocol/sdk` —
+  confirm it bundles cleanly under `bun build --compile`); `task`/`comment`
+  **shell out to the `autosk` CLI** (§5.2), so no UDS client is added to the
+  binary — but `autosk` must be on `PATH` (or `$AUTOSK_BIN`) at runtime, same as
+  `@autosk/pi-tools`.
 - **Bootstrap / availability.** Decide whether `@autosk/claude-agent` is:
   (a) published to npm and installed by `ensureGlobalBootstrap` like
   `@autosk/feature-dev` (so it is available everywhere), or (b) only used by a
@@ -367,6 +441,12 @@ caveats:
    stays alive for multiple turns until stdin closes (the multi-turn model the
    kickback loop relies on). The docs describe streaming input as exactly this;
    verify with the stub + a live smoke.
+7. **`task`/`comment` execution = `autosk --json` shell-out** (decided, §5.2).
+   `autoskd mcp` spawns the `autosk` CLI (single place handling env/socket
+   nuances). Confirm `autosk` is resolvable on `PATH` (or `$AUTOSK_BIN`) in the
+   spawned claude/MCP env, and that `AUTOSK_SOCK` is propagated so the CLI joins
+   the *running* daemon (not a fresh auto-spawn). Confirm the MCP stdio impl
+   bundles under `bun build --compile` (no global `bun`/`node` at runtime).
 
 ## 12. Out of scope (explicit follow-ups)
 
@@ -385,8 +465,11 @@ caveats:
 
 1. **Scaffold** `daemon/extensions/claude-agent/` (package.json, tsconfig, root
    shim, README); `bun install` + `bun run typecheck` green with stub `src`.
-2. **`mcp-transit`** subcommand in `daemon/core` + the `--mcp-config` plumbing;
-   a manual `tools/list` / `tools/call` smoke against `autoskd mcp-transit`.
+2. **`autoskd mcp`** subcommand in `daemon/core` + the `--mcp-config` plumbing:
+   the `transit` (ack-only) tool first, then port `task` / `comment` from
+   `@autosk/pi-tools` (schemas + `argv`/`cli` shell-out to `autosk --json`).
+   A manual `tools/list` / `tools/call` smoke against `autoskd mcp` (assert
+   `transit` acks, `task`/`comment` return real store results).
 3. **`wire.ts`** mapping (Anthropic blocks → pi-format) with unit tests over
    captured `assistant` / `user` / `result` / `stream_event` fixtures.
 4. **`driver.ts`** state machine (turn boundaries, pending target, partials,
@@ -408,6 +491,12 @@ caveats:
   cover: turn-end queueing vs await race, `takePendingTarget`, partial
   coalescing + `stop()` on exit/abort, steer idle-vs-streaming dispatch + retry,
   `shutdown` idempotency. Drive it with synthetic NDJSON lines (no real `claude`).
+- **`mcp-server.test.ts`** — the `autoskd mcp` server: `initialize` /
+  `tools/list` advertises `transit` + `task` + `comment` (transit gated by
+  `AUTOSK_MCP_TRANSIT`); `tools/call transit` acks; `task`/`comment` shell out to
+  a **fake `autosk` binary** (keyed by `$AUTOSK_BIN`) emitting canned `--json`
+  and return the mapped result; argv/JSON shapes match pi-tools (reuse its
+  `argv.test.ts` cases). Also assert the missing-binary error path.
 - **e2e** (opt-in, like pi-agent's): a `claude` stub that emits a canned
   stream-json sequence ending in an `mcp__autosk__transit` tool_use → assert
   `ctx.transit` is called once; a variant with no transit → assert the kickback
