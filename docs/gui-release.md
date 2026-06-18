@@ -2,8 +2,8 @@
 
 The desktop GUI is a [Tauri v2](https://tauri.app) app (React/Vite front end +
 Rust backend). This guide covers **release** builds and how to install them on a
-desktop and on an iPad. For dev runs (`npm run tauri:dev`) and the architecture,
-see [`gui/README.md`](../gui/README.md).
+desktop, an iPad, and an iPhone. For dev runs (`npm run tauri:dev`) and the
+architecture, see [`gui/README.md`](../gui/README.md).
 
 Whichever target you build, the app is a **pure JSON-RPC client of `autoskd`** —
 it does nothing on its own. It runs in one of two modes (set in the in-app
@@ -17,8 +17,9 @@ it does nothing on its own. It runs in one of two modes (set in the in-app
 > **`autoskd` is not bundled into the app yet** (no Tauri sidecar). So a packaged
 > desktop app only works in **local** mode if `autoskd` is already on `PATH`
 > (e.g. `make install` from a checkout, or `brew install wierdbytes/autosk/autosk`),
-> and the **iPad** app must talk to an `autoskd` running elsewhere (Remote mode).
-> `pi` must also be installed wherever the daemon actually runs the agents.
+> and the **iOS** app (iPad or iPhone) must talk to an `autoskd` running
+> elsewhere (Remote mode). `pi` must also be installed wherever the daemon
+> actually runs the agents.
 
 ## Prerequisites (all targets)
 
@@ -55,13 +56,33 @@ Liquid Glass icon for macOS 26+ with a flat fallback for older systems.
 After install, make sure `autoskd` is on `PATH` for **Local** mode, or point the
 app at a remote daemon (see below).
 
-## iOS / iPad release
+## iOS release (iPhone & iPad)
 
 There is no App Store distribution — you install a **signed developer build**
 directly. The iOS target is already generated under
-`gui/src-tauri/gen/apple` (deployment target **iOS 14+**, iPad orientations,
-Local-Network + Bonjour `_autosk._tcp` permissions). All commands run on a
-**Mac with Xcode**.
+`gui/src-tauri/gen/apple` (deployment target **iOS 14+**, iPhone + iPad
+orientations, Local-Network + Bonjour `_autosk._tcp` permissions). The same
+build runs on both device families (`TARGETED_DEVICE_FAMILY = "1,2"`). All
+commands run on a **Mac with Xcode**.
+
+### Layout: two-pane on iPad, compact single-pane on iPhone
+
+The front end picks its layout responsively. On an **iPad** (portrait and
+landscape) it shows the same **two-pane** workspace as the desktop. On an
+**iPhone** (portrait and landscape) it switches to a **compact single-pane**
+layout: a top bar (project switcher / Back + entity title, connection dot, and a
+Settings gear), the active list full-screen, and a bottom tab bar with
+**Tasks / Sessions / Workflows**. Tapping a row pushes a full-screen detail with
+a ‹ Back control and the contextual composer pinned at the bottom; tapping a tab
+returns to that list's root. Modals (Settings, New task, New session, Browse
+extensions, …) open as full-screen sheets, and safe-area insets are respected in
+both orientations.
+
+Activation is automatic — the compact layout engages only on touch devices below
+the breakpoint (`(pointer: coarse) and ((max-width: 700px) or
+(max-height: 480px))`), so iPhone goes compact while iPad and any non-touch
+desktop window stay two-pane regardless of width. There is no toggle and nothing
+to configure. See [`gui/README.md`](../gui/README.md) for the shell internals.
 
 ### One-time setup
 
@@ -99,7 +120,7 @@ onto your own device (the default `app-store-connect` export targets App Store
 Connect uploads and fails with a free Apple ID).
 
 The `.ipa` lands under `gui/src-tauri/gen/apple/build/arm64/`. Install it onto
-the iPad with any of:
+the iPhone or iPad with any of:
 
 - **Xcode** → Window → *Devices & Simulators* → drag the `.ipa` onto the device,
 - the CLI — `xcrun devicectl list devices` to find the device id, then
@@ -107,8 +128,8 @@ the iPad with any of:
 - **Apple Configurator**, or
 - **TestFlight** (requires a paid Apple Developer account).
 
-For quick iteration on a single connected iPad, build + sign + install + launch
-in one step (unlock the iPad and tap **Trust** first):
+For quick iteration on a single connected device, build + sign + install +
+launch in one step (unlock the iPhone/iPad and tap **Trust** first):
 
 ```bash
 npm run tauri -- ios dev --release   # drop --release for a debug build
@@ -120,17 +141,17 @@ npm run tauri -- ios dev --release   # drop --release for a debug build
 > exits or the Mac leaves the network. For a standalone install always use
 > `ios build` as shown above.
 
-After install: on the iPad, **Settings → General → VPN & Device Management →
+After install: on the device, **Settings → General → VPN & Device Management →
 trust** your developer certificate.
 
 **Caveats.** A free Apple ID build expires after **7 days** (re-run the build to
 refresh); a paid Apple Developer account avoids this and enables TestFlight. The
 target is arm64-only and requires Metal (any modern iPad).
 
-### Connect the iPad to `autoskd` (Remote mode)
+### Connect the device to `autoskd` (Remote mode)
 
-The iPad runs in Remote mode. On your Mac (or a server), start `autoskd` with
-the opt-in TCP listener — token auth is automatic:
+The iOS app (iPhone or iPad) runs in Remote mode. On your Mac (or a server),
+start `autoskd` with the opt-in TCP listener — token auth is automatic:
 
 ```bash
 autoskd serve --tcp 0.0.0.0:7878
@@ -143,8 +164,9 @@ In the app: **Settings → Remote** and enter:
 - **token** — the value from `~/.autosk/daemon-token`
 
 Save & reconnect, then **allow** the Local-Network prompt on first launch. The
-Mac and iPad must share a network and the port must be open in the Mac's
-firewall. See [`docs/daemon.md`](daemon.md) for the `--tcp` / token transport.
+Mac and the iOS device must share a network and the port must be open in the
+Mac's firewall. See [`docs/daemon.md`](daemon.md) for the `--tcp` / token
+transport.
 
 ## See also
 

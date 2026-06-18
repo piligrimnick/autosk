@@ -17,9 +17,13 @@ switches.
 >
 > The desktop UI is a **frameless two-panel workspace** — a left sidebar that
 > stacks Tasks / Sessions / Workflows as a lazygit-style accordion, and a main
-> panel hosting the polymorphic entity view + composer. (Earlier design notes
-> for the superseded 3-panel layout live in
-> [`docs/plans/20260609-tauri-gui-redesign.md`](../docs/plans/20260609-tauri-gui-redesign.md).)
+> panel hosting the polymorphic entity view + composer. On an **iPhone** the
+> same store drives a **compact single-pane** layout instead (bottom tab bar +
+> push-to-detail); see the *UI shell* section below. (Earlier design notes for
+> the superseded 3-panel layout live in
+> [`docs/plans/20260609-tauri-gui-redesign.md`](../docs/plans/20260609-tauri-gui-redesign.md);
+> the compact layout is specified in
+> [`docs/plans/20260618-iphone-compact-layout.md`](../docs/plans/20260618-iphone-compact-layout.md).)
 
 ## Layout
 
@@ -43,7 +47,10 @@ gui/
 │   │   ├── store.tsx           # effects + event router: notifications → actions
 │   │   └── types.ts            # AppState shape + action union
 │   ├── features/               # one folder per UI domain
-│   │   ├── layout/             # AppShell, Titlebar, WindowCaptionControls, PanelHeader
+│   │   ├── layout/             # AppShell (desktop/iPad two-pane | compact branch),
+│   │   │                       #   Titlebar, WindowCaptionControls, PanelHeader,
+│   │   │                       #   MobileShell/MobileTopBar/MobileTabBar (iPhone compact),
+│   │   │                       #   hooks/useIsCompact + utils/compact (activation predicate)
 │   │   ├── sessions/           # SessionsPanel (＋ → NewSessionModal), SessionRow,
 │   │   │                       #   NewSessionModal (start an interactive chat)
 │   │   ├── center/             # CenterPanel, Composer, Transcript (pi-format),
@@ -148,6 +155,28 @@ The design mirrors the CodexMonitor blueprint ("shared core + thin adapters"):
   `sessionBadgeStatus`): `working` while the agent is streaming a turn and `idle`
   when it is waiting for your next message — rather than a bare `running`. See
   [docs/daemon.md → Interactive sessions](../docs/daemon.md#interactive-taskless-sessions).
+
+- **Compact (iPhone) shell.** On a touch device below the compact breakpoint
+  (`(pointer: coarse) and ((max-width: 700px) or (max-height: 480px))`,
+  unit-tested via the pure `isCompactViewport` predicate in
+  `features/layout/utils/compact.ts`), `AppShell` early-returns a
+  `MobileShell` instead of the two-pane body — a **second presentation of the
+  same store**, with no new state, reducer, selector, or RPC. The hook
+  `useIsCompact` (a `matchMedia` `useSyncExternalStore` subscription) flips the
+  branch on rotation/resize. The shell re-hosts the existing list panels,
+  `CenterPanel`, composer, and modals in a one-level-deep, full-screen
+  navigation: a `MobileTopBar` (project switcher / ‹ Back + entity title,
+  connection dot, Settings gear — none of the desktop-only chrome), the single
+  list matching `ui.sidebarPanel` full-screen, and a `MobileTabBar` (Tasks /
+  Sessions / Workflows). `selection.kind` derives list-root vs pushed-detail: a
+  tab tap is `setSidebarPanel + clearSelection` (lands on the list root), a row
+  tap pushes the detail, and Back is `clearSelection`. The tab bar is hidden on
+  the detail screen so the composer owns the bottom edge. Every compact rule
+  lives in `styles/mobile.css` (imported last in `main.tsx`) gated behind that
+  one media query — including the full-screen modal-sheet restyle and the
+  safe-area insets — so the desktop/iPad layout is byte-for-byte unchanged and
+  no new `invoke`/`listen` site is added. Build/install on a device:
+  [`docs/gui-release.md`](../docs/gui-release.md).
 
 Both invariants are enforced by `scripts/check-ipc-discipline.mjs` (run as part
 of `npm run typecheck`) and an eslint `no-restricted-imports` rule, so a stray

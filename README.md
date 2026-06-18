@@ -88,8 +88,9 @@ npm run tauri:dev     # launch the desktop app (needs a display + webkit)
 ```
 
 See [`gui/README.md`](gui/README.md) for the architecture, the IPC chokepoints,
-and the full script list. To build and install a **release** build on desktop or
-iPad, see [docs/gui-release.md](docs/gui-release.md).
+and the full script list. To build and install a **release** build on desktop,
+iPad, or iPhone (a compact single-pane layout), see
+[docs/gui-release.md](docs/gui-release.md).
 
 ### CLI
 
