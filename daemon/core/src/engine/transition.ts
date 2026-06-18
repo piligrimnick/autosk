@@ -11,6 +11,7 @@
 import { isStatusStep, type StepTarget, type TaskStatus, type TransitContext, type WorkflowDefinition } from "@autosk/sdk";
 
 import type { Store } from "../store/store.ts";
+import { getStepVisits } from "../store/metadata.ts";
 import { buildTasksApi } from "./context.ts";
 
 /** The engine-owned position triple a transition commits. */
@@ -77,11 +78,13 @@ export interface TransitContextInput {
 
 /**
  * Builds the {@link TransitContext} handed to `workflow.onTransit`. `visits(s)`
- * counts how many sessions the task has had at step `s` — the engine's derived
- * answer to the common `max_visits` guard (plan §3.3, §3.6), surviving restarts
- * because session files persist. A session is created when a step is dispatched,
- * so at the moment of a transition INTO step `s` the count reflects PRIOR
- * occupancies of `s` (the current run is included once its session exists).
+ * reads the engine-maintained `metadata.step_visits[s]` counter (plan §5) — the
+ * persistent, human-resettable answer to the common `max_visits` guard
+ * (plan §3.3, §3.6). The counter is bumped INSIDE the position write of a
+ * transition into a named step (`setPosition(..., { countVisit })`), which
+ * happens AFTER `onTransit` is consulted; so at the moment of a transition INTO
+ * step `s`, `visits(s)` still reflects PRIOR entries (a self-loop's current
+ * occupancy was counted when it was entered, exactly as before).
  */
 export function buildTransitContext(input: TransitContextInput): TransitContext {
   const { store, taskId, workflow, leavingStep, author } = input;
@@ -89,7 +92,7 @@ export function buildTransitContext(input: TransitContextInput): TransitContext 
     taskId,
     workflow,
     step: leavingStep,
-    visits: (s) => store.sessions.sessionsForTask(taskId).filter((m) => m.step === s).length,
+    visits: (s) => getStepVisits(store.peekMetadata(taskId))[s] ?? 0,
     tasks: buildTasksApi(store, taskId),
     comment: (text) => store.addComment(taskId, { author, text }).then(() => {}),
   };

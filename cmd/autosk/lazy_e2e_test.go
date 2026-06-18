@@ -48,19 +48,21 @@ func (f *fakeDS) Comments(context.Context, string) ([]datasource.Comment, error)
 func (f *fakeDS) Healthz(context.Context) (datasource.Health, error) {
 	return datasource.Health{Daemon: "down"}, nil
 }
-func (f *fakeDS) CreateTask(context.Context, string, string) (string, error) { return "", nil }
-func (f *fakeDS) TaskDone(context.Context, string, bool) error               { return nil }
-func (f *fakeDS) TaskCancel(context.Context, string, bool) error             { return nil }
-func (f *fakeDS) TaskReopen(context.Context, string) error                   { return nil }
-func (f *fakeDS) UpdateTask(context.Context, string, *string, *string) error { return nil }
-func (f *fakeDS) EnrollWorkflow(context.Context, string, string) error       { return nil }
-func (f *fakeDS) Resume(context.Context, string, string) error               { return nil }
-func (f *fakeDS) Block(context.Context, string, string) error                { return nil }
-func (f *fakeDS) Unblock(context.Context, string, string) error              { return nil }
-func (f *fakeDS) AddComment(context.Context, string, string) error           { return nil }
-func (f *fakeDS) AbortSession(context.Context, string) error                 { return nil }
-func (f *fakeDS) SessionInput(context.Context, string, string, string) error { return nil }
-func (f *fakeDS) Reconnect(context.Context) error                            { return nil }
+func (f *fakeDS) CreateTask(context.Context, string, string) (string, error)    { return "", nil }
+func (f *fakeDS) TaskDone(context.Context, string, bool) error                  { return nil }
+func (f *fakeDS) TaskCancel(context.Context, string, bool) error                { return nil }
+func (f *fakeDS) TaskReopen(context.Context, string) error                      { return nil }
+func (f *fakeDS) UpdateTask(context.Context, string, *string, *string) error    { return nil }
+func (f *fakeDS) EnrollWorkflow(context.Context, string, string) error          { return nil }
+func (f *fakeDS) Resume(context.Context, string, string) error                  { return nil }
+func (f *fakeDS) Block(context.Context, string, string) error                   { return nil }
+func (f *fakeDS) Unblock(context.Context, string, string) error                 { return nil }
+func (f *fakeDS) AddComment(context.Context, string, string) error              { return nil }
+func (f *fakeDS) SetTaskMetadata(context.Context, string, map[string]any) error { return nil }
+func (f *fakeDS) UnsetTaskMetadata(context.Context, string, []string) error     { return nil }
+func (f *fakeDS) AbortSession(context.Context, string) error                    { return nil }
+func (f *fakeDS) SessionInput(context.Context, string, string, string) error    { return nil }
+func (f *fakeDS) Reconnect(context.Context) error                               { return nil }
 func (f *fakeDS) SessionTranscript(context.Context, string) ([]datasource.LiveEvent, error) {
 	return nil, nil
 }

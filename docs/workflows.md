@@ -97,7 +97,7 @@ interface TransitContext {
   taskId: string;
   workflow: string;                   // the workflow this transition belongs to
   step: string;                       // the step the task is leaving
-  visits(step: string): number;       // how many times the task has entered `step`
+  visits(step: string): number;       // entries into `step` so far (from metadata.step_visits)
   tasks: TasksAPI;                    // live task access (re-reads the store)
   comment(text: string): Promise<void>;
 }
@@ -113,6 +113,23 @@ onTransit(ctx, to) {
   }
 }
 ```
+
+**How the count is kept.** `visits(step)` reads a **persistent** counter the
+engine maintains in the task's [`metadata.step_visits`](daemon.md#task-metadata)
+map — it no longer counts session files. The engine increments
+`metadata.step_visits[step]` by one on **every transition INTO a named step**:
+enroll → `firstStep`, a step→step `transit`, and a `resume` into a step
+(including a *bare* `resume`, which re-enters the parked step). A `{ status }`
+target (a `done` / `cancel` / `human` flip) and the administrative `reopen` /
+park do **not** count. The bump commits atomically with the position write.
+
+The count carries **prior-entries** semantics: `onTransit` runs *before* the
+bump, so inside the hook `ctx.visits(target)` is the number of times the task
+entered `target` **before** this transition (the cap above fires on the 6th
+bounce when the threshold is `5`). Because the counter lives in human-editable
+metadata, it is **resettable**: `autosk metadata unset <id> step_visits` (or
+`metadata set <id> step_visits.dev 0`) lets a capped task proceed again — the
+escape hatch for a task that legitimately needs more passes.
 
 When `onTransit` throws on an agent-chosen target, the error propagates back to
 the agent, which may retry with a different target (the `@autosk/pi-agent`
@@ -380,7 +397,10 @@ dev ──▶ review ──▶ docs ──▶ validator ──▶ accept (human)
   so the project root must be a git repo.
 - **Visit cap:** `onTransit` rejects a bounce-back into `dev` once the task has
   entered `dev` 5 times (via `ctx.visits("dev")`), so a task that keeps failing
-  review/validation parks for a human instead of looping forever.
+  review/validation parks for a human instead of looping forever. The count is
+  the persistent, human-resettable [`metadata.step_visits.dev`](daemon.md#task-metadata)
+  — clear it with `autosk metadata unset <id> step_visits` to let a parked task
+  resume bouncing through `dev`.
 
 ```bash
 id=$(autosk create "Fix the flaky test" --workflow feature-dev --json | jq -r .id)

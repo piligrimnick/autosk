@@ -274,6 +274,25 @@ describe("task-changed on an external file edit (P2 watcher)", () => {
     );
     expect((note.params as { task: { title: string } }).task.title).toBe("edited externally");
   });
+
+  test("task.metadata.set pushes task-changed carrying the updated metadata", async () => {
+    const client = await td.client();
+    const task = await client.call<{ id: string }>("task.create", { cwd, title: "meta-note" });
+    await client.call("task.subscribe", { cwd });
+
+    await client.call("task.metadata.set", { cwd, id: task.id, patch: { "step_visits.dev": 1 } });
+
+    const note = await client.waitForNotification(
+      (n) =>
+        n.method === "task-changed" &&
+        (n.params as { task: { id: string } }).task.id === task.id &&
+        JSON.stringify((n.params as { task: { metadata: unknown } }).task.metadata) ===
+          JSON.stringify({ step_visits: { dev: 1 } }),
+    );
+    expect((note.params as { task: { metadata: unknown } }).task.metadata).toEqual({
+      step_visits: { dev: 1 },
+    });
+  });
 });
 
 describe("session-changed project channel", () => {

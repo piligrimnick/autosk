@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > rows or installed npm-package agents.
 
 ### Added
+- **Editable task metadata.** Every task now carries a free-form `metadata`
+  object in `task.json` (always present, omitted on disk when empty), readable
+  and editable through a new `autosk metadata show/set/unset` verb group, the
+  `task.metadata.set` / `task.metadata.unset` daemon RPC methods, a lazy TUI
+  Metadata panel (`M` opens `$EDITOR`), and the GUI task edit modal; the engine
+  reserves the `step_visits` sub-object (ask-93a91b).
 - **GUI: iPhone-friendly compact single-pane layout.** On touch devices below
   the compact breakpoint (`(pointer: coarse) and ((max-width: 700px) or
   (max-height: 480px))`) the Tauri GUI switches to a full-screen single-pane
@@ -177,6 +183,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the throwaway worktree to the wrong (or no) `.autosk/`.
 
 ### Changed
+- **Workflow visit counts are now metadata-backed.** `ctx.visits(step)` reads
+  the persistent, human-resettable `metadata.step_visits[step]` counter the
+  engine bumps on every transition into a named step, instead of counting
+  session files; in-flight tasks effectively reset their counters to 0 on
+  upgrade, and a cap (e.g. feature-dev's `dev`) can be lifted with
+  `autosk metadata unset <id> step_visits` (ask-93a91b).
 - **desktop GUI — quieter session controls:** End/Abort no longer raise an info
   notice (`End sent to session …` / `Abort sent to session …`); the session
   status flips once the daemon settles it, and errors still surface.

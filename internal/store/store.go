@@ -39,10 +39,12 @@ func OpenStatuses() []Status {
 	return []Status{StatusNew, StatusWork, StatusHuman}
 }
 
-// Task is the rendered task view (v2 shape). v2 drops priority, author, and
-// metadata; `workflow`/`step` carry the names (empty when the task is not
-// enrolled). Derived fields (blocked / blocked_by / blocks / comment_count) are
-// layered on by the caller via render Options.
+// Task is the rendered task view (v2 shape). v2 drops priority and author;
+// `workflow`/`step` carry the names (empty when the task is not enrolled).
+// Metadata is the free-form, human-editable bag (nil/empty when none); the
+// engine reserves the `step_visits` sub-object inside it. Derived fields
+// (blocked / blocked_by / blocks / comment_count) are layered on by the caller
+// via render Options.
 type Task struct {
 	ID          string
 	Title       string
@@ -50,6 +52,7 @@ type Task struct {
 	Status      Status
 	Workflow    string // workflow name ("" when not enrolled)
 	Step        string // current step name ("" when not enrolled)
+	Metadata    map[string]any
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

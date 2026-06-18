@@ -50,7 +50,9 @@ type TaskRef struct {
 // Task is the lazy TUI's projection of a task row. Derived fields
 // (WorkflowName, StepName, Blocked, CommentCount) are resolved by
 // the datasource so the TUI never joins by hand. v2 drops Priority,
-// AuthorID, AuthorName, WorkflowID, CurrentStepID, AgentName, Metadata.
+// AuthorID, AuthorName, WorkflowID, CurrentStepID, AgentName. Metadata is the
+// free-form, human-editable bag (nil/empty when none); the engine reserves the
+// `step_visits` sub-object inside it.
 type Task struct {
 	ID           string
 	Title        string
@@ -62,6 +64,7 @@ type Task struct {
 	BlockedBy    []TaskRef // every blocker (open and closed), in store-order
 	Blocks       []TaskRef // every task this task blocks (open and closed)
 	CommentCount int
+	Metadata     map[string]any
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -241,6 +244,12 @@ type Datasource interface {
 	Block(ctx context.Context, id, blocker string) error
 	Unblock(ctx context.Context, id, blocker string) error
 	AddComment(ctx context.Context, taskID, text string) error
+	// SetTaskMetadata / UnsetTaskMetadata edit a task's free-form metadata bag.
+	// `patch` keys are dot-paths merged into the tree; `keys` are dot-paths
+	// removed (emptied parents pruned). The TUI's metadata editor diffs the
+	// edited document at top-level-key granularity and calls these.
+	SetTaskMetadata(ctx context.Context, id string, patch map[string]any) error
+	UnsetTaskMetadata(ctx context.Context, id string, keys []string) error
 
 	// ---- workflow/agent writes removed - v2 workflows are read-only ----
 

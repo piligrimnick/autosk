@@ -42,6 +42,8 @@ const PLAN_SECTION_4_METHODS = [
   "task.reopen",
   "task.block",
   "task.unblock",
+  "task.metadata.set",
+  "task.metadata.unset",
   "task.comment.add",
   "task.comment.list",
   "task.comment.edit",
@@ -130,6 +132,7 @@ describe("proto-v2 type-level helpers", () => {
       blocked_by: [],
       blocks: [],
       comment_count: 0,
+      metadata: {},
       created_at: "2026-06-12T09:00:00Z",
       updated_at: "2026-06-12T09:00:00Z",
     };

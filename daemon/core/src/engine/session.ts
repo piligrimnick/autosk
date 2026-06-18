@@ -333,9 +333,13 @@ export class SessionRuntime {
     const from = { workflow: this.workflowName, step: this.step };
 
     // 1. Task position first — while the session is still `running` (live), so a
-    //    concurrent scan sees the live session and skips re-dispatching.
+    //    concurrent scan sees the live session and skips re-dispatching. Entering
+    //    a named step counts a visit (atomically with the position write, after
+    //    `onTransit` already ran); a `{ status }` target does not.
     const pos = positionFor(wf, this.step, to);
-    await this.project.store.setPosition(this.taskId, pos);
+    await this.project.store.setPosition(this.taskId, pos, {
+      countVisit: "step" in to ? to.step : undefined,
+    });
 
     // 2. Structural transcript entries.
     this.transcript.transit(to, from);

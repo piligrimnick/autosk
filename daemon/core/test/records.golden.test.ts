@@ -16,6 +16,7 @@ import {
   TaskStore,
   ProjectPaths,
   parseCommentsLenient,
+  parseTask,
   parseTranscriptLenient,
   serializeComments,
   serializeSessionHeader,
@@ -46,6 +47,7 @@ const GOLDEN_TASK: StoredTask = {
   workflow: "feature-dev",
   step: "review",
   blocked_by: ["ask-aa11bb"],
+  metadata: {},
   created_at: "2026-06-12T09:00:00Z",
   updated_at: "2026-06-12T09:30:00Z",
 };
@@ -79,6 +81,7 @@ describe("task.json golden", () => {
       workflow: null,
       step: null,
       blocked_by: [],
+      metadata: {},
       created_at: "2026-06-12T09:00:00Z",
       updated_at: "2026-06-12T09:00:00Z",
     };
@@ -107,8 +110,55 @@ describe("task.json golden", () => {
       created_at: GOLDEN_TASK.created_at,
       description: GOLDEN_TASK.description,
       workflow: GOLDEN_TASK.workflow,
+      metadata: GOLDEN_TASK.metadata,
     } as StoredTask;
     expect(serializeTask(scrambled)).toBe(GOLDEN_TASK_JSON);
+  });
+
+  test("non-empty metadata serialises in the fixed slot (after blocked_by, before created_at)", () => {
+    const withMeta: StoredTask = {
+      ...GOLDEN_TASK,
+      metadata: { step_visits: { dev: 2, review: 1 }, note: "keep" },
+    };
+    expect(serializeTask(withMeta)).toBe(`{
+  "id": "ask-3f9b2c",
+  "title": "Implement auth module",
+  "description": "Wire up the login flow.",
+  "status": "work",
+  "workflow": "feature-dev",
+  "step": "review",
+  "blocked_by": [
+    "ask-aa11bb"
+  ],
+  "metadata": {
+    "step_visits": {
+      "dev": 2,
+      "review": 1
+    },
+    "note": "keep"
+  },
+  "created_at": "2026-06-12T09:00:00Z",
+  "updated_at": "2026-06-12T09:30:00Z"
+}
+`);
+  });
+
+  test("empty metadata omits the key (pre-existing files round-trip unchanged)", () => {
+    expect(serializeTask(GOLDEN_TASK)).not.toContain("metadata");
+    // A task.json written before metadata existed (no key) parses to {} and
+    // re-serialises to the identical bytes.
+    const reparsed = parseTask(GOLDEN_TASK_JSON);
+    expect(reparsed.metadata).toEqual({});
+    expect(serializeTask(reparsed)).toBe(GOLDEN_TASK_JSON);
+  });
+
+  test("parseTask is defensive: missing/corrupt/non-object metadata becomes {}", () => {
+    const base = JSON.parse(GOLDEN_TASK_JSON) as Record<string, unknown>;
+    expect(parseTask(JSON.stringify({ ...base, metadata: undefined })).metadata).toEqual({});
+    expect(parseTask(JSON.stringify({ ...base, metadata: null })).metadata).toEqual({});
+    expect(parseTask(JSON.stringify({ ...base, metadata: [1, 2] })).metadata).toEqual({});
+    expect(parseTask(JSON.stringify({ ...base, metadata: "oops" })).metadata).toEqual({});
+    expect(parseTask(JSON.stringify({ ...base, metadata: { a: 1 } })).metadata).toEqual({ a: 1 });
   });
 
   test("TaskStore writes the golden bytes to disk", async () => {

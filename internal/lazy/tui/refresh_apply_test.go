@@ -83,6 +83,12 @@ func (f *refreshFakeDS) Unblock(_ context.Context, _, _ string) error {
 func (f *refreshFakeDS) AddComment(_ context.Context, _, _ string) error {
 	return datasource.ErrDaemonRequired
 }
+func (f *refreshFakeDS) SetTaskMetadata(_ context.Context, _ string, _ map[string]any) error {
+	return datasource.ErrDaemonRequired
+}
+func (f *refreshFakeDS) UnsetTaskMetadata(_ context.Context, _ string, _ []string) error {
+	return datasource.ErrDaemonRequired
+}
 func (f *refreshFakeDS) AbortSession(_ context.Context, _ string) error {
 	return datasource.ErrDaemonRequired
 }

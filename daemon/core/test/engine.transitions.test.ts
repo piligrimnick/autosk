@@ -245,5 +245,52 @@ describe("engine — enroll / resume / statusStep parking", () => {
     expect(parkReason.v).toContain("looped too many times");
     // 3 sessions ran at "do" (the 3rd self-loop was rejected → parked).
     expect(p.store.sessions.sessionsForTask(task.id)).toHaveLength(3);
+    // The cap is now metadata-backed: the persisted counter sits at the cap.
+    expect(p.store.peekMetadata(task.id)).toEqual({ step_visits: { do: 3 } });
+  });
+
+  test("resetting metadata.step_visits lets a capped task proceed again", async () => {
+    // Same self-looping agent + cap-3 guard as above. After the task parks at the
+    // cap, a human clears the persisted counter (the escape hatch) and resumes —
+    // the task must re-enter "do" and run a fresh batch up to the cap again,
+    // proving `visits()` reads the resettable metadata counter (plan §5).
+    const looper: AgentDefinition = {
+      async onRun(ctx) {
+        try {
+          await ctx.transit({ step: "do" });
+        } catch {
+          await ctx.transit({ status: "human" });
+        }
+      },
+    };
+    const wf: WorkflowDefinition = {
+      name: "capped",
+      firstStep: "do",
+      steps: { do: looper },
+      onTransit(ctx, to) {
+        if ("step" in to && to.step === "do" && ctx.visits("do") >= 3) {
+          throw new Error("looped too many times");
+        }
+      },
+    };
+    const p = track(await makeProject({ workflows: [wf] }));
+    const { engine } = makeEngine();
+    engines.push(engine);
+    await engine.addProject(p.project);
+
+    const task = await p.store.createTask({ title: "resettable" });
+    await engine.enroll(p.root, task.id, { workflow: "capped" });
+    await waitForComplete(p.store, task.id, "human");
+    expect(p.store.sessions.sessionsForTask(task.id)).toHaveLength(3); // hit the cap
+
+    // The human escape hatch: clear the persisted counter, then resume.
+    await p.store.unsetMetadata(task.id, ["step_visits"]);
+    expect(p.store.peekMetadata(task.id)).toEqual({});
+    await engine.resume(p.root, task.id); // re-enters "do"
+    await waitForComplete(p.store, task.id, "human");
+
+    // The reset bought another full batch up to the cap: 3 more "do" sessions.
+    expect(p.store.sessions.sessionsForTask(task.id)).toHaveLength(6);
+    expect(p.store.peekMetadata(task.id)).toEqual({ step_visits: { do: 3 } });
   });
 });

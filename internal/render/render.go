@@ -34,11 +34,21 @@ type TaskJSON struct {
 	BlockedBy    []string `json:"blocked_by"`
 	Blocks       []string `json:"blocks"`
 	CommentCount int      `json:"comment_count"`
+
+	// Metadata is the free-form, human-editable bag (always emitted; {} when
+	// none). The engine reserves the `step_visits` sub-object inside it.
+	Metadata map[string]any `json:"metadata"`
 }
 
 // ToWire converts a store.Task into the wire shape. Derived fields default to
 // zero values — callers populate them via Options or a Decorator.
 func ToWire(t store.Task) TaskJSON {
+	// Metadata is always present on the wire ({} when none), mirroring the SDK
+	// TaskView contract, so `show --json` carries a stable `metadata` object.
+	meta := t.Metadata
+	if meta == nil {
+		meta = map[string]any{}
+	}
 	return TaskJSON{
 		ID:          t.ID,
 		Title:       t.Title,
@@ -50,6 +60,7 @@ func ToWire(t store.Task) TaskJSON {
 		UpdatedAt:   t.UpdatedAt.UTC(),
 		BlockedBy:   []string{},
 		Blocks:      []string{},
+		Metadata:    meta,
 	}
 }
 

@@ -71,9 +71,12 @@ The Detail pane always reflects the focused side panel:
 - **Tasks** — task sheet: header line (`<id> <status>
   <workflow:step>`), an optional `blocked by:` row, a stats row
   (created + comment count), a `Title` box, a `Description` box
-  (rendered as markdown), and one box per comment (multi-line
-  bodies render in full, oldest at the top). There is no priority
-  field in v2.
+  (rendered as markdown), a `Metadata` box, and one box per comment
+  (multi-line bodies render in full, oldest at the top). The
+  `Metadata` box pretty-prints the task's free-form metadata bag;
+  when it carries the engine's reserved `step_visits` counter it
+  leads with a compact `visits: dev×2, review×1` summary line, and an
+  empty bag shows `(no metadata)`. There is no priority field in v2.
 - **Sessions** — session header (id + status glyph + `workflow:step`
   + `agent=` + started / ended timestamps + parent `task:` +
   `error:` when present), then one labelled box per transcript
@@ -158,11 +161,12 @@ ctrl+shift+s). The in-app `?` cheatsheet uses the same spellings.
 | `b` | Add a blocker (prompts for blocker id). |
 | `u` | Remove a blocker (prompts for blocker id). |
 | `m` | Add a comment — single-pane multi-line compose. `enter` inserts a newline; `ctrl+s` submits; `esc` cancels. Empty submit is a silent cancel. |
+| `M` | **Edit metadata** — opens `$EDITOR` on the task's metadata as pretty JSON. On save the editor diffs the document at **top-level-key granularity** and sends changed/added keys via `task.metadata.set` and removed keys via `task.metadata.unset` (never a whole-document replace). Reset a workflow visit cap by deleting `step_visits` here. Last-writer-wins against a concurrent engine `step_visits` bump (same model as a direct `task.json` edit). Also bound on the Detail pane. |
 | `space` | Set the Sessions-panel scope to the selected task without leaving Tasks (the counterpart to `enter`, which scopes *and* jumps). Press `*` to clear. |
 | `J` / `K` | Scroll the task-detail viewport. |
 
-There is no priority key and no metadata editor in v2 — tasks carry
-no priority field, and per-task metadata was removed.
+There is no priority key in v2 — tasks carry no priority field. Per-task
+metadata is editable with `M` (see above).
 
 #### Enroll / resume picker
 

@@ -49,6 +49,7 @@ function mkTask(p: Partial<TaskView> & Pick<TaskView, "id">): TaskView {
     blocked_by: [],
     blocks: [],
     comment_count: 0,
+    metadata: {},
     created_at: "2024-01-01T00:00:00Z",
     updated_at: "2024-01-01T00:00:00Z",
     ...p,

@@ -94,6 +94,8 @@ const cases: Array<{ name: string; run: () => unknown; method: string; params: R
   { name: "taskResume(to)", run: () => ipc.taskResume(cwd, "ask-1", { step: "dev" }), method: "task.resume", params: { cwd, id: "ask-1", to: { step: "dev" } } },
   { name: "taskBlock", run: () => ipc.taskBlock(cwd, "ask-1", "ask-2"), method: "task.block", params: { cwd, id: "ask-1", blocked_by: "ask-2" } },
   { name: "taskUnblock", run: () => ipc.taskUnblock(cwd, "ask-1", "ask-2"), method: "task.unblock", params: { cwd, id: "ask-1", blocked_by: "ask-2" } },
+  { name: "taskMetadataSet", run: () => ipc.taskMetadataSet(cwd, "ask-1", { "step_visits.dev": 0 }), method: "task.metadata.set", params: { cwd, id: "ask-1", patch: { "step_visits.dev": 0 } } },
+  { name: "taskMetadataUnset", run: () => ipc.taskMetadataUnset(cwd, "ask-1", ["step_visits"]), method: "task.metadata.unset", params: { cwd, id: "ask-1", keys: ["step_visits"] } },
   // task.subscribe is now front-end-issued and REQUIRES {cwd}.
   { name: "taskSubscribe", run: () => ipc.taskSubscribe(cwd), method: "task.subscribe", params: { cwd } },
   { name: "taskUnsubscribe", run: () => ipc.taskUnsubscribe(cwd), method: "task.unsubscribe", params: { cwd } },

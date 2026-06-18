@@ -19,8 +19,8 @@ export interface TaskRef {
 }
 
 /**
- * The enriched task view (plan §3.1). v2 drops `priority`, `author_id`, and
- * `metadata`. `blocked` and `blocks` are derived server-side and never stored.
+ * The enriched task view (plan §3.1). v2 drops `priority` and `author_id`.
+ * `blocked` and `blocks` are derived server-side and never stored.
  * `workflow` / `step` are `null` until the task is enrolled.
  */
 export interface TaskView {
@@ -36,6 +36,13 @@ export interface TaskView {
   /** Derived: tasks this one blocks. */
   blocks: TaskRef[];
   comment_count: number;
+  /**
+   * Free-form, human-editable key/value bag persisted in `task.json`. Always
+   * present (an empty object when the task has none). The engine reserves the
+   * `step_visits` sub-object (step name → entry count) which it auto-maintains;
+   * everything else is opaque to the daemon.
+   */
+  metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }

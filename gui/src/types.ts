@@ -24,9 +24,11 @@ export interface TaskRef {
 }
 
 /**
- * The enriched task view. v2 drops the old ranking / authorship / free-form
- * key-value fields; `workflow` / `step` are `null` until the task is enrolled.
- * `blocked` and `blocks` are derived server-side.
+ * The enriched task view. v2 drops the old ranking / authorship fields;
+ * `workflow` / `step` are `null` until the task is enrolled. `blocked` and
+ * `blocks` are derived server-side. `metadata` is the free-form, human-editable
+ * bag (always present; `{}` when none); the engine reserves the `step_visits`
+ * sub-object inside it.
  */
 export interface TaskView {
   id: string;
@@ -39,6 +41,7 @@ export interface TaskView {
   blocked_by: TaskRef[];
   blocks: TaskRef[];
   comment_count: number;
+  metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }

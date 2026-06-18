@@ -22,6 +22,8 @@ import type {
   TranscriptLine,
 } from "@autosk/sdk";
 
+import { isEmptyMetadata } from "./metadata.ts";
+
 // ---------------------------------------------------------------------------
 // Stored task (`tasks/<id>/task.json`). Note `blocked_by` is a flat string[] of
 // task ids on disk; the derived `TaskView.blocked_by` (TaskRef[]) and `blocks`
@@ -36,6 +38,13 @@ export interface StoredTask {
   workflow: string | null;
   step: string | null;
   blocked_by: string[];
+  /**
+   * Free-form, human-editable key/value bag (plan §2). Always an object
+   * in memory ({} when none); the engine reserves the `step_visits` sub-object.
+   * It is OMITTED from the serialised `task.json` when empty (see
+   * {@link serializeTask}) so pre-existing files round-trip byte-for-byte.
+   */
+  metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
@@ -43,9 +52,17 @@ export interface StoredTask {
 /** The five engine-owned vs human-editable fields split (plan §3.7(2)). */
 export const ENGINE_OWNED_TASK_FIELDS = ["status", "step", "workflow"] as const;
 
-/** Serialises a task to its canonical `task.json` bytes. */
+/**
+ * Serialises a task to its canonical `task.json` bytes.
+ *
+ * `metadata` occupies a fixed slot (after `blocked_by`, before `created_at`)
+ * but is OMITTED entirely when empty, so a task that never carried metadata
+ * serialises byte-for-byte identically to the pre-metadata format (the golden
+ * contract). A non-empty bag is serialised verbatim (its own key order is
+ * preserved as authored — it is opaque free-form data).
+ */
 export function serializeTask(t: StoredTask): string {
-  const ordered = {
+  const ordered: Record<string, unknown> = {
     id: t.id,
     title: t.title,
     description: t.description,
@@ -53,9 +70,10 @@ export function serializeTask(t: StoredTask): string {
     workflow: t.workflow,
     step: t.step,
     blocked_by: [...t.blocked_by],
-    created_at: t.created_at,
-    updated_at: t.updated_at,
   };
+  if (!isEmptyMetadata(t.metadata)) ordered.metadata = t.metadata;
+  ordered.created_at = t.created_at;
+  ordered.updated_at = t.updated_at;
   return JSON.stringify(ordered, null, 2) + "\n";
 }
 
@@ -77,9 +95,21 @@ export function parseTask(text: string): StoredTask {
     workflow: typeof raw.workflow === "string" ? raw.workflow : null,
     step: typeof raw.step === "string" ? raw.step : null,
     blocked_by: normalizeIdList(raw.blocked_by),
+    metadata: normalizeMetadata(raw.metadata),
     created_at: typeof raw.created_at === "string" ? raw.created_at : "",
     updated_at: typeof raw.updated_at === "string" ? raw.updated_at : "",
   };
+}
+
+/**
+ * Defensively coerces an on-disk `metadata` value into a plain object. A
+ * missing, null, array, or otherwise non-object value (a fat-fingered human
+ * edit under hybrid ownership) is treated as no metadata — `{}` — rather than
+ * throwing, so one bad edit never bricks a `task.json` parse.
+ */
+function normalizeMetadata(v: unknown): Record<string, unknown> {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return {};
+  return { ...(v as Record<string, unknown>) };
 }
 
 function isTaskStatus(s: unknown): s is TaskStatus {

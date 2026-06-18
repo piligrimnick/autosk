@@ -157,6 +157,12 @@ func (w *timeoutWrapper) Unblock(ctx context.Context, id, blocker string) error 
 func (w *timeoutWrapper) AddComment(ctx context.Context, taskID, text string) error {
 	return w.ds.AddComment(ctx, taskID, text)
 }
+func (w *timeoutWrapper) SetTaskMetadata(ctx context.Context, id string, patch map[string]any) error {
+	return w.ds.SetTaskMetadata(ctx, id, patch)
+}
+func (w *timeoutWrapper) UnsetTaskMetadata(ctx context.Context, id string, keys []string) error {
+	return w.ds.UnsetTaskMetadata(ctx, id, keys)
+}
 func (w *timeoutWrapper) AbortSession(ctx context.Context, id string) error {
 	return w.ds.AbortSession(ctx, id)
 }

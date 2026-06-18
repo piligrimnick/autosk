@@ -30,3 +30,11 @@ export {
   parseTranscriptLenient,
   type ParsedTranscript,
 } from "./records.ts";
+export {
+  STEP_VISITS_KEY,
+  isEmptyMetadata,
+  getStepVisits,
+  bumpStepVisit,
+  applyMetadataPatch,
+  applyMetadataUnset,
+} from "./metadata.ts";
