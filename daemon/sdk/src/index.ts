@@ -12,6 +12,7 @@
 export * from "./types.ts";
 export * from "./workflow.ts";
 export * from "./agent.ts";
+export * from "./process.ts";
 export * from "./transcript.ts";
 export * from "./proto.ts";
 export * from "./api.ts";

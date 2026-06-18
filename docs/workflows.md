@@ -263,7 +263,7 @@ the task's status machine, **not** by step-session boundaries:
 
 ```ts
 interface IsolationProvider {
-  tag: string;                        // "worktree" | "none" | future: "docker", …
+  tag: string;                        // "worktree" | "docker" | "none" | …
   // ensure-ready (create | start | reuse). Mandatory; idempotent + recovery-safe.
   acquire(ctx: { projectRoot: string; taskId: string }): Promise<IsolationHandle>;
   // quiesce-on-exit: stop a LIVE env but keep it cheaply resumable. No
@@ -277,8 +277,43 @@ interface IsolationProvider {
   reap?(ctx: { projectRoot: string; taskId: string }, opts: { force: boolean }):
     Promise<{ removed: boolean; dirty: boolean; detail?: string }>;
 }
-interface IsolationHandle { cwd: string; meta?: Record<string, unknown> }
+interface IsolationHandle {
+  cwd: string;
+  meta?: Record<string, unknown>;
+  // Optional EXECUTION SEAM (see below). When present the engine routes
+  // ctx.exec / ctx.spawn through these instead of running on the host.
+  exec?(cmd: string[], opts: IsolationExecOptions): Promise<ExecResult>;
+  spawn?(cmd: string[], opts: IsolationSpawnOptions): ChildHandle;
+}
 ```
+
+### The execution seam
+
+The optional `exec` / `spawn` on a handle are the **execution seam**. By default
+`ctx.exec` / `ctx.spawn` run on the **host** at the handle's `cwd` (today's
+worktree / no-isolation behaviour). A provider can instead **own process
+creation** by returning a handle with `exec` / `spawn` — the engine then routes
+`ctx.exec` / `ctx.spawn` through them, passing the resolved `cwd` + `signal` (an
+`opts.cwd` / `opts.signal` override wins, else the session defaults). This is what
+lets [`dockerIsolation()`](#isolation-pluggable-per-workflow) run commands
+*inside* a container: its seam rewrites the argv to `docker exec … <container>
+<cmd>` so even `pi --mode rpc` runs in the sandbox, with the agent code unchanged.
+
+```ts
+interface IsolationExecOptions extends ExecOptions { cwd: string; signal: AbortSignal }
+interface IsolationSpawnOptions extends SpawnOptions { cwd: string; signal: AbortSignal }
+```
+
+The seam contract: `exec` MUST honour `opts.signal` (abort / daemon shutdown) and
+return the same `ExecResult` shape (and honour `input` / `timeoutMs` so it
+behaves identically to the host path); `spawn` MUST stream line-buffered stdio,
+kill on `opts.signal`, and return the same `ChildHandle` shape. Both are built on
+the shared `runChild` / `spawnChild` helpers exported from `@autosk/sdk` — the
+same `Bun.spawn` stdio/abort plumbing the engine's host path uses, so a provider
+never reimplements line buffering or abort wiring. Interactive (taskless)
+sessions have no isolation, so they always take the host path. The
+`IsolationProvider` signature is unchanged — the seam lives on the *handle*, so a
+provider opts in simply by returning one with `exec` / `spawn`.
 
 The environment moves through a small state machine, advanced by the task's
 status transitions:
@@ -328,9 +363,23 @@ provider runs each task in its own git worktree at
 `release`** (keeping the checkout on disk across sibling/human-park steps is
 exactly the absence of teardown) and implements `reap` to remove the worktree on
 a terminal transition while **preserving the branch** (so the work survives for
-review/merge). Attach it with `isolation: worktreeIsolation()`; a workflow
+review/merge). It returns a handle **without** the execution seam, so the agent
+runs on the host. Attach it with `isolation: worktreeIsolation()`; a workflow
 without an `isolation` field runs every step in the project root (`tag:
 "none"`).
+
+The opt-in [`dockerIsolation({ image })`](../daemon/extensions/docker/README.md)
+provider (the `@autosk/docker` extension — not bootstrapped by default) goes a
+step further: it **composes** `worktreeIsolation()` for the filesystem **and**
+runs pi (plus every command it spawns) **inside a per-task Docker container** via
+the `exec` / `spawn` seam. The worktree is bind-mounted into the container 1:1,
+so edits still land on `autosk/<task-id>` on the host (review/merge unchanged);
+the daemon socket is mounted so `autosk_comment` / `autosk_task` work from inside
+the sandbox. It implements `release` (`docker stop`, keeping the container for a
+cheap resume) and `reap` (`docker rm -f` + the inner worktree removal, branch
+preserved). Attach it with `isolation: dockerIsolation({ image: "my-org/runtime:latest" })`;
+see the [package README](../daemon/extensions/docker/README.md) for the image
+requirements and options.
 
 ## Driving a workflow from the CLI
 
