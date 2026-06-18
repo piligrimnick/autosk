@@ -18,6 +18,9 @@ import "./styles/composer.css";
 import "./styles/panel.css";
 import "./styles/views.css";
 import "./styles/modal.css";
+// Compact (phone) overrides — imported LAST so its media-gated rules win
+// cascade ties (e.g. full-screen modal sheets).
+import "./styles/mobile.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
