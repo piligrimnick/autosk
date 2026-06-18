@@ -1,0 +1,46 @@
+{
+  "name": "@autosk/claude-agent",
+  "version": "0.1.0",
+  "description": "autosk extension that drives Claude Code (`claude -p` headless stream-json) as an agent (kickback loop, an autosk MCP server for transit/task/comment).",
+  "license": "MIT",
+  "author": "wierdbytes",
+  "homepage": "https://github.com/wierdbytes/autosk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wierdbytes/autosk.git",
+    "directory": "daemon/extensions/claude-agent"
+  },
+  "bugs": {
+    "url": "https://github.com/wierdbytes/autosk/issues"
+  },
+  "keywords": [
+    "autosk",
+    "autosk-extension",
+    "agent",
+    "claude",
+    "claude-code",
+    "ai-agent"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": "./index.ts"
+  },
+  "types": "./index.ts",
+  "autosk": {
+    "extensions": ["./index.ts"]
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "README.md"
+  ],
+  "dependencies": {
+    "@autosk/sdk": "^0.1.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

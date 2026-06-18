@@ -19,23 +19,31 @@
         "@autosk/sdk": "workspace:*",
       },
       "devDependencies": {
+        "@autosk/claude-agent": "workspace:*",
         "@autosk/feature-dev": "workspace:*",
         "@autosk/pi-agent": "workspace:*",
         "@autosk/worktree": "workspace:*",
+      },
+    },
+    "extensions/claude-agent": {
+      "name": "@autosk/claude-agent",
+      "version": "0.1.0",
+      "dependencies": {
+        "@autosk/sdk": "^0.1.0",
       },
     },
     "extensions/feature-dev": {
       "name": "@autosk/feature-dev",
       "version": "0.1.2",
       "dependencies": {
-        "@autosk/pi-agent": "workspace:*",
-        "@autosk/sdk": "workspace:*",
-        "@autosk/worktree": "workspace:*",
+        "@autosk/pi-agent": "^0.1.0",
+        "@autosk/sdk": "^0.1.0",
+        "@autosk/worktree": "^0.1.0",
       },
     },
     "extensions/merge-to-current": {
       "name": "@autosk/merge-to-current",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "@autosk/pi-agent": "^0.1.0",
         "@autosk/sdk": "^0.1.0",
@@ -43,7 +51,7 @@
     },
     "extensions/pi-agent": {
       "name": "@autosk/pi-agent",
-      "version": "0.1.1",
+      "version": "0.1.3",
       "dependencies": {
         "@autosk/sdk": "^0.1.0",
       },
@@ -52,7 +60,7 @@
       "name": "@autosk/worktree",
       "version": "0.1.1",
       "dependencies": {
-        "@autosk/sdk": "workspace:*",
+        "@autosk/sdk": "^0.1.0",
       },
     },
     "sdk": {
@@ -61,6 +69,8 @@
     },
   },
   "packages": {
+    "@autosk/claude-agent": ["@autosk/claude-agent@workspace:extensions/claude-agent"],
+
     "@autosk/core": ["@autosk/core@workspace:core"],
 
     "@autosk/feature-dev": ["@autosk/feature-dev@workspace:extensions/feature-dev"],

@@ -64,6 +64,16 @@ for the full design.
   steer / followup / abort forwarding into the live pi). See
   [`extensions/pi-agent/README.md`](extensions/pi-agent/README.md).
 
+- **`extensions/claude-agent/`** — `@autosk/claude-agent`: the shipped **agent**
+  `claudeAgent({...})`, the structural twin of `@autosk/pi-agent` that drives
+  [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude -p`
+  headless stream-json) instead of `pi --mode rpc`. It mirrors Claude's stream
+  entries into the autosk transcript 1:1 and exposes its transit / task / comment
+  tools through the self-contained `autoskd mcp` stdio MCP server (registered via
+  Claude's `--mcp-config`). Not provisioned by the first-run bootstrap — an
+  opt-in alternative harness. See
+  [`extensions/claude-agent/README.md`](extensions/claude-agent/README.md).
+
 - **`extensions/feature-dev/`** — `@autosk/feature-dev`: the **reference
   workflow** `dev → review → docs → validator → accept` (with review→dev /
   validator→dev bounce-backs, a `ctx.visits("dev")` visit cap, and

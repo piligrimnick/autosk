@@ -154,8 +154,11 @@ interface AgentDefinition {
 `onRun` executes **one full step** in-process and **MUST call `ctx.transit(...)`
 exactly once** before returning. Returning without a transit fails the session
 (`error="agent_did_not_transit"`) and parks the task to `human`. The engine has
-no pi knowledge — pi-based agents are an extension on top of `ctx.spawn` +
-`ctx.transit` (see [`@autosk/pi-agent`](../daemon/extensions/pi-agent/README.md)).
+no harness knowledge — CLI-driven agents are an extension on top of `ctx.spawn` +
+`ctx.transit`. Two are shipped: [`@autosk/pi-agent`](../daemon/extensions/pi-agent/README.md)
+(`piAgent({...})`, drives `pi --mode rpc`) and its structural twin
+[`@autosk/claude-agent`](../daemon/extensions/claude-agent/README.md)
+(`claudeAgent({...})`, drives Claude Code's `claude -p` headless stream-json).
 
 ### The run context
 
@@ -249,6 +252,9 @@ opens directly (no task, no workflow). The engine runs the same
 `"task"` runs the workflow transit loop; `"interactive"` runs a chat loop that
 spawns `pi --mode rpc` **without** the `autosk_transit` tool (transit is not
 offered in chat) and forwards each composer message as a follow-up.
+[`@autosk/claude-agent`](../daemon/extensions/claude-agent/README.md) registers a
+`"@autosk/claude-agent"` agent the same way (its interactive chat drops the
+`mcp__autosk__transit` tool but keeps `task` / `comment`).
 
 See [docs/daemon.md → Interactive sessions](daemon.md#interactive-taskless-sessions)
 for the session lifecycle and the `registry.agent.list` / `session.create` /

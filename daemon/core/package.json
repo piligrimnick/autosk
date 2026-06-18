@@ -12,6 +12,7 @@
     "@autosk/sdk": "workspace:*"
   },
   "devDependencies": {
+    "@autosk/claude-agent": "workspace:*",
     "@autosk/feature-dev": "workspace:*",
     "@autosk/pi-agent": "workspace:*",
     "@autosk/worktree": "workspace:*"

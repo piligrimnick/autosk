@@ -103,6 +103,9 @@ is in the script header.
     isolation provider
   - `daemon/extensions/pi-agent/` — `@autosk/pi-agent`: the shipped agent that
     drives `pi --mode rpc`
+  - `daemon/extensions/claude-agent/` — `@autosk/claude-agent`: the shipped agent
+    that drives Claude Code (`claude -p` headless stream-json); its tool surface
+    is the self-contained `autoskd mcp` stdio MCP server
   - `daemon/extensions/feature-dev/` — `@autosk/feature-dev`: the reference
     workflow (`dev → review → docs → validator → accept`), published to npm and
     installed by the daemon's first-run bootstrap

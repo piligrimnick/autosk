@@ -163,7 +163,8 @@ Tasks live as files under `.autosk/` inside your repo
 
 An **agent** owns a task step. AI agents are **code** defined **inline** in a
 workflow's steps by [extensions](docs/extensions.md) — the npm-published
-`@autosk/pi-agent` drives `pi --mode rpc`, and you can write your own. There is
+`@autosk/pi-agent` drives `pi --mode rpc`, its twin `@autosk/claude-agent` drives
+Claude Code (`claude -p` headless stream-json), and you can write your own. There is
 no install step: a step whose value is an `AgentDefinition` (it has an `onRun`)
 is an agent step, and the **step key is the agent's name**, so registering a
 workflow registers its agents — no per-step registry needed. A

@@ -69,6 +69,14 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<StartD
     throw e;
   }
 
+  // Publish the resolved socket into our own env so anything we run in-process
+  // can join THIS daemon: an `@autosk/claude-agent` step bakes `AUTOSK_SOCK`
+  // into the `--mcp-config` it hands Claude, and `autoskd mcp`'s `autosk`
+  // shell-out then connects to the running daemon instead of auto-spawning a
+  // second one. We may have been spawned with `--sock <path>` and no env, so set
+  // it explicitly (idempotent when it already matches).
+  process.env.AUTOSK_SOCK = socketPath;
+
   const token = resolveDaemonToken(opts, logger);
   // There are no daemon-bundled extensions: on first run (no
   // `~/.autosk/settings.json`) the default project manager npm-installs the

@@ -66,7 +66,8 @@ autoskd serve --tcp 0.0.0.0:7777     # also listen on TCP (token auth, see below
 autoskd serve --workers 8            # worker-pool size (default 4)
 ```
 
-`serve` is the only (and default) verb. Flags:
+`serve` is the default verb (there is one other, non-default verb —
+[`autoskd mcp`](#the-autoskd-mcp-tool-server)). `serve` flags:
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
@@ -91,6 +92,31 @@ A single `autoskd` serves **any number of projects**. Each request carries a
 `{cwd}` selector; the daemon walks up from that cwd to find the project's
 `.autosk/`, opens it lazily (file store + extension registry + scheduler), and
 keeps it loaded. The worker pool is global and FIFO across every loaded project.
+
+### The `autoskd mcp` tool server
+
+`autoskd mcp` is a second, **non-default** verb: a minimal **stdio MCP** (Model
+Context Protocol) server that exposes autosk's tools to a CLI harness that speaks
+MCP. It is the tool surface [`@autosk/claude-agent`](workflows.md#agent-definitions)
+points Claude Code at via `--mcp-config`. It speaks JSON-RPC 2.0 over stdio
+(`initialize` → `tools/list` → `tools/call`), binds **no** socket, and returns
+when stdin closes. It is hand-rolled (no `@modelcontextprotocol/sdk` dependency),
+so it bundles into the compiled `autoskd` binary with no extra runtime.
+
+It advertises up to three tools (the harness sees them prefixed `mcp__autosk__`):
+
+- **`transit`** — *ack-only*, advertised only when `AUTOSK_MCP_TRANSIT=1` (task
+  mode). It returns an immediate ack; the agent driver observes the call and
+  drives the real `ctx.transit`.
+- **`task`** — `create` / `update` / `show` / `list`.
+- **`comment`** — `add` / `list` (`add` defaults the author to `AUTOSK_AGENT`).
+
+`task` / `comment` **execute for real** by shelling out to `autosk … --json`
+(not an embedded RPC client): the CLI already centralizes the project
+(`AUTOSK_CWD`), socket (`AUTOSK_SOCK`), and author (`AUTOSK_AGENT`) resolution,
+which the spawning agent bakes into the `--mcp-config` env block. `autosk` must
+be on `PATH` (or `$AUTOSK_BIN`); a missing binary returns a clear actionable
+error, not a silent failure.
 
 ## What the daemon does for each task
 

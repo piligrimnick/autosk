@@ -313,6 +313,17 @@ blocks for your own workflows):
   `worktreeIsolation()`. It is the workflow every project can enroll into with no
   per-project files.
 
+One more shipped agent is **not** provisioned by the bootstrap — it is an opt-in
+alternative harness you wire into your own workflow (`autosk ext add
+npm:@autosk/claude-agent`, then use it in place of `piAgent({...})`):
+
+- **[`@autosk/claude-agent`](../daemon/extensions/claude-agent/README.md)** —
+  `claudeAgent({...})`, the structural twin of `@autosk/pi-agent` that drives
+  [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude -p`
+  headless stream-json) instead of `pi --mode rpc`. It exposes its transit / task /
+  comment tools through the self-contained [`autoskd mcp`](daemon.md#the-autoskd-mcp-tool-server)
+  stdio MCP server (registered via Claude's `--mcp-config`).
+
 ## Writing your own
 
 The smallest extension is a single file:

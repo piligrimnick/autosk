@@ -13,9 +13,11 @@ export * from "./project/index.ts";
 export * from "./extensions/index.ts";
 export * from "./engine/index.ts";
 export * from "./rpc/index.ts";
+export * from "./mcp/index.ts";
 export { VERSION, commit } from "./version.ts";
 
 import { startDaemon } from "./rpc/index.ts";
+import { runMcpServer } from "./mcp/index.ts";
 
 /** Parsed `serve` flags. */
 interface ServeArgs {
@@ -63,7 +65,15 @@ function parseTcp(spec: string | undefined): { host?: string; port: number } | u
 
 /** The daemon entrypoint: bind the single-instance UDS and serve proto-v2. */
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
-  // `serve` is the only (and default) verb; flags follow.
+  // `mcp` is a self-contained, non-default verb: it runs the stdio MCP server
+  // (the tool surface `@autosk/claude-agent` points Claude at) and never binds
+  // the daemon socket. It returns when stdin closes.
+  if (argv[0] === "mcp") {
+    await runMcpServer();
+    return;
+  }
+
+  // `serve` is the default verb; flags follow.
   const rest = argv[0] === "serve" ? argv.slice(1) : argv;
   const args = parseServeArgs(rest);
 
