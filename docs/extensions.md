@@ -313,6 +313,24 @@ blocks for your own workflows):
   `worktreeIsolation()`. It is the workflow every project can enroll into with no
   per-project files.
 
+## Opt-in extensions
+
+Not every extension is bootstrapped. These you add explicitly (with
+[`autosk ext add`](#managing-extensions) or from the GUI):
+
+- **[`@autosk/docker`](../daemon/extensions/docker/README.md)** —
+  `dockerIsolation({ image })`, an isolation provider that runs pi (and every
+  command it spawns) **inside a per-task Docker container** — a real sandbox — by
+  **composing** `@autosk/worktree` for the git-branch filesystem (edits still land
+  on `autosk/<task-id>` on the host). It is **not** part of the first-run
+  bootstrap: install it with `autosk ext add npm:@autosk/docker` and attach
+  `dockerIsolation({ image })` to a workflow. The operator supplies an image with
+  `pi` (and a compatible `autosk`) preinstalled; see the
+  [package README](../daemon/extensions/docker/README.md) for image requirements,
+  the daemon-socket mount, and the cross-arch / permissions notes. It relies on
+  the `IsolationHandle` exec/spawn seam (see
+  [docs/workflows.md → The execution seam](workflows.md#the-execution-seam)).
+
 One more shipped agent is **not** provisioned by the bootstrap — it is an opt-in
 alternative harness you wire into your own workflow (`autosk ext add
 npm:@autosk/claude-agent`, then use it in place of `piAgent({...})`):

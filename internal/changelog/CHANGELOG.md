@@ -25,6 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `comment`, the latter two shelling out to `autosk --json`) that the agent
   points Claude at via `--mcp-config`; it registers `@autosk/claude-agent` for
   interactive chat and is opt-in (not bootstrap-provisioned) (ask-4f347a).
+- **Docker isolation provider (`@autosk/docker`).** A new opt-in
+  `dockerIsolation({ image })` isolation provider runs pi (and every command it
+  spawns) **inside a per-task Docker container** — a real sandbox — by composing
+  `@autosk/worktree` for the git-branch filesystem (edits still land on
+  `autosk/<task-id>` on the host): it bind-mounts the worktree 1:1, mounts the
+  daemon UDS for in-container `autosk` parity, `acquire`s (create/start/reuse) a
+  deterministically-named container, `release`s with `docker stop`, and `reap`s
+  with `docker rm -f` (branch preserved). Backed by a new optional `exec`/`spawn`
+  **execution seam** on `IsolationHandle` (with `IsolationExecOptions` /
+  `IsolationSpawnOptions`) that lets a provider own process creation, and the
+  shared `runChild` / `spawnChild` child-process helpers now exported from
+  `@autosk/sdk`. Not bootstrapped — install with `autosk ext add
+  npm:@autosk/docker` (ask-ffa1bc).
 - **Editable task metadata.** Every task now carries a free-form `metadata`
   object in `task.json` (always present, omitted on disk when empty), readable
   and editable through a new `autosk metadata show/set/unset` verb group, the

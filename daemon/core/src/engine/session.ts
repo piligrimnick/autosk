@@ -646,10 +646,26 @@ export class SessionRuntime {
       // EPHEMERAL partial channel: routed through the same transcript serial
       // chain as durable appends so a partial(N+1) can never overtake commit(N).
       partial: (m: TranscriptMessage) => this.transcript.partial(m),
-      exec: (cmd: string[], opts?: ExecOptions) =>
-        execOneShot(cmd, { ...opts, defaultCwd: this.cwd, defaultSignal: this.controller.signal }),
-      spawn: (cmd: string[], opts?: SpawnOptions) =>
-        spawnChild(cmd, { ...opts, defaultCwd: this.cwd, signal: this.controller.signal }),
+      // Execution seam (plan §5): when the acquired isolation handle exposes
+      // `exec`/`spawn`, route through it (e.g. `docker exec` runs pi INSIDE the
+      // container) with the cwd + abort signal RESOLVED here; otherwise fall back
+      // to the host child helpers (today's worktree / no-isolation behaviour).
+      // An interactive session has no isolation, so it always takes the host path.
+      exec: (cmd: string[], opts?: ExecOptions) => {
+        if (this.isolation?.exec) {
+          const signal = opts?.signal ?? this.controller.signal;
+          const cwd = opts?.cwd ?? this.cwd;
+          return this.isolation.exec(cmd, { ...opts, cwd, signal });
+        }
+        return execOneShot(cmd, { ...opts, defaultCwd: this.cwd, defaultSignal: this.controller.signal });
+      },
+      spawn: (cmd: string[], opts?: SpawnOptions) => {
+        if (this.isolation?.spawn) {
+          const cwd = opts?.cwd ?? this.cwd;
+          return this.isolation.spawn(cmd, { ...opts, cwd, signal: this.controller.signal });
+        }
+        return spawnChild(cmd, { ...opts, defaultCwd: this.cwd, signal: this.controller.signal });
+      },
       // Fire-and-forget: the agent reports turn boundaries synchronously; the
       // meta patch + fan-out happen off the call. Inert for task sessions.
       setActivity: (a: SessionActivity) => void this.setActivity(a),

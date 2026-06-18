@@ -4,7 +4,14 @@
  * drives the task status machine and calls `onTransit` on every transition.
  */
 
-import type { AgentDefinition, TasksAPI } from "./agent.ts";
+import type {
+  AgentDefinition,
+  ChildHandle,
+  ExecOptions,
+  ExecResult,
+  SpawnOptions,
+  TasksAPI,
+} from "./agent.ts";
 
 /**
  * The target of a transition: either a sibling step within the same workflow,
@@ -78,12 +85,50 @@ export interface WorkflowDefinition {
   isolation?: IsolationProvider;
 }
 
+/**
+ * Options the engine hands a handle's {@link IsolationHandle.exec} seam: the
+ * agent's {@link ExecOptions} with `cwd` + `signal` already resolved (the
+ * handle's `cwd`, or an `opts` override; the session's signal, or an `opts`
+ * override).
+ */
+export interface IsolationExecOptions extends ExecOptions {
+  cwd: string;
+  signal: AbortSignal;
+}
+
+/**
+ * Options the engine hands a handle's {@link IsolationHandle.spawn} seam: the
+ * agent's {@link SpawnOptions} with `cwd` + `signal` already resolved.
+ */
+export interface IsolationSpawnOptions extends SpawnOptions {
+  cwd: string;
+  signal: AbortSignal;
+}
+
 /** A handle to an acquired isolation environment (plan §3.5). */
 export interface IsolationHandle {
   /** The working directory the session runs in (passed as `ctx.cwd`). */
   cwd: string;
   /** Provider-internal bookkeeping (e.g. branch name for worktrees). */
   meta?: Record<string, unknown>;
+
+  /**
+   * Optional EXECUTION SEAM — run a one-shot command INSIDE the environment
+   * (e.g. `docker exec`). When present the engine routes `ctx.exec` through it;
+   * when ABSENT the engine runs the command on the host at `cwd` (today's
+   * worktree behaviour). MUST honour `opts.signal` (abort / daemon shutdown) and
+   * return the same {@link ExecResult} shape.
+   */
+  exec?(cmd: string[], opts: IsolationExecOptions): Promise<ExecResult>;
+
+  /**
+   * Optional EXECUTION SEAM — spawn a long-lived command INSIDE the environment.
+   * When present the engine routes `ctx.spawn` through it (this is how
+   * `pi --mode rpc` ends up inside the container); when ABSENT the engine spawns
+   * on the host at `cwd`. MUST stream line-buffered stdio and kill on
+   * `opts.signal`, returning the same {@link ChildHandle} shape.
+   */
+  spawn?(cmd: string[], opts: IsolationSpawnOptions): ChildHandle;
 }
 
 /**

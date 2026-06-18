@@ -1,0 +1,43 @@
+{
+  "name": "@autosk/docker",
+  "version": "0.1.0",
+  "description": "Opt-in autoskd v2 isolation provider: run pi (and every command it spawns) inside a per-task Docker container (dockerIsolation()), composing @autosk/worktree for the git-branch FS.",
+  "license": "MIT",
+  "author": "wierdbytes",
+  "homepage": "https://github.com/wierdbytes/autosk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wierdbytes/autosk.git",
+    "directory": "daemon/extensions/docker"
+  },
+  "bugs": {
+    "url": "https://github.com/wierdbytes/autosk/issues"
+  },
+  "keywords": [
+    "autosk",
+    "autosk-extension",
+    "docker",
+    "isolation",
+    "sandbox"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": "./index.ts"
+  },
+  "types": "./index.ts",
+  "files": [
+    "index.ts",
+    "src/",
+    "README.md"
+  ],
+  "dependencies": {
+    "@autosk/sdk": "^0.1.0",
+    "@autosk/worktree": "^0.1.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}
