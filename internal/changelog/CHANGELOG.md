@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > rows or installed npm-package agents.
 
 ### Added
+- **GUI: iPhone-friendly compact single-pane layout.** On touch devices below
+  the compact breakpoint (`(pointer: coarse) and ((max-width: 700px) or
+  (max-height: 480px))`) the Tauri GUI switches to a full-screen single-pane
+  shell — a top bar (project switcher + Settings gear), one active list, and a
+  bottom tab bar (Tasks/Sessions/Workflows) with push-to-detail navigation, a
+  ‹ Back control, a pinned contextual composer, full-screen modal sheets, and
+  safe-area insets in both orientations; desktop and iPad keep the two-pane
+  layout unchanged (ask-5c793f).
 - **GUI: streaming partial agent messages.** An active pi-agent turn now renders
   live in the Tauri GUI — assistant text, thinking, and tool-call blocks grow as
   the model produces them, instead of appearing only after the step commits. Built
