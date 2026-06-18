@@ -32,6 +32,12 @@ describe("buildClaudeCommand", () => {
     expect(cmd).toContain("sonnet");
     expect(cmd).toContain("--permission-mode");
     expect(cmd[cmd.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
+    expect(cmd).not.toContain("--effort");
+  });
+
+  test("forwards the effort level when set", () => {
+    const cmd = buildClaudeCommand({ claudeBin: "claude", effort: "high" });
+    expect(cmd[cmd.indexOf("--effort") + 1]).toBe("high");
   });
 
   test("dangerouslySkipPermissions wins over permissionMode", () => {

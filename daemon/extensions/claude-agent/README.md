@@ -121,6 +121,7 @@ time).
 | Option                       | Default                          | Description                                                                                  |
 | ---------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------- |
 | `model`                      | Claude Code default              | Model alias/name, e.g. `"sonnet"` / `"opus"` (`--model`).                                     |
+| `effort`                     | Claude Code default              | Effort level (`--effort`): `low` / `medium` / `high` / `xhigh` / `max` (levels depend on the model). |
 | `firstMessage`               | `""`                             | Inline first-message seed (wins over `firstMessageFile`).                                     |
 | `firstMessageFile`           | —                                | Path to a file whose contents seed the first message.                                         |
 | `appendSystemPrompt`         | —                                | Role guidance appended to the system prompt (`--append-system-prompt`).                       |

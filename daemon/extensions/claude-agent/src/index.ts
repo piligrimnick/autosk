@@ -55,6 +55,12 @@ const COMMENT_TOOL_NAME = "mcp__autosk__comment";
 export interface ClaudeAgentOptions {
   /** Claude model alias/name, e.g. `"sonnet"` / `"opus"` (`--model`). */
   model?: string;
+  /**
+   * Effort level for the run (`--effort`). The available levels depend on the
+   * model. Overrides the `effortLevel` setting for this session (it does not
+   * persist). Omitted by default (Claude Code uses its configured `effortLevel`).
+   */
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
   /** Inline first-message seed (wins over {@link firstMessageFile}). */
   firstMessage?: string;
   /** Path to a file whose contents seed the first message. */
@@ -362,6 +368,7 @@ export function buildClaudeCommand(
     opts = { ...opts, allowedTools: [...autoskTools, ...(opts.allowedTools ?? [])] };
   }
   if (opts.model) args.push("--model", opts.model);
+  if (opts.effort) args.push("--effort", opts.effort);
   if (opts.dangerouslySkipPermissions) {
     args.push("--dangerously-skip-permissions");
   } else {
