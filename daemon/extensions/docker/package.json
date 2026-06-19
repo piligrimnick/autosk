@@ -1,6 +1,6 @@
 {
   "name": "@autosk/docker",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "autosk isolation provider: run agents inside a per-task Docker container with git worktree",
   "license": "MIT",
   "author": "wierdbytes",
@@ -15,7 +15,6 @@
   },
   "keywords": [
     "autosk",
-    "autosk-extension",
     "autosk-isolation"
   ],
   "type": "module",

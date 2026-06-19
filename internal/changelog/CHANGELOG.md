@@ -211,6 +211,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the throwaway worktree to the wrong (or no) `.autosk/`.
 
 ### Changed
+- **Isolation providers dropped from the GUI extension browser.** The shipped
+  isolation providers `@autosk/worktree` (0.1.3) and `@autosk/docker` (0.1.1) no
+  longer carry the `autosk-extension` npm keyword, so they no longer appear in
+  the Workflows panel `＋` browser (which lists `autosk-extension` packages) —
+  isolation providers are attached to a workflow in code, not picked from that
+  list. Installable workflows and agents are unaffected.
 - **Workflow visit counts are now metadata-backed.** `ctx.visits(step)` reads
   the persistent, human-resettable `metadata.step_visits[step]` counter the
   engine bumps on every transition into a named step, instead of counting
