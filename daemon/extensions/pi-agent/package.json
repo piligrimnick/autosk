@@ -16,9 +16,7 @@
   "keywords": [
     "autosk",
     "autosk-extension",
-    "agent",
-    "pi",
-    "ai-agent"
+    "autosk-agent"
   ],
   "type": "module",
   "publishConfig": {

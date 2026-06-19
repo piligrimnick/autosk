@@ -16,10 +16,7 @@
   "keywords": [
     "autosk",
     "autosk-extension",
-    "agent",
-    "claude",
-    "claude-code",
-    "ai-agent"
+    "autosk-agent"
   ],
   "type": "module",
   "publishConfig": {

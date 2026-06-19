@@ -1,7 +1,7 @@
 {
   "name": "@autosk/docker",
   "version": "0.1.0",
-  "description": "Opt-in autoskd v2 isolation provider: run pi (and every command it spawns) inside a per-task Docker container (dockerIsolation()), composing @autosk/worktree for the git-branch FS.",
+  "description": "autosk isolation provider: run agents inside a per-task Docker container with git worktree",
   "license": "MIT",
   "author": "wierdbytes",
   "homepage": "https://github.com/wierdbytes/autosk#readme",
@@ -16,9 +16,7 @@
   "keywords": [
     "autosk",
     "autosk-extension",
-    "docker",
-    "isolation",
-    "sandbox"
+    "autosk-isolation"
   ],
   "type": "module",
   "publishConfig": {

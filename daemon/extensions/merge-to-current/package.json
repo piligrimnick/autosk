@@ -16,9 +16,7 @@
   "keywords": [
     "autosk",
     "autosk-extension",
-    "workflow",
-    "merge-to-current",
-    "git-merge"
+    "autosk-workflow"
   ],
   "type": "module",
   "publishConfig": {

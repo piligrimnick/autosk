@@ -1,6 +1,6 @@
 {
   "name": "@autosk/feature-dev",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "feature-dev (dev → review → docs → validator → accept) wired to @autosk/pi-agent roles and worktree isolation.",
   "license": "MIT",
   "author": "wierdbytes",
@@ -16,8 +16,7 @@
   "keywords": [
     "autosk",
     "autosk-extension",
-    "workflow",
-    "feature-dev"
+    "autosk-workflow"
   ],
   "type": "module",
   "publishConfig": {

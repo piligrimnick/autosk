@@ -1,6 +1,6 @@
 {
   "name": "@autosk/worktree",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Shipped autoskd v2 isolation provider: per-task git worktree isolation (worktreeIsolation()) attachable to any workflow.",
   "license": "MIT",
   "author": "wierdbytes",
@@ -16,8 +16,7 @@
   "keywords": [
     "autosk",
     "autosk-extension",
-    "git-worktree",
-    "isolation"
+    "autosk-isolation"
   ],
   "type": "module",
   "publishConfig": {
