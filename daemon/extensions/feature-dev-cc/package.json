@@ -1,0 +1,46 @@
+{
+  "name": "@autosk/feature-dev-cc",
+  "version": "0.1.0",
+  "description": "feature-dev-cc (dev → review → docs → validator → accept) wired to @autosk/claude-agent roles and worktree isolation — use your Claude Code",
+  "license": "MIT",
+  "author": "wierdbytes",
+  "homepage": "https://github.com/wierdbytes/autosk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wierdbytes/autosk.git",
+    "directory": "daemon/extensions/feature-dev-cc"
+  },
+  "bugs": {
+    "url": "https://github.com/wierdbytes/autosk/issues"
+  },
+  "keywords": [
+    "autosk",
+    "autosk-extension",
+    "autosk-workflow"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": "./index.ts"
+  },
+  "types": "./index.ts",
+  "autosk": {
+    "extensions": ["./index.ts"]
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "prompts/",
+    "README.md"
+  ],
+  "dependencies": {
+    "@autosk/claude-agent": "^0.1.0",
+    "@autosk/sdk": "^0.1.0",
+    "@autosk/worktree": "^0.1.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

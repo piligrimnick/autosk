@@ -49,6 +49,15 @@
         "@autosk/worktree": "^0.1.0",
       },
     },
+    "extensions/feature-dev-cc": {
+      "name": "@autosk/feature-dev-cc",
+      "version": "0.1.0",
+      "dependencies": {
+        "@autosk/claude-agent": "^0.1.0",
+        "@autosk/sdk": "^0.1.0",
+        "@autosk/worktree": "^0.1.0",
+      },
+    },
     "extensions/merge-to-current": {
       "name": "@autosk/merge-to-current",
       "version": "0.1.1",
@@ -84,6 +93,8 @@
     "@autosk/docker": ["@autosk/docker@workspace:extensions/docker"],
 
     "@autosk/feature-dev": ["@autosk/feature-dev@workspace:extensions/feature-dev"],
+
+    "@autosk/feature-dev-cc": ["@autosk/feature-dev-cc@workspace:extensions/feature-dev-cc"],
 
     "@autosk/merge-to-current": ["@autosk/merge-to-current@workspace:extensions/merge-to-current"],
 

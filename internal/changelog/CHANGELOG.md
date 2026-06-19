@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `comment`, the latter two shelling out to `autosk --json`) that the agent
   points Claude at via `--mcp-config`; it registers `@autosk/claude-agent` for
   interactive chat and is opt-in (not bootstrap-provisioned) (ask-4f347a).
+- **`@autosk/feature-dev-cc` (Claude Code feature-dev workflow).** The Claude
+  Code twin of `@autosk/feature-dev` — the same `dev → review → docs → validator
+  → accept` cycle with `review→dev`/`validator→dev` bounce-backs, a `dev`
+  visit-cap guard, and per-task worktree isolation — but every agent step is an
+  inline `@autosk/claude-agent` role (driving `claude -p`) instead of an
+  `@autosk/pi-agent` role. Not bootstrapped — install with `autosk ext add
+  npm:@autosk/feature-dev-cc` (or from a local checkout).
 - **Docker isolation provider (`@autosk/docker`).** A new opt-in
   `dockerIsolation({ image })` isolation provider runs pi (and every command it
   spawns) **inside a per-task Docker container** — a real sandbox — by composing
