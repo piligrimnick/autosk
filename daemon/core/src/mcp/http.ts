@@ -20,8 +20,8 @@
  * The socket binds `0.0.0.0` by default (not loopback): on Linux a container
  * reaching the host via `--add-host=host.docker.internal:host-gateway` connects
  * over the docker bridge IP, which a loopback-only bind does NOT listen on — so a
- * 127.0.0.1 bind refuses the in-container harness (the shipped `feature-dev-cc-docker`
- * path, and what the docker integration test must exercise). The security
+ * 127.0.0.1 bind refuses the in-container harness (the `feature-dev-docker`
+ * dockerSandbox path, and what the docker integration test must exercise). The security
  * boundary is the per-session 32-byte bearer + the ephemeral port (plan §7/§11.3),
  * NOT the bind interface; the returned `url` stays loopback for the host/worktree
  * case, and 0.0.0.0 still accepts those loopback connections.

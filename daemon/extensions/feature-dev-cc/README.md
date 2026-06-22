@@ -5,11 +5,14 @@ same full feature-development cycle, but every agent step is an inline
 [`@autosk/claude-agent`](../claude-agent/README.md) role (driving `claude -p`
 headless stream-json) instead of an [`@autosk/pi-agent`](../pi-agent/README.md)
 role. Each agent runs its harness in a per-task [`@autosk/sandbox`](../sandbox/README.md),
-and teardown is a normal `cleanup` step. This package registers **two**
-workflows: `feature-dev-cc` (a `worktreeSandbox()` — claude on the host, in the
-worktree) and `feature-dev-cc-docker` (a `dockerSandbox({ image })` — claude in a
-per-task `docker run -i --rm` container reaching the host MCP over
-`host.docker.internal`).
+and teardown is a normal `cleanup` step. This package registers the
+`feature-dev-cc` workflow (a `worktreeSandbox()` — claude on the host, in the
+worktree).
+
+> A Claude **`dockerSandbox`** variant is deferred; the thin operator image
+> already lives at [`../claude-agent/docker/`](../claude-agent/docker/README.md)
+> for when it lands. (The pi cycle's docker variant ships today as
+> [`@autosk/feature-dev-docker`](../feature-dev-docker/README.md).)
 
 ## The workflow
 
@@ -26,14 +29,13 @@ dev ──▶ review ──▶ docs ──▶ validator ──▶ accept (human)
 | `docs`      | `claudeAgent` (name `docs`)     | documentation pass (leaves `CHANGELOG.md` to `validator`)    |
 | `validator` | `claudeAgent` (name `validator`)| independent item-by-item verification; on success runs release hygiene (CHANGELOG `[Unreleased]` + a clean, committed worktree) before `accept`; bounces back to `dev` |
 | `accept`    | `statusStep("human")`           | the engine parks here for a human's final acceptance         |
-| `cleanup`   | `sandboxCleanupStep(sandbox)`   | removes the worktree (branch preserved; for docker also `rm -f` any orphan container), then transits to `done` |
+| `cleanup`   | `sandboxCleanupStep(sandbox)`   | removes the worktree (branch preserved), then transits to `done` |
 
 Each agent step is an inline `@autosk/claude-agent` value: the **step key is the
 agent name** (`dev`/`review`/`docs`/`validator`), and registering the workflow
 registers those agents — there is no separate agent registration.
 
-- **Sandbox:** `worktreeSandbox()` (or `dockerSandbox({ image })` for the
-  `feature-dev-cc-docker` sibling) — each task runs in its own git worktree, torn
+- **Sandbox:** `worktreeSandbox()` — each task runs in its own git worktree, torn
   down by the `cleanup` step (route terminals through it so a task never leaks
   its worktree now that `done`/`cancel` are a raw flip).
 - **Visit cap:** `onTransit` rejects a bounce-back into `dev` once the task has
@@ -57,8 +59,7 @@ Because the agent steps are `@autosk/claude-agent`, the same runtime
 requirements apply (see that package's README):
 
 - **`claude`** (the Claude Code CLI) on `PATH`, or `$AUTOSK_CLAUDE_BIN`, already
-  authenticated (the headless run is unattended). For `feature-dev-cc-docker`,
-  `claude` + the toolchain live in the operator image instead.
+  authenticated (the headless run is unattended).
 - **No `autosk` in the run environment** — the `task` / `comment` / `transit`
   tools are served by the per-session host-side HTTP MCP server (`type:"http"` +
   a bearer), so neither the CLI nor a mounted daemon socket is needed.
@@ -108,8 +109,6 @@ overrides this one by name.
 - default export — the extension factory (registers the workflow, whose steps
   carry the four inline Claude agents).
 - `featureDevCcWorkflow(options?)` → `WorkflowDefinition` (a factory; tests inject
-  a custom `sandbox`).
-- `featureDevCcDockerWorkflow(options?)` → `WorkflowDefinition` (the docker
-  sibling; `image` defaults to `$AUTOSK_DOCKER_IMAGE` or `autosk/claude-runtime:latest`).
-- `defaultDockerImage()` — the resolved default image.
+  a custom `sandbox`, and a future docker sibling can reuse it under a distinct
+  `name`).
 - `DEV_VISIT_CAP` — the `dev` re-entry cap constant.
