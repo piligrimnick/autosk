@@ -22,7 +22,7 @@
         "@autosk/claude-agent": "workspace:*",
         "@autosk/feature-dev": "workspace:*",
         "@autosk/pi-agent": "workspace:*",
-        "@autosk/worktree": "workspace:*",
+        "@autosk/sandbox": "workspace:*",
       },
     },
     "extensions/claude-agent": {
@@ -32,21 +32,13 @@
         "@autosk/sdk": "^0.1.0",
       },
     },
-    "extensions/docker": {
-      "name": "@autosk/docker",
-      "version": "0.1.0",
-      "dependencies": {
-        "@autosk/sdk": "^0.1.0",
-        "@autosk/worktree": "^0.1.0",
-      },
-    },
     "extensions/feature-dev": {
       "name": "@autosk/feature-dev",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@autosk/pi-agent": "^0.1.0",
+        "@autosk/sandbox": "^0.1.0",
         "@autosk/sdk": "^0.1.0",
-        "@autosk/worktree": "^0.1.0",
       },
     },
     "extensions/feature-dev-cc": {
@@ -54,8 +46,8 @@
       "version": "0.1.0",
       "dependencies": {
         "@autosk/claude-agent": "^0.1.0",
+        "@autosk/sandbox": "^0.1.0",
         "@autosk/sdk": "^0.1.0",
-        "@autosk/worktree": "^0.1.0",
       },
     },
     "extensions/merge-to-current": {
@@ -73,9 +65,9 @@
         "@autosk/sdk": "^0.1.0",
       },
     },
-    "extensions/worktree": {
-      "name": "@autosk/worktree",
-      "version": "0.1.1",
+    "extensions/sandbox": {
+      "name": "@autosk/sandbox",
+      "version": "0.1.0",
       "dependencies": {
         "@autosk/sdk": "^0.1.0",
       },
@@ -90,8 +82,6 @@
 
     "@autosk/core": ["@autosk/core@workspace:core"],
 
-    "@autosk/docker": ["@autosk/docker@workspace:extensions/docker"],
-
     "@autosk/feature-dev": ["@autosk/feature-dev@workspace:extensions/feature-dev"],
 
     "@autosk/feature-dev-cc": ["@autosk/feature-dev-cc@workspace:extensions/feature-dev-cc"],
@@ -100,9 +90,9 @@
 
     "@autosk/pi-agent": ["@autosk/pi-agent@workspace:extensions/pi-agent"],
 
-    "@autosk/sdk": ["@autosk/sdk@workspace:sdk"],
+    "@autosk/sandbox": ["@autosk/sandbox@workspace:extensions/sandbox"],
 
-    "@autosk/worktree": ["@autosk/worktree@workspace:extensions/worktree"],
+    "@autosk/sdk": ["@autosk/sdk@workspace:sdk"],
 
     "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
 

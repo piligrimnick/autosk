@@ -68,6 +68,11 @@ export interface SessionHost {
   readonly logger: Logger;
   /** Parks a task to `human` with `error` (status flip + an `autosk` comment + notify). */
   park(project: EngineProject, taskId: string, error: string): Promise<void>;
+  /**
+   * Enrolls a (freshly-created) task into a workflow — the per-session MCP
+   * server's `task create --workflow` path. Runs `onTransit` for the entry edge.
+   */
+  enrollTask(project: EngineProject, taskId: string, target: { workflow: string }): Promise<TaskView>;
   /** Re-reads the task and emits a `task-changed` event. */
   notifyTaskChanged(project: EngineProject, taskId: string): Promise<void>;
   /** Emits a session lifecycle event. */

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -1121,7 +1120,7 @@ func (gu *Gui) taskDone(*gocui.Gui, *gocui.View) error {
 		return nil
 	}
 	gu.confirmThen(fmt.Sprintf("mark %s done?", t.ID), func() {
-		gu.runTerminalVerb("done", t.ID, false)
+		gu.runTerminalVerb("done", t.ID)
 	})
 	return nil
 }
@@ -1132,31 +1131,24 @@ func (gu *Gui) taskCancel(*gocui.Gui, *gocui.View) error {
 		return nil
 	}
 	gu.confirmThen(fmt.Sprintf("cancel %s?", t.ID), func() {
-		gu.runTerminalVerb("cancel", t.ID, false)
+		gu.runTerminalVerb("cancel", t.ID)
 	})
 	return nil
 }
 
-// runTerminalVerb drives done/cancel on a worker. On a clean transition the
-// daemon reaps the task's worktree (branch preserved). If the worktree is dirty
-// and `force` was not set, the daemon refuses with ErrEnvironmentDirty; we then
-// prompt to retry with force (which discards the uncommitted changes).
-func (gu *Gui) runTerminalVerb(verb, id string, force bool) {
+// runTerminalVerb drives done/cancel on a worker. A terminal verb is a raw
+// status flip (isolation is agent-owned and torn down by a cleanup workflow
+// step), so there is no dirty-gate / force retry — the worktree branch is always
+// preserved regardless.
+func (gu *Gui) runTerminalVerb(verb, id string) {
 	gu.g.OnWorker(func(_ gocui.Task) error {
 		var err error
 		if verb == "done" {
-			err = gu.ds.TaskDone(gu.ctx, id, force)
+			err = gu.ds.TaskDone(gu.ctx, id)
 		} else {
-			err = gu.ds.TaskCancel(gu.ctx, id, force)
+			err = gu.ds.TaskCancel(gu.ctx, id)
 		}
 		if err != nil {
-			if !force && errors.Is(err, datasource.ErrEnvironmentDirty) {
-				gu.confirmThen(
-					fmt.Sprintf("%s: isolation environment has uncommitted changes — %s --force (discards them)?", id, verb),
-					func() { gu.runTerminalVerb(verb, id, true) },
-				)
-				return nil
-			}
 			gu.flashf("err", "%s: %v", verb, err)
 			return nil
 		}

@@ -4,33 +4,29 @@
  *
  * The walk drives the SHIPPED `feature-dev` step graph (dev → review → docs →
  * validator → accept, with the review→dev bounce) using scripted stub agents and
- * a fake isolation double (so the step graph + `onTransit` are exercised without
+ * a fake sandbox double (so the step graph + `onTransit` are exercised without
  * git). The cap is asserted directly against the shipped `onTransit`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import type {
-  AgentDefinition,
-  IsolationProvider,
-  StepTarget,
-  TransitContext,
-  WorkflowDefinition,
-} from "@autosk/sdk";
+import type { AgentDefinition, StepTarget, TransitContext, WorkflowDefinition } from "@autosk/sdk";
 import { DEV_VISIT_CAP, featureDevWorkflow } from "@autosk/feature-dev";
 
 import { makeEngine, makeProject, type TestProject } from "./engineHarness.ts";
 import { waitForComplete } from "./helpers.ts";
 
 /**
- * An isolation double that hands back the project root (no git, no worktrees).
- * Mirrors the real worktree provider's `{ tag, acquire }` shape — no `release`
- * (a worktree has nothing to quiesce) and no `reap` needed for this stub.
+ * A structural sandbox double that hands back the project root (no git, no
+ * worktrees, no containers). The scripted walk parks at `accept` and never runs
+ * the real `cleanup` step, so the sandbox methods are never actually invoked —
+ * this only keeps the workflow's default `worktreeSandbox()` off real git.
  */
-const fakeIsolation: IsolationProvider = {
-  tag: "worktree",
-  async acquire({ projectRoot }) {
-    return { cwd: projectRoot, meta: {} };
-  },
+const fakeSandbox = {
+  workspace: async ({ projectRoot }: { projectRoot: string; taskId: string }) => ({ cwd: projectRoot }),
+  wrap: (cmd: string[]) => cmd,
+  endpointFor: (port: number) => `http://127.0.0.1:${port}`,
+  stop: async () => {},
+  cleanup: async () => ({ removed: false, dirty: false }),
 };
 
 function scripted(decide: () => StepTarget): AgentDefinition {
@@ -50,7 +46,7 @@ function scriptedFeatureDev(steps: {
   docs: () => StepTarget;
   validator: () => StepTarget;
 }): WorkflowDefinition {
-  const real = featureDevWorkflow({ isolation: fakeIsolation });
+  const real = featureDevWorkflow({ sandbox: fakeSandbox });
   return {
     ...real,
     steps: {
@@ -143,7 +139,7 @@ describe("feature-dev — scripted walk + visit cap", () => {
   }, 20000);
 
   test("onTransit rejects the 6th dev entry (visits('dev') >= cap) and allows the 5th", async () => {
-    const wf = featureDevWorkflow({ isolation: fakeIsolation });
+    const wf = featureDevWorkflow({ sandbox: fakeSandbox });
     expect(wf.onTransit).toBeDefined();
 
     const ctxWith = (devVisits: number): TransitContext =>

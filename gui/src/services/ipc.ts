@@ -44,6 +44,8 @@ export class DaemonError extends Error {
 }
 
 // Mirror of proto-v2 ErrorCodes (the subset the UI branches on).
+// 1005 (EnvironmentDirty) is RESERVED but RETIRED — the daemon no longer emits it
+// (terminal verbs are a raw status flip), so the UI no longer branches on it.
 export const ErrorCode = {
   MethodNotFound: -32601,
   InvalidParams: -32602,
@@ -51,7 +53,6 @@ export const ErrorCode = {
   InvalidProject: 1002,
   NotFound: 1003,
   Conflict: 1004,
-  EnvironmentDirty: 1005,
 } as const;
 
 /**
@@ -196,14 +197,14 @@ export function taskUpdate(
   return daemonRequest<TaskView>("task.update", sel(cwd, { id, ...patch }));
 }
 
-// done/cancel reap the task's worktree (branch preserved); `force` reaps it even
-// with uncommitted changes. Without force a dirty env yields ErrorCode.EnvironmentDirty.
-export function taskDone(cwd: string, id: string, force = false): Promise<TaskView> {
-  return daemonRequest<TaskView>("task.done", sel(cwd, force ? { id, force } : { id }));
+// done/cancel are a raw status flip (isolation is agent-owned and torn down by a
+// cleanup workflow step); the worktree branch is always preserved. No `force`.
+export function taskDone(cwd: string, id: string): Promise<TaskView> {
+  return daemonRequest<TaskView>("task.done", sel(cwd, { id }));
 }
 
-export function taskCancel(cwd: string, id: string, force = false): Promise<TaskView> {
-  return daemonRequest<TaskView>("task.cancel", sel(cwd, force ? { id, force } : { id }));
+export function taskCancel(cwd: string, id: string): Promise<TaskView> {
+  return daemonRequest<TaskView>("task.cancel", sel(cwd, { id }));
 }
 
 export function taskReopen(cwd: string, id: string): Promise<TaskView> {

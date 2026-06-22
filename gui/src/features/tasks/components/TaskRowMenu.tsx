@@ -20,7 +20,6 @@ import * as ipc from "@/services/ipc";
 import type { TaskView } from "@/types";
 import { computeMetadataDiff, metadataToText } from "@/features/tasks/metadataDiff";
 import { Modal } from "@/components/Modal";
-import { useConfirm } from "@/components/ConfirmDialog";
 
 const TERMINAL = new Set(["done", "cancel"]);
 
@@ -35,7 +34,6 @@ export function useTaskRowMenu(task: TaskView): {
 } {
   const { state, effects } = useStore();
   const cwd = state.activeProject ?? "";
-  const confirm = useConfirm();
   const [modal, setModal] = useState<"edit" | "block" | null>(null);
 
   const run = useCallback(
@@ -54,36 +52,14 @@ export function useTaskRowMenu(task: TaskView): {
     [effects, task.id],
   );
 
-  // done/cancel: the daemon reaps the task's worktree (branch preserved). If it
-  // is dirty and `force` was not set, the verb fails with EnvironmentDirty; we
-  // then confirm a forced retry (which discards the uncommitted changes).
+  // done/cancel are a raw status flip (isolation is agent-owned and torn down by
+  // a cleanup workflow step); the worktree branch is always preserved. No
+  // dirty-gate, so no force-confirm prompt.
   const runTerminal = useCallback(
     (verb: "done" | "cancel") => {
-      const call = (force: boolean) =>
-        verb === "done" ? ipc.taskDone(cwd, task.id, force) : ipc.taskCancel(cwd, task.id, force);
-      void run(async () => {
-        try {
-          await call(false);
-        } catch (err) {
-          if (err instanceof ipc.DaemonError && err.code === ipc.ErrorCode.EnvironmentDirty) {
-            const label = verb === "done" ? "Mark done" : "Cancel";
-            const ok = await confirm({
-              title: `${label} (force)`,
-              message: `${task.id}: isolation environment has uncommitted changes.\n${label} with force? This discards them.`,
-              confirmLabel: label,
-              danger: true,
-            });
-            if (!ok) {
-              return; // declined — leave the task as-is
-            }
-            await call(true);
-            return;
-          }
-          throw err; // surface every other error via run()'s notice
-        }
-      });
+      void run(() => (verb === "done" ? ipc.taskDone(cwd, task.id) : ipc.taskCancel(cwd, task.id)));
     },
-    [confirm, cwd, run, task.id],
+    [cwd, run, task.id],
   );
 
   const [popover, setPopover] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);

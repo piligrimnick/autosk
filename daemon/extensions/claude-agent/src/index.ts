@@ -9,20 +9,44 @@
  * assistant/tool messages 1:1 into the autosk transcript, and run the
  * kickback/corrections loop to a single transition.
  *
- * Tool surface (plan §5): one stdio `autosk` MCP server (`autoskd mcp`) registered
- * via `--mcp-config`, exposing `transit` (ack-only, observed by the driver),
- * `task`, and `comment` (executed for real by the MCP server shelling out to
- * `autosk --json`). The model sees `mcp__autosk__transit` / `mcp__autosk__task` /
- * `mcp__autosk__comment`.
+ * Tool surface (plan §5): the per-session, host-side HTTP MCP server minted by
+ * `ctx.newMCPServer()`, registered via `--mcp-config` as `type:"http"` with a
+ * bearer token, exposing `transit` (ack-only, observed by the driver), `task`,
+ * and `comment` (executed for real by the daemon's direct-store backend). The
+ * model sees `mcp__autosk__transit` / `mcp__autosk__task` / `mcp__autosk__comment`.
+ * No `autosk`/`autoskd` and no mounted socket are needed in the sandbox — the
+ * harness reaches the host server via `sandbox.endpointFor(port)` (e.g.
+ * `host.docker.internal`).
  */
 
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 
 import type { AgentDefinition, AgentRunContext, AutoskAPI, StepTarget } from "@autosk/sdk";
 
 import { ClaudeDriver, TRANSIT_TOOL_NAME } from "./driver.ts";
 import { kickbackMessage, renderInitialPrompt, rejectionMessage } from "./prompt.ts";
+
+/** The task identity an agent hands its sandbox. */
+interface SandboxId {
+  projectRoot: string;
+  taskId: string;
+}
+
+/**
+ * The STRUCTURAL sandbox shape the agent consumes (a subset of `@autosk/sandbox`'s
+ * `Sandbox`). Typed structurally so a workflow can pass a hand-rolled sandbox
+ * without this agent depending on the `@autosk/sandbox` package's type.
+ */
+export interface AgentSandbox {
+  /** Ensure the per-task workspace exists and return the dir the harness runs in. */
+  workspace(id: SandboxId): Promise<{ cwd: string }>;
+  /** Wrap the harness argv to run inside the sandbox (`docker run …`). Identity for host/worktree. */
+  wrap(cmd: string[], o: { cwd: string; env?: Record<string, string>; id: SandboxId }): string[];
+  /** Isolation-correct host endpoint an in-sandbox process uses to reach a host `port`. */
+  endpointFor(port: number): string;
+  /** Best-effort stop of the running sandbox process tree (agent `onAbort`). */
+  stop(id: SandboxId): Promise<void>;
+}
 
 export {
   ClaudeDriver,
@@ -86,6 +110,14 @@ export interface ClaudeAgentOptions {
   /** `--bare` for hermetic runs (skip project CLAUDE.md / .mcp.json / hooks discovery). */
   bare?: boolean;
   /**
+   * The sandbox the harness runs inside (e.g. `worktreeSandbox()` /
+   * `dockerSandbox({image})` from `@autosk/sandbox`, or any structural sandbox).
+   * When set the agent resolves the per-task workspace, rewrites the MCP host via
+   * `sandbox.endpointFor(port)`, and wraps the `claude` argv; `onAbort` calls
+   * `sandbox.stop`. When unset, `claude` runs on the host at `ctx.cwd`.
+   */
+  sandbox?: AgentSandbox;
+  /**
    * Register the `autosk` MCP server (transit + task + comment). Default `true`.
    * `false` omits `--mcp-config` (no autosk tools; transit then never fires → the
    * run always parks).
@@ -125,13 +157,25 @@ export function claudeAgent(opts: ClaudeAgentOptions = {}): AgentDefinition {
         await runChat(ctx, opts);
         return;
       }
-      const mcpConfig = opts.autoskTools === false ? undefined : buildMcpConfig(ctx, { transit: true });
+      const id: SandboxId = { projectRoot: ctx.projectRoot, taskId: ctx.tasks.currentId };
+      const ws = opts.sandbox ? await opts.sandbox.workspace(id) : { cwd: ctx.cwd };
+      // Mint the per-session host-side MCP server and point claude at it over HTTP,
+      // rewriting the host for the sandbox topology (e.g. host.docker.internal).
+      let mcp: Awaited<ReturnType<AgentRunContext["newMCPServer"]>> | null = null;
+      let mcpConfig: string | undefined;
+      if (opts.autoskTools !== false) {
+        mcp = await ctx.newMCPServer();
+        const url = opts.sandbox ? opts.sandbox.endpointFor(mcp.port) : mcp.url;
+        mcpConfig = buildMcpConfig(url, mcp.token);
+      }
       const cmd = buildClaudeCommand(opts, { mcpConfig });
-      // Spawn claude in the run directory (the worktree under isolation), but
-      // tell any `autosk` CLI it invokes — directly or via the autosk MCP tools —
-      // which project to target (AUTOSK_CWD), who to attribute comments to
-      // (AUTOSK_AGENT), and which running daemon to join (AUTOSK_SOCK).
-      const child = ctx.spawn(cmd, { cwd: ctx.cwd, env: autoskEnv(ctx) });
+      // Spawn claude at the workspace cwd (a worktree/container under a sandbox,
+      // else the project root). `autoskEnv` carries AUTOSK_CWD/AUTOSK_AGENT for any
+      // host-side `autosk` the model may run via bash; the MCP tool surface itself
+      // is server-bound and needs no env. Under a sandbox the argv is wrapped.
+      const env = autoskEnv(ctx);
+      const argv = opts.sandbox ? opts.sandbox.wrap(cmd, { cwd: ws.cwd, env, id }) : cmd;
+      const child = ctx.spawn(argv, { cwd: ws.cwd, env });
       const driver = new ClaudeDriver(child, {
         onMessage: (m) => ctx.log.message(m),
         onCustom: (t, d) => ctx.log.custom(t, d),
@@ -149,6 +193,8 @@ export function claudeAgent(opts: ClaudeAgentOptions = {}): AgentDefinition {
       } finally {
         liveSessions.delete(ctx.session.id);
         await driver.shutdown().catch(() => {});
+        // Explicit early-release (the engine backstop closes it on settle anyway).
+        if (mcp) await mcp.close().catch(() => {});
       }
     },
 
@@ -156,6 +202,12 @@ export function claudeAgent(opts: ClaudeAgentOptions = {}): AgentDefinition {
     onFollowup: (ctx, message) => forward(ctx, "followup", message),
 
     async onAbort(ctx): Promise<void> {
+      // Best-effort stop of the sandbox process tree (covers a SIGKILL orphan).
+      if (opts.sandbox && ctx.mode === "task") {
+        await opts.sandbox
+          .stop({ projectRoot: ctx.projectRoot, taskId: ctx.tasks.currentId })
+          .catch(() => {});
+      }
       const driver = liveSessions.get(ctx.session.id);
       // ctx.signal has already fired (the engine aborts before onAbort), so the
       // child is being killed; this just asks claude to wind down gracefully.
@@ -225,7 +277,15 @@ async function runTurns(
  * `driver.input("followup", msg)` (idle → a fresh turn).
  */
 async function runChat(ctx: AgentRunContext, opts: ClaudeAgentOptions): Promise<void> {
-  const mcpConfig = opts.autoskTools === false ? undefined : buildMcpConfig(ctx, { transit: false });
+  // A chat has no task, so `newMCPServer()` binds with transit:false (the model
+  // is never offered a tool that has nothing to transit). Interactive mode runs
+  // on the host at ctx.cwd (no per-task workspace).
+  let mcp: Awaited<ReturnType<AgentRunContext["newMCPServer"]>> | null = null;
+  let mcpConfig: string | undefined;
+  if (opts.autoskTools !== false) {
+    mcp = await ctx.newMCPServer();
+    mcpConfig = buildMcpConfig(mcp.url, mcp.token);
+  }
   const cmd = buildClaudeCommand(opts, { mcpConfig, interactive: true });
   const child = ctx.spawn(cmd, { cwd: ctx.cwd, env: autoskEnv(ctx) });
   const driver = new ClaudeDriver(child, {
@@ -245,6 +305,7 @@ async function runChat(ctx: AgentRunContext, opts: ClaudeAgentOptions): Promise<
   } finally {
     liveSessions.delete(ctx.session.id);
     await driver.shutdown().catch(() => {});
+    if (mcp) await mcp.close().catch(() => {});
   }
 }
 
@@ -280,58 +341,34 @@ async function resolveFirstMessage(opts: ClaudeAgentOptions): Promise<string> {
 }
 
 /**
- * The autosk env handed to the spawned claude so any `autosk` CLI it runs (and
- * the `autoskd mcp` server's shell-out) resolves the ORIGINAL project (not the
- * worktree it runs in), attributes comments to the running step, and joins the
- * SAME running daemon (no second auto-spawn). `ctx.spawn` merges this over
- * `process.env`, so PATH/HOME and the rest are preserved.
+ * The autosk env handed to the spawned claude so any host-side `autosk` CLI the
+ * model runs via bash resolves the ORIGINAL project (`AUTOSK_CWD`) and attributes
+ * comments to the running step (`AUTOSK_AGENT`). The MCP tool surface itself is
+ * the per-session HTTP server (server-bound), so it needs NO env — and there is
+ * no mounted socket. `ctx.spawn` merges this over `process.env`.
  */
 export function autoskEnv(ctx: AgentRunContext): Record<string, string> {
-  const env: Record<string, string> = {
+  return {
     AUTOSK_CWD: ctx.projectRoot,
     AUTOSK_AGENT: ctx.workflows.current.step,
   };
-  const sock = resolveSock();
-  if (sock) env.AUTOSK_SOCK = sock;
-  return env;
-}
-
-/** Resolves the running daemon's socket: `$AUTOSK_SOCK` → `~/.autosk/daemon.sock`. */
-function resolveSock(): string {
-  const env = process.env.AUTOSK_SOCK;
-  if (env && env.length > 0) return env;
-  const home = process.env.HOME;
-  return home && home.length > 0 ? join(home, ".autosk", "daemon.sock") : "";
-}
-
-/** The autoskd binary to re-invoke for `autoskd mcp`: `$AUTOSKD_BIN` (dev) → `process.execPath` (compiled). */
-export function resolveAutoskdBin(): string {
-  const env = process.env.AUTOSKD_BIN;
-  return env && env.length > 0 ? env : process.execPath;
 }
 
 /**
- * Builds the inline `--mcp-config` JSON pointing Claude at `autoskd mcp`, with
- * the autosk env (AUTOSK_CWD/AUTOSK_AGENT/AUTOSK_SOCK) baked in so the server's
- * `autosk` shell-out targets the right project + running daemon. `transit:true`
- * sets `AUTOSK_MCP_TRANSIT=1` so the server also advertises the transit tool
- * (task mode only).
+ * Builds the inline `--mcp-config` JSON pointing Claude at the per-session,
+ * host-side HTTP MCP server (`ctx.newMCPServer()`), with the bearer token in the
+ * `Authorization` header. The `url` is already isolation-correct (the agent
+ * rewrote the host via `sandbox.endpointFor(port)` for a container). The server
+ * advertises `transit` only in task mode (it is bound that way), so no client-side
+ * gate is needed here.
  */
-export function buildMcpConfig(ctx: AgentRunContext, flags: { transit: boolean }): string {
-  const env: Record<string, string> = {
-    AUTOSK_CWD: ctx.projectRoot,
-    AUTOSK_AGENT: ctx.workflows.current.step,
-  };
-  const sock = resolveSock();
-  if (sock) env.AUTOSK_SOCK = sock;
-  if (flags.transit) env.AUTOSK_MCP_TRANSIT = "1";
+export function buildMcpConfig(url: string, token: string): string {
   return JSON.stringify({
     mcpServers: {
       autosk: {
-        type: "stdio",
-        command: resolveAutoskdBin(),
-        args: ["mcp"],
-        env,
+        type: "http",
+        url,
+        headers: { Authorization: `Bearer ${token}` },
       },
     },
   });

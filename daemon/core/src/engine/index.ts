@@ -1,7 +1,10 @@
 /**
  * The engine (plan §3.7(3-4)): scheduler + worker pool, session lifecycle,
- * `ctx.transit`, isolation acquire/release, transcript writer, steer/abort
- * routing, and crash recovery. RPC-independent — drivable purely from tests.
+ * `ctx.transit`, the per-session host-side MCP server (`ctx.newMCPServer()`),
+ * transcript writer, steer/abort routing, and crash recovery. Isolation is no
+ * longer an engine concern (the `IsolationProvider` abstraction was abolished —
+ * agents own it via `@autosk/sandbox`). RPC-independent — drivable purely from
+ * tests.
  */
 
 export {

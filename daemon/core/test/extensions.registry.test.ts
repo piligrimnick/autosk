@@ -156,7 +156,6 @@ describe("renderWorkflowInfo (proto-v2 projection)", () => {
     expect(info.name).toBe("feature-dev");
     expect(info.description).toBe("two-stepper");
     expect(info.first_step).toBe("dev");
-    expect(info.isolation).toBe("none");
 
     // Steps are rendered in sorted name order.
     expect(info.steps.map((s) => s.name)).toEqual(["accept", "dev", "review"]);
@@ -180,18 +179,8 @@ describe("renderWorkflowInfo (proto-v2 projection)", () => {
     expect(accept.status).toBe("human");
   });
 
-  test("isolation tag is surfaced; description is omitted when absent", () => {
-    const info = renderWorkflowInfo(
-      wf("iso", {
-        isolation: {
-          tag: "worktree",
-          async acquire() {
-            return { cwd: "/tmp" };
-          },
-        },
-      }),
-    );
-    expect(info.isolation).toBe("worktree");
+  test("description is omitted when absent", () => {
+    const info = renderWorkflowInfo(wf("iso", {}));
     expect("description" in info).toBe(false);
   });
 });

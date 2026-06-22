@@ -103,9 +103,9 @@ const (
 	// CodeConflict marks a retryable "exists but not in a state that accepts the
 	// request now" condition (e.g. a live session, or an absent steer hook).
 	CodeConflict = 1004
-	// CodeEnvironmentDirty marks a terminal verb (done/cancel) that would discard
-	// uncommitted changes in the task's isolation environment (e.g. a git
-	// worktree). Retry with force. Not worktree-specific.
+	// CodeEnvironmentDirty (1005) is RESERVED but RETIRED: the daemon no longer
+	// emits it (terminal verbs are a raw status flip; isolation is agent-owned and
+	// torn down by a cleanup workflow step). The number stays reserved (not reused).
 	CodeEnvironmentDirty = 1005
 )
 

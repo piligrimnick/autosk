@@ -78,7 +78,6 @@ func TestRPC_MapsReadSurface(t *testing.T) {
 				"name": "dev", "status": nil,
 				"targets": []map[string]any{{"step": "review"}},
 			}},
-			"isolation": "worktree",
 		}},
 		"session.list": []map[string]any{{
 			"id": "session-000001", "task_id": "ask-000001",
@@ -126,7 +125,7 @@ func TestRPC_MapsReadSurface(t *testing.T) {
 	if err != nil || len(wfs) != 1 || wfs[0].FirstStep != "dev" || len(wfs[0].Steps) != 1 {
 		t.Fatalf("Workflows mapping wrong: %+v err=%v", wfs, err)
 	}
-	if wfs[0].Steps[0].Targets[0] != "review" || wfs[0].Isolation != "worktree" {
+	if wfs[0].Steps[0].Targets[0] != "review" {
 		t.Errorf("workflow step mapping wrong: %+v", wfs[0].Steps[0])
 	}
 
@@ -172,7 +171,7 @@ func TestRPC_WritesDispatch(t *testing.T) {
 	if err != nil || id != "ask-000009" {
 		t.Errorf("CreateTask id=%q err=%v, want ask-000009/nil", id, err)
 	}
-	if err := ds.TaskDone(ctx, "ask-1", false); err != nil {
+	if err := ds.TaskDone(ctx, "ask-1"); err != nil {
 		t.Errorf("TaskDone err = %v, want nil", err)
 	}
 	if err := ds.AddComment(ctx, "ask-1", "hi"); err != nil {

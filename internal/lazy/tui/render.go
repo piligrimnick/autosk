@@ -495,16 +495,11 @@ func renderSessionsPanel(sessions []datasource.Session, _ int, scope scope, filt
 
 // renderWorkflowsPanel renders the Workflows panel:
 //
-//	[name-WorkflowName] [[wt]-Muted] [N steps-Muted] [first=stepname-StepName] [(synthetic)-Muted]
+//	[name-WorkflowName] [N steps-Muted] [first=stepname-StepName]
 //
 // The `first=` label stays muted while the step value itself wears
 // the StepName hue so a glance at the list groups by workflow first,
 // step second.
-//
-// The `[wt]` marker is emitted exactly for non-synthetic workflows
-// with Isolation == "worktree". It stays muted so it reads as
-// metadata rather than as a focal point — the workflow name is the
-// row's anchor.
 func renderWorkflowsPanel(wfs []datasource.Workflow, _ int, filter string) (string, int) {
 	var b strings.Builder
 	header := 0
@@ -518,14 +513,9 @@ func renderWorkflowsPanel(wfs []datasource.Workflow, _ int, filter string) (stri
 	}
 	for _, w := range wfs {
 		name := styleWorkflowName.Render(fmt.Sprintf("%-24s", w.Name))
-		// Marker column is fixed-width so the `N steps` column lines up.
-		marker := "    "
-		if w.Isolation == "worktree" {
-			marker = styleMuted.Render("[wt]")
-		}
 		steps := styleMuted.Render(fmt.Sprintf("%d steps", len(w.Steps)))
 		first := styleMuted.Render("first=") + renderStepName(w.FirstStep)
-		fmt.Fprintf(&b, "%s %s %s  %s\n", name, marker, steps, first)
+		fmt.Fprintf(&b, "%s %s  %s\n", name, steps, first)
 	}
 	return b.String(), header
 }
@@ -1079,7 +1069,7 @@ func styleForSessionStatus(s datasource.Session) lipgloss.Style {
 //
 // Layout:
 //
-//	<name>  [wt]?  first step: <step>
+//	<name>  first step: <step>
 //	<markdown(Description), if set>
 //	╭─ Steps (N) ─────────────────────────────────╮
 //	│ dev       agent=@autogent/generic next=review  │
@@ -1088,10 +1078,6 @@ func styleForSessionStatus(s datasource.Session) lipgloss.Style {
 //	╰─────────────────────────────────────────────────╯
 //
 // Rules:
-//   - `[wt]` chip appears iff !w.IsSynthetic && w.Isolation ==
-//     "worktree" (the same condition the Workflows panel uses for
-//     its [wt] marker). Wears styleMuted so it reads as metadata,
-//     not a focal point.
 //   - `agent=` / `next=` / `(none)` literals are styleMuted; the
 //     value tokens keep their entity hues (renderStepName,
 //     renderAgentName; styleForTaskStatus for lifecycle terminals
@@ -1107,14 +1093,11 @@ func styleForSessionStatus(s datasource.Session) lipgloss.Style {
 func renderWorkflowDetail(w datasource.Workflow, width int) string {
 	var b strings.Builder
 
-	// Header line: <name> [wt]? first step: <step>. No leading
-	// "workflow" chip — the gocui frame title ("[3] Detail") already
-	// identifies the pane, and the row reads as a single scan line
-	// keyed on the workflow name in its entity hue.
+	// Header line: <name> first step: <step>. No leading "workflow"
+	// chip — the gocui frame title ("[3] Detail") already identifies
+	// the pane, and the row reads as a single scan line keyed on the
+	// workflow name in its entity hue.
 	hdr := renderWorkflowName(w.Name)
-	if w.Isolation == "worktree" {
-		hdr += " " + styleMuted.Render("[wt]")
-	}
 	hdr += " " + styleMuted.Render("first step:") + " " + renderStepName(w.FirstStep)
 	b.WriteString(hdr + "\n")
 

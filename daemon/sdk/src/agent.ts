@@ -113,14 +113,20 @@ export interface AgentRunContext {
    *    The agent runs a chat loop and returns when `ctx.signal` fires.
    */
   mode: "task" | "interactive";
-  /** The run directory: the project root, or — under isolation — the handle's path. */
+  /**
+   * The run directory. Isolation no longer rewrites this: it is **always the
+   * project root** (identical to {@link projectRoot}). An agent that wants its
+   * harness to run somewhere else (e.g. a per-task git worktree, or inside a
+   * container) owns that itself — it resolves a workspace via `@autosk/sandbox`
+   * and passes the chosen cwd to `ctx.spawn`.
+   */
   cwd: string;
   /**
-   * The canonical project root (the directory containing `.autosk/`), regardless
-   * of isolation. Unlike {@link cwd} — which becomes the worktree path when the
-   * workflow runs under isolation — this always points at the original project.
-   * An agent uses it to make out-of-process `autosk` invocations target the right
-   * project (e.g. via the `AUTOSK_CWD` env knob) even when it runs in a worktree.
+   * The canonical project root (the directory containing `.autosk/`). Identical
+   * to {@link cwd} now that isolation is agent-owned (the engine never rewrites
+   * the run dir). Retained as a distinct field so an agent that DOES run its
+   * harness in a worktree/container still has an unambiguous handle on the
+   * original project (e.g. to point an `autosk` CLI at it via `AUTOSK_CWD`).
    */
   projectRoot: string;
   /** Fired on abort / daemon shutdown. */
@@ -160,4 +166,20 @@ export interface AgentRunContext {
   exec(cmd: string[], opts?: ExecOptions): Promise<ExecResult>;
   /** Long-lived interactive child with stdio streaming. */
   spawn(cmd: string[], opts?: SpawnOptions): ChildHandle;
+
+  /**
+   * Mints a per-session, host-side MCP server bound to this session's
+   * `{ projectRoot, taskId, author = step, transit = task-mode }`. Returns the
+   * loopback `url`, the bound `port`, and a bearer `token`; the agent rewrites
+   * the host for its own isolation topology (e.g. `host.docker.internal` for a
+   * container, `127.0.0.1` for host/worktree) using the `port`.
+   *
+   * This is about MCP *serving*, not isolation: it lets an agent hand its harness
+   * a real `task` / `comment` tool surface (and, in task mode, an ack-only
+   * `transit`) over HTTP without mounting the daemon socket or shipping `autosk`
+   * in the sandbox. The server is closed automatically by the engine on every
+   * settle / finaliser / detach (so a forgetful agent never leaks a port across
+   * steps); the returned `close()` is an explicit early-release.
+   */
+  newMCPServer(): Promise<{ url: string; port: number; token: string; close(): Promise<void> }>;
 }

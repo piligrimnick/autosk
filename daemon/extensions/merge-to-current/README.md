@@ -22,9 +22,9 @@ merge ──▶ done      (the branch landed cleanly on the current branch)
 `done` and `human` are terminal/park statuses the agent transitions to directly
 (they are always-available targets — there is no separate `statusStep`).
 
-- **Isolation:** none — the workflow has no `isolation` field, so it runs in the
-  project root (`tag: "none"`) and operates directly on the operator's working
-  tree.
+- **Sandbox:** none — no agent step passes a `sandbox`, so `merge` runs on the
+  host at the project root and operates directly on the operator's working tree
+  (the whole point of a merge step is to touch the real branch).
 - **Thinking:** the `merge` agent runs at `thinking: "high"` (matches the v1
   export's agent params).
 

@@ -1,6 +1,6 @@
 // WorkflowRow — one workflow in the Workflows panel (redesign plan §8.6).
-// Workflows are read-only code projections now; `[wt]` marks a worktree-isolated
-// workflow. Click selects the workflow (center → read-only definition).
+// Workflows are read-only code projections now. Click selects the workflow
+// (center → read-only definition).
 
 import { useStore } from "@/state/store";
 import type { WorkflowInfo } from "@/types";
@@ -8,7 +8,6 @@ import type { WorkflowInfo } from "@/types";
 export function WorkflowRow({ workflow }: { workflow: WorkflowInfo }) {
   const { state, effects } = useStore();
   const selected = state.selection.kind === "workflow" && state.selection.name === workflow.name;
-  const wt = workflow.isolation === "worktree";
 
   return (
     <li
@@ -26,7 +25,6 @@ export function WorkflowRow({ workflow }: { workflow: WorkflowInfo }) {
     >
       <span className="wf-bullet">◦</span>
       <span className="wf-name">{workflow.name}</span>
-      {wt && <span className="wf-wt">[wt]</span>}
     </li>
   );
 }

@@ -2,11 +2,15 @@
  * `@autosk/feature-dev` — the shipped reference workflow (plan §3.6, P6).
  *
  * A full feature-development cycle: `dev → review → docs → validator → accept`
- * (human), with bounce-backs `review → dev` and `validator → dev`, a visit-cap
- * guard in `onTransit` (via `ctx.visits("dev")`), and per-task git worktree
- * isolation. It replaces v1's `feature-dev-generic` bootstrap; each agent step
- * is an inline `@autosk/pi-agent` role seeded with that role's prompt (the step
- * key IS the agent name), and `accept` is a `statusStep("human")` park step.
+ * (human) `→ cleanup → done`, with bounce-backs `review → dev` and
+ * `validator → dev`, a visit-cap guard in `onTransit` (via `ctx.visits("dev")`).
+ * Each agent step is an inline `@autosk/pi-agent` role seeded with that role's
+ * prompt (the step key IS the agent name) and given a per-task `worktreeSandbox`;
+ * `accept` is a `statusStep("human")` park step, and `cleanup` is a
+ * `sandboxCleanupStep` (the human resumes the parked task into it — `autosk
+ * resume <id> --to cleanup` — which tears the worktree down and transits to
+ * `done`). Routing terminals through `cleanup` is what keeps a task from leaking
+ * its worktree now that `done`/`cancel` are a raw status flip.
  *
  * Discovery: this package is published to npm and declared as an extension via
  * `package.json#autosk.extensions`. The daemon installs it into
@@ -21,13 +25,12 @@ import { fileURLToPath } from "node:url";
 import {
   statusStep,
   type AutoskAPI,
-  type IsolationProvider,
   type StepTarget,
   type TransitContext,
   type WorkflowDefinition,
 } from "@autosk/sdk";
 import { piAgent } from "@autosk/pi-agent";
-import { worktreeIsolation } from "@autosk/worktree";
+import { sandboxCleanupStep, worktreeSandbox, type Sandbox } from "@autosk/sandbox";
 
 /**
  * The `dev` re-entry cap: a task may enter `dev` at most this many times before
@@ -42,32 +45,38 @@ function readPrompt(role: string): string {
   return readFileSync(fileURLToPath(new URL(`../prompts/${role}.md`, import.meta.url)), "utf8");
 }
 
-/** Options for {@link featureDevWorkflow} (tests inject a test isolation double). */
+/** Options for {@link featureDevWorkflow} (tests inject a test sandbox double). */
 export interface FeatureDevWorkflowOptions {
-  /** Isolation provider for the workflow. Default: `worktreeIsolation()`. */
-  isolation?: IsolationProvider;
+  /** Sandbox each agent step runs in (and the cleanup step tears down). Default: `worktreeSandbox()`. */
+  sandbox?: Sandbox;
 }
 
 /**
  * The `feature-dev` workflow definition. A factory (not a const) so tests can
- * swap the isolation provider (e.g. a fake, or a temp-home worktree) without
- * touching the shipped default.
+ * swap the sandbox (e.g. a fake, or a temp-home worktree) without touching the
+ * shipped default.
  */
 export function featureDevWorkflow(opts: FeatureDevWorkflowOptions = {}): WorkflowDefinition {
+  const sandbox = opts.sandbox ?? worktreeSandbox();
   return {
     name: "feature-dev",
     description:
-      "Full feature-development cycle: dev → review → docs → validator → accept (human), " +
-      "with review→dev and validator→dev bounce-backs and per-task worktree isolation.",
+      "Full feature-development cycle: dev → review → docs → validator → accept (human) → cleanup → done, " +
+      "with review→dev and validator→dev bounce-backs and a per-task worktree sandbox.",
     firstStep: "dev",
     steps: {
       // Agents are inline: the step key (dev/review/docs/validator) IS the
-      // agent name, and registering the workflow registers these agents.
-      dev: piAgent({ firstMessage: readPrompt("dev") }),
-      review: piAgent({ thinking: "xhigh", firstMessage: readPrompt("review") }),
-      docs: piAgent({ firstMessage: readPrompt("docs") }),
-      validator: piAgent({ firstMessage: readPrompt("validator") }),
+      // agent name, and registering the workflow registers these agents. Each
+      // runs its harness in the per-task worktree `sandbox`.
+      dev: piAgent({ sandbox, firstMessage: readPrompt("dev") }),
+      review: piAgent({ sandbox, thinking: "xhigh", firstMessage: readPrompt("review") }),
+      docs: piAgent({ sandbox, firstMessage: readPrompt("docs") }),
+      validator: piAgent({ sandbox, firstMessage: readPrompt("validator") }),
       accept: statusStep("human"),
+      // Teardown as a normal step: removes the worktree (branch preserved), then
+      // transits to `done`. The human resumes an accepted task into it (`autosk
+      // resume <id> --to cleanup`); an agent may also route a cancel through it.
+      cleanup: sandboxCleanupStep(sandbox),
     },
     onTransit(ctx: TransitContext, to: StepTarget): void {
       if ("step" in to && to.step === "dev" && ctx.visits("dev") >= DEV_VISIT_CAP) {
@@ -77,7 +86,6 @@ export function featureDevWorkflow(opts: FeatureDevWorkflowOptions = {}): Workfl
         );
       }
     },
-    isolation: opts.isolation ?? worktreeIsolation(),
   };
 }
 

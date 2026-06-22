@@ -63,14 +63,8 @@ export function transitAgent(to: StepTarget): AgentDefinition {
 }
 
 /** A one-step workflow `do → <agent>` with the agent inlined as the `do` step. */
-export function oneStep(
-  name: string,
-  agent: AgentDefinition,
-  isolation?: WorkflowDefinition["isolation"],
-): WorkflowDefinition {
-  const wf: WorkflowDefinition = { name, firstStep: "do", steps: { do: agent } };
-  if (isolation) wf.isolation = isolation;
-  return wf;
+export function oneStep(name: string, agent: AgentDefinition): WorkflowDefinition {
+  return { name, firstStep: "do", steps: { do: agent } };
 }
 
 /** A controllable barrier: a promise plus its resolver, for gating agents. */

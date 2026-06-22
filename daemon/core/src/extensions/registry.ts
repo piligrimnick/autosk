@@ -241,7 +241,6 @@ export function renderWorkflowInfo(wf: WorkflowDefinition): WorkflowInfo {
     name: wf.name,
     first_step: wf.firstStep,
     steps,
-    isolation: wf.isolation?.tag ?? "none",
   };
   if (wf.description !== undefined) info.description = wf.description;
   return info;

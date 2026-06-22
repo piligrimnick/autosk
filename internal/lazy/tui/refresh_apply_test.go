@@ -56,10 +56,10 @@ func (f *refreshFakeDS) Reconnect(_ context.Context) error { return nil }
 func (f *refreshFakeDS) CreateTask(_ context.Context, _, _ string) (string, error) {
 	return "", datasource.ErrDaemonRequired
 }
-func (f *refreshFakeDS) TaskDone(_ context.Context, _ string, _ bool) error {
+func (f *refreshFakeDS) TaskDone(_ context.Context, _ string) error {
 	return datasource.ErrDaemonRequired
 }
-func (f *refreshFakeDS) TaskCancel(_ context.Context, _ string, _ bool) error {
+func (f *refreshFakeDS) TaskCancel(_ context.Context, _ string) error {
 	return datasource.ErrDaemonRequired
 }
 func (f *refreshFakeDS) TaskReopen(_ context.Context, _ string) error {

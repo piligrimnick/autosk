@@ -21,15 +21,15 @@
  */
 
 import { VERSION } from "../version.ts";
-import { bunRunProcess, type RunProcess } from "./cli.ts";
+import { type RunProcess } from "./cli.ts";
 import {
-  callComment,
-  callTask,
   callTransit,
   COMMENT_TOOL,
+  shellBackend,
   TASK_TOOL,
   TRANSIT_TOOL,
   type McpTool,
+  type McpToolBackend,
   type McpToolResult,
 } from "./tools.ts";
 
@@ -63,6 +63,23 @@ export interface McpServerOptions {
   run?: RunProcess;
 }
 
+/**
+ * The resolved options every transport-agnostic dispatch ({@link handleMessage} /
+ * {@link callTool}) takes: whether `transit` is advertised, plus EITHER a direct
+ * tool {@link McpToolBackend} (HTTP / in-daemon path) OR a `run` from which a
+ * shell-out backend is built (stdio path). `backend` wins when both are present.
+ */
+export interface McpDispatchOptions {
+  transitEnabled: boolean;
+  backend?: McpToolBackend;
+  run?: RunProcess;
+}
+
+/** Resolves the {@link McpToolBackend}: an explicit `backend`, else a shell-out from `run`. */
+function resolveBackend(opts: McpDispatchOptions): McpToolBackend {
+  return opts.backend ?? shellBackend(opts.run);
+}
+
 /** Whether the `transit` tool is enabled, from `$AUTOSK_MCP_TRANSIT`. */
 export function transitEnabledFromEnv(): boolean {
   return process.env.AUTOSK_MCP_TRANSIT === "1";
@@ -80,16 +97,16 @@ export function listTools(transitEnabled: boolean): McpTool[] {
 export async function callTool(
   name: string,
   args: Record<string, unknown>,
-  opts: { transitEnabled: boolean; run: RunProcess },
+  opts: McpDispatchOptions,
 ): Promise<McpToolResult> {
   switch (name) {
     case "transit":
       if (!opts.transitEnabled) break;
       return callTransit(args);
     case "task":
-      return callTask(args as { action?: unknown; args?: unknown }, opts.run);
+      return resolveBackend(opts).task(args as { action?: unknown; args?: unknown });
     case "comment":
-      return callComment(args as { action?: unknown; args?: unknown }, opts.run);
+      return resolveBackend(opts).comment(args as { action?: unknown; args?: unknown });
   }
   return {
     content: [{ type: "text", text: `unknown tool: ${name}` }],
@@ -103,7 +120,7 @@ export async function callTool(
  */
 export async function handleMessage(
   msg: JsonRpcRequest,
-  opts: { transitEnabled: boolean; run: RunProcess },
+  opts: McpDispatchOptions,
 ): Promise<JsonRpcResponse | null> {
   const id = msg.id ?? null;
   const method = typeof msg.method === "string" ? msg.method : "";
@@ -158,9 +175,9 @@ export async function handleMessage(
  * responses to stdout, until stdin closes. Resolves when stdin is exhausted.
  */
 export async function runMcpServer(options: McpServerOptions = {}): Promise<void> {
-  const opts = {
+  const opts: McpDispatchOptions = {
     transitEnabled: options.transitEnabled ?? transitEnabledFromEnv(),
-    run: options.run ?? bunRunProcess,
+    run: options.run,
   };
 
   const write = (resp: JsonRpcResponse): void => {

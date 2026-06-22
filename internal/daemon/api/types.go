@@ -155,8 +155,6 @@ type WorkflowInfo struct {
 	Description string             `json:"description,omitempty"`
 	FirstStep   string             `json:"first_step"`
 	Steps       []WorkflowStepInfo `json:"steps"`
-	// Isolation provider tag; "none" when the workflow has no provider.
-	Isolation string `json:"isolation"`
 }
 
 // ---------------------------------------------------------------------------

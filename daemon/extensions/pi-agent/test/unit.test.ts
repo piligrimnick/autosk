@@ -71,6 +71,15 @@ describe("buildPiCommand", () => {
     expect(cmd).toContain("--no-session");
   });
 
+  test("under a sandbox (mcpHttp) injects the http pi-extension instead of the transit-only one", () => {
+    const transit = buildPiCommand({ piBin: "pi" });
+    const http = buildPiCommand({ piBin: "pi" }, { mcpHttp: true });
+    const transitExt = transit[transit.indexOf("-e") + 1]!;
+    const httpExt = http[http.indexOf("-e") + 1]!;
+    expect(transitExt).toMatch(/pi-transit-extension\.ts$/);
+    expect(httpExt).toMatch(/pi-mcp-extension\.ts$/);
+  });
+
   test("defaults the binary to $AUTOSK_PI_BIN or `pi`", () => {
     const prev = process.env.AUTOSK_PI_BIN;
     delete process.env.AUTOSK_PI_BIN;

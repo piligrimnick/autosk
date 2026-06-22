@@ -134,8 +134,6 @@ export interface WorkflowInfo {
   /** snake_case on the wire (the `WorkflowDefinition.firstStep` projection). */
   first_step: string;
   steps: WorkflowStepInfo[];
-  /** Isolation provider tag; `"none"` when the workflow has no provider. */
-  isolation: string;
 }
 
 // ---------------------------------------------------------------------------

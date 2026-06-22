@@ -5,34 +5,39 @@
  * Owns the {@link AgentRunContext}, the per-session `AbortController`, the
  * transcript writer, and the settle state machine. Every way a session can end
  * funnels through exactly one of {@link commitTransit} (the agent transited),
- * {@link finalizeFailed} (threw / never transited / isolation acquire failed),
- * or {@link finalizeAborted} (aborted) — guarded by {@link settleOnce} so a race
- * (e.g. abort landing as the agent returns) finalises once.
+ * {@link finalizeFailed} (threw / never transited), or {@link finalizeAborted}
+ * (aborted) — guarded by {@link settleOnce} so a race (e.g. abort landing as the
+ * agent returns) finalises once.
+ *
+ * Isolation is no longer an engine concern (the `IsolationProvider` abstraction
+ * was abolished): `ctx.cwd` is ALWAYS the project root, `ctx.exec`/`ctx.spawn`
+ * always run on the host, and an agent that wants a worktree/container owns it
+ * via `@autosk/sandbox`. The only related engine surface is `ctx.newMCPServer()`
+ * — a per-session host-side HTTP MCP server the engine mints, tracks, and closes
+ * on every settle/finaliser/detach (the backstop, independent of the agent's
+ * explicit `close()`), so a forgetful agent never leaks a port across steps.
  *
  * Lifecycle states (the queued→running transition is the dangerous one):
  *  - **queued** — the runtime exists and is reachable for steer/abort, but
  *    `onRun` has NOT started. `started` is false. A steer/followup here is
  *    rejected (`{handled:false}`); an abort here seals the session `aborted`
  *    WITHOUT ever invoking `onRun`/`onAbort`.
- *  - **running** — claimed by {@link run}: isolation is acquired (in the worker,
- *    bounded by the pool, plan §3.5), the queued→running meta write APPLIED
+ *  - **running** — claimed by {@link run}: the queued→running meta write APPLIED
  *    (via the conditional `patchMetaIf`, so a concurrent abort can never be
  *    resurrected), and `started` is true.
  *  - **settled** — a terminal status was committed exactly once.
  *
  * Commit ordering rule (plan deviation #4): the scheduler scan runs CONCURRENTLY
  * with workers, so a closing session stays `running` (i.e. "live", which makes
- * the scan skip the task) until AFTER the task's new position and the isolation
- * lifecycle (quiesce / reap) are committed — only then is the meta flipped to its
- * terminal status. This is what prevents a double-dispatch and an isolation
- * acquire-vs-release race on the same task.
+ * the scan skip the task) until AFTER the task's new position is committed — only
+ * then is the meta flipped to its terminal status. This is what prevents a
+ * double-dispatch on the same task.
  */
 
 import type {
   AgentDefinition,
   AgentRunContext,
   ExecOptions,
-  IsolationHandle,
   SessionActivity,
   SessionKind,
   SessionMeta,
@@ -50,6 +55,7 @@ import {
 } from "./context.ts";
 import { TranscriptWriter } from "./transcript.ts";
 import { execOneShot, spawnChild } from "./child.ts";
+import { directStoreBackend, startMcpHttpServer, type McpHttpServer } from "../mcp/index.ts";
 import { buildTransitContext, positionFor, validateTarget } from "./transition.ts";
 import { ENGINE_COMMENT_AUTHOR, errMsg, type EngineProject, type SessionHost } from "./types.ts";
 
@@ -69,8 +75,8 @@ export interface TaskSessionRuntimeInit {
 }
 
 /**
- * An interactive (taskless) chat session (plan §4.3): no workflow, no task, no
- * isolation — just a named agent run in chat mode until the user ends or aborts.
+ * An interactive (taskless) chat session (plan §4.3): no workflow, no task —
+ * just a named agent run in chat mode until the user ends or aborts.
  */
 export interface InteractiveSessionRuntimeInit {
   kind: "interactive";
@@ -100,21 +106,21 @@ export class SessionRuntime {
   private readonly step: string;
 
   /**
-   * The directory the agent runs in: the project root, or — once isolation is
-   * acquired in {@link run} — the handle's path. Mutable because acquisition
-   * happens in the worker (plan §3.5), not at construction.
+   * The directory the agent runs in: ALWAYS the project root (isolation no
+   * longer rewrites it — an agent owns its own run dir via `@autosk/sandbox`).
    */
-  private cwd: string;
-  /** The acquired isolation handle, or `null` until {@link run} acquires one. */
-  private isolation: IsolationHandle | null = null;
-  /** Idempotency guard: the live env is quiesced (`release`d) at most once. */
-  private isolationQuiesced = false;
-  /** Idempotency guard: durable env artifacts are reaped at most once. */
-  private isolationReaped = false;
+  private readonly cwd: string;
+  /**
+   * Per-session host-side HTTP MCP servers minted via `ctx.newMCPServer()`. The
+   * engine is the backstop owner: it closes every one on settle/finaliser/detach
+   * (independent of the agent's explicit `close()`), so no port leaks across
+   * steps.
+   */
+  private readonly mcpServers: McpHttpServer[] = [];
 
   private readonly controller = new AbortController();
   private readonly transcript: TranscriptWriter;
-  /** Built lazily in {@link run} once `cwd` reflects any acquired isolation. */
+  /** Built lazily in {@link run} once the queued→running claim is applied. */
   private ctx: AgentRunContext | null = null;
 
   /** A transit has been committed (the session ended via the agent transiting). */
@@ -179,51 +185,23 @@ export class SessionRuntime {
   // -- lifecycle (worker entry) -------------------------------------------
 
   /**
-   * Acquires isolation, marks the session running, runs the agent's `onRun`, and
-   * finalises. Called by the worker pool — so the (possibly slow) isolation
-   * `acquire` is bounded by `--workers`, and a session aborted while it was still
-   * queued is never run here.
+   * Marks the session running, runs the agent's `onRun`, and finalises. Called
+   * by the worker pool; a session aborted while it was still queued is never run
+   * here.
    */
   async run(): Promise<void> {
     if (this.settled) return; // aborted while queued — abort() already sealed it
 
-    // Isolation is acquired HERE, in the worker (bounded by the pool), not in the
-    // scan: queued sessions hold no worktree, and a slow acquire occupies one
-    // worker slot instead of stalling every project's dispatch (plan §3.5). An
-    // interactive session has no workflow (so no isolation): cwd stays the root.
-    if (this.wf?.isolation) {
-      try {
-        this.isolation = await this.wf.isolation.acquire({
-          projectRoot: this.project.root,
-          taskId: this.taskId,
-        });
-        this.cwd = this.isolation.cwd;
-      } catch (e) {
-        await this.finalizeFailed(`isolation_acquire_failed: ${errMsg(e)}`);
-        return;
-      }
-      // An abort could have landed during the acquire await; the session is then
-      // already sealed, so quiesce the just-acquired handle and bail (no reap —
-      // the env stays DORMANT for a resume, exactly like a park).
-      if (this.settled) {
-        await this.quiesceIsolation({ parkOnFailure: false });
-        return;
-      }
-    }
-
-    // The queued→running startup IO — the header `cwd` rewrite and the atomic
-    // queued→running claim — is funnelled to finalizeFailed on a throw (e.g. an
-    // atomicWrite hitting ENOSPC/EACCES, or a rename failing). Without this an IO
-    // error here would escape to runJob, which only logs, leaving the meta
-    // `queued`/`running` on disk → hasLiveSession stays true → the scheduler skips
-    // the task forever (reaped only on a daemon restart). This mirrors the
-    // acquire-failure and finaliser hardening (ISSUE #7 / round-5 #892).
+    // The queued→running startup IO — the atomic queued→running claim — is
+    // funnelled to finalizeFailed on a throw (e.g. an atomicWrite hitting
+    // ENOSPC/EACCES, or a rename failing). Without this an IO error here would
+    // escape to runJob, which only logs, leaving the meta `queued`/`running` on
+    // disk → hasLiveSession stays true → the scheduler skips the task forever
+    // (reaped only on a daemon restart). This mirrors the finaliser hardening
+    // (ISSUE #7 / round-5 #892).
     let meta: SessionMeta;
     let applied: boolean;
     try {
-      if (this.isolation) {
-        await this.project.store.sessions.setHeaderCwd(this.id, this.cwd);
-      }
       // Claim the running state ATOMICALLY against a concurrent abort: only flip
       // queued→running if the session is still queued. If an abort sealed it first
       // (status=aborted), this is a no-op and we must not run `onRun`.
@@ -238,7 +216,7 @@ export class SessionRuntime {
       return;
     }
     if (!applied || this.settled) {
-      await this.quiesceIsolation({ parkOnFailure: false });
+      this.closeMcpServers();
       return;
     }
     this.started = true;
@@ -327,7 +305,7 @@ export class SessionRuntime {
     }
   }
 
-  /** Commits an approved transit (task position, transcript, session meta, isolation). */
+  /** Commits an approved transit (task position, transcript, session meta). */
   private async commitTransit(to: StepTarget): Promise<void> {
     const wf = this.wf!; // only reachable for a task session (transit() guarded wf)
     const from = { workflow: this.workflowName, step: this.step };
@@ -346,23 +324,11 @@ export class SessionRuntime {
     this.transcript.sessionEnd("done");
     await this.transcript.flush();
 
-    // 3. Isolation lifecycle, branched on the transition TARGET (plan §5.2) and
-    //    driven while still live so a sibling/self transition cannot re-acquire
-    //    before this completes. On the happy path a failure DOES park
-    //    (parkOnFailure:true).
-    //      - sibling step: keep the env RUNNING for the next step's acquire to
-    //        reuse — NEITHER release NOR reap (no per-step churn).
-    //      - →human: quiesce (release) only — the env stays DORMANT for a resume.
-    //      - →done/cancel: quiesce (release) THEN reap(force:true) — destroy the
-    //        durable artifacts (worktree dir; branch preserved).
-    if ("step" in to) {
-      // sibling step: nothing to do.
-    } else if (to.status === "human") {
-      await this.quiesceIsolation({ parkOnFailure: true });
-    } else {
-      await this.quiesceIsolation({ parkOnFailure: true });
-      await this.reapIsolationTerminal({ parkOnFailure: true });
-    }
+    // 3. Close the per-session MCP server(s) before sealing (the engine backstop:
+    //    no port leaks across steps, independent of the agent's explicit close()).
+    //    Isolation teardown is NOT here — it is the agent's sandbox + a cleanup
+    //    workflow step; a terminal target only writes position + seals.
+    this.closeMcpServers();
 
     // 4. Now seal the session (non-live) and fan out.
     const done = await this.project.store.sessions.patchMeta(this.id, {
@@ -493,6 +459,7 @@ export class SessionRuntime {
   detach(): void {
     this.settled = true;
     this.controller.abort();
+    this.closeMcpServers();
   }
 
   // -- finalisers ---------------------------------------------------------
@@ -512,8 +479,7 @@ export class SessionRuntime {
     this.transcript.error(error);
     this.transcript.sessionEnd("failed", error);
     await this.transcript.flush();
-    // Park to `human` ⇒ quiesce only (no reap): the env stays DORMANT for a resume.
-    await this.quiesceIsolation({ parkOnFailure: false });
+    this.closeMcpServers();
     const meta = await this.project.store.sessions.patchMeta(this.id, {
       status: "failed",
       error,
@@ -535,8 +501,7 @@ export class SessionRuntime {
     }
     this.transcript.sessionEnd("aborted");
     await this.transcript.flush();
-    // Park to `human` ⇒ quiesce only (no reap): the env stays DORMANT for a resume.
-    await this.quiesceIsolation({ parkOnFailure: false });
+    this.closeMcpServers();
     const meta = await this.project.store.sessions.patchMeta(this.id, {
       status: "aborted",
       ended_at: this.host.clock(),
@@ -549,13 +514,14 @@ export class SessionRuntime {
 
   /**
    * Seals an interactive (taskless) session as `done` (plan §4.3): the chat
-   * agent returned normally or the user ended the session. No park, no transit,
-   * no isolation — there is no task or workflow behind an interactive session.
+   * agent returned normally or the user ended the session. No park, no transit —
+   * there is no task or workflow behind an interactive session.
    */
   private async finalizeDone(): Promise<void> {
     if (!this.settleOnce()) return;
     this.transcript.sessionEnd("done");
     await this.transcript.flush();
+    this.closeMcpServers();
     const meta = await this.project.store.sessions.patchMeta(this.id, {
       status: "done",
       ended_at: this.host.clock(),
@@ -572,57 +538,50 @@ export class SessionRuntime {
   }
 
   /**
-   * Quiesces (releases) the LIVE isolation handle when the task leaves `work`
-   * (a park or terminal). Idempotent — at most one quiesce per session. A
-   * provider without a `release` (e.g. the worktree provider, where keeping the
-   * dir IS the absence of teardown) is a no-op. On the happy-path commit a
-   * release failure parks the task to `human` with the provider error (plan
-   * §3.5); a finaliser passes `parkOnFailure:false` because it already parks the
-   * task itself, so a release failure there must NOT double-park (ISSUE #7).
+   * Mints a per-session host-side HTTP MCP server (`ctx.newMCPServer()`), bound
+   * to this session's `{ projectRoot, taskId, author = step, transit = task-mode }`
+   * via a DIRECT-store tool backend (no `autosk` child). Tracked so the engine
+   * backstop closes it on every settle/finaliser/detach; the returned `close()`
+   * is an explicit early-release.
    */
-  private async quiesceIsolation(opts: { parkOnFailure: boolean }): Promise<void> {
-    if (!this.isolation || this.isolationQuiesced) return;
-    this.isolationQuiesced = true;
-    const release = this.wf?.isolation?.release;
-    if (!release) return; // provider has nothing to quiesce
-    try {
-      await release.call(this.wf.isolation, this.isolation);
-    } catch (e) {
-      this.host.logger.warn(`session ${this.id}: isolation release failed (${errMsg(e)})`);
-      if (opts.parkOnFailure) {
-        await this.host
-          .park(this.project, this.taskId, `isolation_release_failed: ${errMsg(e)}`)
-          .catch(() => {});
-      }
-    }
+  private async newMCPServer(): Promise<{ url: string; port: number; token: string; close(): Promise<void> }> {
+    const author = this.runtimeKind === "task" ? this.step : this.agentName;
+    const backend = directStoreBackend({
+      store: this.project.store,
+      author,
+      enroll: (id, target) => this.host.enrollTask(this.project, id, target),
+    });
+    const server = startMcpHttpServer({ backend, transitEnabled: this.runtimeKind === "task" });
+    this.mcpServers.push(server);
+    return {
+      url: server.url,
+      port: server.port,
+      token: server.token,
+      close: () => this.closeMcpServer(server),
+    };
+  }
+
+  /** Closes one tracked MCP server (idempotent: a second close is a no-op). */
+  private async closeMcpServer(server: McpHttpServer): Promise<void> {
+    const idx = this.mcpServers.indexOf(server);
+    if (idx < 0) return; // already closed
+    this.mcpServers.splice(idx, 1);
+    await server.close().catch((e) => {
+      this.host.logger.warn(`session ${this.id}: MCP server close failed (${errMsg(e)})`);
+    });
   }
 
   /**
-   * Destroys the durable isolation artifacts by IDENTITY on a TERMINAL
-   * transition (`done`/`cancel`). Idempotent — at most one reap per session. The
-   * engine owns the close decision, so it reaps with `force:true` (the worktree
-   * provider preserves the branch regardless). A provider without a `reap` is a
-   * no-op. On the happy-path commit a reap failure parks the task to `human`
-   * with the provider error.
+   * The engine backstop: closes EVERY tracked per-session MCP server. Called on
+   * every settle/finaliser/detach regardless of the agent's explicit `close()`,
+   * so a forgetful agent never leaks a port across steps. Idempotent.
    */
-  private async reapIsolationTerminal(opts: { parkOnFailure: boolean }): Promise<void> {
-    if (this.isolationReaped) return;
-    this.isolationReaped = true;
-    const reap = this.wf?.isolation?.reap;
-    if (!reap) return;
-    try {
-      await reap.call(
-        this.wf!.isolation,
-        { projectRoot: this.project.root, taskId: this.taskId },
-        { force: true },
-      );
-    } catch (e) {
-      this.host.logger.warn(`session ${this.id}: isolation reap failed (${errMsg(e)})`);
-      if (opts.parkOnFailure) {
-        await this.host
-          .park(this.project, this.taskId, `isolation_reap_failed: ${errMsg(e)}`)
-          .catch(() => {});
-      }
+  private closeMcpServers(): void {
+    const servers = this.mcpServers.splice(0);
+    for (const server of servers) {
+      void server.close().catch((e) => {
+        this.host.logger.warn(`session ${this.id}: MCP server close failed (${errMsg(e)})`);
+      });
     }
   }
 
@@ -633,10 +592,10 @@ export class SessionRuntime {
     // The slices shared by both modes (transcript log + child spawning).
     const base = {
       session: { id: this.id },
+      // Always the project root now (isolation no longer rewrites the run dir).
       cwd: this.cwd,
-      // The canonical project root, independent of any acquired isolation handle
-      // (`this.cwd` may be a worktree); lets the agent point `autosk` at the real
-      // project regardless of where it runs.
+      // The canonical project root — identical to `cwd`, kept distinct so an agent
+      // that runs its harness in a sandbox still has an unambiguous project handle.
       projectRoot: this.project.root,
       signal: this.controller.signal,
       log: {
@@ -646,26 +605,17 @@ export class SessionRuntime {
       // EPHEMERAL partial channel: routed through the same transcript serial
       // chain as durable appends so a partial(N+1) can never overtake commit(N).
       partial: (m: TranscriptMessage) => this.transcript.partial(m),
-      // Execution seam (plan §5): when the acquired isolation handle exposes
-      // `exec`/`spawn`, route through it (e.g. `docker exec` runs pi INSIDE the
-      // container) with the cwd + abort signal RESOLVED here; otherwise fall back
-      // to the host child helpers (today's worktree / no-isolation behaviour).
-      // An interactive session has no isolation, so it always takes the host path.
-      exec: (cmd: string[], opts?: ExecOptions) => {
-        if (this.isolation?.exec) {
-          const signal = opts?.signal ?? this.controller.signal;
-          const cwd = opts?.cwd ?? this.cwd;
-          return this.isolation.exec(cmd, { ...opts, cwd, signal });
-        }
-        return execOneShot(cmd, { ...opts, defaultCwd: this.cwd, defaultSignal: this.controller.signal });
-      },
-      spawn: (cmd: string[], opts?: SpawnOptions) => {
-        if (this.isolation?.spawn) {
-          const cwd = opts?.cwd ?? this.cwd;
-          return this.isolation.spawn(cmd, { ...opts, cwd, signal: this.controller.signal });
-        }
-        return spawnChild(cmd, { ...opts, defaultCwd: this.cwd, signal: this.controller.signal });
-      },
+      // Host child helpers at `this.cwd` (= the project root). Isolation no longer
+      // rewrites the run dir or routes through an exec/spawn seam: an agent that
+      // wants its harness elsewhere (a worktree / a container) wraps the argv via
+      // `@autosk/sandbox` and passes its own cwd here.
+      exec: (cmd: string[], opts?: ExecOptions) =>
+        execOneShot(cmd, { ...opts, defaultCwd: this.cwd, defaultSignal: this.controller.signal }),
+      spawn: (cmd: string[], opts?: SpawnOptions) =>
+        spawnChild(cmd, { ...opts, defaultCwd: this.cwd, signal: this.controller.signal }),
+      // Per-session host-side HTTP MCP server (plan §7). The engine tracks + closes
+      // it on settle (the backstop); the agent rewrites the host for its sandbox.
+      newMCPServer: () => this.newMCPServer(),
       // Fire-and-forget: the agent reports turn boundaries synchronously; the
       // meta patch + fan-out happen off the call. Inert for task sessions.
       setActivity: (a: SessionActivity) => void this.setActivity(a),

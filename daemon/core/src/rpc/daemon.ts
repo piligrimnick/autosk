@@ -676,33 +676,24 @@ export class Daemon {
   }
 
   /**
-   * `task.done` / `task.cancel`: set the terminal status, keeping workflow/step.
+   * `task.done` / `task.cancel`: a RAW status flip, keeping workflow/step.
    * Rejected with CONFLICT while a session is live (let the agent transit or be
    * aborted first). Idempotent.
    *
-   * Isolation reaping: on a workflow-driven terminal the engine itself quiesces
-   * (`release`) then reaps the env, but a MANUAL terminal (this path) runs with
-   * no live session — the env is already DORMANT (a prior step or the human-park
-   * `release` quiesced it), so this path is REAP-ONLY (no `release`). We reap by
-   * the deterministic `(projectRoot, taskId)` identity. `force:false` REFUSES to
-   * discard uncommitted changes (rejecting with ENVIRONMENT_DIRTY before the
-   * status flips); `force:true` removes the env regardless (branches are always
-   * preserved).
+   * No isolation teardown and no dirty-gate: isolation is agent-owned and torn
+   * down by a cleanup workflow step, so a terminal verb just flips the status
+   * (any sandbox env is reaped only when the task is routed through a cleanup
+   * step). The branch a worktree sandbox created is always preserved.
    */
   private async taskTerminal(params: unknown, status: "done" | "cancel"): Promise<TaskView> {
     const o = asObj(params);
     const id = reqString(o, "id");
-    const force = optBool(o, "force") ?? false;
     const handle = await this.resolveHandle(reqCwd(o));
     const view = await this.getTaskView(handle.store, id);
     if (view.status === status) return view; // idempotent
     if (handle.store.sessions.hasLiveSession(id)) {
       throw new RpcError(ErrorCodes.CONFLICT, `cannot ${status} ${id}: a session is live (abort it first)`);
     }
-    // Reap the isolation env BEFORE flipping the status: a dirty refusal must
-    // leave the task exactly where it was so the operator can commit or retry
-    // with force. No live session exists (checked above), so the env is quiescent.
-    await this.reapIsolation(handle, view, force, status);
     const updated = await handle.store.setPosition(id, { status, workflow: view.workflow, step: view.step });
     // Close the claim race (review #4): the scheduler claims a task by creating a
     // `queued` session under the SESSION lock, not the task lock, so a dispatch
@@ -717,33 +708,6 @@ export class Daemon {
       throw new RpcError(ErrorCodes.CONFLICT, `cannot ${status} ${id}: a session went live (abort it first)`);
     }
     return updated;
-  }
-
-  /**
-   * Reaps a task's session-free isolation env on a manual terminal (see
-   * {@link taskTerminal}). Resolves the task's workflow → its `IsolationProvider`
-   * and calls `reap({projectRoot, taskId}, {force})`. A dirty env with
-   * `force:false` is rejected with {@link ErrorCodes.ENVIRONMENT_DIRTY} (the
-   * status is untouched). Tasks with no workflow / no provider / a provider that does
-   * not implement `reap` are a no-op.
-   */
-  private async reapIsolation(
-    handle: ProjectHandle,
-    view: TaskView,
-    force: boolean,
-    status: "done" | "cancel",
-  ): Promise<void> {
-    if (!view.workflow) return;
-    const provider = handle.extensions.resolveWorkflow(view.workflow)?.isolation;
-    if (!provider?.reap) return;
-    const result = await provider.reap({ projectRoot: handle.root, taskId: view.id }, { force });
-    if (result.dirty && !result.removed) {
-      throw new RpcError(
-        ErrorCodes.ENVIRONMENT_DIRTY,
-        `cannot ${status} ${view.id}: isolation environment has uncommitted changes` +
-          `${result.detail ? ` (${result.detail})` : ""}; commit them or retry with force`,
-      );
-    }
   }
 }
 

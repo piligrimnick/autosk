@@ -82,9 +82,8 @@ The Detail pane always reflects the focused side panel:
   `error:` when present), then one labelled box per transcript
   line, oldest first. For a running session a 6-row `input`
   textarea is pinned below the transcript.
-- **Workflows** — header line `<name> [wt]? first step: <step>`
-  (the `[wt]` chip appears iff the workflow is non-synthetic and its
-  isolation is `worktree`), the description rendered as markdown,
+- **Workflows** — header line `<name> first step: <step>`, the
+  description rendered as markdown,
   then a `Steps (N)` labelled box with one row per step in
   `<step> agent=<agent> next=<targets|(none)>` form. Columns are
   aligned: the `agent=` chip starts at the same column on every
@@ -226,14 +225,11 @@ keystrokes don't churn the stream.
 
 **Read-only** in v2. Workflows are code contributed by extensions
 (discovered by the daemon), not editable DB rows — there is no
-create / delete / update or isolation-edit hotkey.
+create / delete / update hotkey.
 
 | Key | Action |
 |---|---|
 | `enter` | Filter the Tasks panel to this workflow (scope chip `wf=<name>`) and focus Tasks. |
-
-Isolated workflow rows render a muted `[wt]` marker after the
-workflow name.
 
 ### Agents `[4]`
 

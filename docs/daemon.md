@@ -97,8 +97,12 @@ keeps it loaded. The worker pool is global and FIFO across every loaded project.
 
 `autoskd mcp` is a second, **non-default** verb: a minimal **stdio MCP** (Model
 Context Protocol) server that exposes autosk's tools to a CLI harness that speaks
-MCP. It is the tool surface [`@autosk/claude-agent`](workflows.md#agent-definitions)
-points Claude Code at via `--mcp-config`. It speaks JSON-RPC 2.0 over stdio
+MCP. It is a standalone tool surface for external harnesses that speak MCP over
+stdio. (The shipped [`@autosk/claude-agent`](workflows.md#agent-definitions) no
+longer uses this stdio path — it points Claude Code at a per-session, host-side
+HTTP MCP server minted by [`ctx.newMCPServer()`](workflows.md#the-host-side-mcp-server-ctxnewmcpserver),
+so a sandboxed harness needs neither `autosk` nor a mounted socket.) It speaks
+JSON-RPC 2.0 over stdio
 (`initialize` → `tools/list` → `tools/call`), binds **no** socket, and returns
 when stdin closes. It is hand-rolled (no `@modelcontextprotocol/sdk` dependency),
 so it bundles into the compiled `autoskd` binary with no extra runtime.
@@ -128,18 +132,21 @@ The engine has exactly one scheduling rule:
 
 For each such task:
 
-1. If the workflow declares an **isolation** provider, `acquire` an environment
-   (e.g. a git worktree) and run the session inside its `cwd`.
-2. Create a session (`sessions/<id>.json` + `.jsonl`) and run the agent's
-   `onRun` on the worker pool. The agent writes pi-format transcript entries as
-   it works.
+1. Create a session (`sessions/<id>.json` + `.jsonl`) and run the agent's
+   `onRun` on the worker pool, at `ctx.cwd = projectRoot`. The agent writes
+   pi-format transcript entries as it works. **Isolation is the agent's concern,
+   not the engine's:** a step's agent may wrap its harness in a
+   [sandbox](workflows.md#isolation-agent-owned-sandboxes) (a git worktree or a
+   container) and run it there, but the engine knows nothing about it.
+2. On run start the engine mints a per-session, host-side HTTP MCP server
+   (`ctx.newMCPServer()`) for a sandboxed harness's tool surface, and closes it
+   on every settle / finaliser / detach so no port leaks across steps.
 3. The agent must call `ctx.transit(target)` exactly once — a sibling step, or a
    terminal/park status (`done` / `cancel` / `human`). `transit` validates the
    target through the workflow's `onTransit` hook, atomically updates `task.json`,
-   fires the status-driven isolation lifecycle (nothing on step→step; `release`
-   when the task leaves `work`; `reap` on a `done`/`cancel` terminal — see
-   [workflows.md → Isolation](workflows.md#isolation-pluggable-per-workflow)),
-   and emits notifications.
+   and emits notifications. (A `task.done` / `task.cancel` RPC is a raw status
+   flip with no engine teardown — a sandbox is torn down by a
+   [cleanup step](workflows.md#cleanup-is-a-workflow-step), not the terminal.)
 4. If `onRun` returns **without** transiting, the session fails
    (`error="agent_did_not_transit"`) and the task is parked to `human`.
 
@@ -238,8 +245,8 @@ The shipped `@autosk/pi-agent` registers a `"pi"` agent (chat backed by
 **Lifecycle.**
 
 1. `session.create {agent}` resolves the named agent (unknown name → invalid
-   params), creates a `kind:interactive` session with `cwd = projectRoot` (no
-   isolation), and dispatches it **directly** — interactive sessions run **off**
+   params), creates a `kind:interactive` session with `cwd = projectRoot`, and
+   dispatches it **directly** — interactive sessions run **off**
    the bounded task-worker pool, so an idle chat never occupies a slot a task
    session needs, and the scheduler is never involved.
 2. The session opens **empty** (no first prompt); the first composer message

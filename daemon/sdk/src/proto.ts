@@ -85,9 +85,11 @@ export const ErrorCodes = {
   /** The entity exists but is not in a state that accepts the request now. Retryable. */
   CONFLICT: 1004,
   /**
-   * A terminal verb (`task.done`/`task.cancel`) would discard uncommitted changes
-   * in the task's isolation environment (e.g. a git worktree). Retryable with
-   * `force:true`. Not worktree-specific — any isolation provider may raise it.
+   * RESERVED, RETIRED. Was raised when a terminal verb (`task.done`/`task.cancel`)
+   * would discard uncommitted changes in the task's isolation environment. The
+   * engine no longer tears isolation down on a terminal (isolation is agent-owned
+   * and torn down by a cleanup workflow step), so `done`/`cancel` are now a raw
+   * status flip and never emit this code. The number stays reserved (not reused).
    */
   ENVIRONMENT_DIRTY: 1005,
 } as const;
@@ -164,13 +166,12 @@ export interface TaskGetParams extends ProjectSelector {
   id: string;
 }
 /**
- * `task.done` / `task.cancel`. `force:true` reaps the task's isolation env
- * (worktree) even when it has uncommitted changes (the branch is preserved);
- * without it a dirty env is refused with {@link ErrorCodes.ENVIRONMENT_DIRTY}.
+ * `task.done` / `task.cancel` — a raw status flip (keeping workflow/step).
+ * Isolation is agent-owned and torn down by a cleanup workflow step, so there is
+ * no dirty-gate and no `force` knob: the verb takes the same `{ cwd, id }` as
+ * every other task selector.
  */
-export interface TaskTerminalParams extends TaskGetParams {
-  force?: boolean;
-}
+export type TaskTerminalParams = TaskGetParams;
 export interface TaskCreateParams extends ProjectSelector {
   title: string;
   description?: string;

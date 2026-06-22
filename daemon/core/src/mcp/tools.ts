@@ -44,6 +44,35 @@ export interface McpToolResult {
   structuredContent?: AutoskDetails;
 }
 
+/** The `{ action, args }` envelope both `task` and `comment` tool bodies take. */
+export interface McpActionParams {
+  action?: unknown;
+  args?: unknown;
+}
+
+/**
+ * The pluggable execution backend for the `task` / `comment` tools, so the same
+ * transport-agnostic dispatch ({@link McpTool} list, `handleMessage`) serves two
+ * very different homes:
+ *  - the standalone `autoskd mcp` STDIO server SHELLS OUT to `autosk … --json`
+ *    ({@link shellBackend}); and
+ *  - the per-session HTTP MCP server runs DIRECT against the daemon's own store
+ *    (`directStoreBackend`, no `autosk` child).
+ * Both return the identical {@link McpToolResult} shape.
+ */
+export interface McpToolBackend {
+  task(params: McpActionParams): Promise<McpToolResult>;
+  comment(params: McpActionParams): Promise<McpToolResult>;
+}
+
+/** A {@link McpToolBackend} that shells out to `autosk … --json` (the stdio server path). */
+export function shellBackend(run: RunProcess = bunRunProcess): McpToolBackend {
+  return {
+    task: (params) => callTask(params, run),
+    comment: (params) => callComment(params, run),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // transit (ack-only) — gated by AUTOSK_MCP_TRANSIT
 // ---------------------------------------------------------------------------
@@ -201,11 +230,11 @@ export async function callTask(
   }
 }
 
-function formatTaskText(action: TaskAction, task: Task): string {
+export function formatTaskText(action: TaskAction, task: Task): string {
   return `${action} ${formatTaskLine(task)}\n${JSON.stringify(task)}`;
 }
 
-function formatListText(tasks: Task[]): string {
+export function formatListText(tasks: Task[]): string {
   if (tasks.length === 0) return "no tasks\n[]";
   const lines = tasks.map((t) => formatTaskLine(t));
   return `${tasks.length} task(s)\n${lines.join("\n")}\n${JSON.stringify(tasks)}`;
@@ -309,11 +338,11 @@ export async function callComment(
   }
 }
 
-function formatAddText(taskId: string, c: Comment): string {
+export function formatAddText(taskId: string, c: Comment): string {
   return `added comment id=${c.id} on ${taskId} by ${c.author}\n${JSON.stringify(c)}`;
 }
 
-function formatCommentListText(taskId: string, comments: Comment[]): string {
+export function formatCommentListText(taskId: string, comments: Comment[]): string {
   if (comments.length === 0) return `${taskId}: no comments\n[]`;
   const lines = comments.map((c) => `[${c.id}] ${c.author} @ ${c.created_at}: ${oneLine(c.text)}`);
   return `${taskId}: ${comments.length} comment(s)\n${lines.join("\n")}\n${JSON.stringify(comments)}`;
@@ -327,11 +356,11 @@ function oneLine(text: string): string {
 // shared
 // ---------------------------------------------------------------------------
 
-function ok(text: string, details: AutoskDetails): McpToolResult {
+export function ok(text: string, details: AutoskDetails): McpToolResult {
   return { content: [{ type: "text", text }], isError: false, structuredContent: details };
 }
 
-function errorResult(domain: "task" | "comment", action: string, err: unknown): McpToolResult {
+export function errorResult(domain: "task" | "comment", action: string, err: unknown): McpToolResult {
   if (err instanceof AutoskCliError) {
     const details: AutoskDetails = {
       kind: "error",

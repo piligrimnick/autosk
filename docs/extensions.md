@@ -19,9 +19,10 @@ The daemon calls it once per project with an [`AutoskAPI`](../daemon/sdk/src/api
 ```ts
 import { statusStep, type AutoskAPI } from "@autosk/sdk";
 import { piAgent } from "@autosk/pi-agent";
-import { worktreeIsolation } from "@autosk/worktree";
+import { sandboxCleanupStep, worktreeSandbox } from "@autosk/sandbox";
 
 export default function (autosk: AutoskAPI) {
+  const sandbox = worktreeSandbox();   // a per-task git worktree the agent runs in
   autosk.registerWorkflow({
     name: "my-flow",
     firstStep: "dev",
@@ -29,17 +30,20 @@ export default function (autosk: AutoskAPI) {
       // The step key IS the agent name; registering the workflow registers
       // its inline agents — there is no separate registerAgent call.
       dev: piAgent({
+        sandbox,
         model: "sonnet:high",
         firstMessageFile: new URL("./prompts/dev.md", import.meta.url).pathname,
       }),
       accept: statusStep("human"),
+      // Cleanup is a normal step: route terminals through it so the worktree
+      // never leaks (`done`/`cancel` are now a raw status flip).
+      cleanup: sandboxCleanupStep(sandbox),
     },
     onTransit(ctx, to) {
       if ("step" in to && to.step === "dev" && ctx.visits("dev") >= 5) {
         throw new Error("dev bounced back too many times — park it");
       }
     },
-    isolation: worktreeIsolation(),
   });
 }
 ```
@@ -255,7 +259,7 @@ task.
 `autoskd` ships **no bundled extensions**. On a brand-new machine — detected by
 the absence of `~/.autosk/settings.json` — the daemon provisions the default
 extensions itself on startup: it shells out to `npm` to install
-`@autosk/feature-dev` (which pulls `@autosk/pi-agent` / `@autosk/worktree` /
+`@autosk/feature-dev` (which pulls `@autosk/pi-agent` / `@autosk/sandbox` /
 `@autosk/sdk` transitively) into `~/.autosk/packages/`, then writes
 `~/.autosk/settings.json` listing the explicit `npm:@autosk/feature-dev` entry.
 Every project then discovers `feature-dev` through the npm-packages source above.
@@ -300,47 +304,57 @@ installs it for you, no manual `npm install` step.
 These are the npm packages the first-run bootstrap provisions (and the building
 blocks for your own workflows):
 
-- **[`@autosk/worktree`](../daemon/extensions/worktree/README.md)** —
-  `worktreeIsolation()`, the per-task git-worktree isolation provider you attach
-  to any workflow.
+- **[`@autosk/sandbox`](../daemon/extensions/sandbox/README.md)** — the userspace
+  **sandbox library**: the structural `Sandbox` shape plus `worktreeSandbox()`
+  (a per-task git worktree), `dockerSandbox({ image })` (a per-task `docker run`
+  container), and `sandboxCleanupStep()` (teardown as a normal step). Isolation
+  is no longer an engine/SDK concept — an agent wraps its harness with a sandbox
+  (see [docs/workflows.md → Isolation](workflows.md#isolation-agent-owned-sandboxes)).
+  This package absorbed the retired `@autosk/worktree` + `@autosk/docker`
+  providers.
 - **[`@autosk/pi-agent`](../daemon/extensions/pi-agent/README.md)** —
-  `piAgent({...})`, an agent that drives `pi --mode rpc`, mirrors pi's transcript
-  entries 1:1, and bridges step transitions through an injected `autosk_transit`
-  pi-tool.
+  `piAgent({ sandbox?, ... })`, an agent that drives `pi --mode rpc`, mirrors pi's
+  transcript entries 1:1, and bridges step transitions through an injected
+  `autosk_transit` pi-tool.
 - **[`@autosk/feature-dev`](../daemon/extensions/feature-dev/README.md)** — the
-  reference workflow `dev → review → docs → validator → accept` (with bounce-backs
-  and a `dev` visit cap), wired to four `@autosk/pi-agent` roles and
-  `worktreeIsolation()`. It is the workflow every project can enroll into with no
-  per-project files.
+  reference workflow `dev → review → docs → validator → accept (human) → cleanup
+  → done` (with bounce-backs and a `dev` visit cap), wired to four
+  `@autosk/pi-agent` roles each given a per-task `worktreeSandbox()` and a
+  `sandboxCleanupStep()` teardown step. It is the workflow every project can
+  enroll into with no per-project files.
 
 ## Opt-in extensions
 
 Not every extension is bootstrapped. These you add explicitly (with
 [`autosk ext add`](#managing-extensions) or from the GUI):
 
-- **[`@autosk/docker`](../daemon/extensions/docker/README.md)** —
-  `dockerIsolation({ image })`, an isolation provider that runs pi (and every
-  command it spawns) **inside a per-task Docker container** — a real sandbox — by
-  **composing** `@autosk/worktree` for the git-branch filesystem (edits still land
-  on `autosk/<task-id>` on the host). It is **not** part of the first-run
-  bootstrap: install it with `autosk ext add npm:@autosk/docker` and attach
-  `dockerIsolation({ image })` to a workflow. The operator supplies an image with
-  `pi` (and a compatible `autosk`) preinstalled; see the
-  [package README](../daemon/extensions/docker/README.md) for image requirements,
-  the daemon-socket mount, and the cross-arch / permissions notes. It relies on
-  the `IsolationHandle` exec/spawn seam (see
-  [docs/workflows.md → The execution seam](workflows.md#the-execution-seam)).
+- **[`@autosk/feature-dev-cc`](../daemon/extensions/feature-dev-cc/README.md)** —
+  the Claude Code twin of `@autosk/feature-dev`: the same
+  `dev → review → docs → validator → accept → cleanup → done` graph driven by
+  `@autosk/claude-agent` roles. It registers **two** workflows — `feature-dev-cc`
+  (agents in a per-task `worktreeSandbox()`, claude on the host) and
+  `feature-dev-cc-docker` (agents inside a per-task `dockerSandbox({ image })`
+  container, reaching the host MCP server over `host.docker.internal`; image =
+  `$AUTOSK_DOCKER_IMAGE`, default `autosk/claude-runtime:latest`). It is **not**
+  bootstrapped: install it explicitly (`autosk ext add npm:@autosk/feature-dev-cc`).
+  Docker isolation is just `dockerSandbox({ image })` from the bootstrapped
+  `@autosk/sandbox` — there is no separate isolation-provider extension to add.
 
-One more shipped agent is **not** provisioned by the bootstrap — it is an opt-in
-alternative harness you wire into your own workflow (`autosk ext add
-npm:@autosk/claude-agent`, then use it in place of `piAgent({...})`):
+The agent the Claude workflows use is **not** provisioned by the bootstrap — it
+is an opt-in alternative harness you can also wire into your own workflow
+(`autosk ext add npm:@autosk/claude-agent`, then use it in place of
+`piAgent({...})`):
 
 - **[`@autosk/claude-agent`](../daemon/extensions/claude-agent/README.md)** —
   `claudeAgent({...})`, the structural twin of `@autosk/pi-agent` that drives
   [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude -p`
   headless stream-json) instead of `pi --mode rpc`. It exposes its transit / task /
-  comment tools through the self-contained [`autoskd mcp`](daemon.md#the-autoskd-mcp-tool-server)
-  stdio MCP server (registered via Claude's `--mcp-config`).
+  comment tools through a per-session, host-side HTTP MCP server (minted by
+  `ctx.newMCPServer()` and registered via Claude's `--mcp-config` as a
+  `type:"http"` server with a bearer token), so a thin container image needs
+  neither `autosk` nor a mounted daemon socket. (The standalone
+  [`autoskd mcp`](daemon.md#the-autoskd-mcp-tool-server) stdio server stays for
+  external use.)
 
 ## Writing your own
 
@@ -374,5 +388,6 @@ autosk enroll <task-id> --workflow echo
 To customise a default extension, copy it into `~/.autosk/extensions/` (or your
 project's `.autosk/extensions/`) and edit it; your copy overrides the npm one
 by name. See [docs/workflows.md](workflows.md) for the full
-`WorkflowDefinition` / `AgentDefinition` / `StatusStep` / `IsolationProvider`
-contracts and the `AgentRunContext` your `onRun` receives.
+`WorkflowDefinition` / `AgentDefinition` / `StatusStep` contracts, the
+[`Sandbox`](workflows.md#isolation-agent-owned-sandboxes) shape, and the
+`AgentRunContext` your `onRun` receives.

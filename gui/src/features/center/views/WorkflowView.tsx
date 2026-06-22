@@ -1,9 +1,8 @@
 // WorkflowView — the center body when a workflow is selected (redesign plan
 // §8.3, decision #6): READ-ONLY. Workflows are code now (registered by
-// extensions), so this is a pure projection — header (name + isolation chip),
-// description (markdown), lazy-style steps list (agent / human / targets), and
-// the definition as pretty JSON. No create / edit / delete / isolation-update
-// UI.
+// extensions), so this is a pure projection — header (name), description
+// (markdown), lazy-style steps list (agent / human / targets), and the
+// definition as pretty JSON. No create / edit / delete UI.
 
 import { useStore } from "@/state/store";
 import { selectedWorkflow } from "@/state/selectors";
@@ -28,7 +27,6 @@ export function WorkflowView() {
       <div className="workflow-view-head">
         <div className="workflow-view-title-row">
           <h2 className="workflow-view-title">{wf.name}</h2>
-          <span className={`chip ${wf.isolation === "worktree" ? "chip-accent" : ""}`}>{wf.isolation || "none"}</span>
         </div>
         <div className="workflow-view-meta">entry: {wf.first_step || "—"}</div>
       </div>

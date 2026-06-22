@@ -15,7 +15,7 @@
     "@autosk/claude-agent": "workspace:*",
     "@autosk/feature-dev": "workspace:*",
     "@autosk/pi-agent": "workspace:*",
-    "@autosk/worktree": "workspace:*"
+    "@autosk/sandbox": "workspace:*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

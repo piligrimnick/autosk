@@ -123,8 +123,9 @@ iPad, or iPhone (a compact single-pane layout), see
    step) — picks up the task, runs the workflow, and either closes it to `done`
    or parks it to `human` for review.
 
-   `feature-dev` runs each task inside its own git worktree
-   (`isolation: worktree`), so the project root must be a git repo.
+   `feature-dev` runs each agent step in its own git worktree (a per-task
+   `worktreeSandbox()`), so the project root must be a git repo; a final
+   `cleanup` step tears the worktree down on the way to `done`.
 
 3. **(Optional) Use your own workflow.** Drop a TypeScript extension into
    `~/.autosk/extensions/` (or your project's `.autosk/extensions/`) that
@@ -189,9 +190,9 @@ autosk workflow list          # workflows registered by this project's extension
 autosk workflow show feature-dev
 ```
 
-The daemon installs `feature-dev` (`dev → review → docs → validator → accept`,
-`isolation: worktree`) from npm on first run and makes it available to every
-project. For a one-off
+The daemon installs `feature-dev` (`dev → review → docs → validator → accept
+→ cleanup → done`, each step in a per-task `worktreeSandbox()`) from npm on first
+run and makes it available to every project. For a one-off
 agent, register a tiny workflow with a single agent step (plus a terminal
 `statusStep`).
 
@@ -210,8 +211,10 @@ projects** — it picks the project from the `{cwd}` each request carries.
 What the daemon does for each task in `work` status:
 
 1. Resolves the current step's agent (code, from the project's extension registry).
-2. Acquires isolation if the workflow declares it (e.g. a git worktree), then
-   runs the agent's `onRun` in a **session**.
+2. Runs the agent's `onRun` in a **session** at the project root. Isolation is
+   the agent's concern, not the engine's: a step's agent may wrap its harness in
+   a [sandbox](docs/workflows.md#isolation-agent-owned-sandboxes) (a git worktree
+   or a container) and run it there.
 3. Streams the agent's pi-format transcript to `.autosk/sessions/<id>.jsonl` and
    to any attached viewer (`autosk lazy`, the GUI).
 4. Follows the transition the agent commits (`ctx.transit`) — a sibling step or a

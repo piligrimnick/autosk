@@ -94,18 +94,21 @@ is in the script header.
   ends render over RPC
 - `daemon/` — the Bun/TypeScript daemon workspace:
   - `daemon/sdk/` — `@autosk/sdk`: the public, extension-facing types
-    (Task / Session / Workflow / Agent / Isolation / `AutoskAPI`), the pi-format
+    (Task / Session / Workflow / Agent / `AutoskAPI`), the pi-format
     transcript entry types, and the **proto-v2 wire types** — the single source
     of truth the Go and Tauri clients mirror
   - `daemon/core/` — `@autosk/core`: the daemon binary (file store, project
     manager, extension loader, engine/scheduler, JSON-RPC server)
-  - `daemon/extensions/worktree/` — `@autosk/worktree`: the shipped worktree
-    isolation provider
+  - `daemon/extensions/sandbox/` — `@autosk/sandbox`: the agent-owned sandbox
+    library (structural `Sandbox` + `worktreeSandbox()` / `dockerSandbox()` /
+    `sandboxCleanupStep()`; absorbs the retired `@autosk/worktree` + `@autosk/docker`)
   - `daemon/extensions/pi-agent/` — `@autosk/pi-agent`: the shipped agent that
     drives `pi --mode rpc`
   - `daemon/extensions/claude-agent/` — `@autosk/claude-agent`: the shipped agent
     that drives Claude Code (`claude -p` headless stream-json); its tool surface
-    is the self-contained `autoskd mcp` stdio MCP server
+    is the per-session host HTTP MCP server the engine mints (`ctx.newMCPServer()`,
+    advertised via `--mcp-config type:"http"`; the standalone `autoskd mcp` stdio
+    server survives for external use)
   - `daemon/extensions/feature-dev/` — `@autosk/feature-dev`: the reference
     workflow (`dev → review → docs → validator → accept`), published to npm and
     installed by the daemon's first-run bootstrap

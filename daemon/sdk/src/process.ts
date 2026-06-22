@@ -1,16 +1,16 @@
 /**
  * Generic child-process primitives — the `Bun.spawn` stdio/abort plumbing behind
  * `ctx.exec` (one-shot) and `ctx.spawn` (long-lived, stdio-streamed), extracted
- * from the daemon's `engine/child.ts` so BOTH the engine and out-of-tree
- * isolation providers (e.g. `@autosk/docker`'s `docker exec` seam) import ONE
- * implementation instead of reimplementing `LineDispatcher` / abort wiring.
+ * from the daemon's `engine/child.ts` so BOTH the engine and a userspace sandbox
+ * library (e.g. `@autosk/sandbox`, whose `dockerSandbox.wrap` rewrites an argv to
+ * `docker run …`) can import ONE implementation instead of reimplementing
+ * `LineDispatcher` / abort wiring.
  *
  * These are intentionally pi-free and engine-free: no "defaults" injection, no
  * env-merge policy beyond inheriting `process.env`. The caller passes a fully
  * resolved `signal` (and optional `cwd`/`env`); the engine layers its
- * `ctx.cwd` / `ctx.signal` defaults on top in `engine/child.ts`, and an
- * isolation provider rewrites the argv (e.g. `docker exec …`) before calling
- * here.
+ * `ctx.cwd` / `ctx.signal` defaults on top in `engine/child.ts`, and a sandbox's
+ * `wrap` rewrites the argv (e.g. `docker run …`) before the agent calls here.
  *
  * Runtime-only (Bun): never a wire type, so the Go/Tauri proto mirror is
  * untouched. `@autosk/sdk` already ships runtime helpers (`statusStep`, ids) and
@@ -67,10 +67,10 @@ export async function runChild(cmd: string[], opts: RunChildOptions): Promise<Ex
   // A timeout means "this command is hung — force-kill it", so we SIGKILL (9)
   // rather than SIGTERM. Beyond being the right semantic for a deadline, SIGKILL
   // guarantees the non-zero ExecResult the contract promises even for children
-  // that SWALLOW SIGTERM and exit 0 — notably the `docker exec` CLI client the
-  // `@autosk/docker` seam shells out to (it traps SIGTERM and returns 0, so a
-  // graceful kill there would mask the timeout). The abort path below stays
-  // SIGTERM (cooperative cancellation, not a hung-command kill).
+  // that SWALLOW SIGTERM and exit 0 — notably a `docker` CLI client a sandbox's
+  // `wrap` rewrites the argv to (e.g. `docker run …`), which can trap SIGTERM and
+  // return 0, so a graceful kill there would mask the timeout. The abort path
+  // below stays SIGTERM (cooperative cancellation, not a hung-command kill).
   if (opts.timeoutMs !== undefined) timer = setTimeout(() => proc.kill(9), opts.timeoutMs);
   const onAbort = (): void => proc.kill();
   if (signal.aborted) proc.kill();

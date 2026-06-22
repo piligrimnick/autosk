@@ -51,13 +51,13 @@ func newWorkflowListCmd() *cobra.Command {
 				return nil
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tFIRST_STEP\tSTEPS\tISOLATION")
+			fmt.Fprintln(w, "NAME\tFIRST_STEP\tSTEPS")
 			for _, wf := range wfs {
 				names := make([]string, 0, len(wf.Steps))
 				for _, s := range wf.Steps {
 					names = append(names, s.Name)
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", wf.Name, wf.FirstStep, strings.Join(names, ","), wf.Isolation)
+				fmt.Fprintf(w, "%s\t%s\t%s\n", wf.Name, wf.FirstStep, strings.Join(names, ","))
 			}
 			return w.Flush()
 		},
@@ -67,7 +67,7 @@ func newWorkflowListCmd() *cobra.Command {
 func newWorkflowShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show <name>",
-		Short: "Show one registered workflow (steps, isolation)",
+		Short: "Show one registered workflow (steps)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cl, err := readClient(cmd.Context())
@@ -86,7 +86,6 @@ func newWorkflowShowCmd() *cobra.Command {
 				fmt.Printf("description: %s\n", wf.Description)
 			}
 			fmt.Printf("first_step: %s\n", wf.FirstStep)
-			fmt.Printf("isolation:  %s\n", wf.Isolation)
 			fmt.Println("steps:")
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(w, "  STEP\tKIND\tTARGETS")

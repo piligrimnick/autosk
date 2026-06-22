@@ -1,20 +1,21 @@
 {
-  "name": "@autosk/worktree",
-  "version": "0.1.3",
-  "description": "Shipped autoskd v2 isolation provider: per-task git worktree isolation (worktreeIsolation()) attachable to any workflow.",
+  "name": "@autosk/sandbox",
+  "version": "0.1.0",
+  "description": "autosk userspace sandbox library: worktreeSandbox() / dockerSandbox() an agent wraps its harness with, plus sandboxCleanupStep().",
   "license": "MIT",
   "author": "wierdbytes",
   "homepage": "https://github.com/wierdbytes/autosk#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/wierdbytes/autosk.git",
-    "directory": "daemon/extensions/worktree"
+    "directory": "daemon/extensions/sandbox"
   },
   "bugs": {
     "url": "https://github.com/wierdbytes/autosk/issues"
   },
   "keywords": [
     "autosk",
+    "autosk-sandbox",
     "autosk-isolation"
   ],
   "type": "module",

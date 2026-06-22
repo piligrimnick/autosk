@@ -11,22 +11,27 @@ turns, kickback loop) onto the v2 `ctx.spawn` + `ctx.transit` API (design
 
 ```ts
 import { piAgent } from "@autosk/pi-agent";
-import { worktreeIsolation } from "@autosk/worktree";
+import { sandboxCleanupStep, worktreeSandbox } from "@autosk/sandbox";
+import { statusStep } from "@autosk/sdk";
 
 export default function (autosk) {
+  const sandbox = worktreeSandbox(); // or dockerSandbox({ image })
   autosk.registerWorkflow({
     name: "my-flow",
     firstStep: "dev",
     steps: {
       // The step key IS the agent name; registering the workflow registers
-      // its inline agents.
+      // its inline agents. Each runs its harness in the per-task `sandbox`.
       dev: piAgent({
+        sandbox,
         model: "sonnet:high",
         firstMessageFile: new URL("./prompts/dev.md", import.meta.url).pathname,
       }),
-      review: piAgent({ thinking: "xhigh", firstMessageFile: ".../review.md" }),
+      review: piAgent({ sandbox, thinking: "xhigh", firstMessageFile: ".../review.md" }),
+      accept: statusStep("human"),
+      // Teardown is a normal step (no engine reap): route terminals through it.
+      cleanup: sandboxCleanupStep(sandbox),
     },
-    isolation: worktreeIsolation(),
   });
 }
 ```
@@ -111,23 +116,34 @@ autosk daemon, which observes the call on pi's RPC event stream. That file is
 loaded by **pi's** toolchain, not the daemon, so it is excluded from this
 package's `tsc` typecheck.
 
-## Project resolution under isolation
+## Tool surface under a sandbox
 
-Under worktree isolation the agent runs in `~/.autosk/worktrees/<slug>/<task>`,
-which contains no `.autosk/`. The daemon sets **`AUTOSK_CWD`** (= `ctx.projectRoot`)
-in the spawned pi's environment; the `autosk` CLI honors it as the project
-selector, so task/comment calls resolve the original project instead of walking
-up from the worktree. The structured task/comment tools live in the separate,
-pi-installed [`@autosk/pi-tools`](https://www.npmjs.com/package/@autosk/pi-tools)
-extension (not injected here) — workflow transitions stay on the in-process
-`autosk_transit` channel.
+The `sandbox?` option (a `Sandbox` from `@autosk/sandbox`, or any structural
+sandbox) decides where the harness runs AND which tool surface pi gets:
+
+- **host / `worktreeSandbox`** (not thin): pi runs on the host at the worktree
+  (`~/.autosk/worktrees/<slug>/<task>`), keeping the proven path — the injected
+  `autosk_transit` extension for transitions plus the pi-installed
+  [`@autosk/pi-tools`](https://www.npmjs.com/package/@autosk/pi-tools) for
+  `autosk_task` / `autosk_comment` (which shell out to `autosk`). The daemon sets
+  **`AUTOSK_CWD`** (= `ctx.projectRoot`) so those calls resolve the original
+  project, not the worktree.
+- **`dockerSandbox`** (thin — `sandbox.thin === true`): the image has no `autosk`,
+  so pi instead loads the in-repo `pi-mcp-extension.ts` (transit + task + comment
+  as POSTs to the per-session HTTP MCP server minted by `ctx.newMCPServer()`). The
+  agent injects `AUTOSK_MCP_URL` (rewritten to `host.docker.internal` via
+  `sandbox.endpointFor(port)`) + `AUTOSK_MCP_TOKEN`, and the sandbox bind-mounts
+  the extension file so `pi -e <path>` resolves inside the container. (The
+  `mountSocket` escape hatch keeps the pi-tools path over a mounted daemon socket
+  instead.)
 
 ## Exports
 
 - `piAgent(options)` → `AgentDefinition`
-- `buildPiCommand(options, { interactive? })` (the `interactive` flag skips the
-  injected `autosk_transit` extension), `PiDriver`, `parseTarget`, the prompt
-  renderers
+- `buildPiCommand(options, { interactive?, mcpHttp? })` (the `interactive` flag
+  skips the injected transit extension; `mcpHttp` swaps the transit-only extension
+  for the http `pi-mcp-extension.ts` under a thin sandbox), `PiDriver`,
+  `parseTarget`, the prompt renderers
   (`renderInitialPrompt`, `kickbackMessage`, `rejectionMessage`, `targetLabels`)
   — exported for tooling / tests.
 - default export — an extension factory that registers the named `"pi"` agent for

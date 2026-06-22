@@ -249,13 +249,21 @@ func TestDoneCancelReopen(t *testing.T) {
 	}
 }
 
-func TestDoneCancelForceFlag(t *testing.T) {
+func TestDoneCancelNoForceFlag(t *testing.T) {
 	dir := initProject(t)
-	// `--force` is accepted on done/cancel (a never-enrolled task has no worktree
-	// to reap, so force is a harmless no-op here — this asserts the flag wiring).
+	// `done`/`cancel` are a raw status flip now — the `-f/--force` flag is
+	// HARD-REMOVED (the dirty-gate is gone), so passing it is an unknown-flag error.
 	id := createTask(t, dir, "forced done")
-	if _, err := runRoot(t, dir, "done", "--force", id); err != nil {
-		t.Fatalf("done --force: %v", err)
+	if _, err := runRoot(t, dir, "done", "--force", id); err == nil {
+		t.Fatalf("done --force: expected an unknown-flag error, got nil")
+	}
+	if _, err := runRoot(t, dir, "cancel", "-f", id); err == nil {
+		t.Fatalf("cancel -f: expected an unknown-flag error, got nil")
+	}
+
+	// Plain done/cancel still work (no force needed).
+	if _, err := runRoot(t, dir, "done", id); err != nil {
+		t.Fatalf("done: %v", err)
 	}
 	show, _ := runRoot(t, dir, "show", id, "--json")
 	var tv map[string]any
@@ -264,9 +272,9 @@ func TestDoneCancelForceFlag(t *testing.T) {
 		t.Errorf("expected done, got %v", tv["status"])
 	}
 
-	id2 := createTask(t, dir, "forced cancel")
-	if _, err := runRoot(t, dir, "cancel", "-f", id2); err != nil {
-		t.Fatalf("cancel -f: %v", err)
+	id2 := createTask(t, dir, "plain cancel")
+	if _, err := runRoot(t, dir, "cancel", id2); err != nil {
+		t.Fatalf("cancel: %v", err)
 	}
 	show2, _ := runRoot(t, dir, "show", id2, "--json")
 	var tv2 map[string]any

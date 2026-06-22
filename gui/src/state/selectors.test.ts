@@ -21,7 +21,6 @@ function mkWorkflow(name: string): WorkflowInfo {
     description: "",
     first_step: "dev",
     steps: [{ name: "dev", status: null, targets: [{ status: "done" }] }],
-    isolation: "none",
   };
 }
 

@@ -11,9 +11,9 @@ import (
 )
 
 // newDoneCmd / newCancelCmd / newReopenCmd / newUpdateCmd: thin clients of the
-// daemon's terminal/update verbs. autoskd owns the store mutations (status set,
-// isolation release on terminal transitions); the cobra layer only wires the
-// CLI surface.
+// daemon's terminal/update verbs. autoskd owns the store mutations (a terminal
+// verb is a raw status flip now — isolation is agent-owned and torn down by a
+// cleanup workflow step); the cobra layer only wires the CLI surface.
 
 func newDoneCmd() *cobra.Command {
 	return terminalVerbCmd("done", "Mark a task done", (*rpcclient.Client).TaskDone)
@@ -23,13 +23,12 @@ func newCancelCmd() *cobra.Command {
 	return terminalVerbCmd("cancel", "Cancel a task", (*rpcclient.Client).TaskCancel)
 }
 
-// terminalVerbCmd builds a `<verb> <id> [-f]` command for done/cancel. On a
-// terminal transition the daemon reaps the task's worktree (preserving the
-// branch); `--force` reaps it even with uncommitted changes. A dirty refusal
-// (CodeEnvironmentDirty) is surfaced with a hint instead of a raw rpc error.
-func terminalVerbCmd(use, short string, fn func(*rpcclient.Client, context.Context, string, bool) (rpcclient.Task, error)) *cobra.Command {
-	var force bool
-	cmd := &cobra.Command{
+// terminalVerbCmd builds a `<verb> <id>` command for done/cancel. A terminal
+// verb is a RAW status flip: isolation is agent-owned and torn down by a cleanup
+// workflow step, so there is no `--force`/dirty-gate any more (the worktree
+// branch is always preserved regardless).
+func terminalVerbCmd(use, short string, fn func(*rpcclient.Client, context.Context, string) (rpcclient.Task, error)) *cobra.Command {
+	return &cobra.Command{
 		Use:   use + " <id>",
 		Short: short,
 		Args:  cobra.ExactArgs(1),
@@ -38,18 +37,13 @@ func terminalVerbCmd(use, short string, fn func(*rpcclient.Client, context.Conte
 			if err != nil {
 				return err
 			}
-			t, err := fn(cl, cmd.Context(), args[0], force)
+			t, err := fn(cl, cmd.Context(), args[0])
 			if err != nil {
-				if apiErr, ok := rpcclient.IsAPIError(err); ok && apiErr.Code == rpcclient.CodeEnvironmentDirty {
-					return fmt.Errorf("%s\n(re-run with --force to remove the isolation environment and discard the uncommitted changes)", apiErr.Message)
-				}
 				return err
 			}
 			return emitTaskWire(t)
 		},
 	}
-	cmd.Flags().BoolVarP(&force, "force", "f", false, "remove the worktree even with uncommitted changes (branch is preserved)")
-	return cmd
 }
 
 // newReopenCmd: reopen a done/cancel task. Enrolled tasks park to `human`

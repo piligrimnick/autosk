@@ -1,7 +1,11 @@
 /**
  * The engine (plan §3.7(3-4)): the single scheduler loop + global worker pool,
- * session lifecycle, `ctx.transit` commit path, isolation acquire/release, the
+ * session lifecycle, `ctx.transit` commit path, the per-session MCP server, the
  * transcript writer, steer/followup/abort routing, and crash recovery.
+ *
+ * Isolation is NOT here: the `IsolationProvider` abstraction was abolished, so
+ * the engine never acquires/releases/reaps an env — agents own isolation via
+ * `@autosk/sandbox` and tear it down with a cleanup workflow step.
  *
  * It is RPC-independent — the daemon (P5) constructs it once, feeds it projects
  * via {@link addProject}, and drives it through {@link enroll} / {@link resume} /
@@ -267,8 +271,8 @@ export class Engine implements SessionHost {
    * Creates + dispatches an interactive (taskless) chat session for a registered
    * agent (plan §4.2). Unknown agent → {@link EngineError.invalidParams}. The
    * session is `kind:"interactive"` with empty `task_id`/`workflow`/`step`, runs
-   * at the project root with no isolation, and is dispatched DIRECTLY here — the
-   * task scanner is never involved (it has no task to claim).
+   * at the project root, and is dispatched DIRECTLY here — the task scanner is
+   * never involved (it has no task to claim).
    *
    * Crucially the run is dispatched OFF the bounded task-worker pool (it does NOT
    * go through `queue`+`pump`+`this.active`). A chat's `onRun` blocks on the
@@ -277,8 +281,7 @@ export class Engine implements SessionHost {
    * they do not unblock `onRun`). Occupying a `this.active` slot for that whole
    * time would starve task dispatch: the pool is global across projects and
    * capped at `--workers` (default 4), so a handful of idle chats would deadlock
-   * every project's task scheduler. Interactive sessions acquire no isolation, so
-   * they need none of the pool's `acquire` back-pressure either. Returns the
+   * every project's task scheduler. Returns the
    * freshly-created `queued` meta; the queued→running flip and the terminal
    * settle emit their own session-events.
    */
@@ -405,8 +408,6 @@ export class Engine implements SessionHost {
    * THIS task and sealed its session while we were dispatching another), so the
    * snapshot is never trusted — workflow/step/agent are re-derived here and any
    * change (status≠work, a new live session, a different step) aborts the claim.
-   * Isolation is NOT acquired here; the worker acquires it bounded by the pool
-   * (plan §3.5, ISSUE #5).
    */
   private async dispatch(project: EngineProject, taskId: string): Promise<void> {
     const row = await project.store.schedulingRow(taskId).catch(() => null);
@@ -427,7 +428,7 @@ export class Engine implements SessionHost {
       workflow: row.workflow,
       step: row.step,
       agent: row.step, // the step key IS the agent name
-      cwd: project.root, // isolation (if any) is acquired in the worker and rewrites this
+      cwd: project.root, // the run dir is always the project root (isolation is agent-owned)
       timestamp: this.clock(),
     });
     // Announce the freshly-claimed (queued) session on the project session
@@ -527,6 +528,15 @@ export class Engine implements SessionHost {
     });
     await project.store.addComment(taskId, { author: ENGINE_COMMENT_AUTHOR, text: error });
     this.emitTask(project, updated);
+  }
+
+  /**
+   * {@link SessionHost.enrollTask}: enrolls a (freshly-created) task into a
+   * workflow on behalf of a per-session MCP server's `task create --workflow`.
+   * Delegates to {@link enroll} (which validates + runs `onTransit`).
+   */
+  enrollTask(project: EngineProject, taskId: string, target: { workflow: string }): Promise<TaskView> {
+    return this.enroll(project.root, taskId, target);
   }
 
   async notifyTaskChanged(project: EngineProject, taskId: string): Promise<void> {

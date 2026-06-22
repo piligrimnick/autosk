@@ -31,13 +31,6 @@ import (
 // the TUI's fake datasources use as a stand-in in tests.
 var ErrDaemonRequired = errors.New("daemon required")
 
-// ErrEnvironmentDirty is the sentinel a TaskDone/TaskCancel returns (wrapped,
-// with the daemon's detail message) when the task's isolation environment (e.g.
-// a git worktree) has uncommitted changes and `force` was not set. The TUI
-// detects it via errors.Is to offer a forced retry instead of surfacing a raw
-// rpc error. Not worktree-specific.
-var ErrEnvironmentDirty = errors.New("isolation environment has uncommitted changes")
-
 // TaskRef is a lightweight reference to a related task carrying just
 // enough metadata for the detail pane to render the id with the right
 // status hue without re-querying the store. Used in Task.BlockedBy
@@ -90,7 +83,6 @@ type Workflow struct {
 	Description string
 	FirstStep   string
 	Steps       []WorkflowStep
-	Isolation   string
 }
 
 // NOTE: NonTerminalTaskSampleSize, NonTerminalTaskRef removed - v2 workflows are read-only
@@ -229,10 +221,10 @@ type Datasource interface {
 
 	CreateTask(ctx context.Context, title, description string) (string, error) // drops priority
 	// Status actions map to explicit verbs: done→TaskDone, cancel→TaskCancel, reopen→TaskReopen.
-	// done/cancel reap the task's worktree (branch preserved); `force` reaps it
-	// even with uncommitted changes. Without force a dirty env yields ErrEnvironmentDirty.
-	TaskDone(ctx context.Context, id string, force bool) error
-	TaskCancel(ctx context.Context, id string, force bool) error
+	// done/cancel are a raw status flip (isolation is agent-owned and torn down by
+	// a cleanup workflow step); the worktree branch is always preserved.
+	TaskDone(ctx context.Context, id string) error
+	TaskCancel(ctx context.Context, id string) error
 	TaskReopen(ctx context.Context, id string) error
 	// UpdateTask replaces UpdateTitleDescription - uses pointers for optional updates
 	UpdateTask(ctx context.Context, id string, title, description *string) error

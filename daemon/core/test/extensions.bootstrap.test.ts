@@ -97,8 +97,7 @@ describe("first-run bootstrap", () => {
     const wf = registry.getWorkflowInfo("feature-dev");
     expect(wf).toBeDefined();
     expect(wf!.first_step).toBe("dev");
-    expect(wf!.isolation).toBe("worktree");
-    expect(wf!.steps.map((s) => s.name).sort()).toEqual(["accept", "dev", "docs", "review", "validator"]);
+    expect(wf!.steps.map((s) => s.name).sort()).toEqual(["accept", "cleanup", "dev", "docs", "review", "validator"]);
     expect(registry.diagnostics).toEqual([]);
   });
 

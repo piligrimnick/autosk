@@ -1,15 +1,15 @@
 # @autosk/feature-dev
 
 The shipped **reference workflow** for autoskd v2: a full feature-development
-cycle wired to [`@autosk/pi-agent`](../pi-agent) roles and
-[`@autosk/worktree`](../worktree) isolation. It replaces v1's
-`feature-dev-generic` bootstrap (design
-`docs/plans/20260612-Bun-Daemon-Extensions.md` §3.6, P6).
+cycle wired to [`@autosk/pi-agent`](../pi-agent) roles, each running its harness
+in a per-task [`@autosk/sandbox`](../sandbox) `worktreeSandbox()`, with teardown
+as a normal `cleanup` step. It replaces v1's `feature-dev-generic` bootstrap
+(design `docs/plans/20260612-Bun-Daemon-Extensions.md` §3.6, P6).
 
 ## The workflow
 
 ```text
-dev ──▶ review ──▶ docs ──▶ validator ──▶ accept (human)
+dev ──▶ review ──▶ docs ──▶ validator ──▶ accept (human) ──▶ cleanup ──▶ done
  ▲        │                    │
  └────────┘────────────────────┘   (review→dev and validator→dev bounce-backs)
 ```
@@ -21,12 +21,16 @@ dev ──▶ review ──▶ docs ──▶ validator ──▶ accept (human)
 | `docs`      | `piAgent` (name `docs`)       | documentation pass (leaves `CHANGELOG.md` to `validator`)    |
 | `validator` | `piAgent` (name `validator`)  | independent item-by-item verification; on success runs release hygiene (CHANGELOG `[Unreleased]` + a clean, committed worktree) before `accept`; bounces back to `dev` |
 | `accept`    | `statusStep("human")`         | the engine parks here for a human's final acceptance         |
+| `cleanup`   | `sandboxCleanupStep(sandbox)` | removes the worktree (branch preserved), then transits to `done` |
 
 Each agent step is an inline `@autosk/pi-agent` value: the **step key is the
 agent name** (`dev`/`review`/`docs`/`validator`), and registering the workflow
 registers those agents — there is no separate agent registration.
 
-- **Isolation:** `worktreeIsolation()` — each task runs in its own git worktree.
+- **Sandbox:** `worktreeSandbox()` — each task runs in its own git worktree, torn
+  down by the `cleanup` step (the human resumes an accepted task into it via
+  `autosk resume <id> --to cleanup`). Routing terminals through `cleanup` is what
+  keeps a task from leaking its worktree now that `done`/`cancel` are a raw flip.
 - **Visit cap:** `onTransit` rejects a bounce-back into `dev` once the task has
   already entered `dev` `DEV_VISIT_CAP` (5) times — the 6th `dev` entry is
   rejected (via `ctx.visits("dev")`), so a task that keeps failing review/
@@ -75,5 +79,5 @@ overrides the npm one.
 - default export — the extension factory (registers the workflow, whose steps
   carry the four inline agents).
 - `featureDevWorkflow(options?)` → `WorkflowDefinition` (a factory; tests inject
-  a custom `isolation`).
+  a custom `sandbox`).
 - `DEV_VISIT_CAP` — the `dev` re-entry cap constant.

@@ -1,17 +1,18 @@
 /**
- * Workflow definitions (plan §3.3) and pluggable isolation providers
- * (plan §3.5). Workflows are *code* registered by extensions; the engine only
- * drives the task status machine and calls `onTransit` on every transition.
+ * Workflow definitions (plan §3.3). Workflows are *code* registered by
+ * extensions; the engine only drives the task status machine and calls
+ * `onTransit` on every transition.
+ *
+ * Isolation is no longer an engine/SDK concern: it left the SDK with the
+ * abolition of the `IsolationProvider` abstraction. Agents own the isolation
+ * they need via the userspace `@autosk/sandbox` library (a `worktreeSandbox()` /
+ * `dockerSandbox()` they wrap their harness with) plus a cleanup workflow step
+ * (`sandboxCleanupStep()`). The only related SDK surface is
+ * {@link AgentRunContext.newMCPServer} (per-session host-side MCP serving — not
+ * isolation).
  */
 
-import type {
-  AgentDefinition,
-  ChildHandle,
-  ExecOptions,
-  ExecResult,
-  SpawnOptions,
-  TasksAPI,
-} from "./agent.ts";
+import type { AgentDefinition, TasksAPI } from "./agent.ts";
 
 /**
  * The target of a transition: either a sibling step within the same workflow,
@@ -81,125 +82,4 @@ export interface WorkflowDefinition {
   /** Step name → definition. */
   steps: Record<string, StepDef>;
   onTransit?(ctx: TransitContext, to: StepTarget): void | Promise<void>;
-  /** Optional pluggable isolation module (plan §3.5). */
-  isolation?: IsolationProvider;
-}
-
-/**
- * Options the engine hands a handle's {@link IsolationHandle.exec} seam: the
- * agent's {@link ExecOptions} with `cwd` + `signal` already resolved (the
- * handle's `cwd`, or an `opts` override; the session's signal, or an `opts`
- * override).
- */
-export interface IsolationExecOptions extends ExecOptions {
-  cwd: string;
-  signal: AbortSignal;
-}
-
-/**
- * Options the engine hands a handle's {@link IsolationHandle.spawn} seam: the
- * agent's {@link SpawnOptions} with `cwd` + `signal` already resolved.
- */
-export interface IsolationSpawnOptions extends SpawnOptions {
-  cwd: string;
-  signal: AbortSignal;
-}
-
-/** A handle to an acquired isolation environment (plan §3.5). */
-export interface IsolationHandle {
-  /** The working directory the session runs in (passed as `ctx.cwd`). */
-  cwd: string;
-  /** Provider-internal bookkeeping (e.g. branch name for worktrees). */
-  meta?: Record<string, unknown>;
-
-  /**
-   * Optional EXECUTION SEAM — run a one-shot command INSIDE the environment
-   * (e.g. `docker exec`). When present the engine routes `ctx.exec` through it;
-   * when ABSENT the engine runs the command on the host at `cwd` (today's
-   * worktree behaviour). MUST honour `opts.signal` (abort / daemon shutdown) and
-   * return the same {@link ExecResult} shape.
-   */
-  exec?(cmd: string[], opts: IsolationExecOptions): Promise<ExecResult>;
-
-  /**
-   * Optional EXECUTION SEAM — spawn a long-lived command INSIDE the environment.
-   * When present the engine routes `ctx.spawn` through it (this is how
-   * `pi --mode rpc` ends up inside the container); when ABSENT the engine spawns
-   * on the host at `cwd`. MUST stream line-buffered stdio and kill on
-   * `opts.signal`, returning the same {@link ChildHandle} shape.
-   */
-  spawn?(cmd: string[], opts: IsolationSpawnOptions): ChildHandle;
-}
-
-/**
- * The outcome of a session-free {@link IsolationProvider.reap}. Lets the caller
- * distinguish "removed the env" from "left it in place because it was dirty and
- * `force` was not set" so it can warn the operator instead of silently dropping
- * uncommitted work.
- */
-export interface IsolationReapResult {
-  /** Whether an isolation env existed for the identity and was removed. */
-  removed: boolean;
-  /** True when removal was SKIPPED because the env had uncommitted changes (and `force` was false). */
-  dirty: boolean;
-  /** Optional human-readable detail (e.g. `"3 uncommitted file(s)"`). */
-  detail?: string;
-}
-
-/**
- * A pluggable isolation provider attached to a workflow (sandcastle pattern,
- * plan §3.5). Isolation is scoped to a task's ACTIVE RUN (the contiguous time it
- * spends in `work`) and driven by the task's status machine, not by step-session
- * boundaries. The environment moves through a small state machine:
- *
- * ```text
- *  ABSENT ──acquire(create)──▶ RUNNING ──release(stop)──▶ DORMANT
- *                                ▲   │                        │
- *                                │   └──acquire(reuse)         │
- *                                └────acquire(resume/start)────┘
- *                             (any) ──reap(force)──▶ GONE
- * ```
- *
- * The three methods map to three distinct roles:
- *  - **`acquire` = ensure-ready** (create | start | reuse). Mandatory, called on
- *    entering `work` (enroll / resume) and re-entered per step; MUST be
- *    idempotent and recovery-safe.
- *  - **`release` = quiesce-on-exit**. Optional; called only when the task LEAVES
- *    `work` (`human` park, or `done`/`cancel`). Stops a live env but keeps it
- *    cheaply resumable. NEVER fires on step→step.
- *  - **`reap` = destroy-on-terminal**. Optional; called only on a TERMINAL
- *    transition (`done`/`cancel`), keyed by identity so it works with no live
- *    handle. `force:false` refuses to discard uncommitted changes, `force:true`
- *    removes regardless (branches created by the env are always preserved).
- */
-export interface IsolationProvider {
-  /** `"worktree"` | `"none"` | future: `"docker"`, … */
-  tag: string;
-  /**
-   * Ensure the environment for `(projectRoot, taskId)` exists AND is ready to
-   * run, returning the handle the session runs in. MUST be idempotent and
-   * recovery-safe: create when ABSENT, resume when DORMANT, re-use when RUNNING.
-   * Called on entering `work` (enroll / resume) and re-entered per step.
-   */
-  acquire(ctx: { projectRoot: string; taskId: string }): Promise<IsolationHandle>;
-  /**
-   * Quiesce a LIVE environment when the task LEAVES `work` (park or terminal):
-   * stop it but keep it cheaply resumable by a later `acquire`. NO destruction
-   * happens here (that is `reap`), so there is no `terminal`/`force`. NEVER
-   * called on step→step. Optional — a provider with nothing to stop (e.g. the
-   * worktree provider, where keeping the dir IS the absence of teardown) omits
-   * it.
-   */
-  release?(handle: IsolationHandle): Promise<void>;
-  /**
-   * Destroy the durable artifacts for `(projectRoot, taskId)` on a TERMINAL
-   * transition (`done`/`cancel`), keyed by the deterministic identity rather
-   * than a live handle so it works with no in-memory handle (the engine path on
-   * a workflow-driven terminal, a manual `task.done`/`task.cancel` after a park,
-   * or crash recovery). With `force:false` a dirty env is left in place and
-   * reported via {@link IsolationReapResult.dirty}; with `force:true` it is
-   * removed regardless (branches are always preserved). Optional: providers with
-   * no out-of-band identity may omit it (the caller then skips reaping).
-   */
-  reap?(ctx: { projectRoot: string; taskId: string }, opts: { force: boolean }): Promise<IsolationReapResult>;
 }

@@ -78,28 +78,24 @@ func (c *Client) Resume(ctx context.Context, id string, to *StepTarget) (Task, e
 	return out, err
 }
 
-// TaskDone / TaskCancel are terminal verbs. `force` reaps the task's isolation
-// env (worktree) even when it has uncommitted changes (the branch is preserved);
-// without it a dirty env is refused with CodeEnvironmentDirty.
-func (c *Client) TaskDone(ctx context.Context, id string, force bool) (Task, error) {
-	return c.taskTerminalVerb(ctx, "task.done", id, force)
+// TaskDone / TaskCancel are terminal verbs — a RAW status flip. Isolation is
+// agent-owned and torn down by a cleanup workflow step, so there is no reap and
+// no `force`/dirty-gate (the worktree branch is always preserved).
+func (c *Client) TaskDone(ctx context.Context, id string) (Task, error) {
+	return c.taskTerminalVerb(ctx, "task.done", id)
 }
-func (c *Client) TaskCancel(ctx context.Context, id string, force bool) (Task, error) {
-	return c.taskTerminalVerb(ctx, "task.cancel", id, force)
+func (c *Client) TaskCancel(ctx context.Context, id string) (Task, error) {
+	return c.taskTerminalVerb(ctx, "task.cancel", id)
 }
 
-// TaskReopen reopens a closed task (no isolation reaping — nothing to discard).
+// TaskReopen reopens a closed task.
 func (c *Client) TaskReopen(ctx context.Context, id string) (Task, error) {
 	return c.taskIDVerb(ctx, "task.reopen", id)
 }
 
-func (c *Client) taskTerminalVerb(ctx context.Context, method, id string, force bool) (Task, error) {
-	extra := map[string]any{"id": id}
-	if force {
-		extra["force"] = true
-	}
+func (c *Client) taskTerminalVerb(ctx context.Context, method, id string) (Task, error) {
 	var out Task
-	err := c.call(ctx, method, c.selector(extra), &out)
+	err := c.call(ctx, method, c.selector(map[string]any{"id": id}), &out)
 	return out, err
 }
 

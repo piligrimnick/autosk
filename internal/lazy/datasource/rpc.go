@@ -3,7 +3,6 @@ package datasource
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"sort"
 	"time"
@@ -272,26 +271,13 @@ func (r *RPC) CreateTask(ctx context.Context, title, description string) (string
 	return t.ID, nil
 }
 
-func (r *RPC) TaskDone(ctx context.Context, id string, force bool) error {
-	_, err := r.cli.TaskDone(ctx, id, force)
-	return environmentDirtyErr(err)
+func (r *RPC) TaskDone(ctx context.Context, id string) error {
+	_, err := r.cli.TaskDone(ctx, id)
+	return err
 }
 
-func (r *RPC) TaskCancel(ctx context.Context, id string, force bool) error {
-	_, err := r.cli.TaskCancel(ctx, id, force)
-	return environmentDirtyErr(err)
-}
-
-// environmentDirtyErr maps the daemon's CodeEnvironmentDirty into the package
-// sentinel (preserving the detail message) so the TUI can branch on errors.Is
-// without reaching into rpcclient error codes.
-func environmentDirtyErr(err error) error {
-	if err == nil {
-		return nil
-	}
-	if apiErr, ok := rpcclient.IsAPIError(err); ok && apiErr.Code == rpcclient.CodeEnvironmentDirty {
-		return fmt.Errorf("%w: %s", ErrEnvironmentDirty, apiErr.Message)
-	}
+func (r *RPC) TaskCancel(ctx context.Context, id string) error {
+	_, err := r.cli.TaskCancel(ctx, id)
 	return err
 }
 
@@ -422,7 +408,6 @@ func mapWorkflow(w rpcclient.WorkflowInfo) Workflow {
 		Name:        w.Name,
 		Description: w.Description,
 		FirstStep:   w.FirstStep,
-		Isolation:   w.Isolation,
 	}
 	for _, s := range w.Steps {
 		targets := make([]string, 0, len(s.Targets))

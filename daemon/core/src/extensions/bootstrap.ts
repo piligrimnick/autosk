@@ -2,7 +2,7 @@
  * First-run environment bootstrap.
  *
  * autosk has **no daemon-bundled extensions**: the reference `feature-dev`
- * workflow (and its `@autosk/pi-agent` roles + `@autosk/worktree` isolation)
+ * workflow (and its `@autosk/pi-agent` roles + `@autosk/sandbox` worktree)
  * ship as ordinary npm packages. So on a brand-new machine — detected by the
  * ABSENCE of `~/.autosk/settings.json` — the daemon provisions the default
  * extensions itself: it `npm install`s them into the global packages prefix
@@ -49,7 +49,7 @@ export function autoInstallDisabled(): boolean {
 
 /**
  * npm install specifiers provisioned on first run. Installing `@autosk/feature-dev`
- * pulls its `@autosk/pi-agent` / `@autosk/worktree` / `@autosk/sdk` deps
+ * pulls its `@autosk/pi-agent` / `@autosk/sandbox` / `@autosk/sdk` deps
  * transitively, so they need not be listed here.
  */
 export const DEFAULT_BOOTSTRAP_PACKAGES = ["@autosk/feature-dev"] as const;

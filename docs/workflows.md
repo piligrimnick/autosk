@@ -45,7 +45,6 @@ interface WorkflowDefinition {
   firstStep: string;                  // the step a freshly-enrolled task enters
   steps: Record<string, StepDef>;     // step name → definition
   onTransit?(ctx: TransitContext, to: StepTarget): void | Promise<void>;
-  isolation?: IsolationProvider;      // optional, pluggable (see "Isolation")
 }
 
 // A step is EITHER an inline agent OR a terminal/park status step.
@@ -168,8 +167,8 @@ no harness knowledge — CLI-driven agents are an extension on top of `ctx.spawn
 interface AgentRunContext {
   session: { id: string };
   mode: "task" | "interactive";       // "task" = workflow step (must transit); "interactive" = chat (never transits)
-  cwd: string;                        // run dir: project root, or the isolation handle's path
-  projectRoot: string;                // canonical project root (`.autosk/`), regardless of isolation
+  cwd: string;                        // run dir — ALWAYS the project root (the agent owns any sandbox run dir)
+  projectRoot: string;                // canonical project root (the dir containing `.autosk/`)
   signal: AbortSignal;                // fired on abort / daemon shutdown
 
   tasks: TasksAPI;                    // live task access (current/get/list/comments)
@@ -180,14 +179,23 @@ interface AgentRunContext {
   comment(text: string): Promise<void>;    // shorthand: comment on the current task
   transit(to: StepTarget): Promise<void>;  // validate via onTransit, then commit (once)
 
+  // Mint a per-session, host-side HTTP MCP server (for a sandboxed harness's tool surface).
+  newMCPServer(): Promise<{ url: string; port: number; token: string; close(): Promise<void> }>;
+
   exec(cmd: string[], opts?): Promise<ExecResult>;  // one-shot child process
   spawn(cmd: string[], opts?): ChildHandle;         // long-lived interactive child
 }
 ```
 
 - **`transit`** resolves the target → calls `workflow.onTransit` → atomically
-  updates `task.json` → fires the isolation lifecycle → emits notifications. A
-  second `transit` in the same session throws.
+  updates `task.json` → emits notifications. A second `transit` in the same
+  session throws.
+- **`newMCPServer`** mints a per-session, host-side HTTP MCP server bound to this
+  session's `{ projectRoot, taskId, author = step, transit = task-mode }` and
+  returns `{ url, port, token, close() }` — a sandboxed harness's tool surface
+  (see [Isolation](#isolation-agent-owned-sandboxes)). `close()` is an explicit
+  early release; the engine also closes it on every settle, so no port leaks
+  across steps.
 - **`log`** writes the pi-format transcript: `log.message(...)` for a pi message
   entry, `log.custom(type, data)` for the generic logging channel.
 - **`partial`** streams an in-progress assistant message snapshot to live
@@ -201,13 +209,12 @@ interface AgentRunContext {
   `message_update` events.)
 - **`exec`** / **`spawn`** run child processes; `spawn` is how the pi-agent
   extension drives `pi --mode rpc` over JSON-lines stdio.
-- **`cwd` vs `projectRoot`:** `cwd` is where the agent runs — under worktree
-  isolation a throwaway worktree with no `.autosk/`. `projectRoot` always points
-  at the original project. `@autosk/pi-agent` passes it to the spawned pi as
-  `AUTOSK_CWD`, which the `autosk` CLI honors as its project selector, so any
-  `autosk` call the agent makes (e.g. the `@autosk/pi-tools` `autosk_task` /
-  `autosk_comment` tools) targets the task's own project rather than walking up
-  from the worktree.
+- **`cwd` vs `projectRoot`:** both are **always the project root** now — isolation
+  no longer rewrites `cwd`. An agent that wants a different run dir (e.g. a git
+  worktree) owns it: it resolves a [sandbox](#isolation-agent-owned-sandboxes)
+  workspace and spawns its harness there. `@autosk/pi-agent` passes `projectRoot`
+  to the spawned pi as `AUTOSK_CWD`, which the `autosk` CLI honors as its project
+  selector, so any `autosk` call the agent makes targets the task's own project.
 - **`onSteer`** / **`onFollowup`** receive a `session.input` message on a live
   session; **`onAbort`** runs on `session.abort`. All are optional.
 
@@ -260,132 +267,130 @@ See [docs/daemon.md → Interactive sessions](daemon.md#interactive-taskless-ses
 for the session lifecycle and the `registry.agent.list` / `session.create` /
 `session.end` RPC surface.
 
-## Isolation (pluggable, per workflow)
+## Isolation: agent-owned sandboxes
 
-Worktree isolation is a pluggable provider attached to a workflow (the
-sandcastle pattern), not a hard-wired engine feature. Isolation is scoped to a
-task's **active run** — the contiguous time it spends in `work` — and driven by
-the task's status machine, **not** by step-session boundaries:
+Isolation is **not** an engine or SDK concept. There is no `IsolationProvider`
+contract and no `WorkflowDefinition.isolation` field: an agent owns whatever
+isolation it needs by wrapping its harness with a **sandbox**, and teardown is a
+normal workflow step. The building blocks live in the userspace
+[`@autosk/sandbox`](../daemon/extensions/sandbox/README.md) package
+(`worktreeSandbox()` / `dockerSandbox()` / `sandboxCleanupStep()`); it absorbed
+the retired `@autosk/worktree` and `@autosk/docker` provider packages.
 
-```ts
-interface IsolationProvider {
-  tag: string;                        // "worktree" | "docker" | "none" | …
-  // ensure-ready (create | start | reuse). Mandatory; idempotent + recovery-safe.
-  acquire(ctx: { projectRoot: string; taskId: string }): Promise<IsolationHandle>;
-  // quiesce-on-exit: stop a LIVE env but keep it cheaply resumable. No
-  // destruction here (that is `reap`), so NO `terminal`/`force`. Optional — a
-  // provider with nothing to stop (e.g. worktree) omits it entirely.
-  release?(handle: IsolationHandle): Promise<void>;
-  // destroy-on-terminal, keyed by (projectRoot, taskId) so it needs no live
-  // handle. `force: false` leaves a dirty env in place and reports
-  // `{ dirty: true }`; `force: true` removes it regardless (branches preserved).
-  // Optional: a provider with no out-of-band identity omits it (caller skips reaping).
-  reap?(ctx: { projectRoot: string; taskId: string }, opts: { force: boolean }):
-    Promise<{ removed: boolean; dirty: boolean; detail?: string }>;
-}
-interface IsolationHandle {
-  cwd: string;
-  meta?: Record<string, unknown>;
-  // Optional EXECUTION SEAM (see below). When present the engine routes
-  // ctx.exec / ctx.spawn through these instead of running on the host.
-  exec?(cmd: string[], opts: IsolationExecOptions): Promise<ExecResult>;
-  spawn?(cmd: string[], opts: IsolationSpawnOptions): ChildHandle;
-}
-```
+### The `Sandbox` shape (structural)
 
-### The execution seam
-
-The optional `exec` / `spawn` on a handle are the **execution seam**. By default
-`ctx.exec` / `ctx.spawn` run on the **host** at the handle's `cwd` (today's
-worktree / no-isolation behaviour). A provider can instead **own process
-creation** by returning a handle with `exec` / `spawn` — the engine then routes
-`ctx.exec` / `ctx.spawn` through them, passing the resolved `cwd` + `signal` (an
-`opts.cwd` / `opts.signal` override wins, else the session defaults). This is what
-lets [`dockerIsolation()`](#isolation-pluggable-per-workflow) run commands
-*inside* a container: its seam rewrites the argv to `docker exec … <container>
-<cmd>` so even `pi --mode rpc` runs in the sandbox, with the agent code unchanged.
+A `Sandbox` is a plain object a workflow author passes to an agent step
+(`piAgent({ sandbox, … })` / `claudeAgent({ sandbox, … })`). The shape is
+**structural** — agents accept any object with these methods, so a hand-rolled
+sandbox needs no dependency on `@autosk/sandbox`:
 
 ```ts
-interface IsolationExecOptions extends ExecOptions { cwd: string; signal: AbortSignal }
-interface IsolationSpawnOptions extends SpawnOptions { cwd: string; signal: AbortSignal }
+type Sandbox = {
+  workspace(id): Promise<{ cwd: string }>;          // the per-task dir the harness runs in (idempotent + deterministic)
+  wrap(cmd, { cwd, env, id, roFiles }): string[];   // wrap the harness argv (docker run …); identity for host/worktree
+  endpointFor(port): string;                        // host endpoint an in-sandbox process reaches a host port at
+  stop(id): Promise<void>;                          // best-effort stop of the running harness (agent onAbort)
+  cleanup(id, { force }): Promise<{ removed; dirty; detail? }>;  // terminal teardown (the cleanup step)
+  thin?: boolean;                                   // true ⇒ no autosk/host FS in the sandbox; the agent uses the http MCP tool surface
+};
+type TaskIdentity = { projectRoot: string; taskId: string };
 ```
 
-The seam contract: `exec` MUST honour `opts.signal` (abort / daemon shutdown) and
-return the same `ExecResult` shape (and honour `input` / `timeoutMs` so it
-behaves identically to the host path); `spawn` MUST stream line-buffered stdio,
-kill on `opts.signal`, and return the same `ChildHandle` shape. Both are built on
-the shared `runChild` / `spawnChild` helpers exported from `@autosk/sdk` — the
-same `Bun.spawn` stdio/abort plumbing the engine's host path uses, so a provider
-never reimplements line buffering or abort wiring. Interactive (taskless)
-sessions have no isolation, so they always take the host path. The
-`IsolationProvider` signature is unchanged — the seam lives on the *handle*, so a
-provider opts in simply by returning one with `exec` / `spawn`.
+In `onRun` (task mode) an agent: resolves `workspace(id)` for its run dir, mints
+a per-session [`ctx.newMCPServer()`](#the-host-side-mcp-server-ctxnewmcpserver) for its tool surface,
+rewrites the server host with `endpointFor(mcp.port)`, `wrap()`s the harness
+argv, and spawns at the workspace cwd. `onAbort` calls `sandbox.stop(id)`. With
+**no** sandbox, the harness runs on the host at `ctx.cwd` (= the project root).
 
-The environment moves through a small state machine, advanced by the task's
-status transitions:
+### The host-side MCP server (`ctx.newMCPServer()`)
+
+The reachability problem — *how does a harness running inside a container reach
+the daemon?* — is owned by the agent, not an engine seam. `ctx.newMCPServer()`
+mints a **per-session, host-side HTTP MCP server** (a hand-rolled `Bun.serve()`
+POST→JSON endpoint, ephemeral port, no `@modelcontextprotocol/sdk`) bound to this
+session's `{ projectRoot, taskId, author = step, transit = task-mode }` and
+returns `{ url, port, token, close() }`:
+
+- the agent builds the harness' tool surface against `endpointFor(port)` +
+  `Authorization: Bearer <token>` — for a worktree sandbox that is
+  `http://127.0.0.1:<port>`, for a docker sandbox `http://host.docker.internal:<port>`;
+- the server binds an ephemeral port (`0.0.0.0` so a Linux container reaches it
+  over the docker bridge); the **bearer token + ephemeral port are the security
+  boundary** (a wrong/absent bearer is `401`);
+- `close()` is an explicit early release. The engine also closes the server on
+  **every** settle / finaliser / detach regardless, so a forgetful agent never
+  leaks a port across steps.
+
+`@autosk/claude-agent` passes this to Claude Code as an `--mcp-config`
+`type:"http"` server; `@autosk/pi-agent`, under a `thin` sandbox, injects it
+(`AUTOSK_MCP_URL` / `AUTOSK_MCP_TOKEN`) into a small in-repo pi-extension that
+POSTs transit/task/comment to it — so a **thin** container image needs neither
+`autosk` nor a mounted daemon socket. (Off-sandbox pi keeps its existing
+`@autosk/pi-tools` `autosk` shell-out path.)
+
+### `worktreeSandbox()` — a per-task git worktree
+
+[`worktreeSandbox()`](../daemon/extensions/sandbox/README.md) runs each task in
+its own git worktree at `~/.autosk/worktrees/<slug>/<task-id>` on branch
+`autosk/<task-id>`. `workspace()` creates (or reuses) the checkout, `wrap()` is
+the identity (the harness runs on the host), `endpointFor()` returns
+`http://127.0.0.1:<port>`, and `cleanup()` removes the worktree dir while
+**preserving the branch** (so the work survives for review/merge). It is **not**
+`thin` — the harness runs on the host with `autosk` available. The project root
+must therefore be a git repo.
+
+### `dockerSandbox({ image })` — a per-task container
+
+[`dockerSandbox({ image })`](../daemon/extensions/sandbox/README.md) runs the
+harness **inside a per-task `docker run -i --rm` container**. It composes
+`worktreeSandbox()` for the filesystem (the worktree is bind-mounted 1:1, so
+edits still land on `autosk/<task-id>` on the host) and `wrap()`s the argv into
 
 ```text
- ABSENT ──acquire(create)──▶ RUNNING ──release(stop)──▶ DORMANT
-                               ▲   │                        │
-                               │   └──acquire(reuse)         │
-                               └────acquire(resume/start)────┘
-                            (any) ──reap(force)──▶ GONE
+docker run -i --rm --name <det> --add-host=host.docker.internal:host-gateway \
+  -v <ws>:<ws> -w <ws> -e … <image> <cmd…>
 ```
 
-The three methods map to three distinct roles:
+A container lives exactly as long as **one** harness process (`--rm`
+self-removes on exit); there is no keep-alive container, no `docker exec`, and no
+start/stop/reuse state machine. `endpointFor()` returns
+`http://host.docker.internal:<port>` so the in-container harness reaches the
+host MCP server; `stop()` is `docker stop <name>` (covers a SIGKILL orphan);
+`cleanup()` removes the worktree plus a defensive `docker rm -f <name>`. The
+image is **thin**: just the harness (`claude`/`pi`, authenticated) + the
+build/test toolchain — **no** `socat`, `autosk`/`autoskd`, or mounted socket.
+Inject credentials/caches with `mounts`, align ownership with `user`, and set
+the container `home`; see the
+[package README](../daemon/extensions/sandbox/README.md) for the full image
+contract (UID/GID, HOME, Claude auth via `env: { ANTHROPIC_API_KEY }` or a
+mounted `~/.claude/.credentials.json:ro`). An optional `mountSocket` escape
+hatch mounts the daemon socket for an in-container `autosk` (the pi fallback).
 
-- **`acquire` = ensure-ready** (create | start | reuse). Mandatory. Called on
-  entering `work` (enroll / resume) and re-entered **per step**; MUST be
-  idempotent and recovery-safe (create when ABSENT, resume when DORMANT, re-use
-  when RUNNING). The returned `cwd` becomes the session's `ctx.cwd`.
-- **`release` = quiesce-on-exit** (optional). Called **only when the task LEAVES
-  `work`** — a `human` park, or a `done`/`cancel` terminal. It stops a live env
-  but keeps it cheaply resumable; it carries no `terminal`/`force` and performs
-  no destruction. It **NEVER fires on step→step**. A provider with nothing to
-  stop (keeping the dir IS the absence of teardown) omits it entirely.
-- **`reap` = destroy-on-terminal** (optional). Called **only on a TERMINAL
-  transition** (`done`/`cancel`), keyed by `(projectRoot, taskId)` so it works
-  with no live handle. `force: false` refuses to discard uncommitted changes and
-  reports `{ dirty: true }`; `force: true` removes the env regardless (branches
-  the env created are always preserved).
+### Cleanup is a workflow step
 
-The engine `acquire`s before scheduling each session (per step). On a step→step
-transition it does **nothing** — the env stays RUNNING. On a `human` park it
-calls `release` only; on `done`/`cancel` it calls `release` then `reap({force:
-true})`. A provider failure parks the task to `human` with the provider's
-message.
+Because `done`/`cancel` are now a **raw status flip** with no engine teardown, a
+workflow that allocates a sandbox MUST route its terminals through a cleanup
+step or it leaks the worktree on every task.
+[`sandboxCleanupStep(sandbox, { to?, force? })`](../daemon/extensions/sandbox/README.md)
+builds an ordinary agent step whose `onRun` tears the env down
+(`sandbox.cleanup(...)` — worktree dir removed, branch preserved; defensive
+container rm), comments the outcome, and transits to its target (default
+`{ status: "done" }`). It runs at the project root (so it never sits inside the
+dir it removes) and is idempotent on a missing env:
 
-A **manual** terminal (a `task.done`/`task.cancel` RPC issued while no session is
-live — e.g. after a human-park) has no live handle to `release`, so the daemon
-calls `reap` only to clean up an env a prior step left on disk. By default `reap`
-refuses to discard uncommitted changes (the verb is rejected with
-`ENVIRONMENT_DIRTY`); pass `--force` (`autosk done -f` / `cancel -f`, or the
-TUI/GUI force-confirm prompt) to remove the env and discard them — the branch is
-always preserved.
+```ts
+steps: {
+  dev:     piAgent({ sandbox, firstMessageFile: ".../dev.md" }),
+  accept:  statusStep("human"),
+  cleanup: sandboxCleanupStep(sandbox),     // accept → cleanup → done
+},
+```
 
-The shipped [`worktreeIsolation()`](../daemon/extensions/worktree/README.md)
-provider runs each task in its own git worktree at
-`~/.autosk/worktrees/<slug>/<task-id>` on branch `autosk/<task-id>`. It **omits
-`release`** (keeping the checkout on disk across sibling/human-park steps is
-exactly the absence of teardown) and implements `reap` to remove the worktree on
-a terminal transition while **preserving the branch** (so the work survives for
-review/merge). It returns a handle **without** the execution seam, so the agent
-runs on the host. Attach it with `isolation: worktreeIsolation()`; a workflow
-without an `isolation` field runs every step in the project root (`tag:
-"none"`).
-
-The opt-in [`dockerIsolation({ image })`](../daemon/extensions/docker/README.md)
-provider (the `@autosk/docker` extension — not bootstrapped by default) goes a
-step further: it **composes** `worktreeIsolation()` for the filesystem **and**
-runs pi (plus every command it spawns) **inside a per-task Docker container** via
-the `exec` / `spawn` seam. The worktree is bind-mounted into the container 1:1,
-so edits still land on `autosk/<task-id>` on the host (review/merge unchanged);
-the daemon socket is mounted so `autosk_comment` / `autosk_task` work from inside
-the sandbox. It implements `release` (`docker stop`, keeping the container for a
-cheap resume) and `reap` (`docker rm -f` + the inner worktree removal, branch
-preserved). Attach it with `isolation: dockerIsolation({ image: "my-org/runtime:latest" })`;
-see the [package README](../daemon/extensions/docker/README.md) for the image
-requirements and options.
+A workflow author wires it into the graph wherever teardown should happen; a
+user can also route a parked task into it on demand
+(`autosk resume <id> --to cleanup`). A bare `autosk done`/`cancel` skips it and
+leaks the worktree (an accepted trade-off — the branch is always preserved, and
+no dirty-gate blocks a terminal flip).
 
 ## Driving a workflow from the CLI
 
@@ -416,7 +421,7 @@ Workflows come from code, so the CLI only *shows* them:
 
 ```bash
 autosk workflow list          # workflows registered by this project's extensions
-autosk workflow show <name>   # steps (KIND: agent | done|cancel|human), targets, isolation
+autosk workflow show <name>   # steps (KIND: agent | done|cancel|human), targets
 ```
 
 `workflow show` renders each step with a `KIND` column: `agent` for an inline
@@ -435,7 +440,7 @@ package the daemon installs on first run (see
 so every project can enroll into it with no per-project files:
 
 ```text
-dev ──▶ review ──▶ docs ──▶ validator ──▶ accept (human)
+dev ──▶ review ──▶ docs ──▶ validator ──▶ accept (human) ──▶ cleanup ──▶ done
  ▲        │                    │
  └────────┴────────────────────┘   (review→dev and validator→dev bounce-backs)
 ```
@@ -447,9 +452,16 @@ dev ──▶ review ──▶ docs ──▶ validator ──▶ accept (human)
 | `docs` | agent (`piAgent`) | documentation pass |
 | `validator` | agent (`piAgent`) | independent verification; can bounce back to `dev` |
 | `accept` | `statusStep("human")` | the engine parks here for final acceptance |
+| `cleanup` | agent (`sandboxCleanupStep`) | tears the worktree down (branch preserved), then transits to `done` |
 
-- **Isolation:** `worktreeIsolation()` — each task runs in its own git worktree,
-  so the project root must be a git repo.
+- **Sandbox:** each agent step runs in a per-task `worktreeSandbox()` (its own
+  git worktree on branch `autosk/<task-id>`), so the project root must be a git
+  repo. The `cleanup` step removes the worktree on the way to `done` — the human
+  resumes an accepted task into it (`autosk resume <id> --to cleanup`); routing
+  every terminal through it is what keeps a task from leaking its worktree now
+  that `done`/`cancel` are a raw status flip. A `feature-dev-cc` sibling drives
+  Claude Code instead of pi, and a `feature-dev-cc-docker` sibling swaps in
+  `dockerSandbox({ image })` to run the harness in a container.
 - **Visit cap:** `onTransit` rejects a bounce-back into `dev` once the task has
   entered `dev` 5 times (via `ctx.visits("dev")`), so a task that keeps failing
   review/validation parks for a human instead of looping forever. The count is
@@ -481,9 +493,10 @@ A minimal two-step flow with a human gate:
 // ~/.autosk/extensions/my-flow.ts
 import { statusStep, type AutoskAPI } from "@autosk/sdk";
 import { piAgent } from "@autosk/pi-agent";
-import { worktreeIsolation } from "@autosk/worktree";
+import { sandboxCleanupStep, worktreeSandbox } from "@autosk/sandbox";
 
 export default function (autosk: AutoskAPI) {
+  const sandbox = worktreeSandbox();   // a per-task git worktree the agent runs in
   autosk.registerWorkflow({
     name: "my-flow",
     firstStep: "dev",
@@ -491,15 +504,17 @@ export default function (autosk: AutoskAPI) {
       // The step key is the agent name; registering the workflow registers
       // its inline agents — there is no separate registerAgent call.
       dev: piAgent({
+        sandbox,
         model: "sonnet:high",
         firstMessageFile: new URL("./prompts/dev.md", import.meta.url).pathname,
       }),
       accept: statusStep("human"),
+      // Route terminals through cleanup so the worktree never leaks.
+      cleanup: sandboxCleanupStep(sandbox),
     },
     onTransit(ctx, to) {
       // gate, count, or comment here; throw to reject a transition.
     },
-    isolation: worktreeIsolation(),
   });
 }
 ```

@@ -4,13 +4,13 @@
  * (long-lived, stdio-streamed) — plan §4.2.
  *
  * The Bun stdio/abort plumbing (`LineDispatcher`, `readLines`, abort wiring, env
- * merge) now lives in `@autosk/sdk` so the engine and out-of-tree isolation
- * providers (e.g. `@autosk/docker`'s `docker exec` seam) share ONE
- * implementation. These thin wrappers add only the engine's default injection:
- * the child's cwd defaults to the session's `ctx.cwd` (project root or isolation
- * path) and the session's `AbortSignal` is wired so an abort / daemon shutdown
- * kills the child. Core has no pi knowledge — these are generic process helpers
- * the `@autosk/pi-agent` extension (P6) builds on to drive `pi --mode rpc`.
+ * merge) now lives in `@autosk/sdk` so the engine and a userspace sandbox library
+ * (e.g. `@autosk/sandbox`'s `docker run` wrapper) share ONE implementation. These
+ * thin wrappers add only the engine's default injection: the child's cwd defaults
+ * to the session's `ctx.cwd` (always the project root now — isolation is
+ * agent-owned) and the session's `AbortSignal` is wired so an abort / daemon
+ * shutdown kills the child. Core has no pi knowledge — these are generic process
+ * helpers the `@autosk/pi-agent` extension (P6) builds on to drive `pi --mode rpc`.
  */
 
 import {

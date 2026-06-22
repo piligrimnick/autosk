@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentRunContext } from "@autosk/sdk";
 
-import { autoskEnv, buildClaudeCommand, buildMcpConfig, claudeAgent, resolveAutoskdBin } from "../src/index.ts";
+import { autoskEnv, buildClaudeCommand, buildMcpConfig, claudeAgent } from "../src/index.ts";
 
 function fakeCtx(overrides: Partial<AgentRunContext> = {}): AgentRunContext {
   return {
@@ -99,66 +99,29 @@ describe("buildClaudeCommand", () => {
 });
 
 describe("buildMcpConfig", () => {
-  test("points the autosk stdio server at `autoskd mcp` with the autosk env baked in", () => {
-    const prevSock = process.env.AUTOSK_SOCK;
-    const prevBin = process.env.AUTOSKD_BIN;
-    process.env.AUTOSK_SOCK = "/tmp/autosk.sock";
-    process.env.AUTOSKD_BIN = "/bin/autoskd";
-    try {
-      const cfg = JSON.parse(buildMcpConfig(fakeCtx(), { transit: true }));
-      const server = cfg.mcpServers.autosk;
-      expect(server.type).toBe("stdio");
-      expect(server.command).toBe("/bin/autoskd");
-      expect(server.args).toEqual(["mcp"]);
-      expect(server.env).toEqual({
-        AUTOSK_CWD: "/repo/project",
-        AUTOSK_AGENT: "dev",
-        AUTOSK_SOCK: "/tmp/autosk.sock",
-        AUTOSK_MCP_TRANSIT: "1",
-      });
-    } finally {
-      if (prevSock === undefined) delete process.env.AUTOSK_SOCK;
-      else process.env.AUTOSK_SOCK = prevSock;
-      if (prevBin === undefined) delete process.env.AUTOSKD_BIN;
-      else process.env.AUTOSKD_BIN = prevBin;
-    }
+  test("emits a type:http server pointing at the per-session URL with the bearer", () => {
+    const cfg = JSON.parse(buildMcpConfig("http://host.docker.internal:45678", "tok-abc"));
+    const server = cfg.mcpServers.autosk;
+    expect(server.type).toBe("http");
+    expect(server.url).toBe("http://host.docker.internal:45678");
+    expect(server.headers).toEqual({ Authorization: "Bearer tok-abc" });
+    // No stdio command / args / env baked in any more.
+    expect(server.command).toBeUndefined();
+    expect(server.env).toBeUndefined();
   });
 
-  test("transit:false omits AUTOSK_MCP_TRANSIT (interactive mode)", () => {
-    const cfg = JSON.parse(buildMcpConfig(fakeCtx(), { transit: false }));
-    expect(cfg.mcpServers.autosk.env.AUTOSK_MCP_TRANSIT).toBeUndefined();
+  test("a loopback URL (no sandbox) is carried verbatim", () => {
+    const cfg = JSON.parse(buildMcpConfig("http://127.0.0.1:5000", "t"));
+    expect(cfg.mcpServers.autosk.url).toBe("http://127.0.0.1:5000");
   });
 });
 
 describe("autoskEnv", () => {
-  test("maps projectRoot → AUTOSK_CWD, step → AUTOSK_AGENT, and includes AUTOSK_SOCK", () => {
-    const prev = process.env.AUTOSK_SOCK;
-    process.env.AUTOSK_SOCK = "/tmp/d.sock";
-    try {
-      expect(autoskEnv(fakeCtx())).toEqual({
-        AUTOSK_CWD: "/repo/project",
-        AUTOSK_AGENT: "dev",
-        AUTOSK_SOCK: "/tmp/d.sock",
-      });
-    } finally {
-      if (prev === undefined) delete process.env.AUTOSK_SOCK;
-      else process.env.AUTOSK_SOCK = prev;
-    }
-  });
-});
-
-describe("resolveAutoskdBin", () => {
-  test("prefers $AUTOSKD_BIN, else process.execPath", () => {
-    const prev = process.env.AUTOSKD_BIN;
-    process.env.AUTOSKD_BIN = "/x/autoskd";
-    try {
-      expect(resolveAutoskdBin()).toBe("/x/autoskd");
-      delete process.env.AUTOSKD_BIN;
-      expect(resolveAutoskdBin()).toBe(process.execPath);
-    } finally {
-      if (prev === undefined) delete process.env.AUTOSKD_BIN;
-      else process.env.AUTOSKD_BIN = prev;
-    }
+  test("maps projectRoot → AUTOSK_CWD and step → AUTOSK_AGENT (no socket — the MCP tools are server-bound)", () => {
+    expect(autoskEnv(fakeCtx())).toEqual({
+      AUTOSK_CWD: "/repo/project",
+      AUTOSK_AGENT: "dev",
+    });
   });
 });
 

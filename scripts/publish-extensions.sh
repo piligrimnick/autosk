@@ -8,14 +8,14 @@
 # in dependency order so a consumer's `npm install @autosk/feature-dev` always
 # resolves:
 #
-#   @autosk/sdk  →  @autosk/worktree  →  @autosk/pi-agent  →  @autosk/feature-dev
+#   @autosk/sdk  →  @autosk/sandbox  →  @autosk/pi-agent  →  @autosk/feature-dev
 #
 # It also publishes the other shipped @autosk extensions, each after its deps:
 #   - `@autosk/claude-agent` (agent: drives Claude Code; deps @autosk/sdk).
-#   - `@autosk/docker` (Docker isolation provider; deps @autosk/sdk +
-#     @autosk/worktree).
+#   - `@autosk/sandbox` (userspace sandbox library: worktreeSandbox() /
+#     dockerSandbox() / sandboxCleanupStep(); deps @autosk/sdk).
 #   - `@autosk/feature-dev-cc` (the feature-dev workflow wired to the Claude Code
-#     agent; deps @autosk/sdk + @autosk/worktree + @autosk/claude-agent).
+#     agent; deps @autosk/sdk + @autosk/sandbox + @autosk/claude-agent).
 #   - `@autosk/merge-to-current` (a standalone workflow that merges a task branch
 #     into the project's current branch; deps @autosk/sdk + @autosk/pi-agent).
 # None of these are part of the first-run bootstrap (only @autosk/feature-dev is);
@@ -79,10 +79,9 @@ registry_has_version() {
 # free; it goes last.
 packages=(
   "daemon/sdk"
-  "daemon/extensions/worktree"
+  "daemon/extensions/sandbox"
   "daemon/extensions/pi-agent"
   "daemon/extensions/claude-agent"
-  "daemon/extensions/docker"
   "daemon/extensions/feature-dev"
   "daemon/extensions/feature-dev-cc"
   "daemon/extensions/merge-to-current"

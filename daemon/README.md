@@ -15,7 +15,7 @@ for the full design.
 ## Packages
 
 - **`sdk/`** — `@autosk/sdk`: the public, extension-facing types
-  (Task / Session / Workflow / Agent / Isolation / `AutoskAPI`), the pi-format
+  (Task / Session / Workflow / Agent / `AutoskAPI`), the pi-format
   transcript entry types, and the proto-v2 JSON-RPC wire types. The proto-v2
   types are the single source of truth that the Go (`internal/daemon/api`) and
   Tauri (`gui/src-tauri`) clients mirror.
@@ -39,9 +39,11 @@ for the full design.
   - **engine** (`src/engine/`) — the scheduler (a single event-driven scan + a
     global FIFO worker pool, `--workers`, shared across projects, plus a slow
     safety rescan), the session lifecycle, `ctx.transit` (onTransit validation →
-    atomic `task.json` commit → isolation acquire/release), the pi-format
-    transcript writer, the `AgentRunContext` (tasks/workflows/log/comment/exec/
-    spawn), steer/followup/abort routing, and crash recovery (interrupted
+    atomic `task.json` commit), the pi-format transcript writer, the
+    `AgentRunContext` (tasks/workflows/log/comment/exec/spawn/newMCPServer — the
+    per-session host MCP server is minted on run and closed by an engine
+    backstop on every settle), steer/followup/abort routing, and crash recovery
+    (interrupted
     sessions → `failed: daemon_restart`, task → `human`).
   - **JSON-RPC v2 server** (`src/rpc/`) — JSON-lines over UDS (default
     `~/.autosk/daemon.sock`, `$AUTOSK_SOCK`) plus an opt-in TCP transport with
@@ -49,12 +51,15 @@ for the full design.
     (`task-changed`, `session-event`, `project-changed`); `session.subscribe`
     replay-then-tail; and idle-shutdown.
 
-- **`extensions/worktree/`** — `@autosk/worktree`: the shipped **isolation
-  provider** `worktreeIsolation()` — per-task git-worktree isolation attachable
-  to any workflow (deterministic `~/.autosk/worktrees/<slug>/<task-id>` path on
-  branch `autosk/<task-id>`, branch-preserving terminal reap, dir-kept on
-  sibling/human-park, missing-dir re-allocation). See
-  [`extensions/worktree/README.md`](extensions/worktree/README.md).
+- **`extensions/sandbox/`** — `@autosk/sandbox`: the userspace **sandbox
+  library** — the structural `Sandbox` shape plus `worktreeSandbox()` /
+  `dockerSandbox({ image })` / `sandboxCleanupStep()`. Isolation is no longer an
+  engine/SDK concern: agents own the isolation they need by wrapping their
+  harness with a `Sandbox`, and teardown is a normal workflow step. Absorbs the
+  retired `@autosk/worktree` + `@autosk/docker` providers (byte-identical slug /
+  branch / container-name derivations, so an already-allocated worktree/branch
+  resolves to the same place). See
+  [`extensions/sandbox/README.md`](extensions/sandbox/README.md).
 
 - **`extensions/pi-agent/`** — `@autosk/pi-agent`: the shipped **agent**
   `piAgent({...})` that drives `pi --mode rpc` over JSON-lines stdio, mirrors
@@ -69,17 +74,21 @@ for the full design.
   [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude -p`
   headless stream-json) instead of `pi --mode rpc`. It mirrors Claude's stream
   entries into the autosk transcript 1:1 and exposes its transit / task / comment
-  tools through the self-contained `autoskd mcp` stdio MCP server (registered via
-  Claude's `--mcp-config`). Not provisioned by the first-run bootstrap — an
+  tools over the per-session host HTTP MCP server the engine mints for the run
+  (`ctx.newMCPServer()`, advertised to Claude via `--mcp-config type:"http"` with
+  a per-session bearer). The standalone `autoskd mcp` stdio server survives for
+  external use. Not provisioned by the first-run bootstrap — an
   opt-in alternative harness. See
   [`extensions/claude-agent/README.md`](extensions/claude-agent/README.md).
 
 - **`extensions/feature-dev/`** — `@autosk/feature-dev`: the **reference
-  workflow** `dev → review → docs → validator → accept` (with review→dev /
-  validator→dev bounce-backs, a `ctx.visits("dev")` visit cap, and
-  `worktreeIsolation()`), wired to four `@autosk/pi-agent` roles. It is published
-  to npm and provisioned by the daemon's first-run bootstrap, so every project
-  can enroll into it with no per-project files. See
+  workflow** `dev → review → docs → validator → accept (human) → cleanup → done`
+  (with review→dev / validator→dev bounce-backs and a `ctx.visits("dev")` visit
+  cap), wired to four `@autosk/pi-agent` roles. Each agent step runs in a per-task
+  `worktreeSandbox()`, and the `cleanup` step (`sandboxCleanupStep()`) tears the
+  worktree down (branch preserved) before `done`. It is published to npm and
+  provisioned by the daemon's first-run bootstrap, so every project can enroll
+  into it with no per-project files. See
   [`extensions/feature-dev/README.md`](extensions/feature-dev/README.md).
 
 ## Scripts

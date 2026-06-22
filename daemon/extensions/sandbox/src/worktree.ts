@@ -1,34 +1,31 @@
 /**
- * `@autosk/worktree` — the shipped `worktreeIsolation()` provider (plan §3.5).
+ * `worktreeSandbox()` — per-task git worktree workspace (plan §4).
  *
- * Ports v1's per-task git worktree isolation onto the v2
- * {@link IsolationProvider} contract. The engine
- * (`daemon/core/src/engine/session.ts`) calls `acquire` before scheduling an
- * isolated session (idempotently re-used across the run's steps) and `reap` on a
- * terminal transition (`done`/`cancel`). A worktree has nothing to "stop", so
- * this provider omits `release` entirely — keeping the dir across a step→step or
- * a human-park IS the absence of teardown. FAILURES ARE WRAPPED BY THE ENGINE
- * (`acquire` throw → `isolation_acquire_failed: <msg>`, `reap` throw →
- * `isolation_reap_failed: <msg>`), so this provider just throws descriptive
- * messages — it never parks or formats those prefixes itself.
- *
- * Deterministic mapping (byte-identical to the v1 Go/Rust slug so a worktree
- * allocated by either stack resolves to the same place):
+ * Replaces the retired `@autosk/worktree` `worktreeIsolation()` provider with a
+ * userspace {@link Sandbox} an agent wraps its harness with. The deterministic
+ * slug / path / branch derivations are BYTE-IDENTICAL to the old provider (and
+ * to v1's Go/Rust slug), so an already-allocated worktree/branch resolves to the
+ * same place:
  *
  * ```text
  * ~/.autosk/worktrees/<basename(canonRoot)>-<8hex(sha256(canonRoot))>/<task-id>
  * branch = autosk/<task-id>
  * ```
+ *
+ * As a host workspace there is nothing to `wrap` (the agent runs the harness on
+ * the host at the worktree path) and nothing to `stop`; `endpointFor` is plain
+ * loopback. `cleanup` removes the worktree dir but PRESERVES the branch, gated
+ * on `force` (a dirty checkout is left in place when `force` is false).
  */
 
 import { createHash } from "node:crypto";
 import { mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
-import type { IsolationHandle, IsolationProvider, IsolationReapResult } from "@autosk/sdk";
+import type { Sandbox, SandboxCleanupResult, TaskIdentity } from "./types.ts";
 
-/** Options for {@link worktreeIsolation}. */
-export interface WorktreeIsolationOptions {
+/** Options for {@link worktreeSandbox}. */
+export interface WorktreeSandboxOptions {
   /**
    * Home directory the worktree tree lives under (`<home>/.autosk/worktrees/…`).
    * Defaults to `process.env.HOME`. Injected by tests so they never touch the
@@ -39,35 +36,19 @@ export interface WorktreeIsolationOptions {
   gitBin?: string;
 }
 
-/** The provider tag the registry/`workflow.get` renders for an isolated workflow. */
-export const WORKTREE_TAG = "worktree";
-
-/** Provider-internal bookkeeping carried on every {@link IsolationHandle}. */
-interface WorktreeMeta extends Record<string, unknown> {
-  branch: string;
-  /** The canonical project root the worktree was checked out from. */
-  projectRoot: string;
-}
-
 /**
- * Builds the shipped worktree {@link IsolationProvider}. Attach it to a workflow
- * via `isolation: worktreeIsolation()` (plan §3.6). `acquire` allocates (or
- * re-uses / re-allocates) the per-task worktree and hands the engine its path as
- * `ctx.cwd`; `reap` removes the dir on a terminal transition but PRESERVES the
- * `autosk/<task>` branch. There is no `release`: the dir is simply kept across
- * step→step and human-park (the env is reused on the next `acquire`).
+ * Builds a per-task git worktree {@link Sandbox}. Pass it to an agent step (e.g.
+ * `dev: claudeAgent({ sandbox: worktreeSandbox() })`) and wire a
+ * `sandboxCleanupStep(sandbox)` into the workflow's terminal path.
  */
-export function worktreeIsolation(opts: WorktreeIsolationOptions = {}): IsolationProvider {
+export function worktreeSandbox(opts: WorktreeSandboxOptions = {}): Sandbox {
   const gitBin = opts.gitBin ?? "git";
 
   return {
-    tag: WORKTREE_TAG,
-
-    async acquire({ projectRoot, taskId }): Promise<IsolationHandle> {
+    async workspace({ projectRoot, taskId }: TaskIdentity): Promise<{ cwd: string }> {
       const canon = canonRoot(projectRoot);
       const path = pathFor(canon, taskId, opts.home);
       const branch = branchFor(taskId);
-      const meta: WorktreeMeta = { branch, projectRoot: canon };
 
       await ensureGitAvailable(gitBin);
 
@@ -75,7 +56,7 @@ export function worktreeIsolation(opts: WorktreeIsolationOptions = {}): Isolatio
         // Present already (a prior step kept it, or an external pre-existing dir):
         // verify it is a healthy worktree OF THIS repo, else it is stranded.
         await verifyHealthy(gitBin, canon, path);
-        return { cwd: path, meta };
+        return { cwd: path };
       }
 
       // Missing dir → (re)allocate on the existing branch (v1 "missing worktree
@@ -95,10 +76,18 @@ export function worktreeIsolation(opts: WorktreeIsolationOptions = {}): Isolatio
         const r = await runGit(gitBin, canon, ["worktree", "add", path, "-b", branch]);
         if (r.code !== 0) throw new Error(`worktree add (new branch ${branch}): ${gitErr(r)}`);
       }
-      return { cwd: path, meta };
+      return { cwd: path };
     },
 
-    async reap({ projectRoot, taskId }, { force }): Promise<IsolationReapResult> {
+    // A host workspace runs the harness on the host at the worktree path: there
+    // is nothing to wrap and nothing to stop.
+    wrap: (cmd: string[]): string[] => cmd,
+
+    endpointFor: (port: number): string => `http://127.0.0.1:${port}`,
+
+    stop: async (): Promise<void> => {},
+
+    async cleanup({ projectRoot, taskId }: TaskIdentity, { force }): Promise<SandboxCleanupResult> {
       const canon = canonRoot(projectRoot);
       const path = pathFor(canon, taskId, opts.home);
       await ensureGitAvailable(gitBin);
@@ -108,7 +97,7 @@ export function worktreeIsolation(opts: WorktreeIsolationOptions = {}): Isolatio
 }
 
 // ---------------------------------------------------------------------------
-// Deterministic path / branch derivation (byte-identical to v1).
+// Deterministic path / branch derivation (byte-identical to v1 / @autosk/worktree).
 // ---------------------------------------------------------------------------
 
 /** Canonical branch name `autosk/<taskID>`. */
@@ -139,7 +128,7 @@ export function slugFor(canon: string): string {
 }
 
 /** Symlink-resolved, absolutised project root (v1 `canonRoot`). */
-function canonRoot(projectRoot: string): string {
+export function canonRoot(projectRoot: string): string {
   const abs = resolve(projectRoot);
   try {
     return realpathSync(abs);
@@ -172,8 +161,8 @@ async function verifyHealthy(gitBin: string, canon: string, path: string): Promi
 }
 
 /**
- * The terminal-cleanup core behind {@link IsolationProvider.reap} (session-free,
- * keyed by identity).
+ * The terminal-cleanup core behind {@link Sandbox.cleanup} (session-free, keyed
+ * by identity).
  *
  * Removes the worktree dir while PRESERVING its branch, gated on `force`:
  * `force:false` leaves a dirty checkout in place and reports `{dirty:true}` so
@@ -186,7 +175,7 @@ async function cleanupTerminal(
   canon: string,
   path: string,
   force: boolean,
-): Promise<IsolationReapResult> {
+): Promise<SandboxCleanupResult> {
   if (!existsPath(path)) {
     // Nothing on disk; best-effort clear of any stale git registration.
     if (canon !== "" && (await isGitRepo(gitBin, canon))) await pruneWorktrees(gitBin, canon);
@@ -281,7 +270,7 @@ async function gitCommonDir(gitBin: string, cwd: string): Promise<string> {
 
 /**
  * Caches a SUCCESSFUL `<gitBin> --version` per binary (a failure is re-checked,
- * never cached). Keyed by `gitBin` so a second provider built with a different
+ * never cached). Keyed by `gitBin` so a second sandbox built with a different
  * binary is validated independently instead of short-circuiting on the first.
  */
 const gitAvailableByBin = new Map<string, boolean>();
