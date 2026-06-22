@@ -1,6 +1,15 @@
 # Docker isolation for `feature-dev-cc` (Claude Code) — MCP-over-socket plan
 
-**Status:** plan (analysis only; no code changes yet).
+> **SUPERSEDED (2026-06-22)** by
+> [`20260622-Isolation-Abolition.md`](20260622-Isolation-Abolition.md). That plan
+> drops the `IsolationProvider` abstraction (and this plan's `hostEndpoint` seam)
+> entirely: agents own their isolation, the Docker container becomes a per-session
+> `docker run -i --rm`, and cleanup is a normal workflow step. The per-session
+> host-hosted HTTP MCP server (`ctx.newMCPServer()`) is the one idea carried
+> forward — but the agent (not an engine seam) rewrites the URL host. Kept for
+> historical context / PoC results only.
+
+**Status:** SUPERSEDED — see banner above (analysis only; no code changes yet).
 **Date:** 2026-06-19.
 **Owners:** autosk core.
 **Predecessor:** [`20260618-Docker-Isolation.md`](20260618-Docker-Isolation.md) —
