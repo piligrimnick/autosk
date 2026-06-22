@@ -38,6 +38,10 @@ registers those agents — there is no separate agent registration.
 - **Sandbox:** `worktreeSandbox()` — each task runs in its own git worktree, torn
   down by the `cleanup` step (route terminals through it so a task never leaks
   its worktree now that `done`/`cancel` are a raw flip).
+- **Permissions:** every agent step runs with `dangerouslySkipPermissions: true`
+  (`--dangerously-skip-permissions`) — the run is unattended (a headless
+  permission prompt would abort the turn) and isolated in its per-task worktree
+  sandbox, so the worktree is the safety boundary.
 - **Visit cap:** `onTransit` rejects a bounce-back into `dev` once the task has
   already entered `dev` `DEV_VISIT_CAP` (5) times — the 6th `dev` entry is
   rejected (via `ctx.visits("dev")`), so a task that keeps failing review/

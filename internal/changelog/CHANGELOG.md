@@ -30,8 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   → accept` cycle with `review→dev`/`validator→dev` bounce-backs, a `dev`
   visit-cap guard, and per-task worktree isolation — but every agent step is an
   inline `@autosk/claude-agent` role (driving `claude -p`) instead of an
-  `@autosk/pi-agent` role. Not bootstrapped — install with `autosk ext add
-  npm:@autosk/feature-dev-cc` (or from a local checkout).
+  `@autosk/pi-agent` role. Each agent step runs with
+  `dangerouslySkipPermissions: true` (`--dangerously-skip-permissions`) since the
+  unattended run is isolated in its per-task worktree sandbox. Not bootstrapped —
+  install with `autosk ext add npm:@autosk/feature-dev-cc` (or from a local
+  checkout).
 - **Docker isolation provider (`@autosk/docker`).** A new opt-in
   `dockerIsolation({ image })` isolation provider runs pi (and every command it
   spawns) **inside a per-task Docker container** — a real sandbox — by composing

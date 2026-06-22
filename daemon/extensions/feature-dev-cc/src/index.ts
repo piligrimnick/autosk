@@ -73,11 +73,14 @@ export function featureDevCcWorkflow(opts: FeatureDevCcWorkflowOptions = {}): Wo
     steps: {
       // Agents are inline: the step key (dev/review/docs/validator) IS the
       // agent name. Each is an `@autosk/claude-agent` role running its harness
-      // in the per-task `sandbox`.
-      dev: claudeAgent({ sandbox, firstMessage: readPrompt("dev") }),
-      review: claudeAgent({ sandbox, effort: "xhigh", firstMessage: readPrompt("review") }),
-      docs: claudeAgent({ sandbox, firstMessage: readPrompt("docs") }),
-      validator: claudeAgent({ sandbox, firstMessage: readPrompt("validator") }),
+      // in the per-task `sandbox`. `dangerouslySkipPermissions` skips ALL Claude
+      // permission prompts (`--dangerously-skip-permissions`): the run is
+      // unattended (a headless prompt would abort it) and isolated in a per-task
+      // worktree sandbox, so the worktree IS the safety boundary.
+      dev: claudeAgent({ sandbox, firstMessage: readPrompt("dev"), dangerouslySkipPermissions: true }),
+      review: claudeAgent({ sandbox, effort: "xhigh", firstMessage: readPrompt("review"), dangerouslySkipPermissions: true }),
+      docs: claudeAgent({ sandbox, firstMessage: readPrompt("docs"), dangerouslySkipPermissions: true }),
+      validator: claudeAgent({ sandbox, firstMessage: readPrompt("validator"), dangerouslySkipPermissions: true }),
       accept: statusStep("human"),
       // Teardown as a normal step: removes the worktree (branch preserved), then
       // transits to `done`.

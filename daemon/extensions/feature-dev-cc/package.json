@@ -1,6 +1,6 @@
 {
   "name": "@autosk/feature-dev-cc",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "feature-dev-cc (dev → review → docs → validator → accept) wired to @autosk/claude-agent roles and an @autosk/sandbox worktree + cleanup step — use your Claude Code",
   "license": "MIT",
   "author": "wierdbytes",
