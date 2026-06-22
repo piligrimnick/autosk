@@ -209,6 +209,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `autosk` calls from inside a **worktree-isolated** run (the tools above, or a
   bare `autosk` in a shell) resolve the task's own project instead of walking up
   from the throwaway worktree to the wrong (or no) `.autosk/`.
+- **Agent-owned isolation (`@autosk/sandbox`).** A new bootstrapped sandbox
+  library exposes a structural `Sandbox` shape plus `worktreeSandbox()`,
+  `dockerSandbox({ image })`, and `sandboxCleanupStep()` — agents wrap their own
+  harness with a `Sandbox` and tear it down through a normal `cleanup` workflow
+  step (worktree dir removed, branch preserved; defensive container `rm`). The
+  engine mints a per-session host HTTP MCP server via `ctx.newMCPServer()`
+  (`{ url, port, token, close }`, bound `0.0.0.0` so a container reaches it over
+  `host.docker.internal`, guarded by a per-session bearer + ephemeral port and
+  closed by an engine backstop on every settle), and a `feature-dev-cc-docker`
+  workflow runs every agent step in a per-task `dockerSandbox({ image })`
+  (ask-709e5a).
 
 ### Changed
 - **Isolation providers dropped from the GUI extension browser.** The shipped
@@ -293,6 +304,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workflow seeding (`feature-dev` is provisioned once, globally, on the daemon's
   first run — see **first-run bootstrap** — and is then available to every
   project).
+- **Isolation is now a userspace concern (agent-owned sandboxes).** The engine
+  no longer acquires/releases/reaps an isolation env: `ctx.cwd` is always the
+  project root, `task.done`/`task.cancel` are pure status flips (no dirty-gate),
+  and the reference workflows (`feature-dev`, `feature-dev-cc`) pass a
+  `worktreeSandbox()` to each agent step and route terminals through a `cleanup`
+  step. claude-agent now reaches its transit/task/comment tools over the
+  per-session HTTP MCP server (`--mcp-config type:"http"`) instead of the stdio
+  `autoskd mcp` agent path (the standalone subcommand survives for external use),
+  and pi-agent uses the same HTTP tool surface only inside a thin docker sandbox
+  (host/worktree pi keeps its `@autosk/pi-tools` path) (ask-709e5a).
 
 ### Removed
 - **agents (inline-step redesign):** the `autosk agent list/show` CLI, the
@@ -327,8 +348,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `$AUTOSK_BUNDLED_EXTENSIONS` env override, and the `scripts/bundle-extensions.sh`
   bundler — the reference `feature-dev` workflow is now an npm package the daemon
   installs on first run (see **first-run bootstrap**).
-
-### Fixed
+- **isolation providers + the dirty-gate.** The `@autosk/worktree` and
+  `@autosk/docker` provider packages, the SDK `IsolationProvider` /
+  `IsolationHandle` / `Isolation*Options` / `IsolationReapResult` contracts and
+  `WorkflowDefinition.isolation`, the `isolation` field on `WorkflowInfo`
+  (`workflow show` + the lazy TUI `[wt]` chip + the GUI), and the `-f/--force`
+  flag on `autosk done`/`cancel` (now an unknown-flag error) together with its
+  lazy TUI / GUI force-confirm prompt are all gone — superseded by
+  `@autosk/sandbox` (see Added). The proto-v2 `ENVIRONMENT_DIRTY` (1005) error
+  code is reserved-but-retired and no longer emitted (ask-709e5a).
 - **GUI (iPhone compact layout): on-screen keyboard handling.** iOS WebKit
   (Safari / the Tauri WKWebView) ignores the `interactive-widget=resizes-content`
   viewport hint the compact layout relied on, so the keyboard overlaid the
