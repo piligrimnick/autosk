@@ -1,6 +1,6 @@
 {
   "name": "@autosk/claude-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "autosk extension that drives Claude Code (`claude -p` headless stream-json) as an agent (kickback loop, an autosk MCP server for transit/task/comment).",
   "license": "MIT",
   "author": "wierdbytes",

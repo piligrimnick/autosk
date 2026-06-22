@@ -1,6 +1,6 @@
 {
   "name": "@autosk/pi-tools",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "pi extension exposing the autosk management tools (autosk_task / autosk_comment) for AI agents driving the autosk daemon.",
   "license": "MIT",
   "author": "wierdbytes",

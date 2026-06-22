@@ -1,6 +1,6 @@
 {
   "name": "@autosk/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Public extension-facing types for autoskd v2: Task / Session / Workflow / Agent / Isolation / AutoskAPI, pi-format transcript entries, and proto-v2 wire types.",
   "license": "MIT",
   "author": "wierdbytes",
