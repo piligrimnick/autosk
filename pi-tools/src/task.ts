@@ -3,6 +3,7 @@ import { type Static, Type } from "typebox";
 import { type Component, Text, truncateToWidth } from "@earendil-works/pi-tui";
 
 import { AutoskCliError, runAutoskJson, type RunOptions } from "./cli.ts";
+import { mcpCall, mcpEnabled } from "./mcp.ts";
 import {
 	buildTaskCreateArgv,
 	buildTaskListArgv,
@@ -128,6 +129,9 @@ async function executeTaskTool(
 	signal: AbortSignal | undefined,
 	ctx: ExtensionContext,
 ) {
+	// Transport seam: in a thin sandbox (AUTOSK_MCP_URL set) route through the
+	// per-session HTTP MCP server; on the host fall back to the `autosk` CLI.
+	if (mcpEnabled()) return mcpCall(DOMAIN, params, signal);
 	const args: TaskArgs = params.args ?? {};
 	const runOptions: RunOptions = { cwd: ctx.cwd, signal };
 	const action = params.action;
