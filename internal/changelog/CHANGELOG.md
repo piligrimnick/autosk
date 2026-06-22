@@ -197,11 +197,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scripts/publish-extensions.sh` (ask-305572, ask-e36027).
 - **`@autosk/pi-tools` (new pi extension):** the agent-facing autosk management
   tools — `autosk_task` (create / update / show / list) and `autosk_comment`
-  (add / list) — shipped as a standalone, npm-publishable pi extension over the
-  `autosk --json` CLI. Install it in pi (`~/.pi/agent/settings.json`) to give an
-  interactive or workflow agent a structured task/comment surface. It ships no
-  transition tool: a workflow step still records its transition through the
-  in-process `autosk_transit` channel.
+  (add / list) — shipped as a standalone, npm-publishable pi extension. It is
+  **transport-aware**: when the autosk pi-agent runs pi in a thin sandbox it sets
+  `AUTOSK_MCP_URL`/`AUTOSK_MCP_TOKEN` and the tools POST to the per-session HTTP
+  MCP server; otherwise they shell out to the `autosk --json` CLI. Install it in
+  pi (`~/.pi/agent/settings.json`) to give an interactive or workflow agent a
+  structured task/comment surface. It ships no transition tool: a workflow step
+  still records its transition through the in-process `autosk_transit` channel.
 - **`AUTOSK_CWD` project-selector override:** the `autosk` CLI now honors
   `$AUTOSK_CWD` as the project root for every verb (falling back to the working
   directory). `@autosk/pi-agent` sets it — to the canonical project root, also
@@ -217,9 +219,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine mints a per-session host HTTP MCP server via `ctx.newMCPServer()`
   (`{ url, port, token, close }`, bound `0.0.0.0` so a container reaches it over
   `host.docker.internal`, guarded by a per-session bearer + ephemeral port and
-  closed by an engine backstop on every settle), and a `feature-dev-cc-docker`
-  workflow runs every agent step in a per-task `dockerSandbox({ image })`
-  (ask-709e5a).
+  closed by an engine backstop on every settle); `@autosk/feature-dev-docker`
+  runs every pi agent step in a per-task `dockerSandbox({ image })` (ask-709e5a).
+- **`@autosk/feature-dev-docker` (Docker variant of feature-dev).** A new package
+  registers the `feature-dev-docker` workflow: the shipped `featureDevWorkflow()`
+  pi cycle with every agent step in a per-task `dockerSandbox` (the
+  `ghcr.io/wierdbytes/pi-runtime` image). pi runs THIN — the agent injects only the
+  ack-only `autosk_transit` tool and the transport-aware `@autosk/pi-tools` POSTs
+  `autosk_task`/`autosk_comment` to the per-session host HTTP MCP server over
+  `host.docker.internal` (no `autosk` CLI / socket in the image) — and it
+  bind-mounts the host `~/.pi` (provider auth) + the per-task project `.git` (so an
+  in-container git worktree resolves its commondir). Install with `autosk ext add
+  npm:@autosk/feature-dev-docker`.
+- **Thin operator docker images (`pi-runtime` / `claude-runtime`).** Two thin
+  images `dockerSandbox({ image })` runs ship under the agent packages
+  (`daemon/extensions/pi-agent/docker/` → `ghcr.io/wierdbytes/pi-runtime`,
+  `daemon/extensions/claude-agent/docker/` → `ghcr.io/wierdbytes/claude-runtime`):
+  the harness (`pi` / `claude`) + the Go/Bun/git/make/golangci-lint/Node toolchain,
+  arbitrary-uid-safe, with no `autosk`/`autoskd`/socat. `scripts/publish-extensions.sh`
+  builds + pushes them multi-arch to GHCR alongside the npm packages (`--no-images`
+  to skip). The claude image ships `export-claude-credentials.sh` (bridge the macOS
+  Keychain `Claude Code-credentials` OAuth token into a file the Linux `claude`
+  reads); the Claude `dockerSandbox` workflow itself is deferred.
 
 ### Changed
 - **Isolation providers dropped from the GUI extension browser.** The shipped
@@ -311,9 +332,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `worktreeSandbox()` to each agent step and route terminals through a `cleanup`
   step. claude-agent now reaches its transit/task/comment tools over the
   per-session HTTP MCP server (`--mcp-config type:"http"`) instead of the stdio
-  `autoskd mcp` agent path (the standalone subcommand survives for external use),
-  and pi-agent uses the same HTTP tool surface only inside a thin docker sandbox
-  (host/worktree pi keeps its `@autosk/pi-tools` path) (ask-709e5a).
+  `autoskd mcp` agent path (the standalone subcommand survives for external use).
+  pi-agent now injects ONLY the ack-only `autosk_transit` tool and relies on the
+  single, transport-aware `@autosk/pi-tools` for `autosk_task`/`autosk_comment`:
+  under a thin docker sandbox the agent sets `AUTOSK_MCP_URL`/`AUTOSK_MCP_TOKEN`
+  so pi-tools POSTs to the per-session HTTP MCP server, otherwise pi-tools shells
+  out to the `autosk` CLI — so the in-repo `pi-mcp-extension.ts` duplicate was
+  removed (ask-709e5a).
 
 ### Removed
 - **agents (inline-step redesign):** the `autosk agent list/show` CLI, the
