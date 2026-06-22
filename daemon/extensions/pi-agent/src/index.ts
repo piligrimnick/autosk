@@ -73,18 +73,19 @@ export interface PiAgentOptions {
    * When set the agent resolves the per-task workspace and wraps the `pi` argv;
    * `onAbort` calls `sandbox.stop`.
    *
-   * The tool surface is chosen by `sandbox.thin`:
+   * The agent ALWAYS injects only the ack-only `autosk_transit` tool
+   * (`pi-transit-extension.ts`); `autosk_task` / `autosk_comment` come from the
+   * single, transport-aware `@autosk/pi-tools` extension pi loads from its own
+   * config. `sandbox.thin` only chooses pi-tools' TRANSPORT:
    *  - **thin** (a container with no `autosk` CLI / host FS, e.g.
    *    `dockerSandbox`): mint a per-session HTTP MCP server and inject its
    *    endpoint (`AUTOSK_MCP_URL` / `AUTOSK_MCP_TOKEN`, the URL rewritten via
-   *    `sandbox.endpointFor(port)`) + load the in-repo http pi-extension
-   *    (transit/task/comment as POSTs), so no `autosk` shell-out is needed in the
-   *    container;
+   *    `sandbox.endpointFor(port)`) so `@autosk/pi-tools` POSTs task/comment to
+   *    the host MCP server — no `autosk` shell-out is needed in the container;
    *  - **not thin** (host/worktree, or the `mountSocket` docker escape hatch):
-   *    keep the proven pi-tools + transit-extension path (`autosk` is on PATH /
-   *    reached over the mounted socket).
+   *    no MCP env, so `@autosk/pi-tools` shells out to `autosk` on PATH.
    *
-   * When unset, `pi` runs on the host at `ctx.cwd` with the pi-tools path.
+   * When unset, `pi` runs on the host at `ctx.cwd` (pi-tools' CLI path).
    */
   sandbox?: AgentSandbox;
 }
@@ -116,11 +117,13 @@ export interface AgentSandbox {
   stop(id: SandboxId): Promise<void>;
 }
 
-/** The injected pi extension that registers the `autosk_transit` tool (off-docker path). */
+/**
+ * The injected pi extension that registers the ack-only `autosk_transit` tool.
+ * This is the ONLY tool the agent injects — `autosk_task` / `autosk_comment` come
+ * from the transport-aware `@autosk/pi-tools` extension pi loads from its config
+ * (MCP when `AUTOSK_MCP_URL` is set under a thin sandbox, else the `autosk` CLI).
+ */
 const TRANSIT_EXTENSION_PATH = fileURLToPath(new URL("./pi-transit-extension.ts", import.meta.url));
-
-/** The injected pi extension that registers transit/task/comment as HTTP MCP POSTs (sandbox path). */
-const MCP_EXTENSION_PATH = fileURLToPath(new URL("./pi-mcp-extension.ts", import.meta.url));
 
 /** Per-session driver registry so steer/followup/abort reach the live pi. */
 const liveSessions = new Map<string, PiDriver>();
@@ -157,15 +160,19 @@ export function piAgent(opts: PiAgentOptions = {}): AgentDefinition {
       let mcp: Awaited<ReturnType<AgentRunContext["newMCPServer"]>> | null = null;
       let env = autoskEnv(ctx);
       if (thin) {
+        // Mint the per-session MCP server and hand its endpoint to the in-container
+        // `@autosk/pi-tools` (which routes task/comment through it); the agent still
+        // injects only the ack-only transit tool.
         mcp = await ctx.newMCPServer();
         env = { ...env, AUTOSK_MCP_URL: opts.sandbox!.endpointFor(mcp.port), AUTOSK_MCP_TOKEN: mcp.token };
       }
-      const cmd = buildPiCommand(opts, { mcpHttp: thin });
-      // The injected autosk pi-extension is a HOST file passed to `pi -e`; a
+      const cmd = buildPiCommand(opts);
+      // The injected transit pi-extension is a HOST file passed to `pi -e`; a
       // container can't see the host FS, so a sandbox must bind-mount it (identical
       // path) for `pi -e <path>` to resolve. A host/worktree `wrap` ignores roFiles.
-      const extPath = thin ? MCP_EXTENSION_PATH : TRANSIT_EXTENSION_PATH;
-      const argv = opts.sandbox ? opts.sandbox.wrap(cmd, { cwd: ws.cwd, env, id, roFiles: [extPath] }) : cmd;
+      const argv = opts.sandbox
+        ? opts.sandbox.wrap(cmd, { cwd: ws.cwd, env, id, roFiles: [TRANSIT_EXTENSION_PATH] })
+        : cmd;
       const child = ctx.spawn(argv, { cwd: ws.cwd, env });
       const driver = new PiDriver(child, {
         onMessage: (m) => ctx.log.message(m),
@@ -187,6 +194,13 @@ export function piAgent(opts: PiAgentOptions = {}): AgentDefinition {
       } finally {
         liveSessions.delete(ctx.session.id);
         await driver.shutdown().catch(() => {});
+        // A persistent `pi --mode rpc` does not exit on the driver shutdown alone
+        // (the `docker run` client is killed but the `--rm` container can linger),
+        // so stop the sandbox process tree too. Best-effort; the next step's
+        // workspace() also force-removes a stale container as a backstop.
+        if (opts.sandbox && ctx.mode === "task") {
+          await opts.sandbox.stop(id).catch(() => {});
+        }
         if (mcp) await mcp.close().catch(() => {});
       }
     },
@@ -350,18 +364,17 @@ export function autoskEnv(ctx: AgentRunContext): Record<string, string> {
  * transit is unavailable in an interactive session, so the model must not be
  * offered a tool that would throw (plan §5, §9).
  */
-export function buildPiCommand(opts: PiAgentOptions, flags: { interactive?: boolean; mcpHttp?: boolean } = {}): string[] {
+export function buildPiCommand(opts: PiAgentOptions, flags: { interactive?: boolean } = {}): string[] {
   const bin = opts.piBin ?? process.env.AUTOSK_PI_BIN ?? "pi";
   const args = [bin, "--mode", "rpc"];
   if (opts.model) args.push("--model", opts.model);
   if (opts.thinking) args.push("--thinking", opts.thinking);
-  // Inject the autosk tool surface first so it is always available — except in
-  // interactive (chat) mode, where transit is not offered. Under a THIN sandbox
-  // (`mcpHttp`) the container has no `autosk`, so load the http pi-extension
-  // (transit + task + comment as MCP POSTs); otherwise (host/worktree, or the
-  // mountSocket docker escape hatch) load the transit-only extension and rely on
-  // the globally-installed @autosk/pi-tools for task/comment.
-  if (!flags.interactive) args.push("-e", flags.mcpHttp ? MCP_EXTENSION_PATH : TRANSIT_EXTENSION_PATH);
+  // Inject the ack-only `autosk_transit` tool so it is always available — except
+  // in interactive (chat) mode, where transit is not offered. `autosk_task` /
+  // `autosk_comment` are NOT injected here: the transport-aware @autosk/pi-tools
+  // extension pi loads from its config provides them (MCP under a thin sandbox
+  // when AUTOSK_MCP_URL is set, else the `autosk` CLI).
+  if (!flags.interactive) args.push("-e", TRANSIT_EXTENSION_PATH);
   for (const ext of opts.piExtensions ?? []) args.push("-e", ext);
   for (const skill of opts.piSkills ?? []) args.push("--skill", skill);
   args.push(...(opts.extraArgs ?? []));

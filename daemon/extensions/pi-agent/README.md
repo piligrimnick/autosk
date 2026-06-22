@@ -118,31 +118,33 @@ package's `tsc` typecheck.
 
 ## Tool surface under a sandbox
 
-The `sandbox?` option (a `Sandbox` from `@autosk/sandbox`, or any structural
-sandbox) decides where the harness runs AND which tool surface pi gets:
+The agent ALWAYS injects only the ack-only `autosk_transit` extension;
+`autosk_task` / `autosk_comment` come from the single, **transport-aware**
+[`@autosk/pi-tools`](https://www.npmjs.com/package/@autosk/pi-tools) extension pi
+loads from its own config. The `sandbox?` option (a `Sandbox` from
+`@autosk/sandbox`, or any structural sandbox) decides where the harness runs AND
+which TRANSPORT pi-tools uses:
 
 - **host / `worktreeSandbox`** (not thin): pi runs on the host at the worktree
-  (`~/.autosk/worktrees/<slug>/<task>`), keeping the proven path — the injected
-  `autosk_transit` extension for transitions plus the pi-installed
-  [`@autosk/pi-tools`](https://www.npmjs.com/package/@autosk/pi-tools) for
-  `autosk_task` / `autosk_comment` (which shell out to `autosk`). The daemon sets
-  **`AUTOSK_CWD`** (= `ctx.projectRoot`) so those calls resolve the original
-  project, not the worktree.
-- **`dockerSandbox`** (thin — `sandbox.thin === true`): the image has no `autosk`,
-  so pi instead loads the in-repo `pi-mcp-extension.ts` (transit + task + comment
-  as POSTs to the per-session HTTP MCP server minted by `ctx.newMCPServer()`). The
-  agent injects `AUTOSK_MCP_URL` (rewritten to `host.docker.internal` via
-  `sandbox.endpointFor(port)`) + `AUTOSK_MCP_TOKEN`, and the sandbox bind-mounts
-  the extension file so `pi -e <path>` resolves inside the container. (The
-  `mountSocket` escape hatch keeps the pi-tools path over a mounted daemon socket
-  instead.)
+  (`~/.autosk/worktrees/<slug>/<task>`); no MCP env is set, so `@autosk/pi-tools`
+  shells out to the `autosk` CLI. The daemon sets **`AUTOSK_CWD`**
+  (= `ctx.projectRoot`) so those calls resolve the original project, not the
+  worktree.
+- **`dockerSandbox`** (thin — `sandbox.thin === true`): the agent mints a
+  per-session HTTP MCP server (`ctx.newMCPServer()`) and injects
+  `AUTOSK_MCP_URL` (rewritten to `host.docker.internal` via
+  `sandbox.endpointFor(port)`) + `AUTOSK_MCP_TOKEN`, so the same
+  `@autosk/pi-tools` POSTs `autosk_task`/`autosk_comment` to it instead of
+  shelling out — the image needs neither `autosk` nor a mounted socket. The
+  sandbox bind-mounts the injected transit extension so `pi -e <path>` resolves
+  inside the container.
 
 ## Exports
 
 - `piAgent(options)` → `AgentDefinition`
-- `buildPiCommand(options, { interactive?, mcpHttp? })` (the `interactive` flag
-  skips the injected transit extension; `mcpHttp` swaps the transit-only extension
-  for the http `pi-mcp-extension.ts` under a thin sandbox), `PiDriver`,
+- `buildPiCommand(options, { interactive? })` (the `interactive` flag skips the
+  injected transit extension; task/comment always come from `@autosk/pi-tools`),
+  `PiDriver`,
   `parseTarget`, the prompt renderers
   (`renderInitialPrompt`, `kickbackMessage`, `rejectionMessage`, `targetLabels`)
   — exported for tooling / tests.

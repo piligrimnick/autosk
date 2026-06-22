@@ -285,10 +285,10 @@ describe("dockerSandbox — unit (argv / naming)", () => {
     const argv = sb.wrap(["pi", "--mode", "rpc"], {
       cwd: "/wt",
       id,
-      roFiles: ["/host/ext/pi-mcp-extension.ts"],
+      roFiles: ["/host/ext/pi-transit-extension.ts"],
     });
     // The extension file is bind-mounted at its identical path, read-only.
-    const i = argv.indexOf("/host/ext/pi-mcp-extension.ts:/host/ext/pi-mcp-extension.ts:ro");
+    const i = argv.indexOf("/host/ext/pi-transit-extension.ts:/host/ext/pi-transit-extension.ts:ro");
     expect(i).toBeGreaterThan(0);
     expect(argv[i - 1]).toBe("-v");
     // ...and it comes before the image + command.
@@ -318,6 +318,19 @@ describe("dockerSandbox — cleanup composition (real git, fake docker)", () => 
     expect(fd.lines().some((l) => l.startsWith(`rm -f ${name}`))).toBe(true);
   });
 
+  test("workspace force-removes a stale container (deterministic name is reused across steps)", async () => {
+    if (!gitOk) return;
+    const fd = withFakeDocker();
+    const home = mkTemp("sb-dhome-");
+    const root = makeRepo("sb-drepo-");
+    const id = { projectRoot: root, taskId: "ask-preclean" };
+    const sb = dockerSandbox({ image: "img", dockerBin: fd.dockerBin, worktreeHome: home });
+    const name = containerName(root, "ask-preclean");
+    await sb.workspace(id);
+    // The next step's `docker run --name <det>` must never hit a leftover container.
+    expect(fd.lines().some((l) => l.startsWith(`rm -f ${name}`))).toBe(true);
+  });
+
   test("stop issues `docker stop <name>`", async () => {
     const fd = withFakeDocker();
     const sb = dockerSandbox({ image: "img", dockerBin: fd.dockerBin });
@@ -337,12 +350,15 @@ describe("dockerSandbox — cleanup composition (real git, fake docker)", () => 
 
     const ws = await sb.workspace(id);
     writeFileSync(join(ws.cwd, "scratch.txt"), "uncommitted");
+    // workspace() force-removes a stale container as a pre-clean, so baseline the
+    // rm count and assert cleanup itself adds NO further rm when the tree is dirty.
+    const rmsBefore = fd.lines().filter((l) => l.startsWith("rm")).length;
 
     const refused = await sb.cleanup(id, { force: false });
     expect(refused.removed).toBe(false);
     expect(refused.dirty).toBe(true);
     expect(existsSync(ws.cwd)).toBe(true);
-    expect(fd.lines().some((l) => l.startsWith("rm"))).toBe(false);
+    expect(fd.lines().filter((l) => l.startsWith("rm")).length).toBe(rmsBefore);
   });
 });
 

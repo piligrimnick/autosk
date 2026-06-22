@@ -96,7 +96,18 @@ export function dockerSandbox(opts: DockerSandboxOptions): Sandbox {
     // surface; claude-agent always uses HTTP and ignores it.
     thin: !opts.mountSocket,
 
-    workspace: (id: TaskIdentity) => fs.workspace(id),
+    async workspace(id: TaskIdentity): Promise<{ cwd: string }> {
+      // Defensive pre-clean: the container name is deterministic per task, so it
+      // is SHARED across the workflow's steps (dev → review → …). A persistent
+      // harness (`pi --mode rpc`) does not exit when the agent winds it down
+      // (the `docker run` CLIENT is killed, but the `--rm` container can linger),
+      // and `ctx.transit` schedules the next step before the previous step's
+      // teardown runs — so the next `docker run --name <det>` would hit a name
+      // conflict. Force-remove any leftover container first (best-effort,
+      // idempotent: a no-op when none exists / docker is absent).
+      await removeContainer(dockerBin, containerName(id.projectRoot, id.taskId));
+      return fs.workspace(id);
+    },
 
     wrap: (cmd: string[], o: SandboxWrapOptions): string[] =>
       runArgv(dockerBin, containerName(o.id.projectRoot, o.id.taskId), o.cwd, cmd, o.env, opts, o.roFiles),
@@ -259,6 +270,15 @@ interface DockerResult {
   code: number | null;
   stdout: string;
   stderr: string;
+}
+
+/**
+ * Best-effort `docker rm -f <name>`: frees the deterministic container name
+ * before a new `docker run --name <name>`. Tolerates "no such container" and a
+ * missing docker binary (the subsequent `docker run` surfaces a clear error).
+ */
+async function removeContainer(dockerBin: string, name: string): Promise<void> {
+  await runDocker(dockerBin, ["rm", "-f", name]).catch(() => {});
 }
 
 /** Runs `<dockerBin> <args...>`, capturing stdout/stderr/exit code. */

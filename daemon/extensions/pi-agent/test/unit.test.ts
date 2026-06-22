@@ -71,13 +71,14 @@ describe("buildPiCommand", () => {
     expect(cmd).toContain("--no-session");
   });
 
-  test("under a sandbox (mcpHttp) injects the http pi-extension instead of the transit-only one", () => {
-    const transit = buildPiCommand({ piBin: "pi" });
-    const http = buildPiCommand({ piBin: "pi" }, { mcpHttp: true });
-    const transitExt = transit[transit.indexOf("-e") + 1]!;
-    const httpExt = http[http.indexOf("-e") + 1]!;
-    expect(transitExt).toMatch(/pi-transit-extension\.ts$/);
-    expect(httpExt).toMatch(/pi-mcp-extension\.ts$/);
+  test("always injects only the transit-only pi-extension (task/comment come from @autosk/pi-tools)", () => {
+    // No sandbox/thin variant: the agent injects the ack-only transit tool in
+    // every task-mode run; the transport-aware @autosk/pi-tools provides
+    // task/comment (over MCP under a thin sandbox, else the `autosk` CLI).
+    const cmd = buildPiCommand({ piBin: "pi" });
+    const ext = cmd[cmd.indexOf("-e") + 1]!;
+    expect(ext).toMatch(/pi-transit-extension\.ts$/);
+    expect(cmd.filter((a) => a === "-e")).toHaveLength(1);
   });
 
   test("defaults the binary to $AUTOSK_PI_BIN or `pi`", () => {
