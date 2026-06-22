@@ -50,6 +50,15 @@
         "@autosk/sdk": "^0.1.0",
       },
     },
+    "extensions/feature-dev-docker": {
+      "name": "@autosk/feature-dev-docker",
+      "version": "0.1.0",
+      "dependencies": {
+        "@autosk/feature-dev": "^0.1.0",
+        "@autosk/sandbox": "^0.1.0",
+        "@autosk/sdk": "^0.1.0",
+      },
+    },
     "extensions/merge-to-current": {
       "name": "@autosk/merge-to-current",
       "version": "0.1.1",
@@ -85,6 +94,8 @@
     "@autosk/feature-dev": ["@autosk/feature-dev@workspace:extensions/feature-dev"],
 
     "@autosk/feature-dev-cc": ["@autosk/feature-dev-cc@workspace:extensions/feature-dev-cc"],
+
+    "@autosk/feature-dev-docker": ["@autosk/feature-dev-docker@workspace:extensions/feature-dev-docker"],
 
     "@autosk/merge-to-current": ["@autosk/merge-to-current@workspace:extensions/merge-to-current"],
 

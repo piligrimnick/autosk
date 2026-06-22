@@ -1,0 +1,46 @@
+{
+  "name": "@autosk/feature-dev-docker",
+  "version": "0.1.0",
+  "description": "feature-dev-docker — the @autosk/feature-dev (pi) cycle with every agent step running in a per-task dockerSandbox (ghcr.io/wierdbytes/pi-runtime), authenticated with the host ~/.pi.",
+  "license": "MIT",
+  "author": "wierdbytes",
+  "homepage": "https://github.com/wierdbytes/autosk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wierdbytes/autosk.git",
+    "directory": "daemon/extensions/feature-dev-docker"
+  },
+  "bugs": {
+    "url": "https://github.com/wierdbytes/autosk/issues"
+  },
+  "keywords": [
+    "autosk",
+    "autosk-extension",
+    "autosk-workflow",
+    "docker"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": "./index.ts"
+  },
+  "types": "./index.ts",
+  "autosk": {
+    "extensions": ["./index.ts"]
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "README.md"
+  ],
+  "dependencies": {
+    "@autosk/feature-dev": "^0.1.0",
+    "@autosk/sandbox": "^0.1.0",
+    "@autosk/sdk": "^0.1.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

@@ -331,12 +331,16 @@ Not every extension is bootstrapped. These you add explicitly (with
 - **[`@autosk/feature-dev-cc`](../daemon/extensions/feature-dev-cc/README.md)** —
   the Claude Code twin of `@autosk/feature-dev`: the same
   `dev → review → docs → validator → accept → cleanup → done` graph driven by
-  `@autosk/claude-agent` roles. It registers **two** workflows — `feature-dev-cc`
-  (agents in a per-task `worktreeSandbox()`, claude on the host) and
-  `feature-dev-cc-docker` (agents inside a per-task `dockerSandbox({ image })`
-  container, reaching the host MCP server over `host.docker.internal`; image =
-  `$AUTOSK_DOCKER_IMAGE`, default `autosk/claude-runtime:latest`). It is **not**
-  bootstrapped: install it explicitly (`autosk ext add npm:@autosk/feature-dev-cc`).
+  `@autosk/claude-agent` roles, agents in a per-task `worktreeSandbox()` (claude
+  on the host). It is **not** bootstrapped: install it explicitly (`autosk ext
+  add npm:@autosk/feature-dev-cc`). (A Claude `dockerSandbox` variant is deferred;
+  the thin operator image already lives at `daemon/extensions/claude-agent/docker/`.)
+- **[`@autosk/feature-dev-docker`](../daemon/extensions/feature-dev-docker/README.md)** —
+  the Docker variant of `@autosk/feature-dev`: the same pi cycle, but every agent
+  step runs inside a per-task `dockerSandbox({ image })` container
+  (`ghcr.io/wierdbytes/pi-runtime`, reaching the host MCP over
+  `host.docker.internal`; image = `$AUTOSK_PI_DOCKER_IMAGE`). Auth rides in via
+  the mounted `~/.pi`. Not bootstrapped: `autosk ext add npm:@autosk/feature-dev-docker`.
   Docker isolation is just `dockerSandbox({ image })` from the bootstrapped
   `@autosk/sandbox` — there is no separate isolation-provider extension to add.
 

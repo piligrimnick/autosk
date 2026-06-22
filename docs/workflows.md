@@ -460,8 +460,8 @@ dev ──▶ review ──▶ docs ──▶ validator ──▶ accept (human)
   resumes an accepted task into it (`autosk resume <id> --to cleanup`); routing
   every terminal through it is what keeps a task from leaking its worktree now
   that `done`/`cancel` are a raw status flip. A `feature-dev-cc` sibling drives
-  Claude Code instead of pi, and a `feature-dev-cc-docker` sibling swaps in
-  `dockerSandbox({ image })` to run the harness in a container.
+  Claude Code instead of pi, and `@autosk/feature-dev-docker` swaps in
+  `dockerSandbox({ image })` to run the pi harness in a per-task container.
 - **Visit cap:** `onTransit` rejects a bounce-back into `dev` once the task has
   entered `dev` 5 times (via `ctx.visits("dev")`), so a task that keeps failing
   review/validation parks for a human instead of looping forever. The count is

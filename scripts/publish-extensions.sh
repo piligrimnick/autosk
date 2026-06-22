@@ -16,8 +16,17 @@
 #     dockerSandbox() / sandboxCleanupStep(); deps @autosk/sdk).
 #   - `@autosk/feature-dev-cc` (the feature-dev workflow wired to the Claude Code
 #     agent; deps @autosk/sdk + @autosk/sandbox + @autosk/claude-agent).
+#   - `@autosk/feature-dev-docker` (the feature-dev pi workflow with every agent
+#     step in a per-task dockerSandbox; deps @autosk/sdk + @autosk/sandbox +
+#     @autosk/feature-dev).
 #   - `@autosk/merge-to-current` (a standalone workflow that merges a task branch
 #     into the project's current branch; deps @autosk/sdk + @autosk/pi-agent).
+#
+# It ALSO builds + pushes the thin operator DOCKER IMAGES to GHCR (multi-arch via
+# buildx): `ghcr.io/wierdbytes/pi-runtime` (from daemon/extensions/pi-agent/docker)
+# and `ghcr.io/wierdbytes/claude-runtime` (from daemon/extensions/claude-agent/docker)
+# — the images `dockerSandbox({ image })` runs. Needs `docker login ghcr.io` (a
+# token with write:packages); skip with `--no-images`.
 # None of these are part of the first-run bootstrap (only @autosk/feature-dev is);
 # install them explicitly with `autosk ext add`.
 #
@@ -43,8 +52,9 @@
 #     use `^x.y.z`, so keep them in sync).
 #
 # Usage:
-#   scripts/publish-extensions.sh            # DRY RUN (npm publish --dry-run)
-#   scripts/publish-extensions.sh --publish  # actually publish
+#   scripts/publish-extensions.sh            # DRY RUN (npm publish --dry-run + image plan)
+#   scripts/publish-extensions.sh --publish  # publish npm packages + push GHCR images
+#   scripts/publish-extensions.sh --publish --no-images  # npm only, skip the images
 #   OTP=123456 scripts/publish-extensions.sh --publish   # with 2FA one-time code
 set -euo pipefail
 
@@ -54,11 +64,15 @@ npm_bin="${NPM:-npm}"
 bun_bin="${BUN:-bun}"
 
 mode="dry"
-case "${1:-}" in
-  ""|--dry-run) mode="dry" ;;
-  --publish)    mode="publish" ;;
-  *) echo "usage: publish-extensions.sh [--dry-run|--publish]" >&2; exit 2 ;;
-esac
+do_images=1
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) mode="dry" ;;
+    --publish) mode="publish" ;;
+    --no-images) do_images=0 ;;
+    *) echo "usage: publish-extensions.sh [--dry-run|--publish] [--no-images]" >&2; exit 2 ;;
+  esac
+done
 
 command -v "$npm_bin" >/dev/null 2>&1 || { echo "publish-extensions: npm not found on PATH" >&2; exit 1; }
 
@@ -83,10 +97,45 @@ packages=(
   "daemon/extensions/pi-agent"
   "daemon/extensions/claude-agent"
   "daemon/extensions/feature-dev"
+  "daemon/extensions/feature-dev-docker"
   "daemon/extensions/feature-dev-cc"
   "daemon/extensions/merge-to-current"
   "pi-tools"
 )
+
+# Operator docker images: "<ghcr image>=<build context dir>" (built multi-arch +
+# pushed by publish_images). The build context is the extension's `docker/` dir.
+images=(
+  "ghcr.io/wierdbytes/pi-runtime=daemon/extensions/pi-agent/docker"
+  "ghcr.io/wierdbytes/claude-runtime=daemon/extensions/claude-agent/docker"
+)
+
+# publish_images <dry|publish> — build + push each image to GHCR (multi-arch via
+# buildx). Needs `docker login ghcr.io` and a docker with buildx; a missing docker
+# is a non-fatal skip. Tag with $IMAGE_TAG (default latest); platforms via
+# $IMAGE_PLATFORMS (default linux/amd64,linux/arm64).
+publish_images() {
+  local m="$1" tag="${IMAGE_TAG:-latest}" platforms="${IMAGE_PLATFORMS:-linux/amd64,linux/arm64}"
+  local docker_bin="${DOCKER:-docker}"
+  if ! command -v "$docker_bin" >/dev/null 2>&1; then
+    echo "== skip images: $docker_bin not on PATH =="; return 0
+  fi
+  local builder="autosk-images"
+  for entry in "${images[@]}"; do
+    local image="${entry%%=*}" ctx="$repo_root/${entry#*=}"
+    if [ "$m" = "dry" ]; then
+      echo "== DRY RUN image: $image:$tag ($ctx) for $platforms =="
+      continue
+    fi
+    echo "== publish image: $image:$tag ($ctx) for $platforms =="
+    if ! "$docker_bin" buildx inspect "$builder" >/dev/null 2>&1; then
+      "$docker_bin" buildx create --name "$builder" --use >/dev/null
+    else
+      "$docker_bin" buildx use "$builder"
+    fi
+    "$docker_bin" buildx build --platform "$platforms" -t "$image:$tag" --push "$ctx"
+  done
+}
 
 echo "== sanity: daemon bun install + typecheck + test =="
 ( cd "$daemon" && "$bun_bin" install --frozen-lockfile >/dev/null 2>&1 || "$bun_bin" install >/dev/null )
@@ -118,9 +167,18 @@ for rel in "${packages[@]}"; do
   fi
 done
 
+if [ "$do_images" = 1 ]; then
+  echo
+  echo "== docker images (GHCR) =="
+  publish_images "$mode"
+else
+  echo "== skip images (--no-images) =="
+fi
+
 if [ "$mode" = "dry" ]; then
   echo
-  echo "DRY RUN complete. Re-run with --publish to actually publish (needs \`npm login\`)."
+  echo "DRY RUN complete. Re-run with --publish to actually publish (needs \`npm login\` +"
+  echo "\`docker login ghcr.io\` for the images; add --no-images to skip them)."
 else
   echo
   echo "Published. A fresh machine's daemon will \`npm install @autosk/feature-dev\` on first run;"
