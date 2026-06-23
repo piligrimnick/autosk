@@ -30,6 +30,12 @@ Publishing is multi-arch `buildx` push via
 [`scripts/publish-extensions.sh`](../../../../scripts/publish-extensions.sh)
 (`$GHCR_TOKEN` needs `write:packages`; skip with `--no-images`).
 
+> CI publishes these automatically: on every **green push to `main`**,
+> [`.github/workflows/publish.yml`](../../../../.github/workflows/publish.yml)
+> runs the same script (GHCR login via the built-in `GITHUB_TOKEN`), tagging the
+> images `latest` + `sha-<short>`. The command above is only for out-of-band
+> pushes.
+
 ## Credentials from your system Claude Code
 
 Claude Code on **macOS keeps its OAuth token in the login Keychain** (item

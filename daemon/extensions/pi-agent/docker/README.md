@@ -40,6 +40,12 @@ scripts/publish-extensions.sh --publish            # npm packages + pi-runtime +
 
 `$GHCR_TOKEN` needs `write:packages`. Skip images with `--no-images`.
 
+> CI publishes these automatically: on every **green push to `main`**,
+> [`.github/workflows/publish.yml`](../../../../.github/workflows/publish.yml)
+> runs the same script (GHCR login via the built-in `GITHUB_TOKEN`), tagging the
+> images `latest` + `sha-<short>`. The command above is only for out-of-band
+> pushes.
+
 ## Credentials from your system pi
 
 pi keeps its provider tokens in a plain file — `~/.pi/agent/auth.json`

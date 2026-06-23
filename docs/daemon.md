@@ -51,8 +51,8 @@ daemon, it **auto-spawns** one and waits for it to come up:
 
 `autoskd`'s single-instance binding makes a double-spawn harmless: a second
 launcher that loses the bind race exits `0` and the client uses the daemon that
-won. The Homebrew formula installs `autoskd` right next to `autosk`, so
-auto-spawn works with zero configuration.
+won. The Homebrew **cask** (and `make install`) put `autoskd` right next to
+`autosk` on `PATH`, so auto-spawn works with zero configuration.
 
 ### Foreground / explicit
 

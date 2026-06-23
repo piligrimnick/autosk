@@ -32,15 +32,30 @@ $ autosk enroll ask-3f9b2c --workflow feature-dev
 
 ## Prerequisites
 
-- **Install autosk** — either via Homebrew or from source:
-```bash
-brew install wierdbytes/autosk/autosk    # macOS / Linux — installs autosk + autoskd
-# or from a local checkout:
-make install
-```
-  Homebrew (and `make install`) install **both** binaries: the `autosk` CLI/TUI
-  and the `autoskd` daemon it auto-spawns. The `feature-dev` workflow is fetched
-  from npm on first run (see below).
+- **Install autosk:**
+
+  - **macOS — Homebrew cask** (installs the desktop GUI **and** puts `autosk` +
+    `autoskd` on `PATH`):
+    ```bash
+    brew install --cask wierdbytes/autosk/autosk
+    ```
+    The cask is signed + notarized (Apple Silicon); the GUI bundles the `autosk`
+    CLI/TUI and the `autoskd` daemon as sidecars, so a Finder launch auto-spawns
+    the embedded daemon with no shell `PATH` dependency.
+
+  - **Linux** — grab the `autosk` + `autoskd` binaries (and the GUI
+    `.AppImage`/`.deb`, if you want the desktop app) from the
+    [latest GitHub Release](https://github.com/wierdbytes/autosk/releases/latest).
+    Linux is **not** served via Homebrew.
+
+  - **From source** (any platform):
+    ```bash
+    make install
+    ```
+
+  Every path installs **both** binaries: the `autosk` CLI/TUI and the `autoskd`
+  daemon it auto-spawns. The `feature-dev` workflow is fetched from npm on first
+  run (see below).
 
 - **[pi.dev](https://pi.dev)** — installed and configured for at least one LLM
   provider (the shipped agents drive `pi --mode rpc`).
