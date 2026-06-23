@@ -434,13 +434,26 @@ jobs:
       # SRCROOT=gen/apple and Node then fails with `Cannot find module …/gen/apple/tauri`.
       # Running through npm sets npm_execpath, so the baked command becomes the
       # portable `npm run -- tauri ios xcode-script …` (resolves from any cwd).
-      - name: tauri ios build (App Store, automatic signing)
+      # Manual signing for the App Store export. The APPLE_API_* key only
+      # authenticates the altool upload below — it does NOT sign/export the IPA.
+      # Without a real Apple Distribution cert + provisioning profile tauri-cli
+      # falls back to automatic signing, and `xcodebuild -exportArchive` cannot
+      # mint an App Store profile for app.autosk.gui in CI, failing with
+      # "No Account for Team" / "No profiles for 'app.autosk.gui'" (exit 70).
+      # IOS_CERTIFICATE (base64 Apple Distribution .p12) + IOS_CERTIFICATE_PASSWORD
+      # + IOS_MOBILE_PROVISION (base64 App Store .mobileprovision) switch tauri to
+      # manual signing. These are NOT the macOS APPLE_CERTIFICATE (Developer ID).
+      - name: tauri ios build (App Store, manual signing)
         working-directory: gui
         env:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: ${{ github.workspace }}/private_keys/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
           APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          # Env var names are read verbatim by tauri-cli (signing_from_env).
+          IOS_CERTIFICATE: ${{ secrets.APPLE_IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_IOS_CERTIFICATE_PASSWORD }}
+          IOS_MOBILE_PROVISION: ${{ secrets.APPLE_IOS_MOBILE_PROVISION }}
         run: |
           npm exec -- tauri ios init
           npm exec -- tauri ios build \
