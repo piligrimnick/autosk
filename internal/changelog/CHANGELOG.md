@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-06-24
+
 > **Clean break — autosk v2.** A full rewrite: tasks, comments, and sessions are
 > now plain **files** under `.autosk/` — there is **no database** and **no
 > migrator**, and workflows and agents are now **code** shipped by extensions.
@@ -248,7 +250,8 @@ one TUI to see it all.
   and popup z-order; clear `TextArea` (not just `v.lines`) on
   dispatch / cursor-move / Esc.
 
-[Unreleased]: https://github.com/wierdbytes/autosk/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/wierdbytes/autosk/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/wierdbytes/autosk/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/wierdbytes/autosk/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/wierdbytes/autosk/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/wierdbytes/autosk/compare/v0.1.3...v0.1.4
