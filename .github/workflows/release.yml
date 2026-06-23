@@ -413,6 +413,14 @@ jobs:
       # gen/apple is gitignored and regenerated here every run, so every iOS
       # customization (bundle id app.autosk.gui, icons, capabilities) MUST live
       # in tauri.conf.json — never hand-edited in the generated Xcode project.
+      #
+      # Invoke the CLI via `npm exec` (NOT `./node_modules/.bin/tauri`): `ios init`
+      # bakes the "Build Rust Code" Xcode phase command from how the CLI was
+      # launched. A direct bin call leaves npm_execpath unset, so tauri-cli falls
+      # back to a bare `node tauri ios xcode-script …`, which Xcode runs from
+      # SRCROOT=gen/apple and Node then fails with `Cannot find module …/gen/apple/tauri`.
+      # Running through npm sets npm_execpath, so the baked command becomes the
+      # portable `npm run -- tauri ios xcode-script …` (resolves from any cwd).
       - name: tauri ios build (App Store, automatic signing)
         working-directory: gui
         env:
@@ -421,8 +429,8 @@ jobs:
           APPLE_API_KEY_PATH: ${{ github.workspace }}/private_keys/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
           APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          ./node_modules/.bin/tauri ios init
-          ./node_modules/.bin/tauri ios build \
+          npm exec -- tauri ios init
+          npm exec -- tauri ios build \
             --export-method app-store-connect \
             --build-number "${{ github.run_number }}"
 
