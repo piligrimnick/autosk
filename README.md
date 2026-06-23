@@ -1,4 +1,4 @@
-![autosk lazy dashboard](docs/lazy-mode.png)
+![autosk: the lazy TUI, the desktop GUI, and the mobile web view](docs/hero.png)
 
 ## What is autosk?
 
