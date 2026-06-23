@@ -28,7 +28,13 @@ jobs:
 
     steps:
       # Pinned to the Node.js 24 majors (see ci.yml for the deprecation context).
+      # lfs: true pulls the Git LFS-tracked app icons (gui/src-tauri/icons/*.png,
+      # .icns, .ico, .car) — tauri::generate_context! reads 32x32.png at
+      # build-script time, so without LFS objects `cargo check` fails with
+      # "Invalid PNG signature" (the on-disk file is an LFS pointer).
       - uses: actions/checkout@v5
+        with:
+          lfs: true
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
