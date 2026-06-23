@@ -8,10 +8,15 @@
 2. **workflow engine**: each workflow is a directed graph of **steps**, and each
    step is owned by an **agent** managed by the daemon. Workflows and agents are
    **code** registered by extensions.
+3. **interface**: a convenient way to manage and observe the system — the
+   `autosk` CLI, the `autosk lazy` TUI, and the desktop/mobile GUI.
 
 You can stop at step 1 if all you want is a backlog. Step 2 is opt-in.
 
-Inspired by [beads](https://github.com/steveyegge/beads) but simpler and more flexible. Use it as a plain backlog, or opt in to workflows when you're ready to let agents pick tickets up on their own.
+Inspired by:
+- [beads](https://github.com/steveyegge/beads) — but simpler and more flexible
+- [pi.dev](https://pi.dev) — for its approach to extensibility
+- [sandcastle](https://github.com/mattpocock/sandcastle) — for its programmatic approach to workflows
 
 ```bash
 $ autosk create "Wire up the auth flow"
