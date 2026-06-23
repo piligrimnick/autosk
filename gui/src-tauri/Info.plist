@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Liquid Glass app icon (macOS 26+). Points at the "autosk" asset compiled
+	  into icons/Assets.car (via `actool ... --app-icon autosk`) and bundled to
+	  Contents/Resources/Assets.car through bundle.macOS.files in tauri.conf.json.
+	  macOS < 26 ignores this key and falls back to CFBundleIconFile (icon.icns).
+	-->
+	<key>CFBundleIconName</key>
+	<string>autosk</string>
+</dict>
+</plist>

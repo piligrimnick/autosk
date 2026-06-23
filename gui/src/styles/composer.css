@@ -1,0 +1,79 @@
+.composer {
+  border-top: 1px solid var(--border);
+  background: var(--bg-1);
+  padding: 12px 20px;
+  flex-shrink: 0;
+}
+
+/* Chat-style input: a single-line field that auto-grows (sized in JS) up to 10
+ * lines and then scrolls, with the send button (↑) pinned to the bottom-right
+ * corner so it keeps its bottom/right padding as the field grows. */
+.composer-input-wrap {
+  position: relative;
+  display: flex;
+}
+.composer-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--fg);
+  padding: 9px 46px 9px 12px; /* right padding clears the send button */
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  resize: none;
+  overflow-x: hidden; /* never scroll sideways; JS toggles overflow-y only */
+  overflow-y: hidden;
+  overflow-wrap: break-word; /* wrap long unbreakable strings (e.g. URLs) */
+}
+.composer-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.composer-send {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.12s, opacity 0.12s;
+}
+.composer-send:hover:not(:disabled) {
+  background: #3d7df0;
+}
+.composer-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Segmented toggle — used by the Settings modal (local/remote backend). */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.seg-btn {
+  background: var(--bg);
+  border: none;
+  color: var(--fg-dim);
+  padding: 5px 10px;
+  font-size: 13px;
+}
+.seg-btn:hover {
+  background: var(--bg-3);
+}
+.seg-active {
+  background: var(--accent);
+  color: #fff;
+}

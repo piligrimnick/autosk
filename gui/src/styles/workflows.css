@@ -1,0 +1,212 @@
+/* Workflows panel + read-only center view (redesign plan §8.3/§8.6). */
+
+.wf-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.wf-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.wf-row:hover {
+  background: var(--bg-2);
+}
+.wf-row.is-selected {
+  background: var(--bg-3);
+  border-color: var(--border);
+}
+.wf-bullet {
+  color: var(--fg-mute);
+}
+.wf-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-wt {
+  font-size: 11px;
+  color: var(--accent-2);
+}
+
+/* ---- center: read-only workflow view -------------------------------------*/
+.workflow-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.workflow-view-head {
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.workflow-view-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.workflow-view-title {
+  margin: 0;
+  font-size: 18px;
+}
+.workflow-view-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--fg-mute);
+}
+.workflow-view-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+}
+.workflow-view-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.workflow-section-head {
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  color: var(--fg-mute);
+  margin-bottom: 8px;
+}
+.workflow-step-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 3px 0;
+}
+.workflow-step-name {
+  color: var(--fg);
+  min-width: 120px;
+}
+.workflow-step-agent {
+  color: var(--fg-dim);
+}
+.workflow-step-next {
+  color: var(--fg-mute);
+}
+.workflow-json pre {
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* ---- extension browser (BrowseExtensionsModal) ---------------------------*/
+.ext-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.ext-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-1);
+}
+.ext-row:hover {
+  background: var(--bg-2);
+  border-color: var(--accent-2);
+}
+/* The main info area is a button (opens the npm page); reset the native
+   button chrome and stack its children like the surrounding rows. */
+.ext-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  appearance: none;
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ext-main:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.ext-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.ext-name {
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ext-version {
+  font-size: 11px;
+  color: var(--fg-mute);
+  font-family: var(--mono);
+}
+.ext-desc {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.ext-meta {
+  margin-top: 5px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 11px;
+  color: var(--fg-mute);
+}
+.ext-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.ext-badge {
+  font-size: 11px;
+  color: var(--status-done);
+  background: rgba(74, 222, 128, 0.16);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.install-scope-actions {
+  display: flex;
+  gap: 10px;
+  margin: 14px 0 6px;
+}

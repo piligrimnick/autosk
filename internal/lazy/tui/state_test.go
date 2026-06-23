@@ -7,9 +7,9 @@ func TestStateFocusStackPushPop(t *testing.T) {
 	if s.focused != panelTasks {
 		t.Fatalf("initial focus = %v want Tasks", s.focused)
 	}
-	s.pushFocus(panelJobs)
-	if s.focused != panelJobs {
-		t.Fatalf("after push: focus = %v want Jobs", s.focused)
+	s.pushFocus(panelSessions)
+	if s.focused != panelSessions {
+		t.Fatalf("after push: focus = %v want Sessions", s.focused)
 	}
 	s.popFocus()
 	if s.focused != panelTasks {
@@ -34,10 +34,7 @@ func TestScopeIsEmpty(t *testing.T) {
 	if (scope{TaskID: "ask-000001"}).IsEmpty() {
 		t.Fatal("scope with TaskID is not empty")
 	}
-	if (scope{WorkflowID: "wf-1"}).IsEmpty() {
-		t.Fatal("scope with WorkflowID is not empty")
-	}
-	if (scope{Agent: "x"}).IsEmpty() {
-		t.Fatal("scope with Agent is not empty")
+	if (scope{WorkflowName: "feature-dev"}).IsEmpty() {
+		t.Fatal("scope with WorkflowName is not empty")
 	}
 }

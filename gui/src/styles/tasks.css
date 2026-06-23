@@ -1,0 +1,17 @@
+/* Tasks panel (redesign plan §8.5). Reuses the .task-item* classes from
+ * sidebar.css; the status chip LEADS the row from a fixed-width left gutter
+ * (so the id / title columns line up across rows regardless of the status
+ * label width — NEW vs HUMAN vs CANCEL), and the flex-grown title pushes the
+ * optional blocked flag to the right. The per-task write-verb menu opens on
+ * right-click (see TaskRow). */
+.task-status-gutter {
+  /* matches --session-gutter (sessions.css) so the id column lines up across
+   * both stacked sidebar panels; wide enough for the longest label (CANCEL). */
+  flex: 0 0 68px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.task-status-gutter .badge {
+  flex-shrink: 0;
+}

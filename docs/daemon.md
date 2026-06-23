@@ -1,286 +1,392 @@
-# autosk daemon — multi-project pi orchestrator
+# `autoskd` — the daemon
 
-`autosk daemon` is an HTTP-over-UDS service that drives autosk tasks
-through their workflows. **One daemon per host** serves **any number
-of projects** from a single process. The project is selected per
-request via `X-Autosk-Cwd` / `X-Autosk-DB` headers.
+`autoskd` is the long-running process that drives tasks through their workflows.
+It is the **sole owner** of a project's `.autosk/` directory and the single
+authority on task state. Every front end — the `autosk` CLI, the `autosk lazy`
+TUI, and the Tauri desktop GUI — is a thin **JSON-RPC client** of `autoskd`;
+none of them open or write `.autosk/` directly.
 
-For each in-flight task it picks up, the daemon resolves the current
-step's **agent package** (an npm package installed via `autosk agent
-install`) and dispatches to one of two branches:
+`autoskd` is a **Bun/TypeScript** program (it lives in [`daemon/`](../daemon)).
+For distribution it is compiled to a standalone binary with `bun build
+--compile`, which embeds the Bun runtime — **no global `bun` is needed at
+runtime**.
 
-- **Standard branch** — the package declares `model` / `thinking` /
-  `first_message` / etc. but no `runner`. The executor spawns
-  `pi --mode rpc` with those settings and waits for the agent to call
-  `autosk step next`. On a missed turn it kicks back up to
-  `max_corrections` times before failing.
+> **Clean break from v1.** `autoskd` stores tasks as **files** under `.autosk/`.
+> It does **not** read the old `.autosk/db` database; there is no migrator. A
+> project that still has a v1 `.autosk/db` must be opened with the last v1
+> release (`v0.1.6`). See [the README clean-break note](../README.md#a-clean-break-from-v1).
 
-- **Custom branch** — the package declares an `autosk.agent.runner`
-  path. The executor spawns the Node bootstrapper
-  (`@autosk/agent-runtime`, installed in `~/.autosk/packages/`), feeds
-  it a JSON `RunContextSeed` on stdin, and waits for the process to
-  exit. Custom runners are single-shot — there is no kickback. They
-  emit `autosk step next` via `ctx.cli(...)` (or `ctx.stepNext(...)`)
-  inside the runner module; the executor observes `step_signals`
-  exactly like the standard branch.
+## What lives in `.autosk/`
 
-Multi-project plan:
-[`docs/plans/20260518-Daemon-UDS-Plan.md`](plans/20260518-Daemon-UDS-Plan.md).
-Agent packages plan:
-[`docs/plans/20260518-Agent-Packages.md`](plans/20260518-Agent-Packages.md).
-Daemon foundations:
-[`docs/plans/20260517-Daemon-Plan.md`](plans/20260517-Daemon-Plan.md)
-(transport/auth/scope sections are superseded by the UDS plan).
+A project is just a directory that contains an `.autosk/` folder, resolved by
+walking up from your current directory. There is **no database** — everything is
+plain files the daemon writes atomically (tmp + rename):
 
----
+```
+.autosk/
+  tasks/<id>/task.json        # one task: title, description, status, workflow, step, blocked_by, metadata, timestamps
+  tasks/<id>/comments.jsonl   # the task's comments (one JSON object per line)
+  sessions/<session-id>.json  # session meta (one agent run for one step)
+  sessions/<session-id>.jsonl # the session transcript (pi-format; see "Sessions" below)
+  extensions/                 # (optional) project-local extensions: workflows + agents as code
+  settings.json               # (optional) extension entries to load (npm:<spec> or a local path)
+```
 
-## Quickstart
+Because tasks are files, you can read or hand-edit them. The daemon picks up
+external edits via a startup scan + filesystem watcher (see [Hybrid file
+ownership](#hybrid-file-ownership) below). The registry of known projects lives
+at `~/.autosk/projects.json`.
+
+## Running it
+
+### Auto-spawn (the normal path)
+
+You almost never start `autoskd` by hand. The first time a front end needs the
+daemon, it **auto-spawns** one and waits for it to come up:
+
+1. resolve the `autoskd` binary: `$AUTOSKD_BIN` → a sibling of the calling
+   `autosk` binary → `autoskd` on `PATH`;
+2. spawn `autoskd serve --sock <sock>` detached;
+3. connect over the Unix socket once it is listening.
+
+`autoskd`'s single-instance binding makes a double-spawn harmless: a second
+launcher that loses the bind race exits `0` and the client uses the daemon that
+won. The Homebrew **cask** (and `make install`) put `autoskd` right next to
+`autosk` on `PATH`, so auto-spawn works with zero configuration.
+
+### Foreground / explicit
+
+To run a daemon yourself (e.g. as a service, or to watch its logs), run the
+binary directly:
 
 ```bash
-# 0. Have one or more project roots with .autosk/ initialised:
-cd ~/work/project-a && autosk init        # one-time per project
-cd ~/work/project-b && autosk init
-
-# 1. Launch the daemon. Default socket = ~/.autosk/daemon.sock, workers = 5.
-autosk daemon serve &
-
-# 2. Enroll a task into a workflow from any project root. The per-project
-#    poller picks it up automatically.
-cd ~/work/project-a
-id=$(autosk create "Tidy README" -p 1 --json | jq -r .id)
-autosk enroll "$id" --workflow feature-dev
-
-# 3. Inspect what the daemon is doing for *this* project:
-autosk daemon list
-
-# 4. See every project the daemon currently has loaded:
-autosk daemon list --all-projects
-
-# 5. Tail a job (cwd-scoped):
-autosk daemon status   "$JOB"
-autosk daemon messages "$JOB" --limit 20
-
-# 6. SSE stream (raw curl over the socket):
-curl -N --unix-socket "$HOME/.autosk/daemon.sock" \
-     -H "X-Autosk-Cwd: $PWD" \
-     "http://autosk/v1/jobs/$JOB/stream"
-
-# 7. Cancel.
-autosk daemon cancel "$JOB"
+autoskd                      # serve on the default socket
+autoskd serve --sock /tmp/autosk.sock
+autoskd serve --tcp 0.0.0.0:7777     # also listen on TCP (token auth, see below)
+autoskd serve --workers 8            # worker-pool size (default 4)
 ```
 
-There is no `autosk daemon submit` command and no `POST /v1/jobs`
-route. Work enters the daemon through workflow enrolment; the poller
-(default cadence 2s, per project) surfaces it from `daemon_runs`.
+`serve` is the default verb (there is one other, non-default verb —
+[`autoskd mcp`](#the-autoskd-mcp-tool-server)). `serve` flags:
 
----
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--sock PATH` | `$AUTOSK_SOCK` → `~/.autosk/daemon.sock` | Unix-domain socket path. |
+| `--tcp [HOST:]PORT` | off | Also accept connections over TCP (token auth). Bare `PORT` binds `127.0.0.1`. |
+| `--workers N` | `4` | Size of the global FIFO worker pool (shared across all projects). |
 
-## Configuration
+Environment knobs:
 
-`autosk daemon serve` is CLI-flag-only.
+| Variable | Meaning |
+| --- | --- |
+| `AUTOSK_SOCK` | UDS path (when `--sock` is not passed). |
+| `AUTOSK_IDLE_SECS` | Idle-shutdown window in seconds (default `1800`; `0` or negative disables; ignored in TCP mode). |
+| `AUTOSK_TOKEN_FILE` | Path to the TCP auth token file (default `~/.autosk/daemon-token`). |
+| `AUTOSK_NPM_BIN` | `npm` binary used for every extension install — the first-run bootstrap, the auto-install reconcile, the registry version check + re-install behind `autosk ext update`, and an explicit `autosk ext add npm:<spec>` (default `npm` on `PATH`). |
+| `AUTOSK_NO_AUTO_INSTALL` | When set (to any value other than empty / `0` / `false`), disables the automatic first-run bootstrap *and* the reconcile pass; explicit `autosk ext add` / `autosk ext update` still work. |
+| `AUTOSKD_BIN` | (front-end side) explicit path to the `autoskd` binary for auto-spawn. |
 
-| Flag | Default | Effect |
-|---|---|---|
-| `--sock` | `~/.autosk/daemon.sock` (env `AUTOSK_SOCK`) | Unix-domain socket path. Parent dir is created with mode `0700`, socket with mode `0600`. |
-| `--workers` | `5` | Max concurrent agent processes **across all projects** (single FIFO queue). |
-| `--grace` | `10s` | Time SIGTERM has to bring the agent down before SIGKILL. |
-| `--idle-timeout` | `2h` | Max time between agent events on a single turn before failing the run. |
-| `--poll-interval` | `2s` | Per-project workflow scan cadence. |
-| `--pi-bin` | `pi` | pi binary to spawn (looked up on PATH unless absolute). |
-| `--session-dir-root` | `<projectRoot>/.autosk/sessions` when unset | Literal parent dir for per-job session subdirs. When set, the same path is shared across **all** projects served by this daemon; when empty (the default) each project gets its own `<projectRoot>/.autosk/sessions`. No template substitution is performed. |
-| `--gc-interval` | `30m` (0 == default, negative disables) | How often each project's compactor runs `SELECT dolt_gc()` against its `.autosk/db`. See [§ Compactor & cross-process freshness](#compactor--cross-process-freshness). |
+### One daemon per host, many projects
 
-Project state lives in each project's `.autosk/db`. Projects are
-opened **lazily** on the first request that names them and stay
-resident until the daemon exits. Rows whose `status='running'` at
-first-open are rewritten to `failed` with `error='daemon_restart'`
-(per project, once per daemon lifetime).
+A single `autoskd` serves **any number of projects**. Each request carries a
+`{cwd}` selector; the daemon walks up from that cwd to find the project's
+`.autosk/`, opens it lazily (file store + extension registry + scheduler), and
+keeps it loaded. The worker pool is global and FIFO across every loaded project.
 
-### Single-instance guarantee
+### The `autoskd mcp` tool server
 
-`daemon serve` refuses to start if another live daemon already owns
-the socket:
+`autoskd mcp` is a second, **non-default** verb: a minimal **stdio MCP** (Model
+Context Protocol) server that exposes autosk's tools to a CLI harness that speaks
+MCP. It is a standalone tool surface for external harnesses that speak MCP over
+stdio. (The shipped [`@autosk/claude-agent`](workflows.md#agent-definitions) no
+longer uses this stdio path — it points Claude Code at a per-session, host-side
+HTTP MCP server minted by [`ctx.newMCPServer()`](workflows.md#the-host-side-mcp-server-ctxnewmcpserver),
+so a sandboxed harness needs neither `autosk` nor a mounted socket.) It speaks
+JSON-RPC 2.0 over stdio
+(`initialize` → `tools/list` → `tools/call`), binds **no** socket, and returns
+when stdin closes. It is hand-rolled (no `@modelcontextprotocol/sdk` dependency),
+so it bundles into the compiled `autoskd` binary with no extra runtime.
 
-```
-$ autosk daemon serve
-autosk: uds: daemon already running at /Users/me/.autosk/daemon.sock
-```
+It advertises up to three tools (the harness sees them prefixed `mcp__autosk__`):
 
-If the socket file is *stale* (no peer accepts connections — typical
-after a crash), the daemon unlinks it and rebinds.
+- **`transit`** — *ack-only*, advertised only when `AUTOSK_MCP_TRANSIT=1` (task
+  mode). It returns an immediate ack; the agent driver observes the call and
+  drives the real `ctx.transit`.
+- **`task`** — `create` / `update` / `show` / `list`.
+- **`comment`** — `add` / `list` (`add` defaults the author to `AUTOSK_AGENT`).
 
-### Compactor & cross-process freshness
+`task` / `comment` **execute for real** by shelling out to `autosk … --json`
+(not an embedded RPC client): the CLI already centralizes the project
+(`AUTOSK_CWD`), socket (`AUTOSK_SOCK`), and author (`AUTOSK_AGENT`) resolution,
+which the spawning agent bakes into the `--mcp-config` env block. `autosk` must
+be on `PATH` (or `$AUTOSK_BIN`); a missing binary returns a clear actionable
+error, not a silent failure.
 
-Each loaded project runs a background **compactor** that ticks every
-`--gc-interval` (default 30m) and invokes `SELECT dolt_gc()` to
-reclaim stale chunks. GC is what keeps `.autosk/db` queries fast over
-the long haul, but it has one subtlety operators should know about:
+## What the daemon does for each task
 
-Doltlite implements GC via *write-to-sidecar + atomic rename*, so the
-on-disk inode of `.autosk/db` changes on every successful run. Any
-process whose connection was open at gc time keeps its file
-descriptor pointing at the *orphan* inode. Without intervention a
-reader would serve the pre-gc snapshot forever; a writer would route
-its INSERT/COMMIT into the orphan where it disappears the moment the
-conn closes — silent data loss.
+The engine has exactly one scheduling rule:
 
-The defence lives in `internal/store/doltlite/driver.go`: every
-doltlite store opens through an inode-validating wrapper around
-mattn/go-sqlite3. On every pool checkout the wrapper stats the path
-and compares against the inode the conn was opened against; on a
-mismatch it returns `driver.ErrBadConn` so `database/sql` retires the
-conn and opens a fresh one. `autosk lazy` additionally rotates conns
-on `--refresh` (belt-and-suspenders) and exposes `Ctrl-R` as a manual
-hard-refresh; see
-[`docs/lazy.md` § Cross-process freshness](lazy.md#cross-process-freshness).
+> a task in `status=work` whose current step is an **agent step** (not a
+> `statusStep`) and has no live session ⇒ start a **session** that runs that
+> agent's `onRun`.
 
-Residual race: a gc that completes *mid-statement* or *mid-transaction*
-on a writer's conn can still lose the in-flight bytes because the
-validator runs only between pool checkouts. Per-write probability is
-on the order of 10⁻⁷ with default settings; closing it would require
-a cross-process advisory lock (compactor exclusive, writers shared)
-that both the daemon and ad-hoc CLI invocations respect.
+For each such task:
 
-### The daemon ignores its own AUTOSK_DB
+1. Create a session (`sessions/<id>.json` + `.jsonl`) and run the agent's
+   `onRun` on the worker pool, at `ctx.cwd = projectRoot`. The agent writes
+   pi-format transcript entries as it works. **Isolation is the agent's concern,
+   not the engine's:** a step's agent may wrap its harness in a
+   [sandbox](workflows.md#isolation-agent-owned-sandboxes) (a git worktree or a
+   container) and run it there, but the engine knows nothing about it.
+2. On run start the engine mints a per-session, host-side HTTP MCP server
+   (`ctx.newMCPServer()`) for a sandboxed harness's tool surface, and closes it
+   on every settle / finaliser / detach so no port leaks across steps.
+3. The agent must call `ctx.transit(target)` exactly once — a sibling step, or a
+   terminal/park status (`done` / `cancel` / `human`). `transit` validates the
+   target through the workflow's `onTransit` hook, atomically updates `task.json`,
+   and emits notifications. (A `task.done` / `task.cancel` RPC is a raw status
+   flip with no engine teardown — a sandbox is torn down by a
+   [cleanup step](workflows.md#cleanup-is-a-workflow-step), not the terminal.)
+4. If `onRun` returns **without** transiting, the session fails
+   (`error="agent_did_not_transit"`) and the task is parked to `human`.
 
-`AUTOSK_DB` is **client-side only**. The daemon process itself never
-consults the env var; every request resolves a project via
-`X-Autosk-Cwd` + optional `X-Autosk-DB`. This is what lets one daemon
-serve many projects safely.
+The loop is **event-driven** (it re-scans on every transit) with a slow safety
+rescan as a backstop — there is no 2-second polling.
 
----
+**Crash recovery.** On startup, any session left `running`/`queued` by a previous
+daemon is sealed `failed: daemon_restart` and its task is parked to `human` —
+interrupted work is never silently resumed.
 
-## HTTP API (over unix-domain socket)
+## Sessions & transcripts
 
-The wire shape is plain HTTP/1.1 over `AF_UNIX`. Use `curl --unix-socket`
-or, in code, an `http.Client` with `Transport.DialContext` returning a
-`net.Dial("unix", path)` connection.
+One invocation of an agent's `onRun` for one task step = one **session**.
+Sessions replace v1's "jobs".
 
-| Method | Path | Purpose |
-|---|---|---|
-| `GET`    | `/v1/jobs`                        | List jobs for the request's project. `?status=`, `?task_id=`, `?limit=`. |
-| `GET`    | `/v1/jobs/{job_id}`               | Read one job (scoped to project). |
-| `DELETE` | `/v1/jobs/{job_id}`               | Cancel (SIGTERM → grace → SIGKILL); idempotent on terminal rows. |
-| `GET`    | `/v1/jobs/{job_id}/messages`      | `?limit=N` (≤500), `?full=true`. 410 Gone when session is missing. |
-| `GET`    | `/v1/jobs/{job_id}/stream`        | SSE: `event: message`, `event: status`, `event: done`. Supports `Last-Event-ID`. |
-| `GET`    | `/v1/healthz`                     | Scoped: `{ok, workers, queued, running, db_path, project_root}`. With `?all=true`: cross-project aggregate (no `X-Autosk-Cwd` required). |
-| `GET`    | `/v1/version`                     | autosk build info. Exempt from project headers. |
+- **Meta** (`sessions/<id>.json`): `{ id, kind: task|interactive, task_id,
+  workflow, step, agent, status: queued|running|done|failed|aborted,
+  activity?: idle|busy, error?, started_at, ended_at }`. `activity` is the live
+  **turn** state (orthogonal to the lifecycle `status`): `busy` while the agent
+  is streaming a turn, `idle` when it is waiting for the next user message. It is
+  set for interactive (chat) sessions only and is absent on task sessions and
+  once a session is terminal. A `task` session is created by the scheduler for a
+  workflow step; an `interactive` session is a taskless chat (see [Interactive
+  sessions](#interactive-taskless-sessions) below) whose
+  `task_id`/`workflow`/`step` are the empty-string sentinel (`""`).
+- **Transcript** (`sessions/<id>.jsonl`): a line 1 header followed by typed
+  entries, in a format that **deliberately mirrors pi's session format** so
+  pi-based agents can pipe pi entries through verbatim and pi renderers stay
+  reusable:
+  - **`message` entries** — pi's message schema (`role`, `content[]` blocks incl.
+    `text` / `thinking` / `toolCall` / `image`, `usage`/`cost`, `stopReason`).
+  - **`custom` entries** — the generic agent logging channel.
+  - **engine structural entries** — autosk-specific custom types the engine
+    emits itself: `autosk:transit`, `autosk:steer`, `autosk:error`,
+    `autosk:session_end` — so a transcript is self-contained.
 
-### Required headers
+There is **no retention/GC** in this version: session files accumulate, and
+cleanup is manual (`rm .autosk/sessions/…`).
 
-Every endpoint except `GET /v1/version` and `GET /v1/healthz?all=true`
-requires:
+### Streaming partial messages
 
-| Header | Required | Meaning |
-|---|---|---|
-| `X-Autosk-Cwd` | yes (absolute path) | Project root or any path inside it; the daemon walks up to find `.autosk/db`. |
-| `X-Autosk-DB`  | optional (absolute path) | Overrides walk-up resolution. Wins over `X-Autosk-Cwd` for DB selection, but the project root is still derived from this DB path. |
+While an agent streams a model turn, the daemon can push the **in-progress**
+assistant message live, before it commits the durable transcript line. This is
+the `session-event` `kind:"partial"` frame (carried in `partial?:
+TranscriptMessage` on the wire). It rides the same per-session
+`session.subscribe` replay-then-tail subscription as committed lines, so a client
+renders a growing assistant bubble (text / thinking / tool-call blocks) as the
+turn is produced — today the Tauri GUI does this; `autosk lazy` only tolerates
+(ignores) the frame for now.
 
-Missing/malformed `X-Autosk-Cwd` → `400`. A `cwd` that does not
-contain `.autosk/db` anywhere up the tree → `404`.
+The frame is deliberately minimal and **ephemeral**:
 
-### POST `/v1/jobs` is gone
+- **Cumulative snapshot.** Each frame carries the full current message snapshot,
+  not a delta. A client just *replaces* its current partial — idempotent,
+  loss-tolerant, and correct for a client that joins mid-stream (it replays the
+  committed lines, then receives the next whole snapshot, with no delta backlog
+  to reconstruct). The producer coalesces frames (~40 ms) so the rate is bounded.
+- **Never persisted.** A partial is **not** written to `.jsonl`, carries no
+  `line`, and does **not** advance the subscription's monotonic line cursor. The
+  eventual `message_end` commits the one durable line exactly as before, and that
+  committed line supersedes (and clears) the live bubble.
+- **Ordered against commits.** Partial emission is funnelled through the same
+  serial transcript chain as durable appends, so a partial of message *N+1* can
+  never overtake the commit of message *N*.
+- **Per-session only.** Partials are delivered to per-session subscribers and are
+  excluded from the project-scope `session-changed` broadcast (which carries only
+  the `status`/`done`/`error` lifecycle frames).
 
-The previous v0.1 submit endpoint (which spawned ad-hoc pi sessions
-with caller-supplied prompts) is removed. Submitting work is now
-strictly:
+An agent produces partials via the SDK's ephemeral `ctx.partial(message)` (see
+[docs/workflows.md → The run context](workflows.md#the-run-context)); the shipped
+`@autosk/pi-agent` wires pi's `message_update` events into it.
+
+You can steer or abort a **live** session:
+
+- `session.input {kind: "steer"|"followup"}` injects a message into the running
+  agent (if the agent supports it);
+- `session.abort` fires the session's `AbortSignal`, seals the meta `aborted`,
+  and parks the task to `human`.
+
+## Interactive (taskless) sessions
+
+Not every session belongs to a task. An **interactive session** is a taskless
+chat you open directly against a registered agent (the GUI's Sessions panel `＋`
+button) and drive turn-by-turn — there is no workflow, no synthetic task, and no
+`ctx.transit`. It reuses the same `Session` entity, transcript format, and
+steer/subscribe surface as a task session; only `kind: "interactive"` and the
+`""` sentinels for `task_id`/`workflow`/`step` distinguish it.
+
+**Agent registry.** An extension publishes a named agent with
+`AutoskAPI.registerAgent({ name, description?, agent })` (see
+[docs/workflows.md → Named agents](workflows.md#named-agents--interactive-sessions)).
+`registry.agent.list` returns every registered agent; the GUI picker lists them.
+The shipped `@autosk/pi-agent` registers a `"pi"` agent (chat backed by
+`pi --mode rpc`).
+
+**Lifecycle.**
+
+1. `session.create {agent}` resolves the named agent (unknown name → invalid
+   params), creates a `kind:interactive` session with `cwd = projectRoot`, and
+   dispatches it **directly** — interactive sessions run **off**
+   the bounded task-worker pool, so an idle chat never occupies a slot a task
+   session needs, and the scheduler is never involved.
+2. The session opens **empty** (no first prompt); the first composer message
+   starts the first turn. `session.input {kind:"followup"}` delivers each turn —
+   idle → a fresh turn, streaming → a mid-turn follow-up.
+3. `session.end` winds the agent down gracefully and seals the session `done`
+   (distinct from `session.abort`, which seals `aborted`). Neither parks a task —
+   there is none. An interrupted interactive session is sealed
+   `failed: daemon_restart` on the next daemon start (again, no park); v1 does
+   **not** auto-resume it.
+
+While a chat is live the agent reports its **turn activity** via `ctx.setActivity`
+(`busy` on the turn's `agent_start`, `idle` on `agent_end`). The runtime writes it
+to `meta.activity` and pushes a `status` session-event / `session-changed`, so a
+client can show *idle* (waiting for you) vs *working* (streaming a turn) without
+the lifecycle `status` ever leaving `running`. The GUI renders this as the
+session badge: `idle` / `working` instead of a bare `running`.
+
+A live interactive session counts as pending work, so an idle (waiting-for-user)
+chat keeps the daemon from idle-shutting-down until the chat is ended or aborted.
+(Interactive sessions run off the worker pool, so they are **not** reflected in
+`meta.healthz`'s `running` counter, which reports task-pool jobs only.)
+
+## Hybrid file ownership
+
+The daemon is the writer for all RPC-driven mutations, but it also honours
+external (human/script) edits picked up by its startup scan + fs watcher:
+
+- external edits to `title` / `description` / `blocked_by` / `metadata` /
+  comments are accepted as-is;
+- external edits to `status` / `step` / `workflow` of a task **with a live
+  session** are rejected (the file is rewritten from engine state and a warning
+  is logged) — the engine owns enrolled tasks.
+
+Because `metadata` is human-editable, hand-editing (or `autosk metadata unset`)
+the reserved `step_visits` counter is the supported escape hatch for a workflow
+visit cap (last-writer-wins against a concurrent engine bump). See [Task
+metadata](#task-metadata) below.
+
+## Task metadata
+
+Every task carries a free-form `metadata` object in `task.json` — an opaque,
+human-editable key/value bag (always present, an empty object `{}` when the task
+has none). On disk the key is **omitted entirely when empty**, so pre-metadata
+`task.json` files round-trip byte-for-byte; a non-empty bag serialises in a fixed
+slot (after `blocked_by`, before `created_at`). A missing / corrupt / non-object
+`metadata` parses defensively to `{}`.
+
+The daemon treats the bag as opaque data **except** for one reserved sub-object,
+`step_visits` (a `step name → entry count` map) that the engine auto-maintains
+for workflow visit caps — see [workflows.md → `onTransit`](workflows.md#ontransit--the-only-graph-authority).
+
+Two dedicated RPC methods edit it server-side, under the per-task lock (so
+concurrent edits serialise with no lost updates); both bump `updated_at`, emit
+`task-changed`, and return the updated `TaskView`:
+
+- **`task.metadata.set {id, patch}`** — `patch` keys are **dot-paths** (e.g.
+  `step_visits.dev`); each value is written at that leaf, creating intermediate
+  objects along the way (a merge, not a whole-document replace).
+- **`task.metadata.unset {id, keys}`** — each `keys` entry is a dot-path that is
+  removed; an ancestor object emptied by the removal is pruned.
+
+From the CLI:
 
 ```bash
-autosk create   "..." --workflow feature-dev
-autosk create   "..." --agent    @autosk/developer
-autosk enroll   <id>  --workflow feature-dev
-autosk enroll   <id>  --agent    @autosk/developer
+autosk metadata show <id>                       # pretty JSON (honors --json)
+autosk metadata set <id> step_visits.dev 0      # value parsed as JSON, else a string
+autosk metadata unset <id> step_visits          # reset a workflow's dev visit count
 ```
 
-…and the per-project poller picks it up.
+`autosk show <id> --json` also includes the full `metadata` object. There is no
+`task.update` passthrough for metadata — the dedicated `set`/`unset` family is
+the only RPC write path.
 
----
+## JSON-RPC v2 surface
 
-## Security model
+The protocol is JSON-lines over the transport: one JSON object per line. Every
+project-scoped method carries a `{cwd}` selector; all timestamps on the wire are
+RFC3339 UTC. The wire types are defined once in
+[`daemon/sdk/src/proto.ts`](../daemon/sdk/src/proto.ts) and mirrored by the Go
+(`internal/daemon/api`) and Tauri (`gui/src-tauri`) clients.
 
-- **Auth = filesystem permissions.** The socket is `0600`, its
-  parent directory is `0700`. Anyone able to read `~/.autosk/` already
-  has full read/write access to your project DB(s), so there is no
-  additional trust boundary to defend with tokens here.
-- **No network exposure.** The daemon does not listen on TCP. There
-  is no `--bind` flag, no `--token-file`, no Bearer auth. A future
-  iteration will reintroduce a network mode behind a clearly distinct
-  command surface.
-- **Tool access is pi's.** The spawned pi (or custom runner)
-  inherits the parent environment, can shell, edit files, install
-  dependencies, etc. Do not point a project's cwd at directories you
-  would not give an interactive pi session access to.
-- **Concurrent runs in the same project may race on files.** The
-  global worker pool serialises across projects but does not prevent
-  two jobs in the same project from touching the same path. Mark a
-  workflow with `"isolation": "worktree"` (see
-  [`docs/workflows.md` § Worktree isolation](workflows.md#worktree-isolation))
-  to give each task its own git worktree on its own branch; the
-  daemon then spawns step runs with `cwd` pointing at the worktree
-  and threads `AUTOSK_DB` so `autosk` CLI calls inside the worktree
-  still find the canonical project DB.
+| Domain | Methods |
+| --- | --- |
+| meta | `version`, `auth`, `healthz`, `shutdown` |
+| project | `list`, `add`, `remove`, `init`, `diagnostics` (extension load errors), `subscribe`/`unsubscribe` |
+| task | `list`, `get`, `create`, `update`, `enroll {workflow}`, `resume {to?}`, `done`, `cancel`, `reopen`, `block`/`unblock`, `metadata.set`/`metadata.unset`, `comment.add/list/edit/delete`, `subscribe`/`unsubscribe` |
+| registry | `workflow.list`, `workflow.get`, `agent.list` (rendered from code — read-only) |
+| session | `list {task_id?}`, `get`, `transcript {from_line?, limit?}`, `subscribe`/`unsubscribe` (replay-then-tail), `input {message, kind}`, `abort`, `create {agent}` (open an interactive session), `end` (gracefully end one → `done`) |
 
----
+Notifications (server→client push): `task-changed`, `project-changed`,
+`session-event` (`message`|`status`|`done`|`error`|`partial`). These are fed by
+engine events and the fs watcher (so external file edits surface too). The
+`partial` frame is the ephemeral live-streaming channel — see [Streaming partial
+messages](#streaming-partial-messages) below; it is delivered only to
+per-session subscribers and is **not** broadcast on `session-changed`.
 
-## Closure verification
+**Error codes.** The reserved JSON-RPC range carries protocol failures; the
+domain errors live in the `1xxx` range: `PROJECT_NOT_FOUND` (1001),
+`INVALID_PROJECT` (1002), `NOT_FOUND` (1003), `CONFLICT` (1004 — the entity
+exists but isn't in a state that accepts the request now; retryable).
 
-After every `agent_end` event the daemon classifies the workflow step's
-outcome via `step_signals`:
+A few RPC semantics worth knowing:
 
-| Verdict | Condition | Action |
-|---|---|---|
-| `transition_emitted` | the step's runner called `autosk step next` | Run terminates as `done`, task advances. |
-| (none) | no signal observed | Daemon sends a corrective user message; `corrections_used += 1`. After `max_corrections` the run terminates as `failed` with `error="agent_did_not_emit_transition"`. |
+- `task.done` / `task.cancel` / `task.reopen` are **administrative overrides**:
+  they write via the store and do **not** run `workflow.onTransit` (they reject a
+  task with a live session with `CONFLICT`).
+- `project.remove` is **lazy**: it forgets the project in the registry and emits
+  `project-changed`, but leaves an already-open handle running until the next
+  daemon start.
 
-The daemon **never** calls `autosk done`/`cancel` directly — that is
-owned by the runner via `step next`.
+## Transports, auth, single-instance, idle-shutdown
 
-The recorded `step_signal` is treated as the source of truth for the
-turn outcome. If the agent wrote a signal but the executor's wait on
-the `agent_end` event then errored — pi pipe died, extension-RPC
-payload broke the reader, the unattached `--idle-timeout` fired before
-`agent_end` landed, etc. — the executor still honours the signal and
-advances the task instead of parking it. The original error is
-preserved in the daemon log as
-`executor: WaitForAgentEnd errored but step_signal already recorded; honoring signal`
-so the misbehaving turn is still investigable. Cancellation
-(`ctx.Err() != nil` or `errors.Is(err, context.Canceled)`) is excluded
-from this recovery path and routes through the normal cancel-aware
-cleanup.
+- **UDS (default).** A Unix-domain socket; parent dir `0700`, socket `0600`. No
+  auth — filesystem permissions are the gate. Single-instance is enforced by an
+  atomic pidfile lock (`<sock>.lock`, with dead-pid reclaim).
+- **TCP (opt-in).** `--tcp [HOST:]PORT` adds a TCP listener gated by a token: the
+  first request on a TCP connection must be `meta.auth {token}`. The token lives
+  at `~/.autosk/daemon-token` (`$AUTOSK_TOKEN_FILE`) and is created on first use.
+  Remote front ends (e.g. the GUI in remote mode) use this; a remote daemon must
+  be started explicitly (you can't auto-spawn across hosts).
+- **Idle-shutdown.** A UDS-mode daemon shuts itself down after the idle window
+  (`AUTOSK_IDLE_SECS`, default 30 min) when there are no live connections, no
+  queued/running sessions, and no `status=work` tasks across loaded projects.
+  Disabled with `0`, and always off in TCP mode (a remote daemon is a service).
 
----
+## Inspecting the daemon from the CLI
 
-## Troubleshooting
+```bash
+autosk session list [--task ID]      # sessions in this project (one row per agent run)
+autosk session get <id>              # one session's meta
+autosk session transcript <id>       # render the pi-format transcript
+autosk session abort <id>            # abort a live session (parks the task to human)
+autosk session input <id> "<msg>"    # steer (or --followup) a live session
 
-| Symptom | Likely cause |
-|---|---|
-| `daemon already running at <sock>` | Another `autosk daemon serve` owns the socket. `ps -fU $(whoami) \| grep autosk` to find it. |
-| `400 "X-Autosk-Cwd header required"` | Client did not set the header. CLI subcommands set it automatically from `--cwd` or `os.Getwd()`. |
-| `404 "no .autosk/db found from <cwd>"` | The cwd is outside any autosk project. Run `autosk init` or supply `--cwd` pointing into a real project. |
-| Run sits in `running` forever | The agent never emits `agent_end`. The daemon will fail it after `--idle-timeout` — unless the agent already wrote a `step_signal`, in which case the recorded transition is honoured and the task advances (see [Closure verification](#closure-verification)). |
-| Daemon log: `executor: WaitForAgentEnd errored but step_signal already recorded; honoring signal` | The turn finished correctly from the agent's side (the `step_signal` is in the DB) but the reader / idle-timer tripped during shutdown. The run is recorded as `done` and the task advances; the log line is the forensic breadcrumb. Inspect the `err=` field to see whether the reader died, the idle-timer fired, or another failure mode landed. |
-| Run fails with `agent_did_not_emit_transition` | The agent stopped without calling `autosk step next`, `max_corrections` times. Inspect transcript via `autosk daemon messages`. |
-| Run fails with `daemon_restart` | The daemon was restarted while this run was active. This iteration does not re-attach. Re-enroll the task. |
-| Daemon log: `executor: re-allocated missing worktree` | Isolated workflow's per-task worktree directory was gone at run start; the executor re-allocated it on the existing branch (`autosk/<task-id>`) and continued the run. No human action required. The previous behaviour (park → `human`) only applies to `worktree_stranded` now. |
-| Run fails with `worktree_stranded` | Isolated workflow's worktree directory exists but its `.git` no longer resolves to the project's gitdir (typical when the project was moved or re-initialised). Task is parked → `human`. See [`docs/workflows.md` § Recovering from `worktree_stranded`](workflows.md#recovering-from-worktree_stranded). |
-| 410 on `/v1/jobs/{id}/messages` | `session_path` is empty or the file was deleted. |
-| Stream connection drops | Long polls may need `X-Accel-Buffering: no` (already sent). Use `Last-Event-ID` on reconnect to skip replay. |
+autosk project list                  # known projects on this host
+autosk project diagnostics           # extension load errors for this project
 
----
+autosk version                       # CLI + daemon version
+```
 
-## Open items (next iterations)
-
-- Reintroduce a remote HTTP API for network-accessible deployments.
-- Idle-eviction of projects from memory.
-- Per-project worker limits / priorities between projects.
-- Multi-user / shared-host hardening (SO_PEERCRED).
-- Explicit project registration (replaces the lazy walk-up from
-  `X-Autosk-Cwd`; not related to the removed `autosk attach` CLI verb).
-- Reconnect to surviving pi processes after a daemon restart.
-- Cross-project enumeration for `autosk worktree list --all-projects`
-  (per-project isolation already lands in v0.3 via the workflow
-  `isolation: worktree` opt-in; see
-  [`docs/workflows.md` § Worktree isolation](workflows.md#worktree-isolation)).
-
-See [`docs/plans/20260518-Daemon-UDS-Plan.md`](plans/20260518-Daemon-UDS-Plan.md)
-§10 for the canonical out-of-scope list.
+The Tauri GUI and `autosk lazy` render the same surface live via the subscribe
+streams.

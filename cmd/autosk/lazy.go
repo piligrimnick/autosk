@@ -7,13 +7,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"autosk/internal/agent/pkgregistry"
 	"autosk/internal/buildinfo"
 	"autosk/internal/changelog"
-	"autosk/internal/daemon/client"
+	"autosk/internal/daemon/rpcclient"
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/lazy/tui"
-	"autosk/internal/store/doltlite"
 	"autosk/internal/userstate"
 )
 
@@ -21,13 +19,13 @@ import (
 //
 // Behaviour:
 //
-//   - Opens the project DB read-write (lazy auto-inits when missing,
-//     same as the other write-capable verbs).
-//   - Constructs a datasource.Compose that probes the daemon every
-//     --refresh interval; when the daemon is reachable, Jobs come
-//     from the live HTTP API (with Streaming/AttachCount), otherwise
-//     they come from .autosk/db (and the live SSE subscription is
-//     disabled).
+//   - Renders entirely from autoskd over JSON-RPC (plan §7.5: the single
+//     RPC-client Datasource). autoskd owns the project's `.autosk/` store; the
+//     Go binary opens no local store. autoskd is auto-spawned by the connector on first
+//     request (and runs migrations/bootstrap via project.init on a fresh dir).
+//   - Reads, writes, and the live job transcript tail all route to the daemon
+//     over the UDS. Panels refresh on the daemon's task-changed/project-changed
+//     push (no client-side poll); --refresh is the long safety re-sync floor.
 func newLazyCmd() *cobra.Command {
 	var (
 		sock        string
@@ -36,64 +34,47 @@ func newLazyCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "lazy",
-		Short: "Interactive TUI for tasks, jobs, workflows, and agents",
+		Short: "Interactive TUI for tasks, sessions, workflows, and agents",
 		Long: "lazy is a lazygit-style terminal dashboard for the autosk world.\n" +
-			"Tasks, Jobs, Workflows, and Agents in one process; selecting a job\n" +
-			"renders its transcript (live + archive) directly in the Detail pane.\n" +
+			"Tasks, Sessions, Workflows, and Agents in one process; selecting a\n" +
+			"session renders its transcript (live + archive) in the Detail pane.\n" +
 			"On the first run of a new release, lazy opens a modal showing the\n" +
 			"embedded CHANGELOG.md; press ctrl+w to re-open it manually, or pass\n" +
 			"--no-changelog to suppress the auto-popup.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			store, closeFn, err := openStore(ctx, true)
-			if err != nil {
-				return err
-			}
-			defer closeFn()
-
-			// Tie the doltlite connection-rotation cadence to the
-			// dashboard refresh interval. Lazy is the canonical
-			// long-lived reader; without rotation it would silently
-			// serve a stale snapshot after a cross-process dolt_gc()
-			// atomic-rewrote .autosk/db out from under our fd. See
-			// docs/lazy.md "cross-process freshness" and
-			// doltlite.DefaultConnLifetime.
-			if dl, ok := store.(*doltlite.Store); ok {
-				dl.SetConnMaxLifetime(refresh)
-			}
-
-			reg, _ := pkgregistry.Default()
-			cwd, err := getCwd()
-			if err != nil {
-				return err
-			}
-			off, err := datasource.NewOffline(store, cwd, reg)
-			if err != nil {
-				return fmt.Errorf("datasource: %w", err)
-			}
-			cli, err := client.New(client.Options{Sock: sock, Cwd: cwd})
-			if err != nil {
-				return fmt.Errorf("daemon client: %w", err)
-			}
-			comp := datasource.NewCompose(off, cli, refresh)
-			defer comp.Close()
-
-			opts := tui.Options{
-				Datasource:  comp,
-				ProjectRoot: cwd,
-				Refresh:     refresh,
-			}
-			if !noChangelog {
-				opts.ChangelogModal = buildChangelogModal(buildinfo.Version)
-			}
-			return tui.Run(ctx, opts)
+			return runLazyRPC(cmd.Context(), sock, refresh, noChangelog)
 		},
 	}
 	cmd.Flags().StringVar(&sock, "sock", "", "daemon socket path (default $AUTOSK_SOCK or ~/.autosk/daemon.sock)")
-	cmd.Flags().DurationVar(&refresh, "refresh", 2*time.Second, "panel refresh interval")
+	cmd.Flags().DurationVar(&refresh, "refresh", 2*time.Second,
+		"safety re-sync interval (panels update on the daemon push; floored to 30s while the push is active)")
 	cmd.Flags().BoolVar(&noChangelog, "no-changelog", false,
 		"suppress the first-run-of-a-new-release changelog popup (read-only; does not modify ~/.autosk/state.json)")
 	return cmd
+}
+
+// runLazyRPC runs the TUI against the autoskd-backed datasource (reads +
+// writes + the live transcript tail + the task-changed/project-changed push).
+// autoskd is auto-spawned by the connector on first request; the Go binary
+// opens no local store.
+func runLazyRPC(ctx context.Context, sock string, refresh time.Duration, noChangelog bool) error {
+	cwd, err := getCwd()
+	if err != nil {
+		return err
+	}
+	cli, err := rpcclient.New(rpcclient.Options{Sock: sock, Cwd: cwd})
+	if err != nil {
+		return fmt.Errorf("autoskd client: %w", err)
+	}
+	opts := tui.Options{
+		Datasource:  datasource.NewRPC(cli),
+		ProjectRoot: cwd,
+		Refresh:     refresh,
+	}
+	if !noChangelog {
+		opts.ChangelogModal = buildChangelogModal(buildinfo.Version)
+	}
+	return tui.Run(ctx, opts)
 }
 
 // buildChangelogModal decides whether to push the auto-popup on lazy

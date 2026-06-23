@@ -8,6 +8,8 @@ var Version = "dev"
 // Commit is the short git commit hash. Set via -ldflags at build time.
 var Commit = "unknown"
 
-// Backend names the storage backend the binary was compiled against.
-// "doltlite" for the default build; "doltserver" when built with -tags doltserver.
-var Backend = "doltlite"
+// Backend names the storage backend the binary talks to. The Go binary
+// is a pure JSON-RPC client and links no storage engine itself;
+// persistence is owned by the autoskd daemon, which stores tasks,
+// comments, and sessions as files under each project's `.autosk/`.
+var Backend = "autoskd"

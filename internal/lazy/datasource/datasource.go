@@ -1,28 +1,17 @@
 // Package datasource is the only seam between the lazy TUI and the
 // rest of autosk. Contexts, controllers, and helpers never reach into
-// internal/store, internal/daemon/client, or internal/workflow
+// internal/store, internal/daemon/rpcclient, or internal/workflow
 // directly — they go through a Datasource.
 //
-// Three implementations live alongside:
-//
-//   - offline: reads .autosk/db directly via internal/store +
-//     internal/agent + internal/workflow + internal/comments +
-//     internal/daemon/runstore + internal/daemon/transcript. Writes
-//     mutate the DB in-process (the same code paths the CLI commands
-//     in cmd/autosk/*.go use). Live (SSE input/abort) verbs are no-ops
-//     that return ErrDaemonRequired.
-//
-//   - live: same read surface, but Jobs and the transcript stream come
-//     from the daemon's HTTP/UDS API (internal/daemon/client). Used
-//     when the daemon is reachable so the TUI sees the in-flight pi
-//     state (Streaming / AttachCount) rather than the stale DB row.
-//
-//   - compose: 2s health probe over the UDS that flips between live
-//     and offline. Exposes a Health channel the status-bar reads.
+// There is a single implementation, RPC (rpc.go): every read, write, and the
+// live transcript tail route to autoskd (the daemon that solely owns the
+// project's .autosk store) over the JSON-RPC client (internal/daemon/rpcclient),
+// which auto-spawns the daemon on first use. The Go binary opens no store of
+// its own — it is a pure RPC client.
 //
 // All verbs are context-cancellable and MUST return within a few
-// hundred milliseconds. Long-running streams (the Live tab's SSE) are
-// expressed as a dedicated StreamLive() method that returns a handle
+// hundred milliseconds. The live transcript stream (session.subscribe) is
+// expressed as a dedicated StreamSession() method that returns a handle
 // the caller can close.
 package datasource
 
@@ -32,12 +21,14 @@ import (
 	"time"
 
 	"autosk/internal/daemon/api"
+	"autosk/internal/daemon/runstore"
 	"autosk/internal/store"
 )
 
-// ErrDaemonRequired is returned by offline-mode verbs that can't be
-// answered without a live daemon (Live tab SSE, /input, /abort,
-// CancelJob).
+// ErrDaemonRequired is the sentinel for verbs that cannot be answered without a
+// reachable daemon. With the single RPC datasource every verb requires the
+// daemon, so this is no longer returned in production; it survives as the error
+// the TUI's fake datasources use as a stand-in in tests.
 var ErrDaemonRequired = errors.New("daemon required")
 
 // TaskRef is a lightweight reference to a related task carrying just
@@ -50,151 +41,81 @@ type TaskRef struct {
 }
 
 // Task is the lazy TUI's projection of a task row. Derived fields
-// (WorkflowName, StepName, AgentName, Blocked, CommentCount) are
-// resolved by the datasource so the TUI never joins by hand.
+// (WorkflowName, StepName, Blocked, CommentCount) are resolved by
+// the datasource so the TUI never joins by hand. v2 drops Priority,
+// AuthorID, AuthorName, WorkflowID, CurrentStepID, AgentName. Metadata is the
+// free-form, human-editable bag (nil/empty when none); the engine reserves the
+// `step_visits` sub-object inside it.
 type Task struct {
-	ID            string
-	Title         string
-	Description   string
-	Status        store.Status
-	Priority      int
-	AuthorID      string
-	AuthorName    string
-	WorkflowID    string
-	WorkflowName  string
-	CurrentStepID string
-	StepName      string
-	AgentName     string // current step's agent
-	Blocked       bool
-	BlockedBy     []TaskRef // every blocker (open and closed), in store-order
-	Blocks        []TaskRef // every task this task blocks (open and closed)
-	CommentCount  int
-	// Metadata is the raw tasks.metadata JSON object. The Tasks-panel
-	// `M` hotkey reads it (pretty-prints with json.MarshalIndent) and
-	// writes it back wholesale via Datasource.SetMetadata. nil when
-	// the column is SQL NULL.
-	Metadata  map[string]any
+	ID           string
+	Title        string
+	Description  string
+	Status       store.Status
+	WorkflowName string // workflow name (from api Workflow)
+	StepName     string // current step name (from api Step)
+	Blocked      bool
+	BlockedBy    []TaskRef // every blocker (open and closed), in store-order
+	Blocks       []TaskRef // every task this task blocks (open and closed)
+	CommentCount int
+	Metadata     map[string]any
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// Session is the lazy TUI's projection of a session (replaces Job).
+// Built from api.SessionMeta with derived fields for rendering.
+type Session struct {
+	ID        string
+	TaskID    string
+	Workflow  string
+	Step      string
+	Agent     string
+	Status    runstore.RunStatus
+	Error     string
+	StartedAt *time.Time
+	EndedAt   *time.Time
+}
+
+// Workflow is the read-only projection of a workflow from code (api.WorkflowInfo).
+// v2 drops ID, IsSynthetic, TaskCount, NonTerminalTaskCount, NonTerminalTasks.
+type Workflow struct {
+	Name        string
+	Description string
+	FirstStep   string
+	Steps       []WorkflowStep
+}
+
+// NOTE: NonTerminalTaskSampleSize, NonTerminalTaskRef removed - v2 workflows are read-only
+
+// WorkflowStep is one step of a workflow rendered from code.
+type WorkflowStep struct {
+	Name string
+	// Status is the terminal/park status for a statusStep ("done"/"cancel"/
+	// "human"), or "" for an agent step (whose Name is the agent name).
+	Status  string
+	Targets []string // step names or status values from Targets
+}
+
+// Agent is the read-only projection of an agent. v2 agents are inline step
+// values (the step key is the agent name), so this is derived from the
+// registered workflows' agent steps rather than a dedicated registry view.
+type Agent struct {
+	Name string
+}
+
+// Comment mirrors api.Comment for rendering convenience.
+type Comment struct {
+	ID        string // v2 uses string IDs (cm-...)
+	Author    string // single rendered string
+	Text      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
 
-// Job mirrors api.JobResponse with a few cross-referenced helper
-// fields so the Jobs list can render the workflow:step label without
-// a second lookup.
-type Job struct {
-	api.JobResponse
-	WorkflowName string
-	StepName     string
-	AgentName    string
-}
-
-// Workflow is the projection of a workflows row + steps.
-type Workflow struct {
-	ID          string
-	Name        string
-	Description string
-	IsSynthetic bool
-	FirstStep   string
-	Steps       []WorkflowStep
-	TaskCount   int // tasks pointing at this workflow
-	// Isolation mirrors workflows.isolation ("none" | "worktree"). Empty
-	// in the on-disk row collapses to "none" at scan time. Surfaced on
-	// the Workflows panel ([wt] marker) and the workflow inspector.
-	Isolation string
-	// NonTerminalTaskCount is the TOTAL number of tasks currently in a
-	// non-terminal state ({new, work, human}) pointing at this
-	// workflow. The workflow inspector uses it to render the
-	// "(N non-terminal task(s) currently use this)" hint. Lazy's
-	// isolation popup uses it as the denominator when rendering the
-	// per-task list with a cap-at-NonTerminalTaskSampleSize suffix.
-	NonTerminalTaskCount int
-	// NonTerminalTasks is a bounded sample (first
-	// NonTerminalTaskSampleSize by id ASC) of the workflow's
-	// non-terminal tasks. Lazy's isolation confirm popup
-	// enumerates this list (plan §6.3 + §8 risk #4: cap at 10 with
-	// `... and N more` suffix). The full list is always available
-	// via `autosk list --workflow <name>`.
-	NonTerminalTasks []NonTerminalTaskRef
-}
-
-// NonTerminalTaskSampleSize bounds Workflow.NonTerminalTasks (the
-// sample lazy renders in the isolation confirm popup body). Sized to
-// fit comfortably in the popup before the `... and N more` suffix
-// kicks in; pinned in popup_isolation_test.go.
-const NonTerminalTaskSampleSize = 10
-
-// NonTerminalTaskRef is one row of Workflow.NonTerminalTasks — the
-// information the isolation confirm popup needs to render one
-// "  - <id> (status=..., current step=...)" line per affected task.
-// Separate from TaskRef (which is used for blocker references and
-// intentionally carries only id+status) so the slimmer blocker
-// renderer doesn't grow a StepName field it doesn't use.
-type NonTerminalTaskRef struct {
-	ID       string
-	Status   store.Status
-	StepName string
-}
-
-// WorkflowStep is one row of a workflow's step graph.
-type WorkflowStep struct {
-	ID         string
-	Name       string
-	AgentName  string
-	NextSteps  []string // resolved names
-	NextStatus []string // task_status transitions (terminal)
-	TaskCount  int      // tasks whose current_step_id == this step
-}
-
-// Agent is the projection of an agents row + (optional) package
-// metadata pulled from the pkgregistry.
-type Agent struct {
-	ID         string
-	Name       string
-	IsHuman    bool
-	Source     string // "builtin" | "installed" | "db_only"
-	Version    string // empty unless Source=="installed"
-	Model      string
-	Thinking   string
-	ExtraArgs  []string
-	PiSkills   []string
-	PiExt      []string
-	TasksOwned int // tasks where author_id == id OR current_step.agent_id == id
-}
-
-// Comment mirrors comments.Comment for rendering convenience.
-type Comment struct {
-	ID         int64
-	TaskID     string
-	AuthorID   string
-	AuthorName string
-	Text       string
-	CreatedAt  time.Time
-}
-
-// Signal is one step_signals row (the rows agents insert via
-// `autosk step next`). Decoded inline because the workflow store
-// doesn't expose them.
-//
-// step_signals exposes a (run_id, transition_id) tuple but no
-// synthetic id; we project TransitionID alongside JobID so the
-// inspector can render "step_next via transition #N" if anyone needs
-// it. The transition_id is also decoded into Target via the
-// step_transitions row's NextStepName / TaskStatus.
-type Signal struct {
-	TransitionID int64
-	TaskID       string
-	JobID        string
-	StepID       string
-	StepName     string
-	WorkflowID   string
-	WorkflowName string
-	Target       string // sibling step name OR done|cancel|human
-	AgentID      string
-	AgentName    string
-	CreatedAt    time.Time
-}
+// NOTE: Signal type removed - v2 has no signals
 
 // Health describes the datasource's view of the daemon.
+// v2 Health dropped DBPath/ProjectRoot scoped fields.
 type Health struct {
 	Daemon    string // "ok" | "down" | "stale"
 	Workers   int
@@ -206,28 +127,23 @@ type Health struct {
 // IsOK reports whether daemon is reachable and healthy.
 func (h Health) IsOK() bool { return h.Daemon == "ok" }
 
-// MessageEvent is the transcript event shape rendered by Archive /
-// Live tabs. Same wire shape as api.MessageEvent but importable
-// without pulling daemon/api into TUI code.
-type MessageEvent = api.MessageEvent
-
-// LiveEvent is one SSE frame from StreamLive.
+// LiveEvent is one session-event frame from StreamSession.
 type LiveEvent struct {
 	// Kind is "message" | "status" | "done" | "error".
 	Kind    string
-	Message MessageEvent    // populated when Kind == "message"
-	Status  api.JobResponse // populated when Kind == "status" or "done"
-	Err     error           // populated when Kind == "error"
-	EventID int             // SSE id, 0 when absent
+	Line    api.TranscriptLine // populated when Kind == "message"
+	Session api.SessionMeta    // populated when Kind == "status" or "done"
+	Err     error              // populated when Kind == "error"
+	LineNum int                // line number from transcript
 }
 
-// LiveHandle is the active SSE subscription returned by StreamLive.
+// LiveHandle is the active session-event subscription returned by StreamSession.
 type LiveHandle struct {
 	Events <-chan LiveEvent
 	close  func() error
 }
 
-// Close terminates the SSE stream. Idempotent.
+// Close terminates the session-event subscription. Idempotent.
 func (h *LiveHandle) Close() error {
 	if h == nil || h.close == nil {
 		return nil
@@ -235,42 +151,58 @@ func (h *LiveHandle) Close() error {
 	return h.close()
 }
 
-// NewLiveHandle is the constructor live.go uses; exported for the
-// composer.
+// NewLiveHandle constructs a LiveHandle; used by StreamSession (rpc.go) and the
+// TUI's live-pump tests.
 func NewLiveHandle(ch <-chan LiveEvent, closeFn func() error) *LiveHandle {
 	return &LiveHandle{Events: ch, close: closeFn}
 }
 
-// UpdateIsolationReport is the lazy-side mirror of
-// workflow.UpdateIsolationReport. We keep a parallel struct so the
-// TUI never imports internal/workflow directly (the datasource
-// package is the only seam between the TUI and the rest of the
-// project).
-type UpdateIsolationReport struct {
-	Workflow          string
-	From              string
-	To                string
-	Noop              bool
-	NonTerminalTasks  []string
-	EnsuredTasks      []EnsureRecord
-	LeftoverWorktrees []LeftoverWorktree
-	RolledBackEnsures []EnsureRecord
-	FailedTask        string
+// ChangeEvent is one daemon push delivered by a Watcher: a signal that the
+// project's task state (Kind=="task"), its workflow/agent registry
+// (Kind=="project"), or one of its sessions (Kind=="session") changed and the
+// dashboard should re-fetch. It carries no diff — the consumer re-reads the
+// affected panels. Backed by the daemon's task-changed / project-changed /
+// session-changed notifications (plan §5).
+type ChangeEvent struct {
+	Kind string // "task" | "project" | "session"
 }
 
-// EnsureRecord and LeftoverWorktree mirror the workflow-package types
-// of the same names.
-type EnsureRecord struct {
-	TaskID   string
-	Path     string
-	Branch   string
-	Existing bool
+// WatchHandle is the active task-changed/project-changed subscription returned
+// by Watcher.Watch.
+type WatchHandle struct {
+	Events <-chan ChangeEvent
+	close  func() error
 }
 
-type LeftoverWorktree struct {
-	TaskID string
-	Path   string
+// Close terminates the subscription. Idempotent.
+func (h *WatchHandle) Close() error {
+	if h == nil || h.close == nil {
+		return nil
+	}
+	return h.close()
 }
+
+// NewWatchHandle constructs a WatchHandle; used by RPC.Watch (rpc.go) and the
+// TUI's watch-loop tests.
+func NewWatchHandle(ch <-chan ChangeEvent, closeFn func() error) *WatchHandle {
+	return &WatchHandle{Events: ch, close: closeFn}
+}
+
+// Watcher is the OPTIONAL push-notification capability a Datasource may
+// implement. The RPC datasource (rpc.go) implements it over the daemon's
+// task.subscribe stream so the TUI refreshes on a server push instead of a
+// fixed poll (plan §5: "replace lazy's client-side 2s poll with a server
+// push"). A datasource that does NOT implement Watcher (e.g. the test fakes)
+// makes the TUI fall back to its periodic safety re-sync. Kept separate from
+// Datasource so adding push refresh does not force every fake to grow a method.
+type Watcher interface {
+	// Watch opens a task-changed/project-changed subscription. The handle
+	// delivers a ChangeEvent on each daemon push until the stream ends (daemon
+	// disconnect / subscribe error) or the caller Closes it. Returns promptly.
+	Watch(ctx context.Context) (*WatchHandle, error)
+}
+
+// NOTE: UpdateIsolationReport, EnsureRecord, LeftoverWorktree removed - v2 workflows are read-only
 
 // Datasource is the read+write contract the TUI talks through.
 type Datasource interface {
@@ -278,103 +210,70 @@ type Datasource interface {
 
 	Tasks(ctx context.Context, f TaskFilter) ([]Task, error)
 	GetTask(ctx context.Context, id string) (Task, error)
-	Jobs(ctx context.Context, f JobFilter) ([]Job, error)
-	GetJob(ctx context.Context, id string) (Job, error)
-	Workflows(ctx context.Context, includeSynthetic bool) ([]Workflow, error)
-	Agents(ctx context.Context) ([]Agent, error)
+	Sessions(ctx context.Context, taskID string) ([]Session, error) // replaces Jobs
+	GetSession(ctx context.Context, id string) (Session, error)     // replaces GetJob
+	Workflows(ctx context.Context) ([]Workflow, error)              // drops includeSynthetic
+	Agents(ctx context.Context) ([]Agent, error)                    // derived from workflow agent steps
 	Comments(ctx context.Context, taskID string) ([]Comment, error)
-	// Signals returns step_signals rows attached to a single run
-	// (jobID), newest first. Design plan §5.5: the Inspector "Signals"
-	// tab is scoped to ONE run.
-	Signals(ctx context.Context, jobID string) ([]Signal, error)
-	// SignalsForTask returns every step_signals row attached to a task
-	// across all of its runs. Used by the dashboard's Tasks-detail
-	// widgets where the operator wants the full kickback history.
-	SignalsForTask(ctx context.Context, taskID string) ([]Signal, error)
-	Messages(ctx context.Context, jobID string, full bool, limit int) ([]MessageEvent, error)
 	Healthz(ctx context.Context) (Health, error)
 
 	// ---- writes (task lifecycle) ----
 
-	CreateTask(ctx context.Context, title, description string, priority int) (string, error)
-	UpdateStatus(ctx context.Context, id string, status store.Status) error
-	UpdatePriority(ctx context.Context, id string, p int) error
-	// UpdateTitleDescription rewrites tasks.title and tasks.description
-	// in one call. Either field may be unchanged from the current task —
-	// callers are expected to pre-load the current values (or accept
-	// the wipe) and submit a full pair. Returns an error when title
-	// is empty after trimming so the UI can render a flash.
-	UpdateTitleDescription(ctx context.Context, id, title, description string) error
-	// Enroll (re-)attaches a task to a workflow. When stepName is empty
-	// the task lands on the workflow's first step (CLI default);
-	// otherwise it lands on the named step (CLI parity with
-	// `autosk enroll --step NAME`).
-	Enroll(ctx context.Context, id, workflow, stepName string) error
+	CreateTask(ctx context.Context, title, description string) (string, error) // drops priority
+	// Status actions map to explicit verbs: done→TaskDone, cancel→TaskCancel, reopen→TaskReopen.
+	// done/cancel are a raw status flip (isolation is agent-owned and torn down by
+	// a cleanup workflow step); the worktree branch is always preserved.
+	TaskDone(ctx context.Context, id string) error
+	TaskCancel(ctx context.Context, id string) error
+	TaskReopen(ctx context.Context, id string) error
+	// UpdateTask replaces UpdateTitleDescription - uses pointers for optional updates
+	UpdateTask(ctx context.Context, id string, title, description *string) error
+	// EnrollWorkflow enrolls a task into a workflow at its first step. (The wire
+	// verb also accepts an explicit step; the TUI picker doesn't expose it yet.)
+	EnrollWorkflow(ctx context.Context, id, workflow string) error
+	// Resume maps to Resume(id, nil) for "resume from human" or Resume(id, &StepTarget{Step:toStep})
 	Resume(ctx context.Context, id, toStep string) error
 	Block(ctx context.Context, id, blocker string) error
 	Unblock(ctx context.Context, id, blocker string) error
 	AddComment(ctx context.Context, taskID, text string) error
-	// SetMetadata replaces tasks.metadata wholesale with m. A nil or
-	// empty map clears the metadata column (renders as "{}" on read).
-	SetMetadata(ctx context.Context, id string, m map[string]any) error
+	// SetTaskMetadata / UnsetTaskMetadata edit a task's free-form metadata bag.
+	// `patch` keys are dot-paths merged into the tree; `keys` are dot-paths
+	// removed (emptied parents pruned). The TUI's metadata editor diffs the
+	// edited document at top-level-key granularity and calls these.
+	SetTaskMetadata(ctx context.Context, id string, patch map[string]any) error
+	UnsetTaskMetadata(ctx context.Context, id string, keys []string) error
 
-	// ---- writes (workflow / agent) ----
+	// ---- workflow/agent writes removed - v2 workflows are read-only ----
 
-	CreateWorkflow(ctx context.Context, jsonOrPath string) (string, error)
-	DeleteWorkflow(ctx context.Context, name string) error
-	// UpdateWorkflowIsolation flips the workflows.isolation column.
-	// The mode string is the same shape as `autosk workflow update
-	// --isolation`: "none" or "worktree". force=true bypasses the
-	// non-terminal-tasks guard with mode-specific side-effects (per
-	// task Ensure for none→worktree; leftover worktree paths surfaced
-	// in Report.LeftoverWorktrees for worktree→none). DryRun is not
-	// exposed at the datasource layer: the TUI's confirmation popup
-	// is the preview; the call always commits.
-	UpdateWorkflowIsolation(ctx context.Context, name, mode string, force bool) (UpdateIsolationReport, error)
-	InstallAgent(ctx context.Context, name, version string) error
-	UninstallAgent(ctx context.Context, name string) error
+	// ---- sessions (live only) ----
 
-	// ---- jobs (live only) ----
+	AbortSession(ctx context.Context, id string) error                // replaces CancelJob/AbortJob
+	SessionInput(ctx context.Context, id, message, kind string) error // replaces SendInput
 
-	CancelJob(ctx context.Context, jobID string) error
-	SendInput(ctx context.Context, jobID, message, behavior string) (string, error)
-	AbortJob(ctx context.Context, jobID string) error
-
-	// Reconnect drops any pooled connection inside the underlying
-	// store and forces the next query to acquire a fresh
-	// *sqlite3.SQLiteConn. The lever lazy uses to recover from a
-	// cross-process `dolt_gc()` that atomic-rewrote `.autosk/db` out
-	// from under our fd. Safe to call concurrently with in-flight
-	// reads; idempotent. Offline + Compose forward to the doltlite
-	// store; daemon-only datasources may treat this as a no-op.
+	// Reconnect is a no-op for the RPC datasource: the daemon owns the
+	// store, and the Go binary holds no connection of its own to drop.
+	// It survives on the interface as a recovery lever the TUI's
+	// Ctrl-R hard-refresh can call; daemon-only datasources treat it
+	// as a no-op. Safe to call concurrently; idempotent.
 	Reconnect(ctx context.Context) error
 
-	// StreamLive opens an SSE subscription to a job. Caller must call
-	// LiveHandle.Close. Offline datasources return ErrDaemonRequired.
-	StreamLive(ctx context.Context, jobID string) (*LiveHandle, error)
+	// SessionTranscript fetches a session's full archived transcript as a slice
+	// of LiveEvents (oldest first). Used for the Detail pane snapshot.
+	SessionTranscript(ctx context.Context, sessionID string) ([]LiveEvent, error)
+
+	// StreamSession opens a session.subscribe transcript tail. Caller must call
+	// LiveHandle.Close. Backed by the daemon's persistent connection.
+	StreamSession(ctx context.Context, sessionID string) (*LiveHandle, error)
 }
 
-// TaskFilter narrows Tasks results. Empty struct == "default open work".
-//
-// Agent scoping has three flavours because the design plan §3.4
-// explicitly distinguishes them:
-//   - AgentName       – broad: match either AuthorName OR StepAgentName.
-//     Used by the agent: facet for backwards
-//     compatibility with the help text.
-//   - AuthorName      – narrow: filter on tasks.author_id only.
-//     Used when the Agents-panel popup chooses
-//     "by author".
-//   - StepAgentName   – narrow: filter on current_step.agent_id only.
-//     Used when the Agents-panel popup chooses
-//     "by current step".
+// TaskFilter narrows Tasks results. v2 drops Priority, AgentName, AuthorName, StepAgentName.
+// Keep status filter + search only. WorkflowID becomes WorkflowName.
 type TaskFilter struct {
-	Statuses      []store.Status
-	Priority      *int
-	WorkflowID    string
-	AgentName     string // broad match (author OR current step's agent)
-	AuthorName    string // narrow: author_id only
-	StepAgentName string // narrow: current_step.agent_id only
-	Search        string // substring match on id / title (case-insensitive)
+	Statuses     []store.Status
+	WorkflowName string // workflow name filter
+	StepName     string // step name filter
+	Blocked      *bool  // blocked state filter
+	Search       string // substring match on id / title (case-insensitive)
 }
 
 // DefaultTaskFilter returns the filter that mirrors `autosk list`
@@ -383,10 +282,4 @@ func DefaultTaskFilter() TaskFilter {
 	return TaskFilter{Statuses: store.OpenStatuses()}
 }
 
-// JobFilter narrows Jobs results.
-type JobFilter struct {
-	TaskID     string
-	WorkflowID string
-	Statuses   []string
-	Limit      int
-}
+// NOTE: JobFilter removed - Sessions() takes just taskID parameter

@@ -1,0 +1,122 @@
+.sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  background: var(--bg-1);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  z-index: 2;
+}
+.sidebar-title {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--fg-mute);
+}
+.sidebar-actions {
+  display: flex;
+  gap: 2px;
+}
+.sidebar-empty {
+  padding: 14px 12px;
+  color: var(--fg-mute);
+  font-size: 13px;
+}
+
+.project-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.project-row:hover {
+  background: var(--bg-2);
+}
+.project-caret {
+  color: var(--fg-mute);
+  font-size: 11px;
+  width: 12px;
+}
+.project-name {
+  flex: 1;
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-remove {
+  opacity: 0;
+}
+.project-row:hover .project-remove {
+  opacity: 1;
+}
+.project-open > .project-row {
+  background: var(--bg-2);
+}
+
+.new-task-btn {
+  width: 100%;
+}
+.task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* One single-line row: DONE  ask-xxxxxx  Title…  ⛔ — the status chip LEADS the
+ * row (left edge), then the id, then the title which flex-grows and
+ * ellipsis-truncates so the optional blocked flag stays pinned to the right
+ * edge. No ranking widget is rendered here. */
+.task-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+.task-item:hover {
+  background: var(--bg-2);
+}
+.task-item.is-selected {
+  background: var(--bg-3);
+  border-color: var(--border);
+}
+.task-id {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--task-id);
+  flex-shrink: 0;
+}
+.blocked-flag {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.task-item-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

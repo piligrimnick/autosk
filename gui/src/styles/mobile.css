@@ -1,0 +1,308 @@
+/* Compact (phone) layout — iPhone compact-layout plan.
+ *
+ * EVERY rule in this file is gated behind the activation media query, so the
+ * desktop / iPad two-pane shell is byte-for-byte unaffected. The query mirrors
+ * COMPACT_MEDIA_QUERY in features/layout/utils/compact.ts verbatim, so the CSS
+ * gate and the JS mount gate (useIsCompact) never disagree. Imported LAST in
+ * main.tsx so its overrides win cascade ties (e.g. full-screen modal sheets).
+ */
+@media (pointer: coarse) and ((max-width: 700px) or (max-height: 480px)) {
+  /* ---- shell: top bar / notice / body / (tab bar) -------------------------*/
+  /* Flex column (not grid) so a null NoticeBar leaves no empty row. The shell
+   * owns the top + horizontal safe-area insets (chrome clear of the notch in
+   * both orientations — in iPhone landscape the notch is on a side); the tab
+   * bar and the composer own the bottom inset, so insets are never doubled. */
+  .mobile-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    /* --app-vh is the live visual-viewport height published by MobileShell's
+     * useViewportKeyboard hook. iOS WebKit ignores interactive-widget, so this
+     * is what actually shrinks the shell to fit above the on-screen keyboard;
+     * it falls back to 100dvh on platforms/states where the var is unset. */
+    height: var(--app-vh, 100dvh);
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--fg);
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) 0
+      env(safe-area-inset-left);
+  }
+
+  /* ---- no input focus-zoom ----------------------------------------------*/
+  /* iOS auto-zooms (and pans the layout sideways) when a focused control
+   * renders below 16px. That zoom also shrinks the visual viewport, which the
+   * --app-vh hook would then mistake for the keyboard and collapse the shell.
+   * Pin every text control to 16px on the phone so focusing it never zooms.
+   * (Backed up by maximum-scale=1 in index.html's viewport meta.) */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+
+  /* ---- top bar -----------------------------------------------------------*/
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 48px;
+    flex-shrink: 0;
+    padding: 0 6px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+    user-select: none;
+  }
+  .mobile-topbar-spacer {
+    flex: 1;
+  }
+  .mobile-topbar-title {
+    flex: 1;
+    min-width: 0;
+    font-weight: 600;
+    font-size: 16px;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* The compact top bar's project switcher can use the full available width. */
+  .mobile-topbar .project-switcher {
+    max-width: 70vw;
+    font-size: 16px;
+  }
+
+  /* ≥44px tap targets for the gear / back controls. */
+  .mobile-icon-btn {
+    background: transparent;
+    border: none;
+    color: var(--fg-dim);
+    min-width: 44px;
+    height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    border-radius: 8px;
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+  .mobile-icon-btn:active {
+    background: var(--bg-3);
+    color: var(--fg);
+  }
+  .mobile-icon-btn svg {
+    width: 20px;
+    height: 20px;
+  }
+  .mobile-back {
+    padding: 0 10px 0 6px;
+    color: var(--accent);
+    font-size: 15px;
+  }
+  .mobile-back-label {
+    font-weight: 500;
+  }
+
+  /* ---- body --------------------------------------------------------------*/
+  .mobile-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* The single hosted list panel fills the body: drop the accordion's 3:1
+   * flex weighting and the inter-panel border (only one panel is mounted). */
+  .mobile-body .sidebar-panel,
+  .mobile-body .sidebar-panel.is-active {
+    flex: 1 1 auto;
+    min-height: 0;
+    border-bottom: none;
+  }
+  /* The hosted panel header becomes the list screen's section header. */
+  .mobile-body .panel-header {
+    height: 48px;
+  }
+  .mobile-body .panel-header.is-clickable {
+    cursor: default;
+  }
+  /* ≥40px tap targets for the panel ＋ / ↻ icon actions (mouse-sized today). */
+  .mobile-body .panel-header-actions .btn-ghost {
+    min-width: 40px;
+    min-height: 40px;
+    font-size: 18px;
+  }
+
+  /* The detail center panel fills the body. */
+  .mobile-body .panel-center {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  /* Detail screens whose Composer is absent (composerMode "none": a selected
+   * workflow, or a terminal/read-only session) have nothing carrying the
+   * bottom inset once the tab bar is hidden. Give the scroll body a baseline
+   * home-indicator inset so its tail can scroll clear of the home indicator.
+   * (When a composer IS present it owns the bottom edge; this just adds a
+   * small, harmless gap above it.) */
+  .mobile-shell.is-detail .center-body {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* Roomier list rows for touch (≥44px). */
+  .mobile-body .task-item,
+  .mobile-body .session-row,
+  .mobile-body .wf-row {
+    min-height: 44px;
+  }
+
+  /* ---- bottom tab bar ----------------------------------------------------*/
+  .mobile-tabbar {
+    display: flex;
+    flex-shrink: 0;
+    border-top: 1px solid var(--border);
+    background: var(--bg-1);
+    /* Sit above the home indicator. */
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .mobile-tab {
+    flex: 1;
+    min-height: 52px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    background: transparent;
+    border: none;
+    color: var(--fg-mute);
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    padding: 6px 0;
+    cursor: pointer;
+  }
+  .mobile-tab.is-active {
+    color: var(--accent);
+  }
+  .mobile-tab-icon {
+    display: inline-flex;
+  }
+  .mobile-tab-icon svg {
+    width: 22px;
+    height: 22px;
+    display: block;
+  }
+
+  /* ---- composer (detail screen) -----------------------------------------*/
+  /* No tab bar on the detail screen → the composer owns the bottom edge and
+   * carries the home-indicator inset. The viewport meta's
+   * interactive-widget=resizes-content keeps it above the on-screen keyboard. */
+  .mobile-shell.is-detail .composer {
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  }
+  /* With the keyboard up the shell already sits flush on the keyboard's top
+   * edge (which covers the home indicator), so the safe-area bottom inset would
+   * just be dead space between the input and the keyboard — drop it. */
+  .mobile-shell.is-keyboard.is-detail .composer {
+    padding-bottom: 10px;
+  }
+
+  /* ---- detail screen: no horizontal scroll + hard-wrap long content ------*/
+  /* A scroll pane with overflow-y:auto computes overflow-x to `auto` too, so a
+   * single long unbreakable token (a path, a URL) opens a sideways scroll on
+   * the whole detail screen. Pin overflow-x:hidden on every detail pane and
+   * hard-wrap long words / code so the content always reflows to the viewport
+   * width instead. */
+  .mobile-shell.is-detail .center-body,
+  .mobile-shell.is-detail .session-view,
+  .mobile-shell.is-detail .task-view,
+  .mobile-shell.is-detail .session-view-transcript,
+  .mobile-shell.is-detail .task-view-body {
+    overflow-x: hidden;
+  }
+  .mobile-shell.is-detail .markdown,
+  .mobile-shell.is-detail .markdown p,
+  .mobile-shell.is-detail .markdown li,
+  .mobile-shell.is-detail .markdown code,
+  .mobile-shell.is-detail .msg-body,
+  .mobile-shell.is-detail .msg-chip,
+  .mobile-shell.is-detail .task-view-title {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  /* Fenced code blocks wrap on the phone instead of scrolling sideways. */
+  .mobile-shell.is-detail .markdown pre,
+  .mobile-shell.is-detail .msg-code {
+    white-space: pre-wrap;
+    overflow-x: hidden;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  /* ---- session detail header: status · workflow:step · agent   task-id ---*/
+  /* The session id already labels the top bar, so drop the duplicate on the
+   * header line: it reads "status · workflow:step · agent" with the task id
+   * pinned (and never truncated) at the right edge, all on a single line. */
+  .mobile-shell.is-detail .session-view-id {
+    display: none;
+  }
+  .mobile-shell.is-detail .session-view-title {
+    flex-wrap: nowrap;
+  }
+  .mobile-shell.is-detail .session-view-title .session-wfstep {
+    min-width: 0;
+  }
+  .mobile-shell.is-detail .session-view-right {
+    flex-shrink: 0;
+  }
+
+  /* ---- sessions list rows: full task id / agent, truncated session id -----*/
+  /* The session id is the least useful column on a phone: let it shrink and
+   * ellipsis so the task id (or, for a chat, the agent name) prints in full on
+   * the right edge — and the row never opens a horizontal scroll. */
+  .mobile-body .panel-body {
+    overflow-x: hidden;
+  }
+  .mobile-body .session-row .session-id {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mobile-body .session-row .session-task-id {
+    flex: 0 0 auto;
+    overflow: visible;
+    text-overflow: clip;
+  }
+  .mobile-body .session-row .session-agent-name {
+    margin-left: auto;
+    flex: 0 0 auto;
+  }
+
+  /* ---- full-screen modal sheets -----------------------------------------*/
+  /* CSS-only: the modal JSX is unchanged. The overlay still closes on a
+   * backdrop tap (Modal's onMouseDown) where one is reachable, and every modal
+   * keeps its × close button, so all sheets are dismissable. */
+  .modal-overlay {
+    align-items: stretch;
+    justify-content: stretch;
+  }
+  .modal {
+    width: 100%;
+    max-width: none;
+    height: 100vh;
+    height: 100dvh;
+    max-height: none;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    /* Full-screen sheet: clear the notch / home indicator on all four edges so
+     * the head (title + ×) and footer buttons stay reachable in landscape. */
+    padding: env(safe-area-inset-top) env(safe-area-inset-right)
+      env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  .modal-head {
+    min-height: 48px;
+  }
+}

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/jesseduffield/gocui"
 
 	"autosk/internal/lazy/ansiutil"
@@ -159,8 +160,8 @@ func TestCheatsheet_NoCrossPanelLeakage(t *testing.T) {
 			}
 		}
 	}
-	// And: the Local section must contain at least the workflow
-	// write verbs (n new, D delete, i isolation).
+	// And: v2 workflows are READ-ONLY, so the Local section must NOT
+	// contain any workflow write verbs.
 	gotLocalDescs := map[string]bool{}
 	currentSection := ""
 	for _, it := range gu.st.popup.CheatsheetItems {
@@ -172,9 +173,9 @@ func TestCheatsheet_NoCrossPanelLeakage(t *testing.T) {
 			gotLocalDescs[it.Description] = true
 		}
 	}
-	for _, want := range []string{"new workflow (from file)", "delete workflow", "toggle isolation"} {
-		if !gotLocalDescs[want] {
-			t.Errorf("Local bucket missing expected workflow verb %q; got %v", want, gotLocalDescs)
+	for _, banned := range []string{"new workflow (from file)", "delete workflow", "toggle isolation"} {
+		if gotLocalDescs[banned] {
+			t.Errorf("Local bucket leaked removed workflow write verb %q; got %v", banned, gotLocalDescs)
 		}
 	}
 }
@@ -192,33 +193,33 @@ func TestCheatsheet_FilterAndCursor(t *testing.T) {
 	if initialCount < 5 {
 		t.Fatalf("expected several visible rows; got %d", initialCount)
 	}
-	// Type 'metadata' → must produce a smaller filtered set
-	// including the "edit metadata" row.
+	// Type 'comment' → must produce a smaller filtered set
+	// including the "add comment" row.
+	gu.cheatsheetAppendRune('c')
+	gu.cheatsheetAppendRune('o')
 	gu.cheatsheetAppendRune('m')
-	gu.cheatsheetAppendRune('e')
-	gu.cheatsheetAppendRune('t')
-	gu.cheatsheetAppendRune('a')
-	if gu.st.popup.CheatsheetFilter != "meta" {
-		t.Fatalf("filter=%q want %q", gu.st.popup.CheatsheetFilter, "meta")
+	gu.cheatsheetAppendRune('m')
+	if gu.st.popup.CheatsheetFilter != "comm" {
+		t.Fatalf("filter=%q want %q", gu.st.popup.CheatsheetFilter, "comm")
 	}
-	filtered := filterCheatsheetItems(gu.st.popup.CheatsheetItems, "meta")
+	filtered := filterCheatsheetItems(gu.st.popup.CheatsheetItems, "comm")
 	if cheatsheetVisibleRowCount(filtered) >= initialCount {
 		t.Errorf("filter did not shrink set: %d >= %d", cheatsheetVisibleRowCount(filtered), initialCount)
 	}
-	// "metadata" must appear.
+	// "add comment" must appear.
 	visibleDescs := map[string]bool{}
 	for _, it := range filtered {
 		if !it.IsHeader {
 			visibleDescs[it.Description] = true
 		}
 	}
-	if !visibleDescs["edit metadata"] {
-		t.Errorf("filter \"meta\" did not include \"edit metadata\": %v", visibleDescs)
+	if !visibleDescs["add comment"] {
+		t.Errorf("filter \"comm\" did not include \"add comment\": %v", visibleDescs)
 	}
 
 	// Backspace pops one rune.
 	_ = gu.cheatsheetBackspace(nil, nil)
-	if gu.st.popup.CheatsheetFilter != "met" {
+	if gu.st.popup.CheatsheetFilter != "com" {
 		t.Errorf("backspace did not pop: filter=%q", gu.st.popup.CheatsheetFilter)
 	}
 
@@ -410,7 +411,7 @@ func TestRenderCheatsheetBody_ColumnAlignment(t *testing.T) {
 			if idx < 0 {
 				continue
 			}
-			prefixCols = append(prefixCols, lipglossWidth(ln[:idx]))
+			prefixCols = append(prefixCols, lipgloss.Width(ln[:idx]))
 			found = true
 			break
 		}

@@ -1,0 +1,25 @@
+/* Design-system tokens (redesign plan §9). Phase 1 seeds the shell-sizing and
+ * CodexMonitor-derived status hues; the full palette re-map onto these tokens
+ * is the dedicated Styling phase. Base color vars (--bg, --fg, …) still live in
+ * base.css and are referenced here. */
+:root {
+  /* shell sizing */
+  --titlebar-height: 40px;
+  --panel-header-height: 34px;
+  --sidebar-width: 300px;
+
+  /* macOS traffic-light inset for the titlebar (left padding) — clears the
+   * native traffic lights and leaves a gap before the first titlebar control. */
+  --titlebar-mac-inset: 94px;
+
+  /* CodexMonitor-derived status hues — used by the animated session status
+   * dot from Phase 3 onward. */
+  --status-processing: #ff9f43;
+  --status-reviewing: #2fd1c4;
+  --status-ready: #3fe47e;
+  --status-unread: #4da3ff;
+
+  /* motion */
+  --ds-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ds-dur-fast: 120ms;
+}

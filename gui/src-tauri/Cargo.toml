@@ -1,0 +1,41 @@
+[package]
+name = "autosk-gui"
+version = "0.1.0"
+description = "autosk desktop GUI (Tauri shell, JSON-RPC client of autoskd)"
+edition = "2021"
+license = "MIT"
+default-run = "autosk-gui"
+rust-version = "1.85"
+
+# This crate is a STANDALONE cargo project, intentionally excluded from the
+# root workspace (see ../../Cargo.toml `exclude`). Per plan §6 the Tauri backend
+# is a pure JSON-RPC client of autoskd (local UDS / remote TCP) — it does NOT
+# link autosk-core / doltlite. Keeping it out of the workspace means it builds
+# CGO/doltlite-free and `cargo check` here is independent of the daemon's
+# doltlite fetch + link.
+
+[lib]
+# The `_lib` suffix keeps the lib name distinct from the bin on Windows
+# (rust-lang/cargo#8519); mirrors the CodexMonitor blueprint.
+name = "autosk_gui_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "sync", "time", "process", "macros"] }
+# Browse the npm registry for `autosk-extension` packages (npm.rs). rustls-tls
+# (ring + webpki roots) keeps this OpenSSL-free across platforms; `json`
+# deserialises the search response directly.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Open a package's npmjs.com page in the user's default browser (scoped in
+# capabilities/default.json to https://www.npmjs.com/*).
+tauri-plugin-opener = "2"
+
+[features]
+# Default Tauri custom-protocol feature toggled on for release builds.
+custom-protocol = ["tauri/custom-protocol"]

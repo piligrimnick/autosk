@@ -1,6 +1,6 @@
-// Package tui — jobtranscript.go is the per-jobID transcript cache
-// + per-event box rendering. The SSE lifecycle that feeds events
-// into here lives in jobdetail.go; the renderer that joins the
+// Package tui — sessiontranscript.go is the per-sessionID transcript cache
+// + per-event box rendering. The live-subscription lifecycle that feeds
+// events into here lives in sessiondetail.go; the renderer that joins the
 // per-event boxes into the Detail pane body lives in render.go.
 
 package tui
@@ -9,34 +9,51 @@ import (
 	"strings"
 	"time"
 
+	"autosk/internal/daemon/api"
 	"autosk/internal/lazy/datasource"
 	"autosk/internal/lazy/markdown"
 	"autosk/internal/timeformat"
 )
 
-// ensureTranscriptEntryLocked returns the cache entry for jobID,
+// parseWireTime parses an RFC3339 UTC wire timestamp. Returns the
+// zero time on empty/malformed input so callers can route through
+// internal/timeformat (which renders the zero time as "") without a
+// panic-prone byte-slice. NEVER slice line.Timestamp by index — a
+// custom/external agent can emit a short or malformed value.
+func parseWireTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// ensureTranscriptEntryLocked returns the cache entry for sessionID,
 // creating one if needed. Eviction policy: when the map is at
-// jobTranscriptCacheMax AND jobID is not already present, drop the
+// sessionTranscriptCacheMax AND sessionID is not already present, drop the
 // least-recently-touched non-key entry (LRU). Every call — hit OR
 // miss — stamps the entry's touchedAt with time.Now() so a return
-// visit to a cached job refreshes its LRU rank.
+// visit to a cached session refreshes its LRU rank.
 //
 // MUST be called with state.mu held (read+write — we mutate the
 // map). The "Locked" suffix mirrors the selectedTaskLocked /
-// selectedJobLocked conventions for "I hold the lock; just give me
+// selectedSessionLocked conventions for "I hold the lock; just give me
 // the value".
-func (gu *Gui) ensureTranscriptEntryLocked(jobID string) *jobTranscriptEntry {
-	if gu.st.jobTranscript == nil {
-		gu.st.jobTranscript = map[string]*jobTranscriptEntry{}
+func (gu *Gui) ensureTranscriptEntryLocked(sessionID string) *sessionTranscriptEntry {
+	if gu.st.sessionTranscript == nil {
+		gu.st.sessionTranscript = map[string]*sessionTranscriptEntry{}
 	}
 	now := time.Now()
-	if te, ok := gu.st.jobTranscript[jobID]; ok {
+	if te, ok := gu.st.sessionTranscript[sessionID]; ok {
 		te.touchedAt = now
 		return te
 	}
-	evictTranscriptIfNeeded(gu.st.jobTranscript, jobID, jobTranscriptCacheMax)
-	te := &jobTranscriptEntry{touchedAt: now}
-	gu.st.jobTranscript[jobID] = te
+	evictTranscriptIfNeeded(gu.st.sessionTranscript, sessionID, sessionTranscriptCacheMax)
+	te := &sessionTranscriptEntry{touchedAt: now}
+	gu.st.sessionTranscript[sessionID] = te
 	return te
 }
 
@@ -50,12 +67,12 @@ func (gu *Gui) ensureTranscriptEntryLocked(jobID string) *jobTranscriptEntry {
 // `k == key` check the previous version carried was redundant
 // (the key is absent by contract) and has been removed.
 //
-// The scan is O(N) but N is capped at jobTranscriptCacheMax (32) so
+// The scan is O(N) but N is capped at sessionTranscriptCacheMax (32) so
 // the cost is trivial — cheaper than maintaining an ordered list
 // alongside the map. A zero touchedAt sorts as "oldest" so a freshly
 // allocated entry whose stamp wasn't set (defensive path) evicts
 // before genuinely-used entries.
-func evictTranscriptIfNeeded(m map[string]*jobTranscriptEntry, key string, maxLen int) {
+func evictTranscriptIfNeeded(m map[string]*sessionTranscriptEntry, key string, maxLen int) {
 	if _, exists := m[key]; exists {
 		return
 	}
@@ -79,7 +96,7 @@ func evictTranscriptIfNeeded(m map[string]*jobTranscriptEntry, key string, maxLe
 
 // appendTranscriptEvent appends ev to te.events and the
 // corresponding pre-rendered drawLabeledBox to te.renderedBoxes.
-// When te.events would exceed jobLiveBufCap, the oldest 25% are
+// When te.events would exceed sessionLiveBufCap, the oldest 25% are
 // dropped in one allocation and te.truncated is set.
 //
 // te.renderedWidth is INTENTIONALLY not touched here — it remains
@@ -87,33 +104,33 @@ func evictTranscriptIfNeeded(m map[string]*jobTranscriptEntry, key string, maxLe
 // contentW differs from te.renderedWidth (mid-stream resize race),
 // the existing boxes are at the OLD width while the new box would
 // be at the NEW width; keeping renderedWidth pinned to the old
-// value means renderJobDetail's `renderedWidth != contentW` guard
+// value means renderSessionDetail's `renderedWidth != contentW` guard
 // fires on the next frame and rebuilds the whole slice at the
 // current width. In the steady state contentW always equals
-// te.renderedWidth (pumpJobLive reads gu.innerWidth at append time
+// te.renderedWidth (pumpSessionLive reads gu.innerWidth at append time
 // and that matches the value rebuildTranscriptBoxes was last fed),
 // so the rebuild only fires when a real resize happened.
-func appendTranscriptEvent(te *jobTranscriptEntry, ev datasource.MessageEvent, contentW int) {
+func appendTranscriptEvent(te *sessionTranscriptEntry, line api.TranscriptLine, contentW int) {
 	if te == nil {
 		return
 	}
-	te.events = append(te.events, ev)
-	box := renderTranscriptEventBox(ev, contentW)
+	te.events = append(te.events, datasource.LiveEvent{Kind: "message", Line: line})
+	box := renderTranscriptLineBox(line, contentW) // renamed from renderTranscriptEventBox
 	te.renderedBoxes = append(te.renderedBoxes, box)
 	// joinedBody needs a rebuild — do NOT extend in place via
 	// joinedBody = joinedBody + "\n" + box + "\n": that reallocates
 	// the full prefix on every append and degrades the live-pump
 	// path to O(N²) over the session. We mark dirty and let
-	// renderJobDetail rebuild the whole joined string in one
+	// renderSessionDetail rebuild the whole joined string in one
 	// strings.Join pass on the next frame (which only fires when
 	// the Detail pane is actually visible). The dirty flag set
 	// here covers BOTH the plain append AND the cap-trim path
 	// below — the trim mutates renderedBoxes too, but dirty is
 	// already true so no second assignment is needed.
 	te.joinedDirty = true
-	if n := len(te.events); n > jobLiveBufCap {
-		keep := jobLiveBufCap - jobLiveBufCap/4 // drop oldest 25%
-		newEvs := make([]datasource.MessageEvent, keep)
+	if n := len(te.events); n > sessionLiveBufCap {
+		keep := sessionLiveBufCap - sessionLiveBufCap/4 // drop oldest 25%
+		newEvs := make([]datasource.LiveEvent, keep)
 		copy(newEvs, te.events[n-keep:])
 		te.events = newEvs
 		newBoxes := make([]string, keep)
@@ -125,14 +142,14 @@ func appendTranscriptEvent(te *jobTranscriptEntry, ev datasource.MessageEvent, c
 
 // rebuildTranscriptBoxes re-renders every per-event box at the
 // given contentW. Called when the pane width changes (resize) and
-// after loadJobArchive replaces te.events.
+// after loadSessionArchive replaces te.events.
 //
 // Also rebuilds te.joinedBody in the same pass and clears the
 // dirty flag — a resize / archive replace is the worst case for
 // the join (every box is fresh string content), and folding it in
 // here saves a second loop over te.renderedBoxes when
-// renderJobDetail next runs.
-func rebuildTranscriptBoxes(te *jobTranscriptEntry, contentW int) {
+// renderSessionDetail next runs.
+func rebuildTranscriptBoxes(te *sessionTranscriptEntry, contentW int) {
 	if te == nil {
 		return
 	}
@@ -141,7 +158,7 @@ func rebuildTranscriptBoxes(te *jobTranscriptEntry, contentW int) {
 		te.renderedBoxes = make([]string, 0, len(te.events))
 	}
 	for i := range te.events {
-		te.renderedBoxes = append(te.renderedBoxes, renderTranscriptEventBox(te.events[i], contentW))
+		te.renderedBoxes = append(te.renderedBoxes, renderTranscriptLineBox(te.events[i].Line, contentW))
 	}
 	te.renderedWidth = contentW
 	rebuildJoinedBody(te)
@@ -161,7 +178,7 @@ func rebuildTranscriptBoxes(te *jobTranscriptEntry, contentW int) {
 // Pre-sizes the Builder via Grow(sum + 2*N) so the typical 5000-
 // event session avoids the usual doubling reallocs as the body
 // grows.
-func rebuildJoinedBody(te *jobTranscriptEntry) {
+func rebuildJoinedBody(te *sessionTranscriptEntry) {
 	if te == nil {
 		return
 	}
@@ -184,20 +201,14 @@ func rebuildJoinedBody(te *jobTranscriptEntry) {
 	te.joinedBody = b.String()
 }
 
-// renderTranscriptEventBox renders one MessageEvent as a labeled
-// box. The label is "<smart-datetime> <kind-styled> [<name-accent>]".
-// Body rendering:
+// renderTranscriptLineBox renders one api.TranscriptLine as a labeled
+// box. The label varies by Type:
+//   - "message": timestamp + role + (tool info if applicable)
+//   - "custom": timestamp + custom type
+//   - "session": session header info
 //
-//   - kind starts with "assistant" (assistant_text / assistant_thinking):
-//     markdown.Render at contentW.
-//   - empty Text: empty body (drawLabeledBox accepts this and renders
-//     a frame with just the label).
-//   - everything else: plain text wrapped at contentW.
-//
-// The assistant check uses strings.HasPrefix so future assistant_*
-// kinds (e.g. assistant_tool_use) automatically pick up markdown
-// rendering.
-func renderTranscriptEventBox(ev datasource.MessageEvent, contentW int) string {
+// Body rendering uses pi-format message content or custom data.
+func renderTranscriptLineBox(line api.TranscriptLine, contentW int) string {
 	// Width arithmetic — drawLabeledBox takes the OUTER width, not
 	// the content width, so we add the 4 cells of frame+padding
 	// back in. Floor at 6 so drawLabeledBox doesn't fall through
@@ -207,23 +218,82 @@ func renderTranscriptEventBox(ev datasource.MessageEvent, contentW int) string {
 		outerW = 6
 	}
 
-	stamp := ""
-	if !ev.TS.IsZero() {
-		stamp = timeformat.FormatDateTimeSmart(ev.TS) + " "
-	}
-	label := styleHeader.Render(stamp + ev.Kind)
-	if ev.Name != "" {
-		label += " " + styleAccent.Render(ev.Name)
+	var label, body string
+
+	switch line.Type {
+	case "session":
+		// Session header line. The wire timestamp is RFC3339 UTC;
+		// render it in the operator's local zone via timeformat
+		// (AGENTS.md: all user-facing times route through timeformat).
+		label = styleHeader.Render("Session: " + line.Agent + " on " + line.Step)
+		if started := timeformat.FormatDateTime(parseWireTime(line.Timestamp)); started != "" {
+			body = "Started: " + started
+		}
+
+	case "message":
+		// Pi-format message entry
+		if line.Message == nil {
+			return ""
+		}
+		// Render the RFC3339 UTC timestamp in the operator's local
+		// zone via timeformat — never byte-slice line.Timestamp (a
+		// short/malformed value would panic the render loop).
+		stamp := ""
+		if s := timeformat.FormatDateTimeSmart(parseWireTime(line.Timestamp)); s != "" {
+			stamp = s + " "
+		}
+		label = styleHeader.Render(stamp + line.Message.Role)
+		if line.Message.ToolName != "" {
+			label += " " + styleAccent.Render(line.Message.ToolName)
+		}
+		// Render message content. Text() flattens text+thinking blocks,
+		// so a pure tool-call turn has an empty Text() — surface the
+		// toolCall block names too so a tool-only assistant turn isn't
+		// rendered as an empty box.
+		text := line.Message.Text()
+		if text != "" {
+			if line.Message.Role == "assistant" {
+				body = markdown.Render(text, contentW)
+			} else {
+				body = wrapPlain(text, contentW)
+			}
+		}
+		if calls := transcriptToolCalls(line.Message); calls != "" {
+			if body != "" {
+				body += "\n"
+			}
+			body += wrapPlain(calls, contentW)
+		}
+
+	case "custom":
+		// Custom entry (e.g. autosk:* events)
+		customType := strings.TrimPrefix(line.CustomType, "autosk:")
+		label = styleHeader.Render(customType)
+		// For now, just show raw JSON data
+		if len(line.Data) > 0 {
+			body = wrapPlain(string(line.Data), contentW)
+		}
+
+	default:
+		label = styleHeader.Render("Unknown: " + line.Type)
 	}
 
-	var body string
-	switch {
-	case ev.Text == "":
-		body = ""
-	case strings.HasPrefix(ev.Kind, "assistant"):
-		body = markdown.Render(ev.Text, contentW)
-	default:
-		body = wrapPlain(ev.Text, contentW)
-	}
 	return drawLabeledBox(label, body, outerW)
+}
+
+// transcriptToolCalls returns a compact one-tool-per-line summary of the
+// toolCall blocks in m (e.g. "→ Read", "→ Bash"), or "" when the message
+// carries no tool calls. Lets the Detail box show something for a
+// tool-only assistant turn whose Text() is empty.
+func transcriptToolCalls(m *api.TranscriptMessage) string {
+	if m == nil {
+		return ""
+	}
+	var names []string
+	for _, b := range m.Blocks() {
+		if b.Type == "toolCall" && b.Name != "" {
+			names = append(names, "→ "+b.Name)
+		}
+	}
+	return strings.Join(names, "\n")
 }

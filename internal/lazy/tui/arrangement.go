@@ -8,11 +8,11 @@ import (
 // loop. Keep them in one place so renames stay in sync.
 const (
 	winTasks        = "tasks"
-	winJobs         = "jobs"
+	winSessions     = "sessions" // renamed from winJobs
 	winWorkflows    = "workflows"
 	winAgents       = "agents"
 	winDetail       = "main"
-	winJobInput     = "jobInput"
+	winSessionInput = "sessionInput" // renamed from winJobInput
 	winLog          = "extras"
 	winStatusBar    = "statusbar"
 	// winOptionsStrip is the lazygit-style context-aware bindings
@@ -26,8 +26,8 @@ const (
 	// winPopupCheatsheet is the editable list view that backs the
 	// new `?` cheatsheet popup (sections + filter + Enter-to-execute).
 	winPopupCheatsheet = "popupCheatsheet"
-	winPopupConfirm = "popupConfirm"
-	winPopupPrompt  = "popupPrompt"
+	winPopupConfirm    = "popupConfirm"
+	winPopupPrompt     = "popupPrompt"
 	// Task-compose popup (lazygit-style two-pane commit editor).
 	winTaskComposeSummary     = "taskComposeSummary"
 	winTaskComposeDescription = "taskComposeDescription"
@@ -74,8 +74,8 @@ var allPopupWindows = []string{
 // boxlayout-aware status bar + options-strip pair) so it is
 // allocated and GC'd alongside the other dashboard views.
 var allDashboardWindows = []string{
-	winTasks, winJobs, winWorkflows, winAgents,
-	winDetail, winJobInput, winLog,
+	winTasks, winSessions, winWorkflows, winAgents, // renamed winJobs -> winSessions
+	winDetail, winSessionInput, winLog, // renamed winJobInput -> winSessionInput
 }
 
 // ViewState distinguishes the two top-level arrangements.
@@ -93,15 +93,15 @@ const (
 // arrangeArgs is the input to a window-arrangement function. Only the
 // fields we actually consume; we don't need lazygit's whole bag.
 //
-// winJobInput is NOT positioned by the boxlayout tree — it is
+// winSessionInput is NOT positioned by the boxlayout tree — it is
 // overlaid on top of winDetail's bottom rows by layout.go when the
-// selected job is live. boxlayout doesn't support overlapping
+// selected session is live. boxlayout doesn't support overlapping
 // boxes, so we keep arrangement focused on the non-overlapping
 // stack (side panels + detail + log + status bar) and inject the
 // overlay coordinates downstream.
 type arrangeArgs struct {
 	width, height int
-	focusedSide   string // one of winTasks / winJobs / winWorkflows / winAgents
+	focusedSide   string // one of winTasks / winSessions / winWorkflows / winAgents
 	state         ViewState
 	logHidden     bool
 }
@@ -123,8 +123,8 @@ type arrangeArgs struct {
 // area to zero and the row would render blank. If you ever stop
 // applying that offset in layout.go, bump these back to Size:3.
 //
-// winJobInput does NOT appear in this tree. It is overlaid on top of
-// winDetail's bottom rows by layout.go when the selected job is
+// winSessionInput does NOT appear in this tree. It is overlaid on top of
+// winDetail's bottom rows by layout.go when the selected session is
 // live. boxlayout doesn't support overlapping boxes, so the input's
 // position is computed in layout.go from dims[winDetail] after
 // arrange() runs.
@@ -174,7 +174,7 @@ func sideStack(focused string) []*boxlayout.Box {
 	}
 	return []*boxlayout.Box{
 		{Window: winTasks, Weight: w(winTasks)},
-		{Window: winJobs, Weight: w(winJobs)},
+		{Window: winSessions, Weight: w(winSessions)}, // renamed from winJobs
 		{Window: winWorkflows, Weight: w(winWorkflows)},
 		{Window: winAgents, Weight: w(winAgents)},
 	}

@@ -1,0 +1,30 @@
+// WorkflowRow — one workflow in the Workflows panel (redesign plan §8.6).
+// Workflows are read-only code projections now. Click selects the workflow
+// (center → read-only definition).
+
+import { useStore } from "@/state/store";
+import type { WorkflowInfo } from "@/types";
+
+export function WorkflowRow({ workflow }: { workflow: WorkflowInfo }) {
+  const { state, effects } = useStore();
+  const selected = state.selection.kind === "workflow" && state.selection.name === workflow.name;
+
+  return (
+    <li
+      className={`wf-row${selected ? " is-selected" : ""}`}
+      title={workflow.name}
+      role="button"
+      tabIndex={0}
+      onClick={() => effects.selectWorkflow(workflow.name)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          effects.selectWorkflow(workflow.name);
+        }
+      }}
+    >
+      <span className="wf-bullet">◦</span>
+      <span className="wf-name">{workflow.name}</span>
+    </li>
+  );
+}

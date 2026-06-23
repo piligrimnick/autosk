@@ -4,10 +4,9 @@
 // these helpers so the project speaks one timezone and one set of
 // layouts.
 //
-// Machine wire formats (JSON API responses, daemon HTTP API,
-// RunContextSeed for agents, comment RenderForPrompt for LLM agents,
-// TS extension types) stay on RFC3339 UTC and do NOT route through
-// this package — see internal/comments/store.go and
+// Machine wire formats (the `--json` CLI output, the proto-v2 JSON-RPC
+// wire types, and the pi-format session transcript) stay on RFC3339
+// UTC and do NOT route through this package — see
 // internal/daemon/api/types.go.
 //
 // Layouts:

@@ -11,6 +11,11 @@
 
 Reproduce with `scripts/pi-rpc-probe.sh`.
 
+> This is a reconnaissance note on **pi's** `--mode rpc` wire contract. The pi
+> wire facts below are pi's own; the autosk-side mechanism descriptions refer to
+> the `@autosk/pi-agent` extension (`daemon/extensions/pi-agent/`), which is what
+> drives pi and mirrors its events into the session transcript.
+
 ---
 
 ## Wire format
@@ -33,7 +38,7 @@ stdin   →  RpcExtensionUIResponse  (only as replies to a request)
 | `prompt`             | `message`                             | Start a fresh user turn on an idle agent (initial run prompt + every kickback). |
 | `follow_up`          | `message`                             | Queue an additional user turn while the agent is still streaming. Daemon does not use this in v0. |
 | `abort`              | —                                     | Stop the current run. Used by cancel before SIGTERM. |
-| `get_state`          | —                                     | Read `sessionFile`, `sessionId`, `messageCount`. Re-polled with backoff in the background after the first `prompt` until `sessionFile` populates, then recorded as `pi_session_id` / `session_path`. |
+| `get_state`          | —                                     | Read `sessionFile`, `sessionId`, `messageCount`. Re-polled with backoff after the first `prompt` until `sessionFile` populates, then recorded by the pi-agent driver for the session. |
 | `set_model`          | `provider`, `modelId`                 | Reserved; daemon prefers `--model` CLI flag. |
 | `set_thinking_level` | `level` (`off|minimal|low|medium|high|xhigh`) | Reserved; daemon prefers `--thinking` CLI flag. |
 
@@ -67,8 +72,9 @@ command was accepted.
 ### From `AgentSessionEvent` extensions
 
 `queue_update`, `compaction_start|end`, `session_info_changed`,
-`thinking_level_changed`, `auto_retry_start|end`. Daemon projects these
-to `kind:"other"` and only relays them on the SSE stream.
+`thinking_level_changed`, `auto_retry_start|end`. The pi-agent extension
+mirrors the relevant ones into the session transcript (`ctx.log`); clients
+tail them via `session.subscribe`.
 
 ### Responses and requests
 
@@ -120,7 +126,7 @@ The daemon's strategy:
 pi --mode rpc
    --model     <model>          # iff request.model != ""
    --thinking  <level>          # iff request.thinking != ""
-   --session-dir <per-job dir>  # always; resolves session.jsonl
+   --session-dir <per-session dir>  # always; resolves session.jsonl
    --no-voice                   # avoid audio side-effects in headless runs
    --no-peon                    # ditto
    (request.extra_args appended)
@@ -134,31 +140,32 @@ long-lived stdin handling.
 ## Pi session id & session file path
 
 Captured via `{type:"get_state"}`. The response's `data` contains
-`sessionId` and `sessionFile`. The daemon writes both to
-`daemon_runs.pi_session_id` / `daemon_runs.session_path`.
+`sessionId` and `sessionFile`. The pi-agent extension records both for the
+autosk session.
 
 **Why we poll, not query once.** pi 0.74-0.75 creates `session.jsonl`
 lazily inside its session manager — the file path is stamped on the
 first persist (after the first prompt is preflight-accepted), not at
 spawn time. A `get_state` issued right after spawn therefore comes
-back with `sessionFile == ""`. The executor kicks off a background
-goroutine after a successful `prompt` send that re-issues `get_state`
+back with `sessionFile == ""`. The pi-agent driver re-issues `get_state`
 with exponential backoff (100 ms → 5 s cap, ~30 s total budget) until
-`sessionFile` populates, then writes through `SetPISession` exactly
-once. The poll is gated on the runner type: it only runs for pi-based
-agents, since custom Node runners have no pi session.
+`sessionFile` populates.
 
-`session_path` is the file we tail for `GET /v1/jobs/{id}/messages` —
-the daemon does NOT mirror events into its own table.
+autosk does NOT tail pi's own `session.jsonl`: the pi-agent extension
+mirrors pi's events into the autosk session transcript
+(`./.autosk/sessions/<id>.jsonl`) as it observes them, and clients read
+that via `session.transcript` / `session.subscribe`.
 
 ---
 
 ## Known unknowns (deferred past v0)
 
-- Image inputs in `prompt` — not in the v0 HTTP API.
+- Image inputs in `prompt` — not in the v0 API.
 - `compact` lifecycle and how it interleaves with `agent_end` — we treat
   `compaction_start|end` as informational and don't re-check closure.
-- `auto_retry_*` events — surfaced via SSE; the daemon does not intervene.
+- `auto_retry_*` events — the pi-agent extension mirrors them into the
+  session transcript (`ctx.log`); clients tail them via `session.subscribe`.
+  The daemon does not intervene in pi's retry loop.
 - Pi version skew — if `dist/modes/rpc/rpc-types.d.ts` changes, only the
-  projection layer in `internal/daemon/pi/events.go` and the wire types
-  in `internal/daemon/pi/wire.go` need updating.
+  projection layer + wire types in the pi-agent driver
+  (`daemon/extensions/pi-agent/src/driver.ts`) need updating.

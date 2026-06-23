@@ -1,0 +1,274 @@
+/* Frameless two-panel shell. Grid:
+ *   row 1: titlebar drag strip
+ *   row 2: notice bar (auto; collapses to 0 when no notice)
+ *   row 3: [ sidebar accordion | main panel ] */
+
+/* Flex column (not grid) so a null NoticeBar doesn't leave an empty row: the
+ * titlebar + (optional) notice are flex-shrink:0 and .app-panels takes the
+ * rest. */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  /* iOS WKWebView: 100vh is the LAYOUT viewport (taller than the visible
+   * area), which pushes the composer actions off-screen — dvh tracks the
+   * actual visible viewport. Desktop WebViews resolve both identically. */
+  height: 100dvh;
+  /* Keep the chrome clear of the iOS status bar / home indicator (both 0 on
+   * desktop; need viewport-fit=cover in index.html to be non-zero on iOS). */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+/* ---- titlebar -------------------------------------------------------------*/
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--titlebar-height);
+  flex-shrink: 0;
+  padding: 0 4px 0 12px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.titlebar-mac {
+  padding-left: var(--titlebar-mac-inset);
+}
+/* Interactive children must not drag the window. */
+.titlebar button,
+.titlebar .titlebar-status,
+.titlebar .titlebar-action,
+.titlebar input,
+.titlebar select {
+  -webkit-app-region: no-drag;
+}
+.titlebar-spacer {
+  flex: 1;
+}
+.titlebar-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+.titlebar-action {
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+}
+.titlebar-action:hover {
+  background: var(--bg-3);
+  color: var(--fg);
+}
+.titlebar-action svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ---- window caption controls (Windows) ------------------------------------*/
+.window-caption-controls {
+  display: inline-flex;
+  align-items: stretch;
+  height: var(--titlebar-height);
+  -webkit-app-region: no-drag;
+}
+.window-caption-control {
+  width: 46px;
+  height: var(--titlebar-height);
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--fg-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color var(--ds-dur-fast) ease, color var(--ds-dur-fast) ease;
+}
+.window-caption-control:hover {
+  background: var(--bg-3);
+  color: var(--fg);
+}
+.window-caption-control-close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+/* ---- panels ---------------------------------------------------------------*/
+.app-panels {
+  position: relative; /* anchors the absolutely-positioned sidebar resizer */
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+.app-panels.sidebar-collapsed {
+  grid-template-columns: 1fr;
+}
+
+/* ---- sidebar resizer (drag the sidebar's right edge) ----------------------*/
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--sidebar-width);
+  width: 8px;
+  transform: translateX(-4px);
+  cursor: col-resize;
+  z-index: 6;
+  -webkit-app-region: no-drag;
+}
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-1px);
+  background: transparent;
+  transition: background-color var(--ds-dur-fast) ease;
+}
+.sidebar-resizer:hover::after,
+body.is-resizing .sidebar-resizer::after {
+  background: var(--accent);
+}
+body.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.panel-center {
+  background: var(--bg);
+}
+
+/* ---- sidebar accordion (Tasks / Sessions / Workflows) ---------------------*/
+/* lazygit-style stack: the active panel grows (weight 3), the others collapse
+ * (weight 1). flex-basis 0 makes the heights a pure 3:1:1 ratio of the column. */
+.sidebar-stack {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg-1);
+  border-right: 1px solid var(--border);
+}
+.sidebar-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: var(--panel-header-height); /* the header is always visible */
+  overflow: hidden;
+  flex: 1 1 0;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-panel:last-child {
+  border-bottom: none;
+}
+.sidebar-panel.is-active {
+  flex: 3 1 0;
+}
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--panel-header-height);
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+/* Clickable accordion headers (sidebar panels). */
+.panel-header.is-clickable {
+  cursor: pointer;
+  user-select: none;
+}
+.panel-header.is-clickable:hover {
+  background: var(--bg-2);
+}
+.panel-header.is-active {
+  background: var(--bg-2);
+}
+.panel-header.is-active .panel-title {
+  color: var(--fg);
+}
+.panel-title {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  color: var(--fg-mute);
+}
+.panel-header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* Project switcher — lives in the titlebar (status bar), to the right of the
+ * macOS traffic lights, where the brand used to be. */
+.project-switcher {
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  font-weight: 600;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  max-width: 280px;
+}
+.project-switcher:hover {
+  background: var(--bg-3);
+}
+.project-switcher-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-switcher-caret {
+  color: var(--fg-mute);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+/* Extension-load-error indicator on the project switcher (project.diagnostics). */
+.project-switcher-warn {
+  color: var(--warn);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.panel-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--fg-mute);
+  font-size: 13px;
+}

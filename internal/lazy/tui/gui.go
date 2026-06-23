@@ -9,7 +9,7 @@
 //
 // The only seam between the TUI and the rest of autosk is
 // internal/lazy/datasource. Nothing in this package imports
-// internal/store, internal/daemon/client, or internal/workflow
+// internal/store, internal/daemon/rpcclient, or internal/workflow
 // directly.
 package tui
 
@@ -82,12 +82,18 @@ type Gui struct {
 	// without a real gocui.Gui.
 	dispatch func(func())
 
+	// editObject opens an external editor on the given seed text and returns the
+	// edited result. Defaults to runEditorJSON (suspend gocui + $VISUAL/$EDITOR
+	// on a temp file + resume); the metadata editor uses it, and tests inject a
+	// fake so the diff/apply path is exercised without spawning an editor.
+	editObject func(initial string) (string, error)
+
 	// lastFetchNS is the wall-clock duration of the most recent
 	// fetchRefresh, in nanoseconds. The tick loop reads it to decide
 	// how long to wait before the next refresh — if the datasource is
-	// slow (e.g. doltlite's chunk-store WAL has grown and every query
-	// pays a hundreds-of-milliseconds replay cost) we back off so the
-	// dashboard never pegs a core trying to keep up. Reset to 0 on
+	// slow (e.g. the daemon is busy and every request pays a
+	// hundreds-of-milliseconds round-trip) we back off so the dashboard
+	// never pegs a core trying to keep up. Reset to 0 on
 	// scheduleRefresh from a user action so the next tick reverts to
 	// the base cadence promptly when the slowdown clears.
 	lastFetchNS atomic.Int64
@@ -157,9 +163,9 @@ type bodyCacheEntry struct {
 // finish in well under half the budget, double it when reads exceed
 // half the budget, and cap at maxAdaptiveDelay so a wedged datasource
 // doesn't stall the dashboard for minutes. The thresholds are picked
-// so a healthy DB stays at the base 2s while a doltlite store mid-WAL
-// stretch (each refresh ~500ms-3s) settles at 4-30s instead of
-// firing back-to-back ticks and saturating a core.
+// so a healthy daemon stays at the base 2s while a slow stretch (each
+// refresh ~500ms-3s) settles at 4-30s instead of firing back-to-back
+// ticks and saturating a core.
 func adaptiveDelay(base, elapsed time.Duration) time.Duration {
 	if base <= 0 {
 		base = 2 * time.Second
@@ -182,10 +188,10 @@ func adaptiveDelay(base, elapsed time.Duration) time.Duration {
 }
 
 // maxAdaptiveDelay caps the adaptive ticker. 30s is long enough that a
-// truly-wedged datasource (e.g. doltlite re-replaying a multi-MB WAL
-// on every query) doesn't burn cycles, short enough that the operator
-// still sees the dashboard reanimate within human-impatience range
-// once compaction kicks in.
+// truly-wedged datasource (e.g. an overloaded daemon that takes
+// seconds per request) doesn't burn cycles, short enough that the
+// operator still sees the dashboard reanimate within human-impatience
+// range once the slowdown clears.
 const maxAdaptiveDelay = 30 * time.Second
 
 // Run constructs the gui, opens the alt-screen, and blocks on the
@@ -239,6 +245,7 @@ func Run(ctx context.Context, opts Options) error {
 		cancel:      cancel,
 		stopRefresh: make(chan struct{}),
 	}
+	gu.editObject = gu.runEditorJSON
 
 	g.SetManagerFunc(gu.layout)
 	if err := gu.bindKeys(); err != nil {
@@ -258,10 +265,26 @@ func Run(ctx context.Context, opts Options) error {
 		)
 	}
 
-	// Kick an initial refresh + adaptive ticker. Both go via
-	// g.OnWorker / g.Update — no goroutine-per-panel.
+	// Kick an initial refresh, then choose the steady-state refresh driver.
+	// Both go via g.OnWorker / g.Update — no goroutine-per-panel.
 	gu.scheduleRefresh()
-	go gu.adaptiveTickLoop(opts.Refresh)
+	// Preferred driver: the daemon's task-changed/project-changed push (plan
+	// §5) — panels update on a server push instead of a fixed poll. A
+	// long-interval re-sync still runs as a backstop against a notification
+	// dropped across a daemon reconnect; it is floored to safetyResyncInterval
+	// so the steady state is the push, never the former 2s poll. A datasource
+	// without the Watcher capability (the test fakes) falls back to the
+	// --refresh poll.
+	if w, ok := opts.Datasource.(datasource.Watcher); ok {
+		safety := opts.Refresh
+		if safety < safetyResyncInterval {
+			safety = safetyResyncInterval
+		}
+		go gu.watchLoop(w)
+		go gu.adaptiveTickLoop(safety)
+	} else {
+		go gu.adaptiveTickLoop(opts.Refresh)
+	}
 	go gu.spinnerLoop()
 
 	// gocui's MainLoop is hostile to non-fatal mid-flush errors: a
@@ -279,34 +302,126 @@ func Run(ctx context.Context, opts Options) error {
 	if mainErr != nil && mainErr != gocui.ErrQuit && !errors.Is(mainErr, gocui.ErrQuit) {
 		cancel()
 		close(gu.stopRefresh)
-		gu.stopJobLive()
+		gu.stopSessionLive()
 		return mainErr
 	}
 	cancel()
 	close(gu.stopRefresh)
-	gu.stopJobLive()
+	gu.stopSessionLive()
 	return nil
 }
 
-// adaptiveTickLoop schedules refreshes on a self-adjusting cadence.
+// safetyResyncInterval is the floor cadence the adaptive tick loop runs at
+// when the daemon push (task-changed/project-changed) is the steady-state
+// refresh driver. The push covers normal updates within milliseconds; this
+// long re-sync only catches a notification dropped across a daemon reconnect,
+// so it is deliberately well above the former 2s poll. A user --refresh larger
+// than this is honoured; anything smaller is floored to it so push mode never
+// degenerates into a tight client-side poll.
+const safetyResyncInterval = 30 * time.Second
+
+// watchBackoffMin / watchBackoffMax bound watchLoop's reconnect backoff.
+const (
+	watchBackoffMin = 250 * time.Millisecond
+	watchBackoffMax = 5 * time.Second
+)
+
+// watchLoop is the push-driven refresh driver (plan §5): it subscribes to the
+// daemon's task-changed/project-changed notifications and calls scheduleRefresh
+// on each one, so panels update on a server push instead of a fixed poll. The
+// subscription is re-established (with capped exponential backoff) whenever it
+// drops — a daemon restart, an idle auto-spawn cycle, or a transient
+// disconnect — and a refresh is forced on every (re)connect so nothing is
+// missed across the gap. scheduleRefresh already coalesces a burst into a
+// single trailing refresh, so a flurry of notifications can't queue redundant
+// work. Runs in a goroutine started by Run() only when the datasource
+// implements datasource.Watcher; exits on stopRefresh / ctx cancel (the same
+// shutdown signal the other loops honour).
+func (gu *Gui) watchLoop(w datasource.Watcher) {
+	backoff := watchBackoffMin
+	for {
+		select {
+		case <-gu.stopRefresh:
+			return
+		case <-gu.ctx.Done():
+			return
+		default:
+		}
+		handle, err := w.Watch(gu.ctx)
+		if err == nil {
+			backoff = watchBackoffMin
+			// Re-sync on (re)connect: catch any change that landed while we
+			// were not subscribed.
+			gu.scheduleRefresh()
+			gu.consumeWatch(handle)
+			_ = handle.Close()
+		}
+		// Pause before (re)connecting so a wedged/absent daemon can't spin the
+		// loop; a healthy long-lived stream pays only this 250ms gap on
+		// reconnect. Errors grow the backoff up to the cap.
+		if !gu.watchSleep(backoff) {
+			return
+		}
+		if err != nil {
+			backoff *= 2
+			if backoff > watchBackoffMax {
+				backoff = watchBackoffMax
+			}
+		}
+	}
+}
+
+// consumeWatch forwards each notification to scheduleRefresh until the stream
+// closes (daemon disconnect) or the gui stops. Returns so watchLoop can
+// reconnect (stream close) or exit (stop).
+func (gu *Gui) consumeWatch(handle *datasource.WatchHandle) {
+	for {
+		select {
+		case <-gu.stopRefresh:
+			return
+		case <-gu.ctx.Done():
+			return
+		case _, ok := <-handle.Events:
+			if !ok {
+				return // stream closed; watchLoop reconnects
+			}
+			gu.scheduleRefresh()
+		}
+	}
+}
+
+// watchSleep waits d, returning false if the gui is shutting down (so the
+// caller stops looping) and true if the full delay elapsed.
+func (gu *Gui) watchSleep(d time.Duration) bool {
+	select {
+	case <-gu.stopRefresh:
+		return false
+	case <-gu.ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
+// adaptiveTickLoop schedules a periodic refresh on a self-adjusting cadence.
+// It is the steady-state driver ONLY when the datasource has no push
+// capability; when the daemon push (watchLoop) is active this loop runs at the
+// long safetyResyncInterval purely as a backstop (a missed notification across
+// a reconnect), not as the primary refresh path.
 //
-// The classic time.NewTicker(base) loop has a nasty failure mode
-// against doltlite: when the chunk-store WAL grows long enough that
-// each fetchRefresh takes longer than the 2s tick, the worker queue
-// stays permanently saturated. Each refresh re-reads ~6 panels, each
-// panel cursor-open triggers btreeRefreshFromDisk → csReplayWal, and
-// the whole thing pegs a core indefinitely (see the post-mortem in
+// The classic time.NewTicker(base) loop has a nasty failure mode against a
+// slow datasource: when each fetchRefresh takes longer than the tick, the
+// worker queue stays permanently saturated. Each refresh re-reads ~6 panels
+// and the whole thing pegs a core indefinitely (see the post-mortem in
 // docs/daemon.md "100%-CPU lazy").
 //
-// The adaptive loop sleeps for max(base, elapsed*2) up to a 30s cap,
-// so a slow datasource self-throttles instead of melting the CPU.
-// Once compaction (autosk gc / the daemon's per-project compactor)
-// shrinks the chunk-store again, the next refresh comes back fast,
-// lastFetchNS drops, and the loop snaps back to the base cadence on
-// the very next iteration.
+// The adaptive loop sleeps for max(base, elapsed*2) up to a 30s cap, so a slow
+// datasource self-throttles instead of melting the CPU; once it speeds up
+// again, lastFetchNS drops and the loop snaps back to the base cadence on the
+// very next iteration.
 //
-// Runs in a goroutine; nothing touches the gocui screen here —
-// Refresh is g.Update-driven.
+// Runs in a goroutine; nothing touches the gocui screen here — Refresh is
+// g.Update-driven.
 func (gu *Gui) adaptiveTickLoop(base time.Duration) {
 	if base <= 0 {
 		base = 2 * time.Second
@@ -376,8 +491,8 @@ func (gu *Gui) spinnerLoop() {
 func (gu *Gui) hasActiveJob() bool {
 	var any bool
 	gu.st.withRLock(func() {
-		for i := range gu.st.jobs {
-			if runstore.RunStatus(gu.st.jobs[i].Status) == runstore.StatusRunning {
+		for i := range gu.st.sessions {
+			if runstore.RunStatus(gu.st.sessions[i].Status) == runstore.StatusRunning {
 				any = true
 				return
 			}
@@ -480,26 +595,26 @@ func (gu *Gui) renderViews() {
 	gu.st.withRLock(func() {
 		focused := gu.st.focused
 
-		// taskJobIdx is published by applyRefreshLocked from the
-		// TaskID-unfiltered jobs read; reading it here under the
+		// taskSessionIdx is published by applyRefreshLocked from the
+		// TaskID-unfiltered sessions read; reading it here under the
 		// model's RLock is correct — the spinner ticker only triggers
 		// a layout pass, it doesn't refetch.
 		spinTick := gu.spinnerTick.Load()
 		tasksBody, tasksHdr := renderTasksPanel(
 			gu.st.tasks, gu.st.taskCursor,
 			gu.st.scope, gu.st.filter.Tasks,
-			gu.innerWidth(winTasks), spinTick, gu.st.taskJobIdx,
+			gu.innerWidth(winTasks), spinTick, gu.st.taskSessionIdx,
 		)
 		gu.writeView(winTasks, "[1] Tasks", tasksBody)
 		gu.applyRowHighlight(winTasks, tasksHdr, gu.st.taskCursor, len(gu.st.tasks), focused == panelTasks)
 
-		jobsBody, jobsHdr := renderJobsPanel(gu.st.jobs, gu.st.jobCursor, gu.st.scope, gu.st.filter.Jobs, gu.innerWidth(winJobs))
-		gu.writeView(winJobs, "[2] Jobs", jobsBody)
-		// Keep the Jobs row highlight on while the caret is in
-		// winJobInput (panelJobInput) — the operator is still working
-		// the selected running job, just typing instead of navigating.
-		jobsHighlighted := focused == panelJobs || focused == panelJobInput
-		gu.applyRowHighlight(winJobs, jobsHdr, gu.st.jobCursor, len(gu.st.jobs), jobsHighlighted)
+		sessionsBody, sessionsHdr := renderSessionsPanel(gu.st.sessions, gu.st.sessionCursor, gu.st.scope, gu.st.filter.Sessions, gu.innerWidth(winSessions))
+		gu.writeView(winSessions, "[2] Sessions", sessionsBody)
+		// Keep the Sessions row highlight on while the caret is in
+		// winSessionInput (panelSessionInput) — the operator is still working
+		// the selected running session, just typing instead of navigating.
+		sessionsHighlighted := focused == panelSessions || focused == panelSessionInput
+		gu.applyRowHighlight(winSessions, sessionsHdr, gu.st.sessionCursor, len(gu.st.sessions), sessionsHighlighted)
 
 		wfBody, wfHdr := renderWorkflowsPanel(gu.st.workflows, gu.st.workflowCursor, gu.st.filter.Workflows)
 		gu.writeView(winWorkflows, "[3] Workflows", wfBody)
@@ -509,26 +624,30 @@ func (gu *Gui) renderViews() {
 		gu.writeView(winAgents, "[4] Agents", agBody)
 		gu.applyRowHighlight(winAgents, agHdr, gu.st.agentCursor, len(gu.st.agents), focused == panelAgents)
 
-		// Detail pane: writeViewSticky's bottom-anchor behaviour is
-		// the right policy ONLY for the live job transcript — it auto-
-		// tails new events as they arrive. For Task / Workflow / Agent
-		// detail the same policy would wrongly scroll past the title /
-		// description on the very first render (the first frame's
-		// prevLines==0 path always fires sticky), so use a plain
-		// writeView for those branches.
+		// Detail pane: both the live session transcript and the task /
+		// workflow / agent detail tail new content when the operator is
+		// parked at the bottom (writeViewSticky / writeViewTailing). They
+		// differ only on the FIRST frame of a newly-rendered entity:
+		//   - session transcript (writeViewSticky) opens at the bottom so
+		//     switching to a session in the Sessions panel snaps to the
+		//     newest line and live events are immediately visible;
+		//   - task / workflow / agent detail (writeViewTailing) opens at the
+		//     top so the title / description shows first, not the tail of
+		//     the comment thread. A new comment still tails into view, but
+		//     only when the operator was already at the end.
 		//
 		// When the entity rendered into the pane changes between
 		// frames (cursor moves to a different task, focus flips from
-		// Tasks to Jobs, etc.), clear winDetail's buffer + reset its
+		// Tasks to Sessions, etc.), clear winDetail's buffer + reset its
 		// origin to (0,0) so the new entity starts from its natural
-		// anchor: top for non-job, bottom for job (writeViewSticky
-		// snaps to bottom because prevLines is now 0). Clearing the
-		// buffer also matters for the sticky-tail computation:
-		// without it, leftover lines from the previous entity would
-		// fail the "at bottom" predicate and the new job's transcript
-		// would land at the top instead of tailing the latest events.
+		// anchor: top for non-session, bottom for session (both decided by
+		// the first-frame prevLines==0 path). Clearing the buffer also
+		// matters for the sticky-tail computation: without it, leftover
+		// lines from the previous entity would fail the "at bottom"
+		// predicate and the new session's transcript would land at the top
+		// instead of tailing the latest events.
 		curDetailKey := detailEntityKey(gu.st)
-		isJobDetail := detailShowsJob(gu.st)
+		isSessionDetail := detailShowsSession(gu.st)
 		if curDetailKey != gu.lastDetailKey {
 			if v, err := gu.g.View(winDetail); err == nil && v != nil {
 				v.Clear()
@@ -538,10 +657,10 @@ func (gu *Gui) renderViews() {
 			gu.lastDetailKey = curDetailKey
 		}
 		detailBody := renderDetail(gu.st, gu.innerWidth(winDetail))
-		if isJobDetail {
+		if isSessionDetail {
 			gu.writeViewSticky(winDetail, "[0] Detail", detailBody)
 		} else {
-			gu.writeView(winDetail, "[0] Detail", detailBody)
+			gu.writeViewTailing(winDetail, "[0] Detail", detailBody, false)
 		}
 		gu.writeView(winLog, "log", renderCommandLog(gu.st.logBuf, gu.st.flash))
 		gu.writeView(winStatusBar, "", renderStatusBar(gu.st, gu.opts.ProjectRoot))
@@ -552,20 +671,20 @@ func (gu *Gui) renderViews() {
 		optsWin := gu.st.focused.normalizeForDetail().window()
 		gu.writeView(winOptionsStrip, "", renderOptionsStrip(gu.bindingSpecs(), optsWin, gu.innerWidth(winOptionsStrip)))
 
-		// Job-input textarea is allocated by layout whenever the
-		// selected job is non-terminal AND the Detail pane is
-		// currently showing that job. The Detail-pane gate matters:
+		// Session-input textarea is allocated by layout whenever the
+		// selected session is non-terminal AND the Detail pane is
+		// currently showing that session. The Detail-pane gate matters:
 		// when the operator is on the Tasks panel (Detail shows the
-		// task), the input must NOT appear just because the Jobs
-		// panel's cursor happens to point at a live job. renderViews
+		// task), the input must NOT appear just because the Sessions
+		// panel's cursor happens to point at a live session. renderViews
 		// mirrors layout's gate so writeView doesn't poke at a view
-		// that doesn't exist this frame. When the job is terminal
+		// that doesn't exist this frame. When the session is terminal
 		// the input view is absent and the Detail pane uses its full
 		// inner height for the transcript.
-		if isJobDetail {
-			if j, ok := gu.st.selectedJob(); ok && isJobLive(j) {
-				title := "input — ctrl+d send  ctrl+f follow_up  ctrl+a abort  esc cancel"
-				gu.writeView(winJobInput, title, gu.st.jobInput)
+		if isSessionDetail {
+			if s, ok := gu.st.selectedSession(); ok && isSessionLive(s) {
+				title := "input — ctrl+d send  ctrl+f follow-up  ctrl+a abort  esc cancel"
+				gu.writeView(winSessionInput, title, gu.st.sessionInput)
 			}
 		}
 	})
@@ -722,9 +841,9 @@ func (gu *Gui) snapViewportToCursor(p panelID) {
 		case panelTasks:
 			cursor = gu.st.taskCursor
 			rowCount = len(gu.st.tasks)
-		case panelJobs:
-			cursor = gu.st.jobCursor
-			rowCount = len(gu.st.jobs)
+		case panelSessions:
+			cursor = gu.st.sessionCursor
+			rowCount = len(gu.st.sessions)
 		case panelWorkflows:
 			cursor = gu.st.workflowCursor
 			rowCount = len(gu.st.workflows)
@@ -783,8 +902,8 @@ func (gu *Gui) panelScroll(p panelID, step int) func(*gocui.Gui, *gocui.View) er
 			switch p {
 			case panelTasks:
 				rowCount = len(gu.st.tasks)
-			case panelJobs:
-				rowCount = len(gu.st.jobs)
+			case panelSessions:
+				rowCount = len(gu.st.sessions)
 			case panelWorkflows:
 				rowCount = len(gu.st.workflows)
 			case panelAgents:
@@ -871,19 +990,17 @@ func headerLinesForLocked(p panelID, st *state) int {
 		if st.scope.WorkflowName != "" {
 			h++
 		}
-		if st.scope.Agent != "" {
-			h++
-		}
+		// NOTE: agent scoping removed in v2
 		if st.filter.Tasks != "" {
 			h++
 		}
 		return h
-	case panelJobs:
+	case panelSessions:
 		h := 0
 		if st.scope.TaskID != "" {
 			h++
 		}
-		if st.filter.Jobs != "" {
+		if st.filter.Sessions != "" {
 			h++
 		}
 		return h
@@ -899,50 +1016,50 @@ func headerLinesForLocked(p panelID, st *state) int {
 	return 0
 }
 
-// taskJobIndex is the per-row projection of the jobs snapshot that
-// the Tasks panel consults for its job-presence markers:
+// taskSessionIndex is the per-row projection of the sessions snapshot that
+// the Tasks panel consults for its session-presence markers:
 //
-//   - Active is the set of tasks with at least one running job. It
+//   - Active is the set of tasks with at least one running session. It
 //     drives the animated braille spinner (blue, task-id hue).
-//   - Any is the set of tasks with at least one job in ANY status
-//     (queued / running / done / failed / cancel). It drives the
-//     static ">" marker (magenta, job-id hue) shown when no spinner
+//   - Any is the set of tasks with at least one session in ANY status
+//     (queued / running / done / failed / aborted). It drives the
+//     static ">" marker (magenta, session-id hue) shown when no spinner
 //     is animating.
 //
 // Active ⊆ Any by construction — the renderer picks the spinner
 // first and falls back to the marker only when the row isn't
-// actively running. Pre-sized maps from len(jobs) so the common
-// "one task per job" case avoids a rehash.
+// actively running. Pre-sized maps from len(sessions) so the common
+// "one task per session" case avoids a rehash.
 //
 // The index is built at refresh time from the TaskID-UNFILTERED
-// jobs read (see fetchRefresh), NOT from the filtered slice that
-// drives the Jobs panel. Otherwise an active scope.TaskID would
-// shrink the Jobs query down to one task and every other row in
+// sessions read (see fetchRefresh), NOT from the filtered slice that
+// drives the Sessions panel. Otherwise an active scope.TaskID would
+// shrink the Sessions query down to one task and every other row in
 // Tasks would lose its marker — a regression noticed the first time
-// an operator pressed Space on a row that had jobs.
-type taskJobIndex struct {
+// an operator pressed Space on a row that had sessions.
+type taskSessionIndex struct { // renamed from taskJobIndex
 	Active map[string]bool
 	Any    map[string]bool
 }
 
-// taskJobIndexFromJobs builds a taskJobIndex from a jobs slice.
+// taskSessionIndexFromSessions builds a taskSessionIndex from a sessions slice.
 // Pure function so refresh.go can call it on the unfiltered fetch
 // result (no lock needed; the slice is owned by the calling
 // goroutine until applyRefreshLocked publishes it). Returns empty
-// (but non-nil) maps when there are no jobs so the renderer can do
+// (but non-nil) maps when there are no sessions so the renderer can do
 // a single map lookup per row without nil-checking.
-func taskJobIndexFromJobs(jobs []datasource.Job) taskJobIndex {
-	idx := taskJobIndex{
-		Active: make(map[string]bool, len(jobs)),
-		Any:    make(map[string]bool, len(jobs)),
+func taskSessionIndexFromSessions(sessions []datasource.Session) taskSessionIndex {
+	idx := taskSessionIndex{ // renamed from taskJobIndex
+		Active: make(map[string]bool, len(sessions)),
+		Any:    make(map[string]bool, len(sessions)),
 	}
-	for i := range jobs {
-		tid := jobs[i].TaskID
+	for i := range sessions {
+		tid := sessions[i].TaskID
 		if tid == "" {
 			continue
 		}
 		idx.Any[tid] = true
-		if runstore.RunStatus(jobs[i].Status) == runstore.StatusRunning {
+		if sessions[i].Status == runstore.StatusRunning {
 			idx.Active[tid] = true
 		}
 	}
@@ -1079,14 +1196,27 @@ func viewBufferLineCount(v *gocui.View) int {
 	return strings.Count(buf, "\n") + 1
 }
 
-// writeViewSticky is writeView + a sticky-tail behaviour: if the
-// view was scrolled to the bottom BEFORE the new body landed (or the
-// view was empty / freshly created), the viewport origin is moved
-// after the write so the tail stays visible. If the user had scrolled
-// up, the origin is left alone so wheel/PgUp positions are preserved
-// across live-event appends and 2s refresh ticks.
+// writeViewSticky / writeViewTailing is writeView + a sticky-tail
+// behaviour: if the view was scrolled to the bottom BEFORE the new
+// body landed, the viewport origin is moved after the write so the
+// tail stays visible. If the user had scrolled up, the origin is left
+// alone so wheel/PgUp positions are preserved across live-event
+// appends and 2s refresh ticks.
 //
-// Used by winDetail only. Tasks / Jobs / Workflows / Agents already
+// anchorBottomOnFirstFrame controls the very first frame (the empty /
+// freshly-cleared buffer, prevLines==0) — i.e. the moment a new entity
+// is rendered into the pane:
+//
+//   - true  (writeViewSticky): land at the bottom. This is the session
+//     transcript: switching to a session in the Sessions panel snaps to
+//     the newest line so live events are immediately visible.
+//   - false (writeViewTailing): leave the origin at the top. This is the
+//     task / workflow / agent detail: opening a task shows its title /
+//     description first, NOT the tail of the comment thread. Subsequent
+//     frames still tail the bottom when the user is parked there, so a
+//     new comment auto-scrolls into view only if they were at the end.
+//
+// Used by winDetail only. Jobs / Workflows / Agents lists already
 // manage their origin via the cursor-highlight loop, and applying
 // sticky-tail there would break the wheel-scroll-keeps-its-place
 // affordance.
@@ -1106,6 +1236,10 @@ func viewBufferLineCount(v *gocui.View) int {
 // Using the full inner height for the threshold preserves the
 // at-bottom anchor across the overlay-appears transition.
 func (gu *Gui) writeViewSticky(name, title, body string) {
+	gu.writeViewTailing(name, title, body, true)
+}
+
+func (gu *Gui) writeViewTailing(name, title, body string, anchorBottomOnFirstFrame bool) {
 	v, err := gu.g.View(name)
 	if err != nil || v == nil {
 		return
@@ -1132,13 +1266,20 @@ func (gu *Gui) writeViewSticky(name, title, body string) {
 	} else {
 		prevLines = viewBufferLineCount(v)
 	}
-	// First frame OR user is at (or past) the bottom → sticky.
-	// `oy + fullH >= prevLines` is true exactly when the visible
-	// region [oy, oy+fullH) already covers the last line index
-	// (prevLines-1). Using prevLines as a true line count (rather
-	// than the off-by-one newline count) is required for both this
-	// predicate AND the post-write target below.
-	beforeSticky := prevLines == 0 || oy+fullH >= prevLines
+	// First frame → honour anchorBottomOnFirstFrame (bottom for the
+	// session transcript, top for task/workflow/agent detail). On any
+	// later frame, sticky only when the user is at (or past) the
+	// bottom. `oy + fullH >= prevLines` is true exactly when the
+	// visible region [oy, oy+fullH) already covers the last line index
+	// (prevLines-1). Using prevLines as a true line count (rather than
+	// the off-by-one newline count) is required for both this predicate
+	// AND the post-write target below.
+	var beforeSticky bool
+	if prevLines == 0 {
+		beforeSticky = anchorBottomOnFirstFrame
+	} else {
+		beforeSticky = oy+fullH >= prevLines
+	}
 
 	gu.writeView(name, title, body)
 
@@ -1174,16 +1315,4 @@ func (gu *Gui) writeViewSticky(name, title, body string) {
 		target = 0
 	}
 	v.SetOrigin(ox, target)
-}
-
-// truncateLines crops a string to at most n lines (helps small views).
-func truncateLines(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	parts := strings.SplitN(s, "\n", n+1)
-	if len(parts) <= n {
-		return s
-	}
-	return strings.Join(parts[:n], "\n")
 }

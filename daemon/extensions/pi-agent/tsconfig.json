@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "comment": "pi-transit-extension.ts is loaded by pi's toolchain (imports pi's typebox / ExtensionAPI), never by the autosk daemon, which only passes its path to `pi -e`. Excluded so the workspace typecheck does not need pi's deps.",
+  "exclude": ["src/pi-transit-extension.ts"]
+}

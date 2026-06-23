@@ -6,20 +6,48 @@ on:
   pull_request:
 
 jobs:
-  test:
+  # The Bun daemon (daemon/): typecheck + unit tests. These are pure
+  # (reducer/store/engine logic, no spawned daemon), so a single ubuntu runner
+  # is enough. `autoskd` is a Bun/TypeScript app — the only native build in the
+  # whole pipeline is the standalone Tauri GUI backend (see gui.yml).
+  daemon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: bun install
+        working-directory: daemon
+        run: bun install --frozen-lockfile
+
+      - name: typecheck
+        working-directory: daemon
+        run: bun run typecheck
+
+      - name: test
+        working-directory: daemon
+        run: bun test
+
+  # The Go binary (CLI + lazy TUI): a pure JSON-RPC client of autoskd. It is
+  # CGO-free and links no storage engine — `make build` is plain `go build`.
+  # `make test` compiles the Bun `autoskd` (via `bun build --compile`) and the
+  # verb tests auto-spawn it, so the runner needs both Go AND Bun.
+  go:
     strategy:
       fail-fast: false
       matrix:
-        # macos-14 is Apple Silicon (osx-arm64). ubuntu-latest is linux-x64.
+        # macos-26 is Apple Silicon (osx-arm64). ubuntu-latest is linux-x64.
         # linux-arm64 / win-x64 release assets exist too — wire them in once
         # we have runners for them.
         os: [ubuntu-latest, macos-26]
     runs-on: ${{ matrix.os }}
 
     steps:
-      # All three actions are pinned to their Node.js 24 majors:
-      #   checkout v5 / setup-go v6 / cache v5. Node 20-based majors are
-      #   deprecated by GitHub and will be forced off on 2026-06-02.
+      # checkout v5 / setup-go v6 are pinned to their Node.js 24 majors.
       - uses: actions/checkout@v5
 
       - name: Set up Go
@@ -27,14 +55,13 @@ jobs:
         with:
           go-version: "1.25"
 
-      # Cache the auto-fetched libdoltlite so we don't hit GitHub releases on
-      # every CI run. The Makefile pins DOLTLITE_VERSION, so the cache key is
-      # stable per version + platform.
-      - name: Cache doltlite
-        uses: actions/cache@v5
+      # `make test` (and `make build-autoskd`) compile the Bun daemon with
+      # `bun build --compile`, so Bun must be on PATH. The compiled binary
+      # embeds the Bun runtime, so nothing else needs Bun at runtime.
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          path: .doltlite
-          key: doltlite-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
+          bun-version: latest
 
       - name: go vet
         run: make vet
@@ -44,3 +71,27 @@ jobs:
 
       - name: test
         run: make test
+
+  # Release-layout smoke: package `autoskd` exactly as the release ships it, then
+  # prove the installed `autosk` auto-spawns the compiled `autoskd` and serves
+  # with NO global bun (auto-spawn acceptance criterion). There are no bundled
+  # extensions — the reference `feature-dev` workflow is an npm package the daemon
+  # installs on first run (which needs npm + network, deliberately not asserted
+  # by this offline smoke).
+  clean-layout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: clean-layout auto-spawn test
+        run: bash scripts/clean-layout-test.sh

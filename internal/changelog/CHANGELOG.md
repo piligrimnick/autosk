@@ -7,13 +7,520 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **Clean break — autosk v2.** The daemon is rewritten from scratch as a
+> Bun/TypeScript program (`autoskd`), and the storage engine is gone: a project's
+> tasks, comments, and session transcripts are now plain **files** under
+> `.autosk/` — there is **no database**. v2 does **not** read the old
+> `.autosk/db`, and there is **no migrator**: open an existing v1 project with the
+> last v1 release, [`v0.1.6`](https://github.com/wierdbytes/autosk/releases/tag/v0.1.6).
+> Workflows and agents are now **code** registered by extensions, not database
+> rows or installed npm-package agents.
+
+### Added
+- **CI: continuous npm + GHCR publishing on `main`.** A new
+  `.github/workflows/publish.yml` runs after a green `CI` run on a push to `main`
+  and publishes every version-bumped `@autosk/*` package to npm via OIDC trusted
+  publishing (no `NPM_TOKEN`, automatic provenance), and pushes the `pi-runtime`
+  + `claude-runtime` GHCR images multi-arch tagged `latest` + `sha-<short>`
+  (ask-92ce08).
+- **macOS Homebrew cask** (`brew install --cask wierdbytes/autosk/autosk`): a
+  signed, notarized, stapled Apple-Silicon `autosk.app` that embeds the `autosk`
+  CLI/TUI and `autoskd` daemon as Tauri sidecars and symlinks both onto `PATH`,
+  so a Finder launch auto-spawns the daemon with no shell `PATH`; bumped on
+  stable tags only (ask-92ce08).
+- **Linux GUI release assets.** Tagged releases now attach an
+  `autosk_<ver>_amd64.AppImage` (and a best-effort `.deb`) to the GitHub Release
+  alongside the `autosk`/`autoskd` Linux binaries (ask-92ce08).
+- **iOS TestFlight pipeline.** Every tag (including pre-releases) builds the GUI
+  with Tauri iOS automatic signing (one shared App Store Connect API key, no
+  manual cert/profile) and uploads the IPA to TestFlight with a monotonic build
+  number (ask-92ce08).
+- **`@autosk/claude-agent` (Claude Code headless agent).** A second shipped
+  agent that drives Claude Code (`claude -p` stream-json) as an autoskd v2 agent
+  — the structural twin of `@autosk/pi-agent`, with Claude Code as the harness
+  instead of `pi --mode rpc` — plus a new self-contained `autoskd mcp` stdio MCP
+  subcommand exposing the autosk tool surface (`transit` ack-only + `task` +
+  `comment`, the latter two shelling out to `autosk --json`) that the agent
+  points Claude at via `--mcp-config`; it registers `@autosk/claude-agent` for
+  interactive chat and is opt-in (not bootstrap-provisioned) (ask-4f347a).
+- **`@autosk/feature-dev-cc` (Claude Code feature-dev workflow).** The Claude
+  Code twin of `@autosk/feature-dev` — the same `dev → review → docs → validator
+  → accept` cycle with `review→dev`/`validator→dev` bounce-backs, a `dev`
+  visit-cap guard, and per-task worktree isolation — but every agent step is an
+  inline `@autosk/claude-agent` role (driving `claude -p`) instead of an
+  `@autosk/pi-agent` role. Each agent step runs with
+  `dangerouslySkipPermissions: true` (`--dangerously-skip-permissions`) since the
+  unattended run is isolated in its per-task worktree sandbox. Not bootstrapped —
+  install with `autosk ext add npm:@autosk/feature-dev-cc` (or from a local
+  checkout).
+- **Docker isolation provider (`@autosk/docker`).** A new opt-in
+  `dockerIsolation({ image })` isolation provider runs pi (and every command it
+  spawns) **inside a per-task Docker container** — a real sandbox — by composing
+  `@autosk/worktree` for the git-branch filesystem (edits still land on
+  `autosk/<task-id>` on the host): it bind-mounts the worktree 1:1, mounts the
+  daemon UDS for in-container `autosk` parity, `acquire`s (create/start/reuse) a
+  deterministically-named container, `release`s with `docker stop`, and `reap`s
+  with `docker rm -f` (branch preserved). Backed by a new optional `exec`/`spawn`
+  **execution seam** on `IsolationHandle` (with `IsolationExecOptions` /
+  `IsolationSpawnOptions`) that lets a provider own process creation, and the
+  shared `runChild` / `spawnChild` child-process helpers now exported from
+  `@autosk/sdk`. Not bootstrapped — install with `autosk ext add
+  npm:@autosk/docker` (ask-ffa1bc).
+- **Editable task metadata.** Every task now carries a free-form `metadata`
+  object in `task.json` (always present, omitted on disk when empty), readable
+  and editable through a new `autosk metadata show/set/unset` verb group, the
+  `task.metadata.set` / `task.metadata.unset` daemon RPC methods, a lazy TUI
+  Metadata panel (`M` opens `$EDITOR`), and the GUI task edit modal; the engine
+  reserves the `step_visits` sub-object (ask-93a91b).
+- **GUI: iPhone-friendly compact single-pane layout.** On touch devices below
+  the compact breakpoint (`(pointer: coarse) and ((max-width: 700px) or
+  (max-height: 480px))`) the Tauri GUI switches to a full-screen single-pane
+  shell — a top bar (project switcher + Settings gear), one active list, and a
+  bottom tab bar (Tasks/Sessions/Workflows) with push-to-detail navigation, a
+  ‹ Back control, a pinned contextual composer, full-screen modal sheets, and
+  safe-area insets in both orientations; desktop and iPad keep the two-pane
+  layout unchanged (ask-5c793f).
+- **GUI: streaming partial agent messages.** An active pi-agent turn now renders
+  live in the Tauri GUI — assistant text, thinking, and tool-call blocks grow as
+  the model produces them, instead of appearing only after the step commits. Built
+  on a new ephemeral `session-event` `kind:"partial"` frame (a cumulative,
+  never-persisted snapshot that carries no transcript line and never advances the
+  subscription cursor) and an SDK `ctx.partial(message)` channel; the committed
+  durable line supersedes the live bubble with no flicker or duplication
+  (ask-b9258c).
+- **Interactive (taskless) chat sessions.** Open a session from the GUI Sessions
+  panel (`＋` → NewSessionModal), pick a registered agent, and chat with the model
+  turn-by-turn — the session is tied to no task and no workflow. Backed by a new
+  first-class agent registry (`AutoskAPI.registerAgent`; `@autosk/pi-agent`
+  registers the `pi` agent) and three new proto-v2 RPC methods
+  `registry.agent.list` / `session.create` / `session.end`; a graceful End seals
+  the session `done` (vs Abort → `aborted`) (ask-f330c1). A live chat now also
+  surfaces its **turn activity**: the session badge reads `working` while the
+  agent is streaming a turn and `idle` when it is waiting for your next message
+  (instead of a bare `running`). Backed by a new `SessionMeta.activity`
+  (`idle`|`busy`) field, an `AgentRunContext.setActivity` hook the chat agent
+  drives from pi's `agent_start`/`agent_end`, and a `session-changed` push so
+  both the Sessions panel rows and the open session view update live.
+- **GUI: browse & install `autosk-extension` npm packages from the Workflows
+  panel.** A new `＋` action in the Workflows header (shown only when a project is
+  active) opens a browser listing npm packages published with the
+  `autosk-extension` keyword, sorted by weekly downloads; each row shows
+  name+version, description, weekly downloads, publisher, and last-updated date.
+  Clicking a row opens the package's npmjs.com page in the default browser;
+  already-installed packages show an "Installed (global/project)" badge. Install
+  asks where to put it (Globally / To this project → `extension.install`
+  `{ local: false | true }`) and then hints to reopen the project for the new
+  workflow(s) to appear. The npm search runs in the Tauri backend (new
+  `extension_search` command, scoped to the npm registry); opening pages uses the
+  official `@tauri-apps/plugin-opener`, restricted to `https://www.npmjs.com/*`.
+- **`--force`/`-f` on `autosk done` & `autosk cancel`:** force-reaps the task's
+  isolation env (git worktree) even when it has uncommitted changes — the branch
+  is always preserved, only the working dir + its uncommitted edits are dropped.
+  Surfaced in all three front ends: the CLI flag, a force-confirm prompt in the
+  `autosk lazy` Tasks panel, and a force-confirm dialog in the desktop GUI. New
+  proto-v2 error code `ENVIRONMENT_DIRTY` (1005) backs the warn-then-force flow, and
+  the `IsolationProvider` SDK contract gains an optional, identity-keyed `reap()`
+  (session-free cleanup) method.
+- **daemon (`autoskd`):** a brand-new Bun/TypeScript daemon that owns each
+  project's `.autosk/` directory and drives tasks through their workflows. It is
+  auto-spawned on first use over a Unix socket (single-instance bind; opt-in TCP
+  + token for remote front ends; idle-shutdown), serves the proto-v2 JSON-RPC
+  surface, and ships as a standalone binary (`bun build --compile` — embeds the
+  Bun runtime, so no global `bun` is needed at runtime). Replaces the v1 Go
+  `autosk daemon`.
+- **live session updates:** the `autosk lazy` TUI and the desktop GUI now see
+  sessions appear and change state in real time. The daemon adds a project-scoped
+  `session-changed` notification (pushed on a session's create → running →
+  terminal transitions) plus the `session.subscribeProject` /
+  `session.unsubscribeProject` RPC verbs; front ends subscribe once per active
+  project and no longer have to know a session id ahead of time — or poll — to
+  watch a freshly-enrolled task's session spin up and run to completion.
+- **storage:** tasks / comments / sessions are now files under `.autosk/`
+  (`tasks/<id>/task.json` + `comments.jsonl`, `sessions/<id>.json` + `.jsonl`),
+  written atomically by the daemon, with a startup scan + fs-watcher that picks
+  up external (human/script) edits. No database, no migrations, no GC.
+- **workflows & agents as code:** workflows are TypeScript registered by
+  **extensions** (their agents are inline step values — the step key is the agent
+  name), with pi-style discovery (project `.autosk/extensions/` ▸ global
+  `~/.autosk/extensions/` ▸ npm packages in `settings.json`),
+  loaded in-process with full error isolation — a broken extension is recorded
+  via `project.diagnostics` and never crashes the daemon. The engine only drives
+  the task status machine and calls each workflow's `onTransit` hook; visit caps
+  and guards live in that hook (`ctx.visits`). See `docs/extensions.md` and
+  `docs/workflows.md`.
+- **extension packages (npm):** `@autosk/sdk` (the extension-facing types),
+  `@autosk/worktree` (the per-task git-worktree isolation provider, attachable to
+  any workflow), `@autosk/pi-agent` (an agent that drives `pi --mode rpc`, mirrors
+  pi's transcript entries 1:1, and bridges transitions through an injected
+  `autosk_transit` pi-tool), and `@autosk/feature-dev` (the reference workflow
+  `dev → review → docs → validator → accept` with review→dev / validator→dev
+  bounce-backs and a `dev` visit cap — replaces v1's `feature-dev-generic`). All
+  four are published to npm as raw TypeScript; the daemon installs
+  `@autosk/feature-dev` on first run (see **first-run bootstrap**).
+- **`@autosk/merge-to-current` workflow (npm):** a single-step, non-isolated
+  workflow that merges a task's `autosk/<task-id>` branch into the project's
+  **current** branch (whatever `HEAD` points at) — the v2 port of v1's
+  `merge-to-main`, with the destination changed from `main`/`master` to the
+  current branch and a fast-forward-when-possible merge. It auto-commits pending
+  task-worktree edits to the branch first, refuses on a dirty tree / detached
+  HEAD, and either lands cleanly (`done`) or fully rolls back and parks for a
+  human (`human`). Published to npm but NOT part of the first-run bootstrap —
+  install with `autosk ext add npm:@autosk/merge-to-current`, then
+  `autosk enroll <id> --workflow merge-to-current`.
+- **first-run bootstrap:** on a fresh machine (no `~/.autosk/settings.json`) the
+  daemon provisions the default extensions itself — it `npm install`s
+  `@autosk/feature-dev` (deps pulled transitively) into `~/.autosk/packages/` and
+  writes `~/.autosk/settings.json`, so every project discovers `feature-dev` with
+  no per-project files. `settings.json`'s presence is the "already initialised"
+  marker (provide your own to opt out); the install needs `npm` on `PATH`
+  (`$AUTOSK_NPM_BIN`) + network and is logged-but-never-fatal on failure.
+- **auto-install reconcile:** on every start the daemon also installs any package
+  listed in `settings.json#extensions` that is not yet present — the global
+  `~/.autosk/settings.json` once per start, each project's
+  `./.autosk/settings.json` on first open. Only **missing** packages install
+  (no upgrade); set **`AUTOSK_NO_AUTO_INSTALL`** to disable all automatic
+  installs (first-run bootstrap included).
+- **`autosk ext` (extension management):** the `autosk ext` command group —
+  `autosk ext add <source>`, `autosk ext list`, and `autosk ext remove <source>`
+  to manage `settings.json#extensions`, with `-l/--local` for project scope; a
+  source is `npm:<spec>[@version]` (installed into the scope's packages dir) or a
+  local path (`/abs`, `./rel`, `../rel`, `~/path`, referenced in place). Plus
+  `autosk ext update [source]`: bump installed floating-`npm:` extensions to
+  newer registry versions in place — global scope outside a project, the union
+  of global + project inside one, with `--global` / `-l/--local` scope overrides
+  and a `--dry-run`/`--check` preview; version-pinned (`npm:foo@1.2.3`) and
+  local-path entries are reported as skipped (ask-6dfc43, ask-08d0cb).
+- **sessions:** one agent run for one step is a **session** with a pi-format
+  transcript (`sessions/<id>.jsonl`: a header, pi `message` entries with text /
+  thinking / `toolCall` / image content blocks, and the engine's structural
+  `autosk:transit` / `autosk:steer` / `autosk:error` / `autosk:session_end`
+  entries). Live sessions support steer / follow-up / abort.
+- **cli:** new `autosk session` group — `list [--task ID]`, `get`, `transcript
+  [--from-line N] [--limit N]`, `abort`, `input <message> [--followup]`;
+  the read-only `autosk workflow list|show` registry view;
+  a new `autosk project` group (`list`, `add`, `diagnostics`); and
+  `autosk comment edit|delete` (comments are now editable/deletable) (ask-305572).
+- **gui:** a new native **Tauri desktop app** (`gui/`) at `autosk lazy` parity —
+  a frameless two-panel workspace (a Tasks / Sessions / Workflows accordion + a
+  polymorphic entity view driven by one entity-aware composer), a live pi-format
+  session transcript (`session.transcript` / `session-event`) with steer / abort,
+  editable/deletable comments, a project switcher with an extension-diagnostics
+  badge (`project.diagnostics`), a read-only workflow registry view,
+  whole-UI zoom, a collapsible/resizable sidebar, and a Liquid Glass app icon.
+  Runs **local** (auto-spawned `autoskd` over UDS) or **remote** (TCP + token);
+  the Tauri backend is a pure JSON-RPC client of `autoskd` (ask-9e5f8c,
+  ask-03019a).
+- **build/release:** `make build-autoskd` compiles the Bun daemon to `bin/autoskd`
+  (no extension bundling); `make install` installs both `autosk` + `autoskd`.
+  Releases ship **both** binaries per target, and the Homebrew formula installs
+  both — so auto-spawn works on a clean machine with no global `bun`. The
+  `@autosk/*` extension packages are published to npm via
+  `scripts/publish-extensions.sh` (ask-305572, ask-e36027).
+- **`@autosk/pi-tools` (new pi extension):** the agent-facing autosk management
+  tools — `autosk_task` (create / update / show / list) and `autosk_comment`
+  (add / list) — shipped as a standalone, npm-publishable pi extension. It is
+  **transport-aware**: when the autosk pi-agent runs pi in a thin sandbox it sets
+  `AUTOSK_MCP_URL`/`AUTOSK_MCP_TOKEN` and the tools POST to the per-session HTTP
+  MCP server; otherwise they shell out to the `autosk --json` CLI. Install it in
+  pi (`~/.pi/agent/settings.json`) to give an interactive or workflow agent a
+  structured task/comment surface. It ships no transition tool: a workflow step
+  still records its transition through the in-process `autosk_transit` channel.
+- **`AUTOSK_CWD` project-selector override:** the `autosk` CLI now honors
+  `$AUTOSK_CWD` as the project root for every verb (falling back to the working
+  directory). `@autosk/pi-agent` sets it — to the canonical project root, also
+  exposed to agents as `ctx.projectRoot` — when it spawns a workflow agent, so
+  `autosk` calls from inside a **worktree-isolated** run (the tools above, or a
+  bare `autosk` in a shell) resolve the task's own project instead of walking up
+  from the throwaway worktree to the wrong (or no) `.autosk/`.
+- **Agent-owned isolation (`@autosk/sandbox`).** A new bootstrapped sandbox
+  library exposes a structural `Sandbox` shape plus `worktreeSandbox()`,
+  `dockerSandbox({ image })`, and `sandboxCleanupStep()` — agents wrap their own
+  harness with a `Sandbox` and tear it down through a normal `cleanup` workflow
+  step (worktree dir removed, branch preserved; defensive container `rm`). The
+  engine mints a per-session host HTTP MCP server via `ctx.newMCPServer()`
+  (`{ url, port, token, close }`, bound `0.0.0.0` so a container reaches it over
+  `host.docker.internal`, guarded by a per-session bearer + ephemeral port and
+  closed by an engine backstop on every settle); `@autosk/feature-dev-docker`
+  runs every pi agent step in a per-task `dockerSandbox({ image })` (ask-709e5a).
+- **`@autosk/feature-dev-docker` (Docker variant of feature-dev).** A new package
+  registers the `feature-dev-docker` workflow: the shipped `featureDevWorkflow()`
+  pi cycle with every agent step in a per-task `dockerSandbox` (the
+  `ghcr.io/wierdbytes/pi-runtime` image). pi runs THIN — the agent injects only the
+  ack-only `autosk_transit` tool and the transport-aware `@autosk/pi-tools` POSTs
+  `autosk_task`/`autosk_comment` to the per-session host HTTP MCP server over
+  `host.docker.internal` (no `autosk` CLI / socket in the image) — and it
+  bind-mounts the host `~/.pi` (provider auth) + the per-task project `.git` (so an
+  in-container git worktree resolves its commondir). Install with `autosk ext add
+  npm:@autosk/feature-dev-docker`.
+- **Thin operator docker images (`pi-runtime` / `claude-runtime`).** Two thin
+  images `dockerSandbox({ image })` runs ship under the agent packages
+  (`daemon/extensions/pi-agent/docker/` → `ghcr.io/wierdbytes/pi-runtime`,
+  `daemon/extensions/claude-agent/docker/` → `ghcr.io/wierdbytes/claude-runtime`):
+  the harness (`pi` / `claude`) + the Go/Bun/git/make/golangci-lint/Node toolchain,
+  arbitrary-uid-safe, with no `autosk`/`autoskd`/socat. `scripts/publish-extensions.sh`
+  builds + pushes them multi-arch to GHCR alongside the npm packages (`--no-images`
+  to skip). The claude image ships `export-claude-credentials.sh` (bridge the macOS
+  Keychain `Claude Code-credentials` OAuth token into a file the Linux `claude`
+  reads); the Claude `dockerSandbox` workflow itself is deferred.
+
+### Changed
+- **Install + release distribution.** Install instructions now describe a
+  per-platform matrix — macOS via the Homebrew cask, Linux via GitHub Release
+  assets (no Homebrew), source via `make install` — and `release.yml` now
+  produces signed app artifacts (macOS DMG, Linux AppImage/`.deb`, iOS
+  TestFlight) in addition to the `autosk`/`autoskd` binaries (ask-92ce08).
+- **Isolation providers dropped from the GUI extension browser.** The shipped
+  isolation providers `@autosk/worktree` (0.1.3) and `@autosk/docker` (0.1.1) no
+  longer carry the `autosk-extension` npm keyword, so they no longer appear in
+  the Workflows panel `＋` browser (which lists `autosk-extension` packages) —
+  isolation providers are attached to a workflow in code, not picked from that
+  list. Installable workflows and agents are unaffected.
+- **Workflow visit counts are now metadata-backed.** `ctx.visits(step)` reads
+  the persistent, human-resettable `metadata.step_visits[step]` counter the
+  engine bumps on every transition into a named step, instead of counting
+  session files; in-flight tasks effectively reset their counters to 0 on
+  upgrade, and a cap (e.g. feature-dev's `dev`) can be lifted with
+  `autosk metadata unset <id> step_visits` (ask-93a91b).
+- **desktop GUI — quieter session controls:** End/Abort no longer raise an info
+  notice (`End sent to session …` / `Abort sent to session …`); the session
+  status flips once the daemon settles it, and errors still surface.
+- **desktop GUI — wider sidebar resize:** the sidebar can now be dragged out to
+  half the window width (the cap is dynamic instead of a fixed 480px), so the
+  Tasks / Sessions / Workflows lists get more room on wide displays.
+- **desktop GUI — calmer typography:** status badges (Tasks / Sessions panels
+  and the center task/session views) now render lowercase (`work`, `running`,
+  `done`, …) and are centered in their fixed-width gutter; panel titles, section
+  headers, field labels, menu labels, transcript role labels, and the task
+  comments header drop the all-caps treatment for sentence case (`Tasks`,
+  `Sessions`, `Workflows`, `Comments`, `Assistant`, …).
+- **enroll / resume — looser status gates + GUI consolidation:** `task.enroll`
+  is now accepted from `new`, `cancel`, **and** `human` (previously `new` only)
+  and takes an optional starting `step` (default: the workflow's first step), so
+  it can place a task at any step of any workflow; `task.resume` is now accepted
+  from `human` **and** `cancel` (previously `human` only). `work` (abort the live
+  run first) and `done` (use `reopen`) are still rejected. The desktop GUI drops
+  the separate **Resume** button: a single **Enroll** button opens the picker
+  pre-seeded to the task's current workflow + step (continue where it left off)
+  and always calls `task.enroll` with the picked step. The CLI `autosk enroll`
+  gains a `--step STEP` flag.
+- **`@autosk/sdk` isolation lifecycle:** the `IsolationProvider` contract is now
+  status-driven — `acquire` stays per-step (idempotent ensure-ready), `release`
+  becomes an optional, no-arg quiesce-on-exit hook fired only when a task LEAVES
+  `work` (never step→step), and durable teardown moves to the optional `reap` on
+  a terminal transition. No operator-visible change — the worktree provider
+  behaves identically end-to-end (dir kept across steps/park, removed on
+  terminal, branch preserved) (ask-35186d).
+- **`@autosk/feature-dev`:** the shipped reference workflow's `validator` step
+  now performs mandatory **release hygiene** on success (updates `CHANGELOG.md`
+  `[Unreleased]` per Keep a Changelog, then commits a clean worktree with
+  Conventional Commits) before transitioning to `accept`, and the `docs` step
+  now explicitly defers `CHANGELOG.md` to `validator`. Every role prompt also
+  gained an **Available transitions** section naming its intended
+  `autosk_transit` targets (ported from the customized `feature-dev-generic`
+  workflow that lived in v1 `.autosk/db`).
+- **workflows:** workflow extensions now register their agents **inline** as
+  step values — each step is either an `AgentDefinition` (the step key is the
+  agent name) or a `statusStep`, and the single `registerWorkflow` API registers
+  the workflow together with its agents (there is no `registerAgent`). The new
+  `statusStep("done"|"cancel"|"human")` SDK helper replaces a step's
+  `{ human: true }` marker and adds terminal `done` / `cancel` steps; the
+  `registry.workflow.*` wire shape carries a per-step
+  `status: "done"|"cancel"|"human"|null` (agent steps are `null`) instead of the
+  old `agent` + `human` fields. See `docs/workflows.md` and `docs/extensions.md`.
+- **protocol:** the CLI, lazy TUI, and Tauri GUI now speak the **proto-v2**
+  namespaced JSON-RPC surface (`meta.*`, `project.*`, `task.*` incl.
+  `task.comment.*`, `registry.*`, `session.*`) carrying only the `{cwd}` selector
+  (the v1 `db_path` selector and the source discriminator are gone). The wire
+  types live once in `daemon/sdk/src/proto.ts` and are mirrored by the Go
+  (`internal/daemon/api`) and Tauri (`gui/src-tauri`) clients (ask-305572,
+  ask-03019a).
+- **tasks:** the task shape **drops `priority`, `author`, and `metadata`** (incl.
+  `step_visits`) and now carries `workflow` / `step` names; `--json` output and
+  the `list` table drop the priority column accordingly (ask-305572).
+- **cli:** the Go `autosk` binary is now a pure JSON-RPC client — CGO-free
+  (`make build` is plain `go build`), it links no storage engine of its own, and
+  every verb routes through the auto-spawned `autoskd`; `autosk version` reports
+  `backend: autoskd` (ask-305572).
+- **lazy:** the Jobs pane is now the **Sessions** pane (one session = one agent
+  run; transcript reads the pi-format `session.transcript` / `session-event`
+  stream), the Workflows pane is **read-only** (workflows are code), the priority
+  column / author filter / metadata editor are gone, and panels refresh on the
+  daemon's `task-changed` / `project-changed` push (ask-305572).
+- **bootstrap:** a freshly-created project lays down `.autosk/{tasks,sessions,
+  extensions}` and registers with the daemon — no database, and no per-project
+  workflow seeding (`feature-dev` is provisioned once, globally, on the daemon's
+  first run — see **first-run bootstrap** — and is then available to every
+  project).
+- **Isolation is now a userspace concern (agent-owned sandboxes).** The engine
+  no longer acquires/releases/reaps an isolation env: `ctx.cwd` is always the
+  project root, `task.done`/`task.cancel` are pure status flips (no dirty-gate),
+  and the reference workflows (`feature-dev`, `feature-dev-cc`) pass a
+  `worktreeSandbox()` to each agent step and route terminals through a `cleanup`
+  step. claude-agent now reaches its transit/task/comment tools over the
+  per-session HTTP MCP server (`--mcp-config type:"http"`) instead of the stdio
+  `autoskd mcp` agent path (the standalone subcommand survives for external use).
+  pi-agent now injects ONLY the ack-only `autosk_transit` tool and relies on the
+  single, transport-aware `@autosk/pi-tools` for `autosk_task`/`autosk_comment`:
+  under a thin docker sandbox the agent sets `AUTOSK_MCP_URL`/`AUTOSK_MCP_TOKEN`
+  so pi-tools POSTs to the per-session HTTP MCP server, otherwise pi-tools shells
+  out to the `autosk` CLI — so the in-repo `pi-mcp-extension.ts` duplicate was
+  removed (ask-709e5a).
+
+### Removed
+- **Homebrew formula.** The tap is now cask-only — the `release.yml` formula
+  bump job is gone and `Casks/autosk.rb` is the published artifact, so
+  `brew install autosk` resolves unambiguously to the cask on macOS; Linux moves
+  to GitHub Release assets / npm (ask-92ce08).
+- **agents (inline-step redesign):** the `autosk agent list/show` CLI, the
+  `enroll` / `create` `--agent` flag (and the `single:<agent>` synthetic
+  workflow it materialised), the `registry.agent.list` RPC verb + the `AgentInfo`
+  wire type, and the `AutoskAPI.registerAgent` method — agents are now inline
+  workflow-step values (see Changed).
+- **storage:** the `.autosk/db` database and everything tied to it — the `--db`
+  flag / `AUTOSK_DB` selector and the schema/`migrate` machinery; a project is
+  now just an `.autosk/` directory resolved by walk-up from `{cwd}` (ask-305572).
+- **cli:** the verbs with no proto-v2 equivalent — the whole `metadata`, `sql`,
+  and `worktree` groups; `gc`, `migrate`, `history`; `workflow create|delete|update`;
+  `agent install|uninstall`; `step next` (and the bare `next`-as-transition
+  alias); the whole `autosk daemon` group (auto-spawn + `autosk session` /
+  `autosk project` replace it); and the `-p/--priority` flags + `--author` filter
+  (ask-305572).
+- **tasks:** `priority`, `author`, and `metadata` (incl. `step_visits`).
+- **agents/workflows:** the npm-package agent system (`autosk agent install`) and
+  the JSON/DB workflow editor, both superseded by code-as-extensions; the four v1
+  agent npm packages under `agents/` and the example workflow JSON under
+  `docs/examples/workflows/` are removed.
+- **extensions (v1):** the `@wierdbytes/pi-autosk` pi extension is retired (its
+  core verb `autosk_step` → `step next` no longer exists; transitions are
+  daemon-internal via the in-process `autosk_transit` pi-tool), along with the v1
+  custom-agent SDK + bootstrapper (`@autosk/agent-sdk`, `@autosk/agent-runtime`)
+  — superseded by `@autosk/sdk` + `@autosk/pi-agent`.
+- **daemon internals:** the v1 Rust daemon workspace and its embedded
+  database/GC/migration machinery are gone, replaced by the Bun `autoskd` (this
+  intermediate Rust daemon never reached a release).
+- **daemon-bundled extensions:** there is no longer a fourth, lowest-priority
+  "daemon-bundled" discovery source, no extensions packaged beside the binary,
+  the `$AUTOSK_BUNDLED_EXTENSIONS` env override, and the `scripts/bundle-extensions.sh`
+  bundler — the reference `feature-dev` workflow is now an npm package the daemon
+  installs on first run (see **first-run bootstrap**).
+- **isolation providers + the dirty-gate.** The `@autosk/worktree` and
+  `@autosk/docker` provider packages, the SDK `IsolationProvider` /
+  `IsolationHandle` / `Isolation*Options` / `IsolationReapResult` contracts and
+  `WorkflowDefinition.isolation`, the `isolation` field on `WorkflowInfo`
+  (`workflow show` + the lazy TUI `[wt]` chip + the GUI), and the `-f/--force`
+  flag on `autosk done`/`cancel` (now an unknown-flag error) together with its
+  lazy TUI / GUI force-confirm prompt are all gone — superseded by
+  `@autosk/sandbox` (see Added). The proto-v2 `ENVIRONMENT_DIRTY` (1005) error
+  code is reserved-but-retired and no longer emitted (ask-709e5a).
+- **GUI (iPhone compact layout): on-screen keyboard handling.** iOS WebKit
+  (Safari / the Tauri WKWebView) ignores the `interactive-widget=resizes-content`
+  viewport hint the compact layout relied on, so the keyboard overlaid the
+  `100dvh` shell: the task/comments scroll body was cut off too early, a large
+  dead gap sat between the composer and the keyboard, an empty scroll region
+  appeared below the input (WKWebView's keyboard contentInset), and focusing the
+  input auto-zoomed the page (the sub-16px field tripped iOS's focus-zoom),
+  panning it sideways. Now: every text control is pinned to 16px (plus
+  `maximum-scale=1` in the viewport meta) so focus never zooms; the document and
+  shell heights are driven off the live `visualViewport.height` (a `--app-vh`
+  custom property) so the content fits exactly above the keyboard with nothing
+  for WKWebView to scroll (the top bar can no longer be dragged off-screen); the
+  window is pinned to the top edge; and the composer drops its home-indicator
+  inset while the keyboard is up. The iOS keyboard's form-accessory bar (the
+  prev/next chevrons + Done checkmark) is also removed via the Tauri window
+  config (`disableInputAccessoryView: true`).
+- **GUI (iPhone compact layout): horizontal scroll & cramped session rows.**
+  On the phone single-pane layout, opening a task or session no longer opens a
+  sideways scroll: a scroll pane's `overflow-y:auto` was computing `overflow-x`
+  to `auto`, so a single long unbreakable token (a path/URL) — or a fenced code
+  block — dragged the whole detail screen sideways. Detail panes now pin
+  `overflow-x:hidden` and hard-wrap long words and code. The Sessions list also
+  stops scrolling sideways and now lets the session id shrink/ellipsis so the
+  task id (or, for a chat, the agent name) prints in full on the right edge.
+  Finally, the open-session header drops the duplicate session id (already shown
+  in the top bar) and reads `status · workflow:step · agent` with the task id
+  pinned to the right edge on one line. Desktop and iPad are unaffected (every
+  rule is gated behind the compact media query).
+- **pi-agent: garbled final transcript line on session end.** When a `pi`
+  session exited it left an unreadable `pi-agent:warn` entry
+  (`pi:stderr: \u001b[?2026h\u001b[r…`) as the last line of the transcript. `pi`
+  writes a burst of terminal-teardown control sequences to stderr on exit (mouse
+  tracking off, leave the alt-screen, end synchronized output) even under
+  `--mode rpc`, and the driver forwarded that line verbatim. pi-agent now strips
+  ANSI/terminal control sequences from forwarded stderr and drops a line that is
+  pure control noise, while still surfacing real stderr text (e.g. crash stack
+  traces).
+- **GUI: confirmation dialogs did nothing.** The project switcher's remove
+  (×) button, comment delete, session abort, and force done/cancel relied on
+  the native `window.confirm()`, which this Tauri/wry build never shows on macOS
+  (it returns `false` with no dialog) — so the actions silently bailed out. They
+  now use an in-app confirm modal that works on every platform.
+- **overlapping session status badge:** in the desktop GUI's Sessions panel, a
+  row that transitioned `queued → running` briefly showed both badges stacked on
+  top of each other until you hovered the row. React reused the same `<span>`
+  for the badge across the status change, and the `running` badge's `.is-live`
+  pulse animation promotes that node to its own WebKit (WKWebView) compositing
+  layer — leaving the previous badge's pixels painted on top until a repaint
+  (e.g. the row's hover background) cleared them. The badge is now keyed on the
+  status, so React mounts a fresh node on each status change and the pulse
+  starts on a clean layer.
+- **composer horizontal scroll:** the desktop GUI's shared chat-style input
+  (the *Add a comment* and *Steer the agent* composers) no longer shows a stray
+  horizontal scrollbar. The auto-growing textarea only had its `overflow-y`
+  managed, leaving `overflow-x` at the `<textarea>` default of `auto`, so a long
+  unbreakable string (e.g. a URL) — or the vertical scrollbar appearing past 10
+  lines — could trigger a sideways scroll. The field now pins `overflow-x:
+  hidden` and wraps long words (`overflow-wrap: break-word`).
+- **orphaned worktree on a manual done/cancel:** marking a task `done`/`cancel`
+  by hand (CLI `autosk done`/`cancel`, the `autosk lazy` Tasks panel, or the
+  desktop GUI) used to leave its git worktree (e.g. one a human-park step had
+  kept on disk) stranded under `~/.autosk/worktrees/` forever — only the
+  workflow-engine's own terminal transition reaped it. A manual terminal now
+  reaps the task's worktree too, by its deterministic `(projectRoot, taskId)`
+  identity, **preserving the branch** (the work survives for review/merge). If
+  the worktree has uncommitted changes the verb is refused with a warning
+  (`ENVIRONMENT_DIRTY`) instead of silently discarding them; re-run with `--force`
+  (`autosk done -f` / `cancel -f`, or confirm the TUI/GUI force prompt) to remove
+  the worktree and discard the changes.
+- **daemon double-bind race on a stale lock:** `autoskd`'s single-instance
+  guard could let two daemons bind the same socket when a stale lock left by a
+  crashed/killed daemon was reclaimed by several auto-spawns at once. The stale
+  lock reclaim had a TOCTOU between the dead-holder check and the unlink, so a
+  sibling that had already reclaimed + bound could have its live lock and socket
+  deleted and bound over — stranding clients on an orphaned listener and leaving
+  two engines owning one `.autosk/`. Stale-lock reclamation is now serialised
+  behind an exclusive breaker file (with a liveness re-check under the breaker),
+  so exactly one daemon ever binds.
+- **empty task list with `--status all` / in the lazy dashboard:** an "all
+  statuses" request was sent as `status: []`, which the daemon's membership
+  filter read as "match none" — so `autosk list --status all` and the `autosk
+  lazy` Tasks panel (which always asks for every status) came back empty. The Go
+  client now omits the status key when no positive status is requested, and the
+  daemon treats an empty status list as "no constraint" (all statuses).
+- **session list ordering:** `session.list` now returns sessions newest-first
+  (by id, descending) by default — previously oldest-first — so the `autosk lazy`
+  Sessions panel and the CLI render the most recent run at the top without any
+  client-side re-sort.
+- **transcript / task auto-scroll:** the desktop GUI no longer yanks the center
+  panel to the bottom on every update regardless of where you were reading. The
+  GUI now matches the `autosk lazy` TUI: selecting a session in the Sessions
+  panel anchors its transcript at the newest line, opening a task starts from the
+  top (title/description), and new lines/comments only auto-scroll into view when
+  you are already parked at the bottom. While tailing, the GUI glides to the
+  newest line with a smooth scroll animation (instant when the OS prefers reduced
+  motion) instead of jumping abruptly, and a deliberate scroll-up mid-animation
+  releases the tail so a streaming transcript never traps the reader. The TUI
+  task detail gained the same tail-when-at-bottom behaviour (it previously never
+  followed new comments).
+
 ## [0.1.6] — 2026-06-08
 
 ### Changed
-- **bootstrap:** `feature-dev-generic` workflow now ships with `isolation: worktree` by default.
+- **bootstrap:** the `feature-dev-generic` workflow now ships with
+  `isolation: worktree` by default.
 
 ### Fixed
-- **daemon:** fix empty lazy transcript and `HTTP 410 session_missing` from `daemon messages <job>`
+- **daemon:** fix the empty lazy transcript and `HTTP 410 session_missing` from
+  `daemon messages <job>`.
 
 ## [0.1.5] — 2026-05-25
 

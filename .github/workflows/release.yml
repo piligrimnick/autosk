@@ -1,13 +1,25 @@
 name: Release
 
-# Publish a GitHub release with prebuilt binaries whenever a semver tag is
-# pushed.
+# Publish a GitHub release with prebuilt binaries + signed app artifacts
+# whenever a semver tag is pushed.
 #
 # Tag pattern is strict semver with an optional pre-release suffix:
-#   v1.2.3        -> regular release
-#   v1.2.3-rc1    -> auto-marked as pre-release (doesn't become "latest")
+#   v1.2.3        -> regular release  (becomes "latest"; bumps the macOS cask)
+#   v1.2.3-rc1    -> pre-release      (not "latest"; NO cask bump; still TestFlight)
 #
-# Build matrix mirrors ci.yml so we only ship what CI exercises.
+# Jobs (plan §8):
+#   build-binaries  (linux-x64 + osx-arm64): autosk (Go) + autoskd (Bun)  -> Release assets
+#   build-macos-app (macos, arm64):  signed/notarized autosk_<ver>_aarch64.dmg
+#                                    (GUI embeds the CLI/TUI + daemon)     -> Release asset
+#   build-linux-gui (ubuntu):        autosk_<ver>_amd64.AppImage (+ .deb)  -> Release assets
+#   build-ios       (macos):         IPA -> TestFlight (ALL tags)          -> (not a Release asset)
+#   release         (ubuntu):        gh release create (needs the 3 asset jobs)
+#   bump-tap-cask   (ubuntu):        render+push Casks/autosk.rb           (STABLE tags only)
+#
+# There are no daemon-bundled extensions: the reference `feature-dev` workflow
+# is the npm package `@autosk/feature-dev`, which the daemon installs on first
+# run. macOS/iOS signing reuses ONE shared App Store Connect API key for iOS
+# automatic signing, macOS notarization, and the TestFlight upload (plan §9).
 on:
   push:
     tags:
@@ -19,15 +31,15 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  build-binaries:
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            asset: autosk-linux-x64
+            target: linux-x64
           - os: macos-26
-            asset: autosk-osx-arm64
+            target: osx-arm64
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -45,33 +57,385 @@ jobs:
         with:
           go-version: "1.25"
 
-      # Same cache as ci.yml so a release right after a green CI run on the
-      # same SHA reuses the already-downloaded libdoltlite.
-      - name: Cache doltlite
-        uses: actions/cache@v5
+      # The daemon is compiled with `bun build --compile`, so the release runner
+      # needs Bun. The compiled binary embeds the Bun runtime — nothing needs
+      # Bun at the user's runtime.
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          path: .doltlite
-          key: doltlite-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
+          bun-version: latest
 
-      - name: build
+      - name: build autosk (Go CLI/TUI)
         run: make build
 
-      - name: stage binary
-        run: |
-          mkdir -p dist
-          cp bin/autosk "dist/${{ matrix.asset }}"
-          chmod +x "dist/${{ matrix.asset }}"
+      # Compile autoskd into dist/pkg/bin/autoskd. Bake the tag/commit into the
+      # daemon's reported version.
+      - name: package autoskd
+        env:
+          AUTOSK_VERSION: ${{ github.ref_name }}
+          AUTOSK_COMMIT: ${{ github.sha }}
+        run: scripts/package-autoskd.sh dist/pkg
 
-      - name: upload artifact
+      - name: stage assets
+        run: |
+          mkdir -p dist/out
+          cp bin/autosk           "dist/out/autosk-${{ matrix.target }}"
+          cp dist/pkg/bin/autoskd "dist/out/autoskd-${{ matrix.target }}"
+          chmod +x "dist/out/autosk-${{ matrix.target }}" "dist/out/autoskd-${{ matrix.target }}"
+
+      - name: upload artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
+          name: release-${{ matrix.target }}
+          path: dist/out/*
           if-no-files-found: error
           retention-days: 7
 
+  # Signed + notarized macOS GUI as a drag-install DMG. The .app EMBEDS the Go
+  # `autosk` CLI/TUI and the Bun `autoskd` daemon as Tauri sidecars, so a
+  # Finder/Dock launch can auto-spawn the daemon with no shell PATH.
+  #
+  # The `externalBin` + signing overrides live in a NON-auto-merged config
+  # (gui/src-tauri/macos-release.conf.json) applied via `tauri build --config`
+  # below. Why not the auto-merged `tauri.macos.conf.json`: tauri-build validates
+  # `externalBin` existence at build-script time, which would break a plain
+  # `cargo check` on macOS (the documented backend check) since the sidecars are
+  # only staged in this job. `--config` is only seen by `tauri build` here, after
+  # the sidecars are staged.
+  build-macos-app:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      - name: Set up Rust toolchain (stable)
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustup target add aarch64-apple-darwin
+
+      - name: npm ci
+        working-directory: gui
+        run: npm ci
+
+      - name: build autosk (Go CLI/TUI)
+        run: make build
+
+      - name: package autoskd
+        env:
+          AUTOSK_VERSION: ${{ github.ref_name }}
+          AUTOSK_COMMIT: ${{ github.sha }}
+        run: scripts/package-autoskd.sh dist/pkg
+
+      # Tauri's `externalBin` expects a `-$TARGET_TRIPLE` suffix. The CLI sidecar
+      # is staged as `autosk-cli` (NOT `autosk`) because the app's own main
+      # binary is already named `autosk` (productName) and would collide; the
+      # cask renames it back to `autosk` on PATH (see bump-tap-cask).
+      - name: stage Tauri sidecars (arm64)
+        run: |
+          mkdir -p gui/src-tauri/binaries
+          cp bin/autosk           gui/src-tauri/binaries/autosk-cli-aarch64-apple-darwin
+          cp dist/pkg/bin/autoskd gui/src-tauri/binaries/autoskd-aarch64-apple-darwin
+          chmod +x gui/src-tauri/binaries/autosk-cli-aarch64-apple-darwin \
+                   gui/src-tauri/binaries/autoskd-aarch64-apple-darwin
+
+      # CFBundleShortVersionString is specified as a period-separated list of at
+      # most three integers, so strip any pre-release suffix (e.g. 1.2.3-rc1 ->
+      # 1.2.3) before baking it into the bundle. The DMG *filename* keeps the
+      # full tag (incl. -rc1) below so pre-release assets stay distinguishable.
+      # (Mirrors the iOS `set marketing version from tag` step.)
+      - name: set bundle version from tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          core="${version%%-*}"
+          tmp="$(mktemp)"
+          jq --arg v "$core" '.version=$v' gui/src-tauri/tauri.conf.json > "$tmp"
+          mv "$tmp" gui/src-tauri/tauri.conf.json
+
+      # Import the Developer ID Application cert into an ephemeral keychain so the
+      # Tauri bundler AND the explicit re-sign below can use it non-interactively.
+      # We intentionally do NOT pass APPLE_CERTIFICATE to `tauri build` (which
+      # would have Tauri create its own throwaway keychain) — we want the identity
+      # to persist for the manual codesign pass.
+      - name: import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/app-signing.keychain-db"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      # The shared App Store Connect API key (.p8) drives notarytool below.
+      - name: materialize App Store Connect API key (.p8)
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/private_keys"
+          echo "$APPLE_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/private_keys/AuthKey.p8"
+
+      # Build ONLY the .app (not the DMG) so we can fix sidecar signing before
+      # packaging + notarizing (the DMG is assembled manually below).
+      - name: tauri build (.app, signed)
+        working-directory: gui
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          ./node_modules/.bin/tauri build \
+            --target aarch64-apple-darwin \
+            --bundles app \
+            --config src-tauri/macos-release.conf.json
+
+      # Mitigate tauri#11992 (the bundler may not hardened-runtime-sign embedded
+      # sidecars, which fails notarization): re-sign the two sidecars with the
+      # hardened runtime + JIT entitlements, re-seal the app, then notarize +
+      # staple the .app ITSELF, and finally assemble + notarize + staple the DMG.
+      - name: re-sign sidecars, notarize+staple app, build+notarize DMG
+        working-directory: gui
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/autosk.app"
+          ents="src-tauri/entitlements.plist"
+          key="$RUNNER_TEMP/private_keys/AuthKey.p8"
+
+          # Re-sign the two sidecars (deepest first) then re-seal the enclosing
+          # .app, all with the hardened runtime + JIT entitlements.
+          for b in autosk-cli autoskd; do
+            codesign --force --options runtime --timestamp \
+              --entitlements "$ents" \
+              --sign "$APPLE_SIGNING_IDENTITY" \
+              "$app/Contents/MacOS/$b"
+          done
+          codesign --force --options runtime --timestamp \
+            --entitlements "$ents" \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+          # Notarize + staple the .app ITSELF (not just the DMG). A ticket
+          # stapled only to the DMG does not travel with the app once Homebrew
+          # copies autosk.app out to /Applications, so the installed app would
+          # need an online notary check on first launch. Stapling the .app makes
+          # it work offline. (Bare Mach-O sidecars can't be stapled directly —
+          # only the enclosing .app/.dmg can — but they are covered by the app's
+          # notarization above.)
+          appzip="$RUNNER_TEMP/autosk-app.zip"
+          ditto -c -k --keepParent "$app" "$appzip"
+          xcrun notarytool submit "$appzip" \
+            --key "$key" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
+          # Acceptance criterion: the stapled app must pass Gatekeeper offline.
+          # Fail the job fast on any notarization regression.
+          spctl -a -vvv "$app"
+
+          # Assemble the DMG from the now-stapled app, sign it, then notarize +
+          # staple the DMG too so the downloaded disk image itself passes
+          # Gatekeeper.
+          stage="$RUNNER_TEMP/dmg"
+          rm -rf "$stage"; mkdir -p "$stage"
+          cp -R "$app" "$stage/"
+          ln -s /Applications "$stage/Applications"
+          mkdir -p "$GITHUB_WORKSPACE/dist/out"
+          dmg="$GITHUB_WORKSPACE/dist/out/autosk_${version}_aarch64.dmg"
+          hdiutil create -volname "autosk" -srcfolder "$stage" -ov -format UDZO "$dmg"
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
+          xcrun notarytool submit "$dmg" \
+            --key "$key" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          # Gatekeeper assessment of the DMG (open context) — fail fast on a
+          # notarization regression rather than shipping a broken disk image.
+          spctl -a -t open --context context:primary-signature -vvv "$dmg"
+
+      - name: upload macOS DMG artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-macos-app
+          path: dist/out/*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+  # Linux GUI as Release assets (no Homebrew on Linux — plan R5/§5). The Linux
+  # base config carries no `externalBin`, so this is a GUI-only AppImage/.deb;
+  # the `autosk`/`autoskd` linux-x64 binaries ship separately (build-binaries).
+  build-linux-gui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      - name: Set up Rust toolchain (stable)
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libssl-dev
+
+      - name: npm ci
+        working-directory: gui
+        run: npm ci
+
+      - name: set bundle version from tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          tmp="$(mktemp)"
+          jq --arg v "$version" '.version=$v' gui/src-tauri/tauri.conf.json > "$tmp"
+          mv "$tmp" gui/src-tauri/tauri.conf.json
+
+      - name: tauri build (AppImage + deb)
+        working-directory: gui
+        run: ./node_modules/.bin/tauri build --bundles appimage,deb
+
+      - name: stage Linux GUI assets
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist/out
+          bundle="gui/src-tauri/target/release/bundle"
+          cp "$bundle"/appimage/*.AppImage "dist/out/autosk_${version}_amd64.AppImage"
+          # The .deb is best-effort (some runners lack dpkg-deb tooling).
+          cp "$bundle"/deb/*.deb "dist/out/autosk_${version}_amd64.deb" || true
+
+      - name: upload Linux GUI artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-linux-gui
+          path: dist/out/*
+          if-no-files-found: error
+          retention-days: 7
+
+  # iOS -> TestFlight on EVERY tag (incl. pre-releases — TestFlight is the beta
+  # channel; the cask bump below is stable-only). Automatic signing uses the
+  # shared App Store Connect API key — no manual cert/profile (plan §6/D.2).
+  build-ios:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      - name: Set up Rust toolchain (stable)
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustup target add aarch64-apple-ios
+
+      - name: npm ci
+        working-directory: gui
+        run: npm ci
+
+      # CFBundleShortVersionString must be plain x.y.z, so strip any pre-release
+      # suffix; the monotonic CFBundleVersion comes from --build-number below.
+      - name: set marketing version from tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          core="${version%%-*}"
+          tmp="$(mktemp)"
+          jq --arg v "$core" '.version=$v' gui/src-tauri/tauri.conf.json > "$tmp"
+          mv "$tmp" gui/src-tauri/tauri.conf.json
+
+      # altool resolves the key from ./private_keys/AuthKey_<id>.p8; Tauri reads
+      # APPLE_API_KEY_PATH. Materialise once at the conventional location.
+      - name: materialize App Store Connect API key (.p8)
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/private_keys"
+          echo "$APPLE_API_KEY_P8" | base64 --decode \
+            > "$GITHUB_WORKSPACE/private_keys/AuthKey_${APPLE_API_KEY}.p8"
+
+      # gen/apple is gitignored and regenerated here every run, so every iOS
+      # customization (bundle id app.autosk.gui, icons, capabilities) MUST live
+      # in tauri.conf.json — never hand-edited in the generated Xcode project.
+      - name: tauri ios build (App Store, automatic signing)
+        working-directory: gui
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ github.workspace }}/private_keys/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ./node_modules/.bin/tauri ios init
+          ./node_modules/.bin/tauri ios build \
+            --export-method app-store-connect \
+            --build-number "${{ github.run_number }}"
+
+      - name: upload IPA to TestFlight
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          ipa="$(find gui/src-tauri/gen/apple/build -name '*.ipa' -type f | head -n1)"
+          [ -n "$ipa" ] || { echo "no IPA produced under gen/apple/build" >&2; exit 1; }
+          echo "uploading $ipa to TestFlight"
+          xcrun altool --upload-app --type ios --file "$ipa" \
+            --apiKey "$APPLE_API_KEY" --apiIssuer "$APPLE_API_ISSUER"
+
   release:
-    needs: build
+    needs: [build-binaries, build-macos-app, build-linux-gui]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -81,14 +445,12 @@ jobs:
 
       # download-artifact crossed the Node 24 line later than the rest:
       # v6 is still on Node 20 (GitHub deprecation warning), v7 is the
-      # first major with `runs.using: node24`. v8 also exists but ships
-      # two behavioral breaks (digest-mismatch now fails, conditional
-      # unzip) that we don't need here.
+      # first major with `runs.using: node24`.
       - name: download artifacts
         uses: actions/download-artifact@v7
         with:
           path: dist
-          # Flatten per-artifact subdirectories so every binary lands
+          # Flatten per-artifact subdirectories so every asset lands
           # directly under dist/ for the upload glob below.
           merge-multiple: true
 
@@ -108,8 +470,7 @@ jobs:
       # Extract release notes from CHANGELOG.md (Keep a Changelog 1.1.0
       # `## [<version>]` section). The script exits non-zero if the section
       # is missing or empty, which fails the job on purpose: every tag --
-      # including pre-releases like v1.2.3-rc1 -- must have a matching
-      # entry. No CHANGELOG entry, no release.
+      # including pre-releases like v1.2.3-rc1 -- must have a matching entry.
       - name: extract release notes from CHANGELOG.md
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -128,22 +489,26 @@ jobs:
           fi
           gh release create "${GITHUB_REF_NAME}" "${flags[@]}" dist/*
 
-  # Push an updated Formula/autosk.rb into wierdbytes/homebrew-autosk so
-  # `brew install wierdbytes/autosk/autosk` (and `brew upgrade`) pick up
+  # Render + push Casks/autosk.rb into wierdbytes/homebrew-autosk so
+  # `brew install --cask wierdbytes/autosk/autosk` (and `brew upgrade`) pick up
   # the new release with no manual bookkeeping.
   #
-  # Pre-releases (tag contains '-') skip the bump: brew has no
-  # 'pre-release channel' for taps, and we don't want rc/beta tags to
-  # become what `brew install autosk` resolves to.
-  bump-tap:
+  # The tap is CASK-ONLY (plan R5/§7): the old Formula/autosk.rb is retired (the
+  # formula bump job is gone). The cask installs the signed/notarized autosk.app
+  # and symlinks the embedded CLI (autosk-cli -> autosk) + daemon (autoskd) onto
+  # PATH, so a terminal `autosk`/`autoskd` works and a Finder launch auto-spawns
+  # the embedded daemon (no shell PATH dependency).
+  #
+  # Pre-releases (tag contains '-') skip the bump: brew has no 'pre-release
+  # channel' for taps, and rc/beta tags must not become what `brew install
+  # autosk` resolves to. (Pre-releases still ship to TestFlight via build-ios.)
+  bump-tap-cask:
     needs: release
     if: "!contains(github.ref_name, '-')"
     runs-on: ubuntu-latest
     steps:
       # HOMEBREW_TAP_TOKEN is a fine-grained PAT scoped to
-      # wierdbytes/homebrew-autosk with `contents: write`. github.token
-      # can't push to a different repo, so we need an explicit
-      # credential here.
+      # wierdbytes/homebrew-autosk with `contents: write`.
       - name: checkout tap
         uses: actions/checkout@v5
         with:
@@ -151,62 +516,60 @@ jobs:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: tap
 
-      - name: download release assets
+      - name: download DMG asset
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p assets
           gh release download "${GITHUB_REF_NAME}" \
             -R "${{ github.repository }}" \
+            -p 'autosk_*_aarch64.dmg' \
             -D assets
 
-      - name: render formula
+      - name: render cask
         env:
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
           version="${TAG#v}"
-          mac_sha=$(sha256sum assets/autosk-osx-arm64 | awk '{print $1}')
-          lin_sha=$(sha256sum assets/autosk-linux-x64 | awk '{print $1}')
+          dmg_sha=$(sha256sum "assets/autosk_${version}_aarch64.dmg" | awk '{print $1}')
+          mkdir -p tap/Casks
 
-          cat > tap/Formula/autosk.rb <<EOF
+          cat > tap/Casks/autosk.rb <<EOF
           # NOTE: this file is regenerated end-to-end by the release workflow in
-          # ${REPO} on every tagged release. Edit it by hand only if
-          # you know what you're doing -- your changes will be overwritten on the
+          # ${REPO} on every STABLE tagged release. Edit it by hand only if you
+          # know what you're doing -- your changes will be overwritten on the
           # next release.
-          class Autosk < Formula
+          cask "autosk" do
+            version "${version}"
+            sha256 "${dmg_sha}"
+
+            url "https://github.com/${REPO}/releases/download/v#{version}/autosk_#{version}_aarch64.dmg"
+            name "autosk"
             desc "Task manager and workflow manager for coding agents"
             homepage "https://github.com/${REPO}"
-            version "${version}"
-            license "MIT"
 
-            on_macos do
-              on_arm do
-                url "https://github.com/${REPO}/releases/download/v#{version}/autosk-osx-arm64"
-                sha256 "${mac_sha}"
-              end
-            end
+            depends_on macos: ">= :big_sur"
+            depends_on arch: :arm64
 
-            on_linux do
-              on_intel do
-                url "https://github.com/${REPO}/releases/download/v#{version}/autosk-linux-x64"
-                sha256 "${lin_sha}"
-              end
-            end
+            app "autosk.app"
 
-            def install
-              binary = OS.mac? ? "autosk-osx-arm64" : "autosk-linux-x64"
-              bin.install binary => "autosk"
-            end
+            # The GUI embeds the CLI/TUI + daemon as sidecars; expose both on PATH.
+            # The CLI sidecar is named \`autosk-cli\` inside the bundle (the app's
+            # own main binary is already \`autosk\`), so rename it back to \`autosk\`.
+            binary "#{appdir}/autosk.app/Contents/MacOS/autosk-cli", target: "autosk"
+            binary "#{appdir}/autosk.app/Contents/MacOS/autoskd"
 
-            test do
-              # \`autosk version\` prints the buildinfo Version string, which is
-              # the same tag we point the URL at. Substring-match so it works
-              # whether or not the build embedded a leading 'v'.
-              assert_match version.to_s, shell_output("#{bin}/autosk version")
-            end
+            zap trash: [
+              "~/.autosk",
+              "~/Library/Application Support/autosk",
+              "~/Library/Application Support/app.autosk.gui",
+            ]
           end
           EOF
+
+          echo "--- rendered Casks/autosk.rb ---"
+          cat tap/Casks/autosk.rb
 
       - name: commit and push
         working-directory: tap
@@ -215,10 +578,10 @@ jobs:
         run: |
           git config user.name  "autosk-release-bot"
           git config user.email "autosk-release-bot@users.noreply.github.com"
-          git add Formula/autosk.rb
+          git add Casks/autosk.rb
           if git diff --staged --quiet; then
-            echo "formula already up to date for ${TAG}; nothing to push"
+            echo "cask already up to date for ${TAG}; nothing to push"
             exit 0
           fi
-          git commit -m "autosk ${TAG}"
+          git commit -m "autosk ${TAG} (cask)"
           git push

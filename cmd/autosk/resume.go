@@ -1,113 +1,46 @@
 package main
 
 import (
-	"errors"
-	"fmt"
-
 	"github.com/spf13/cobra"
 
-	"autosk/internal/agent"
-	"autosk/internal/store"
-	"autosk/internal/store/doltlite"
-	"autosk/internal/workflow"
+	"autosk/internal/daemon/rpcclient"
 )
 
-// newResumeCmd: `autosk resume <id> [--to STEP]` — out of human.
-// Plan §5.6.
-//
-// Visit-counter semantics (docs/plans/20260520-Step-Visit-Limits.md):
-//
-//   - `resume <id>` with NO --to does NOT count as a transition. The
-//     task is flipped back to work at the same step; no visit bump and
-//     no cap check.
-//   - `resume <id> --to STEP` IS treated as a deliberate transition
-//     into STEP, even when STEP == current_step. It goes through
-//     workflow.EnterStep so the visit counter bumps and step.max_visits
-//     is enforced.
+// newResumeCmd: `autosk resume <id> [--to STEP]` — move a task out of `human`
+// back into `work`. A thin client of the daemon's task.resume {to?}. With no
+// --to the task returns to the step it was waiting in; --to STEP relocates it
+// to a sibling step (or a terminal/park status: done|cancel|human).
 func newResumeCmd() *cobra.Command {
 	var toStep string
 	cmd := &cobra.Command{
 		Use:   "resume <id>",
 		Short: "Resume a task from human back into the workflow",
 		Long: "Move a task out of `human` and back into `work`.\n\n" +
-			"By default it returns to the step it was waiting in (so the same\n" +
-			"agent sees the new comments and retries). Use --to STEP to jump\n" +
-			"to a different step in the same workflow.\n\n" +
-			"Visit counter semantics:\n" +
-			"  - resume <id>          — does NOT count as a step visit (no\n" +
-			"                            transition; the task stays on the same\n" +
-			"                            step).\n" +
-			"  - resume <id> --to STEP — DOES count: this is treated as a\n" +
-			"                            deliberate transition into STEP and\n" +
-			"                            therefore bumps step_visits[STEP].\n" +
-			"                            If STEP is at its max_visits cap, the\n" +
-			"                            command fails; clear the counter with\n" +
-			"                            `autosk metadata reset-visits <id> --step STEP`.",
+			"By default it returns to the step it was waiting in. Use --to STEP\n" +
+			"to jump to a different step in the same workflow, or --to one of\n" +
+			"done|cancel|human to relocate to a terminal/park status.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			taskID := args[0]
-			s, closeFn, err := openStore(cmd.Context(), true)
+			cl, err := writeClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer closeFn()
-			dl := s.(*doltlite.Store)
-			ag := agent.New(dl.DB())
-			wfs := workflow.New(dl.DB(), ag)
-
-			cur, err := s.GetTask(cmd.Context(), taskID)
-			if err != nil {
-				if errors.Is(err, store.ErrNotFound) {
-					return fmt.Errorf("task not found: %s", taskID)
+			var to *rpcclient.StepTarget
+			if toStep != "" {
+				switch toStep {
+				case "done", "cancel", "human":
+					to = &rpcclient.StepTarget{Status: toStep}
+				default:
+					to = &rpcclient.StepTarget{Step: toStep}
 				}
-				return err
 			}
-			if cur.Status != store.StatusHuman {
-				return fmt.Errorf("cannot resume task in status %q (only `human`)", cur.Status)
-			}
-			if cur.WorkflowID == "" {
-				return fmt.Errorf("task %s has no workflow_id; cannot resume", taskID)
-			}
-
-			if toStep == "" {
-				// No transition: just flip the status. Do NOT touch
-				// step_visits or current_step_id (the task resumes on the
-				// step it was parked on).
-				if cur.CurrentStepID == "" {
-					return errors.New("task has no current_step_id; pass --to STEP")
-				}
-				newStatus := store.StatusWork
-				t, err := s.UpdateTask(cmd.Context(), taskID, store.TaskPatch{Status: &newStatus})
-				if err != nil {
-					return err
-				}
-				commitWrite(cmd.Context(), s, "resume "+taskID)
-				return emitRich(cmd.Context(), wfs, t)
-			}
-
-			// --to STEP: a deliberate transition. Resolve the step,
-			// then let EnterStep bump step_visits + enforce the cap.
-			st, err := wfs.FindStepByName(cmd.Context(), cur.WorkflowID, toStep)
-			if err != nil {
-				if errors.Is(err, workflow.ErrNotFound) {
-					return fmt.Errorf("step %q not found in this task's workflow", toStep)
-				}
-				return err
-			}
-			if err := workflow.EnterStep(cmd.Context(), s, wfs, workflow.EnterStepInput{
-				TaskID: taskID,
-				StepID: st.ID,
-			}); err != nil {
-				return mapEnterStepError(err, taskID)
-			}
-			t, err := s.GetTask(cmd.Context(), taskID)
+			t, err := cl.Resume(cmd.Context(), args[0], to)
 			if err != nil {
 				return err
 			}
-			commitWrite(cmd.Context(), s, "resume "+taskID+" --to "+toStep)
-			return emitRich(cmd.Context(), wfs, t)
+			return emitTaskWire(t)
 		},
 	}
-	cmd.Flags().StringVar(&toStep, "to", "", "step name within the task's workflow to resume at (default: current step). Counts as a transition (visit bump + cap check).")
+	cmd.Flags().StringVar(&toStep, "to", "", "step name to resume at (or done|cancel|human); default: current step")
 	return cmd
 }

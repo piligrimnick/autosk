@@ -1,0 +1,35 @@
+/* Live remnants of the pre-redesign layout: the connection dot (titlebar +
+ * settings modal) and the notice bar. The old app-root/topbar/sidebar rules are
+ * gone — layout now lives in shell.css and the feature stylesheets. */
+
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.conn-ok {
+  background: var(--ok);
+}
+.conn-down {
+  background: var(--danger);
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.notice-error {
+  background: rgba(239, 83, 80, 0.14);
+  color: #ff9a9a;
+  border-bottom: 1px solid #5a3030;
+}
+.notice-info {
+  background: rgba(76, 141, 255, 0.12);
+  color: #a9c7ff;
+  border-bottom: 1px solid #2f4570;
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Core capabilities for the autosk GUI window: invoke commands, listen to re-emitted daemon notifications, and the frameless-titlebar window actions (drag to move + caption controls).",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:app:default",
+    "core:webview:default",
+    "core:webview:allow-set-webview-zoom",
+    { "identifier": "opener:allow-open-url", "allow": [{ "url": "https://www.npmjs.com/*" }] }
+  ]
+}

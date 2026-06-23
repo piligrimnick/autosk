@@ -1,0 +1,52 @@
+{
+  "name": "@autosk/pi-tools",
+  "version": "0.1.1",
+  "description": "pi extension exposing the autosk management tools (autosk_task / autosk_comment) for AI agents driving the autosk daemon.",
+  "license": "MIT",
+  "author": "wierdbytes",
+  "homepage": "https://github.com/wierdbytes/autosk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wierdbytes/autosk.git",
+    "directory": "pi-tools"
+  },
+  "bugs": {
+    "url": "https://github.com/wierdbytes/autosk/issues"
+  },
+  "keywords": [
+    "autosk",
+    "pi",
+    "pi-extension",
+    "ai-agent",
+    "task"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src/",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.74.0",
+    "@earendil-works/pi-tui": ">=0.74.0",
+    "typebox": ">=1.1.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.74.1",
+    "@earendil-works/pi-tui": "^0.74.1",
+    "@types/bun": "^1.2.10",
+    "typebox": "^1.1.24",
+    "typescript": "^5.7.3"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test"
+  }
+}

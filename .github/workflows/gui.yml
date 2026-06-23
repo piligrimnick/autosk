@@ -1,0 +1,95 @@
+name: GUI CI
+
+# Builds + checks the Tauri desktop GUI (gui/) on every PR — the GUI release
+# artifact alongside the Go `autosk` binary + the Bun `autoskd` daemon (ci.yml).
+#
+# Two layers run here:
+#   * Front end (gui/) — `npm ci`, typecheck (which also runs the
+#     check-ipc-discipline.mjs guard: one `invoke` site, one `listen` site),
+#     the production Vite build, and the vitest unit suite.
+#   * Backend (gui/src-tauri/) — `cargo check`. The Tauri backend is a pure
+#     JSON-RPC client of autoskd and a self-contained cargo crate (there is no
+#     root cargo workspace — the daemon is Bun/TypeScript), so it links no
+#     storage engine — but `cargo check` still runs tauri-build's build script,
+#     which probes the system webkit2gtk/gtk dev libs on Linux (installed below).
+#
+# This is intentionally headless: `npm run tauri:dev/build` need a display + the
+# full webkit bundle, so end-to-end runtime behaviour is validated to the
+# JSON-RPC contract + unit-covered here, and exercised manually in a GUI env.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gui:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Pinned to the Node.js 24 majors (see ci.yml for the deprecation context).
+      - uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      - name: Set up Rust toolchain (stable)
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      # Tauri v2 build-script prerequisites on Linux: tauri-build probes these
+      # dev libs via pkg-config during `cargo check`. (No display/webkit runtime
+      # is launched here, so we only need the -dev headers, not a full GUI env.)
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libssl-dev
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-gui-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('gui/src-tauri/Cargo.lock', 'gui/src-tauri/Cargo.toml') }}
+          restore-keys: |
+            cargo-gui-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: npm ci
+        working-directory: gui
+        run: npm ci
+
+      # typecheck = `tsc --noEmit` + the IPC-discipline guard
+      # (scripts/check-ipc-discipline.mjs): a stray Tauri `invoke`/`listen`
+      # import outside the two chokepoints fails the build here.
+      - name: typecheck + IPC-discipline guard
+        working-directory: gui
+        run: npm run typecheck
+
+      - name: vite build
+        working-directory: gui
+        run: npm run build
+
+      - name: vitest
+        working-directory: gui
+        run: npm run test
+
+      # The Tauri (Rust) backend. Self-contained crate → independent of the
+      # rest of the repo (the daemon is Bun/TypeScript, not Rust).
+      - name: cargo check (src-tauri)
+        working-directory: gui/src-tauri
+        run: cargo check

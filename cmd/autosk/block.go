@@ -3,32 +3,29 @@ package main
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
-
-	"autosk/internal/store"
 )
 
-// newBlockCmd: `autosk block <id> <blocker>...` — variadic, transactional.
+// newBlockCmd: `autosk block <id> <blocker>...` — add blocker edges. v2
+// task.block takes a single blocker, so multiple are applied in a loop.
 func newBlockCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "block <id> <blocker-id>...",
 		Short: "Add blocker edge(s): each <blocker> blocks <id>",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, closeFn, err := openStore(cmd.Context(), true)
+			id := args[0]
+			blockers := args[1:]
+			cl, err := writeClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer closeFn()
-
-			id := args[0]
-			blockers := args[1:]
-			if err := s.Block(cmd.Context(), id, blockers...); err != nil {
-				return translateBlockErr(err, id, blockers)
+			for _, b := range blockers {
+				if _, err := cl.Block(cmd.Context(), id, b); err != nil {
+					return err
+				}
 			}
-			commitWrite(cmd.Context(), s, fmt.Sprintf("block %s by %s", id, strings.Join(blockers, ",")))
 			if !flagQuiet {
 				fmt.Printf("blocked %s by %v\n", id, blockers)
 			}
@@ -56,28 +53,34 @@ func newUnblockCmd() *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, closeFn, err := openStore(cmd.Context(), true)
+			id := args[0]
+			cl, err := writeClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer closeFn()
-			id := args[0]
 			if all {
-				n, err := s.UnblockAll(cmd.Context(), id)
+				t, err := cl.GetTask(cmd.Context(), id)
 				if err != nil {
 					return err
 				}
-				commitWrite(cmd.Context(), s, fmt.Sprintf("unblock %s --all", id))
+				n := 0
+				for _, ref := range t.BlockedBy {
+					if _, err := cl.Unblock(cmd.Context(), id, ref.ID); err != nil {
+						return err
+					}
+					n++
+				}
 				if !flagQuiet {
 					fmt.Printf("unblocked %s (%d edge(s) removed)\n", id, n)
 				}
 				return nil
 			}
 			blockers := args[1:]
-			if err := s.Unblock(cmd.Context(), id, blockers...); err != nil {
-				return err
+			for _, b := range blockers {
+				if _, err := cl.Unblock(cmd.Context(), id, b); err != nil {
+					return err
+				}
 			}
-			commitWrite(cmd.Context(), s, fmt.Sprintf("unblock %s from %s", id, strings.Join(blockers, ",")))
 			if !flagQuiet {
 				fmt.Printf("unblocked %s from %v\n", id, blockers)
 			}
@@ -88,7 +91,8 @@ func newUnblockCmd() *cobra.Command {
 	return cmd
 }
 
-// newDepCmd: `autosk dep list <id>` — read-only viewer.
+// newDepCmd: `autosk dep list <id>` — read-only viewer over the derived
+// blocked_by / blocks edges.
 func newDepCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dep",
@@ -99,35 +103,18 @@ func newDepCmd() *cobra.Command {
 		Short: "Show incoming (blocked_by) and outgoing (blocks) edges",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, closeFn, err := openStore(cmd.Context(), false)
+			cl, err := readClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer closeFn()
-
-			incoming, outgoing, err := s.Deps(cmd.Context(), args[0])
+			t, err := cl.GetTask(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
-			fmt.Printf("blocked_by: %v\n", incoming)
-			fmt.Printf("blocks:     %v\n", outgoing)
+			fmt.Printf("blocked_by: %v\n", wireRefIDs(t.BlockedBy))
+			fmt.Printf("blocks:     %v\n", wireRefIDs(t.Blocks))
 			return nil
 		},
 	})
 	return cmd
-}
-
-func translateBlockErr(err error, id string, blockers []string) error {
-	switch {
-	case errors.Is(err, store.ErrSelfBlock):
-		return fmt.Errorf("a task cannot block itself: %s", id)
-	case errors.Is(err, store.ErrCycle):
-		return fmt.Errorf("adding %v as blocker(s) of %s would create a cycle", blockers, id)
-	case errors.Is(err, store.ErrNotFound):
-		return fmt.Errorf("task not found: %s", id)
-	case errors.Is(err, store.ErrBlockerNotFound):
-		return fmt.Errorf("one of the blocker tasks does not exist: %v", blockers)
-	default:
-		return err
-	}
 }

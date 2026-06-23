@@ -8,7 +8,6 @@ require (
 	github.com/gdamore/tcell/v2 v2.13.5
 	github.com/jesseduffield/gocui v0.3.1-0.20260331125330-c81715e95462
 	github.com/jesseduffield/lazycore v0.0.0-20221023210126-718a4caea996
-	github.com/mattn/go-sqlite3 v1.14.37
 	github.com/muesli/termenv v0.16.0
 	github.com/spf13/cobra v1.10.1
 	golang.org/x/mod v0.36.0

@@ -3,22 +3,21 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"autosk/internal/buildinfo"
-	"autosk/internal/projectdb"
-	"autosk/internal/store/doltlite"
+	"autosk/internal/daemon/rpcclient"
 )
 
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "Print version, backend, and schema info",
+		Short: "Print version + the daemon version when reachable",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			info := versionInfo{
 				Version: buildinfo.Version,
@@ -28,21 +27,21 @@ func newVersionCmd() *cobra.Command {
 				OS:      runtime.GOOS,
 				Arch:    runtime.GOARCH,
 			}
-			// Best-effort: report schema version of the project DB if we can find one.
-			// Failure here is not an error — `autosk version` should always work.
-			if v, dbPath, ok := tryReadSchemaVersion(cmd.Context()); ok {
-				info.SchemaVersion = v
-				info.DBPath = dbPath
+			// Best-effort: report the daemon's version if one is already
+			// running. `autosk version` never auto-spawns (zero side effects).
+			if dv, ok := tryDaemonVersion(cmd.Context()); ok {
+				info.DaemonVersion = dv.Version
+				info.DaemonCommit = dv.Commit
 			}
 			if flagJSON {
 				return json.NewEncoder(os.Stdout).Encode(info)
 			}
 			fmt.Printf("autosk %s (%s)\n", info.Version, info.Commit)
 			fmt.Printf("  backend:        %s\n", info.Backend)
-			if info.DBPath != "" {
-				fmt.Printf("  schema version: %d  (%s)\n", info.SchemaVersion, info.DBPath)
+			if info.DaemonVersion != "" {
+				fmt.Printf("  daemon:         %s (%s)\n", info.DaemonVersion, info.DaemonCommit)
 			} else {
-				fmt.Printf("  schema version: -   (no .autosk/db in scope)\n")
+				fmt.Printf("  daemon:         -   (not running)\n")
 			}
 			fmt.Printf("  go:             %s %s/%s\n", info.Go, info.OS, info.Arch)
 			return nil
@@ -54,39 +53,28 @@ type versionInfo struct {
 	Version       string `json:"version"`
 	Commit        string `json:"commit"`
 	Backend       string `json:"backend"`
-	SchemaVersion int    `json:"schema_version"`
-	DBPath        string `json:"db_path,omitempty"`
+	DaemonVersion string `json:"daemon_version,omitempty"`
+	DaemonCommit  string `json:"daemon_commit,omitempty"`
 	Go            string `json:"go"`
 	OS            string `json:"os"`
 	Arch          string `json:"arch"`
 }
 
-// tryReadSchemaVersion attempts to resolve and open the project DB read-only-ish.
-// Returns (schemaVersion, dbPath, ok). ok=false on any failure (including
-// "no DB found" — not an error for `version`).
-func tryReadSchemaVersion(ctx context.Context) (int, string, bool) {
+// tryDaemonVersion probes an already-running daemon for its version. It never
+// auto-spawns (NoAutoSpawn) so `autosk version` has zero side effects.
+func tryDaemonVersion(ctx context.Context) (rpcclient.Version, bool) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	cwd, err := os.Getwd()
+	cl, err := rpcclient.New(rpcclient.Options{NoAutoSpawn: true})
 	if err != nil {
-		return 0, "", false
+		return rpcclient.Version{}, false
 	}
-	path, err := projectdb.Resolve(cwd, flagDB)
+	cctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	v, err := cl.Version(cctx)
 	if err != nil {
-		if errors.Is(err, projectdb.ErrNotFound) {
-			return 0, "", false
-		}
-		return 0, "", false
+		return rpcclient.Version{}, false
 	}
-	s := doltlite.New()
-	if err := s.Open(ctx, path); err != nil {
-		return 0, path, false
-	}
-	defer s.Close()
-	v, err := s.SchemaVersion(ctx)
-	if err != nil {
-		return 0, path, false
-	}
-	return v, path, true
+	return v, true
 }

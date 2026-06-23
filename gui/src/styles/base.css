@@ -1,0 +1,311 @@
+:root {
+  --bg: #16181d;
+  --bg-1: #1c1f26;
+  --bg-2: #22262e;
+  --bg-3: #2a2f39;
+  --border: #333a45;
+  --fg: #e6e9ef;
+  --fg-dim: #9aa3b0;
+  /* Lightened from #6b7280 (~3.7:1 on --bg, below WCAG AA) to ~5.2:1 so the
+   * heavily-used "muted" text (timestamps, meta, labels) is legible. */
+  --fg-mute: #828b9c;
+  --accent: #4c8dff;
+  --accent-2: #6ee7b7;
+  --danger: #ef5350;
+  --warn: #f2c14e;
+  --ok: #4ade80;
+  --status-new: #8aa0c6;
+  --status-work: #4c8dff;
+  --status-human: #f2c14e;
+  --status-done: #4ade80;
+  --status-cancel: #6b7280;
+  /* Entity hues, matched 1:1 to lazy-mode (TokyoNight): task=Focus blue,
+   * session=Accent magenta, workflow=Warn yellow, step=PopupBox purple,
+   * agent=Scope cyan. */
+  --task-id: #7aa2f7;
+  --session-id: #bb9af7;
+  --workflow-name: #e0af68;
+  --step-name: #9d7cd8;
+  --agent-name: #7dcfff;
+  --radius: 8px;
+  --mono: "SFMono-Regular", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  /* --app-vh is the live visual-viewport height published by MobileShell on the
+   * iPhone compact layout; it pins the document to the area above the on-screen
+   * keyboard so WKWebView never adds keyboard scroll/inset (the top bar can't be
+   * dragged off-screen). It is unset elsewhere, so this falls back to 100%. */
+  height: var(--app-vh, 100%);
+  margin: 0;
+  /* The shell owns all scroll regions; the document itself never scrolls, and
+   * overscroll-behavior:none kills the macOS rubber-band bounce of the whole
+   * window when an inner pane is scrolled past its limit. */
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Inner scroll panes: contain overscroll so hitting their top/bottom doesn't
+ * chain to (and bounce) the document. */
+.panel-body,
+.session-view-transcript,
+.task-view-body,
+.workflow-view-body,
+.modal-body {
+  overscroll-behavior: contain;
+}
+
+body {
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.dim {
+  color: var(--fg-mute);
+}
+
+/* Muted "·" separator between header entities (task/session center views). */
+.meta-sep {
+  color: var(--fg-mute);
+  flex-shrink: 0;
+}
+
+/* ---- buttons ---- */
+.btn {
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: var(--radius);
+  padding: 5px 11px;
+  font-size: 13px;
+  transition: background 0.12s, border-color 0.12s;
+}
+.btn:hover:not(:disabled) {
+  background: #323844;
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover:not(:disabled) {
+  background: #3d7df0;
+}
+.btn-danger {
+  border-color: #5a3030;
+  color: #ff8a8a;
+}
+.btn-danger:hover:not(:disabled) {
+  background: #3a2626;
+}
+.btn-sm {
+  padding: 3px 8px;
+  font-size: 12px;
+}
+.btn-ghost {
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+  font-size: 15px;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.btn-ghost:hover {
+  background: var(--bg-3);
+  color: var(--fg);
+}
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0 4px;
+  font-size: 13px;
+}
+.btn-link:hover {
+  text-decoration: underline;
+}
+
+/* ---- inputs ---- */
+.input,
+.textarea,
+.select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  width: 100%;
+}
+.input:focus,
+.textarea:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.input-sm {
+  padding: 3px 6px;
+  width: auto;
+}
+.textarea {
+  resize: vertical;
+}
+.textarea.mono {
+  font-family: var(--mono);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.field-label {
+  font-size: 12px;
+  color: var(--fg-dim);
+  letter-spacing: 0.03em;
+}
+.field-row {
+  display: flex;
+  gap: 12px;
+}
+.field-row .field {
+  flex: 1;
+}
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--fg-dim);
+}
+.hint {
+  font-size: 12px;
+  color: var(--fg-mute);
+  line-height: 1.5;
+}
+.form-error {
+  color: var(--danger);
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+/* ---- badges / chips ---- */
+.badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: lowercase;
+  letter-spacing: 0.03em;
+  background: var(--bg-3);
+  color: var(--fg-dim);
+}
+.badge-new { background: rgba(138, 160, 198, 0.18); color: var(--status-new); }
+.badge-work { background: rgba(76, 141, 255, 0.18); color: var(--status-work); }
+.badge-human { background: rgba(242, 193, 78, 0.18); color: var(--status-human); }
+.badge-done { background: rgba(74, 222, 128, 0.16); color: var(--status-done); }
+.badge-cancel { background: rgba(107, 114, 128, 0.18); color: var(--status-cancel); }
+.badge-running { background: rgba(76, 141, 255, 0.2); color: var(--status-work); }
+.badge-queued { background: rgba(242, 193, 78, 0.16); color: var(--status-human); }
+.badge-failed { background: rgba(239, 83, 80, 0.18); color: var(--danger); }
+/* Interactive-session turn activity (derived from SessionMeta.activity): a live
+ * chat reads `working` while the agent streams a turn, `idle` when waiting. */
+.badge-working { background: rgba(76, 141, 255, 0.2); color: var(--status-work); }
+.badge-idle { background: rgba(138, 160, 198, 0.16); color: var(--fg-dim); }
+
+.chip {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 11px;
+  background: var(--bg-3);
+  color: var(--fg-dim);
+  margin-left: 4px;
+}
+.chip-accent {
+  background: rgba(110, 231, 183, 0.16);
+  color: var(--accent-2);
+}
+
+.run-indicator {
+  color: var(--ok);
+  font-size: 11px;
+}
+.run-indicator.streaming {
+  color: var(--accent);
+  animation: pulse 1.2s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.spinner {
+  color: var(--fg-mute);
+  font-size: 13px;
+  padding: 12px;
+}
+.spinner-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1s infinite;
+}
+
+.empty-state {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--fg-mute);
+}
+.empty-title {
+  font-size: 15px;
+  color: var(--fg-dim);
+}
+.empty-hint {
+  font-size: 13px;
+  margin-top: 6px;
+}
+
+.section {
+  margin-bottom: 16px;
+}
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.section-title {
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  color: var(--fg-mute);
+}

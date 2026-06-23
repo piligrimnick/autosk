@@ -1,0 +1,45 @@
+{
+  "name": "@autosk/merge-to-current",
+  "version": "0.1.2",
+  "description": "Single-step workflow: merge the autosk-managed branch `autosk/<task-id>` into the project's CURRENT branch (non-isolated, fast-forward when possible).",
+  "license": "MIT",
+  "author": "wierdbytes",
+  "homepage": "https://github.com/wierdbytes/autosk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wierdbytes/autosk.git",
+    "directory": "daemon/extensions/merge-to-current"
+  },
+  "bugs": {
+    "url": "https://github.com/wierdbytes/autosk/issues"
+  },
+  "keywords": [
+    "autosk",
+    "autosk-extension",
+    "autosk-workflow"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": "./index.ts"
+  },
+  "types": "./index.ts",
+  "autosk": {
+    "extensions": ["./index.ts"]
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "prompts/",
+    "README.md"
+  ],
+  "dependencies": {
+    "@autosk/pi-agent": "^0.1.0",
+    "@autosk/sdk": "^0.1.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

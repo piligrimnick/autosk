@@ -7,9 +7,9 @@
 // as the rest of the TUI.
 //
 // This package is the TUI-only seam: machine-facing wire formats
-// (CLI --json, daemon HTTP API, RunContextSeed, comments
-// RenderForPrompt, TS extension types) stay on raw UTF-8 plain text
-// and never call into here.
+// (the `--json` CLI output, the proto-v2 JSON-RPC wire types, and the
+// pi-format session transcript) stay on raw UTF-8 plain text and never
+// call into here.
 //
 // The renderer is cached by (width, paletteVersion) and rebuilt on
 // the next Render call when either changes. The cache lives in this

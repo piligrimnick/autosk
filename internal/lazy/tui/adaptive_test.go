@@ -11,7 +11,7 @@ import (
 // The shape of the function is the contract: if last refresh was
 // fast we stay at the base cadence, otherwise we back off to
 // max(base*2, elapsed*2) capped at 30s. The cap is what stops a
-// wedged doltlite from melting the CPU; the elapsed*2 floor stops
+// wedged datasource from melting the CPU; the elapsed*2 floor stops
 // us from queuing back-to-back refreshes against a slow datasource.
 func TestAdaptiveDelay_BoundsAndBackoff(t *testing.T) {
 	const base = 2 * time.Second

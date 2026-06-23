@@ -12,23 +12,24 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"autosk/internal/agent"
-	"autosk/internal/comments"
-	"autosk/internal/store/doltlite"
+	"autosk/internal/daemon/rpcclient"
 	"autosk/internal/timeformat"
 )
 
 func newCommentCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "comment",
-		Short: "Append-only comments on a task",
+		Short: "Comments on a task (the cross-agent channel)",
 		Long: "Comments are the cross-agent channel for a task: the workflow engine\n" +
 			"surfaces every prior comment at the top of each step's prompt.\n" +
-			"Authors default to $AUTOSK_AGENT (human if unset).",
+			"Authors default to $AUTOSK_AGENT (human if unset). v2 comments are\n" +
+			"editable and deletable (the daemon is the sole writer).",
 	}
 	cmd.AddCommand(
 		newCommentAddCmd(),
 		newCommentListCmd(),
+		newCommentEditCmd(),
+		newCommentDeleteCmd(),
 	)
 	return cmd
 }
@@ -38,10 +39,7 @@ func newCommentAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add <task-id> [text]",
 		Short: "Append a comment to a task (text may also be piped via stdin)",
-		Long: "Append a comment to a task.\n\n" +
-			"Text can be passed positionally; if omitted (or `-`), it is read\n" +
-			"from stdin. The author defaults to $AUTOSK_AGENT (human).",
-		Args: cobra.RangeArgs(1, 2),
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			taskID := args[0]
 			var text string
@@ -59,30 +57,19 @@ func newCommentAddCmd() *cobra.Command {
 			if strings.TrimSpace(text) == "" {
 				return errors.New("comment text is empty")
 			}
-
-			s, closeFn, err := openStore(cmd.Context(), true)
-			if err != nil {
-				return err
-			}
-			defer closeFn()
-			dl := s.(*doltlite.Store)
-			ag := agent.New(dl.DB())
-			cs := comments.New(dl.DB())
-
-			// Resolve author: --author NAME overrides $AUTOSK_AGENT.
 			authorName := strings.TrimSpace(author)
 			if authorName == "" {
 				authorName = callerAgentName()
 			}
-			aRow, err := ag.EnsureByName(cmd.Context(), authorName)
-			if err != nil {
-				return fmt.Errorf("ensure author %q: %w", authorName, err)
-			}
-			c, err := cs.Add(cmd.Context(), taskID, aRow.ID, text)
+
+			cl, err := writeClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			_ = dl.DoltCommit(cmd.Context(), "comment add "+taskID)
+			c, err := cl.AddComment(cmd.Context(), taskID, authorName, text)
+			if err != nil {
+				return err
+			}
 			return emitComment(c)
 		},
 	}
@@ -91,66 +78,115 @@ func newCommentAddCmd() *cobra.Command {
 }
 
 func newCommentListCmd() *cobra.Command {
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "list <task-id>",
 		Short: "List comments on a task (oldest first)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, closeFn, err := openStore(cmd.Context(), false)
+			cl, err := readClient(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer closeFn()
-			dl := s.(*doltlite.Store)
-			cs := comments.New(dl.DB())
-			list, err := cs.ListByTask(cmd.Context(), args[0])
+			list, err := cl.Comments(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
 			return emitComments(list)
 		},
 	}
+}
+
+func newCommentEditCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "edit <task-id> <comment-id> [text]",
+		Short: "Rewrite a comment's text (text may also be piped via stdin)",
+		Args:  cobra.RangeArgs(2, 3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			taskID, commentID := args[0], args[1]
+			var text string
+			switch {
+			case len(args) == 3 && args[2] != "-":
+				text = args[2]
+			default:
+				b, err := io.ReadAll(os.Stdin)
+				if err != nil {
+					return fmt.Errorf("read stdin: %w", err)
+				}
+				text = string(b)
+			}
+			text = strings.TrimRight(text, "\n")
+			if strings.TrimSpace(text) == "" {
+				return errors.New("comment text is empty")
+			}
+			cl, err := writeClient(cmd.Context())
+			if err != nil {
+				return err
+			}
+			c, err := cl.EditComment(cmd.Context(), taskID, commentID, text)
+			if err != nil {
+				return err
+			}
+			return emitComment(c)
+		},
+	}
 	return cmd
+}
+
+func newCommentDeleteCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "delete <task-id> <comment-id>",
+		Aliases: []string{"rm"},
+		Short:   "Delete a comment",
+		Args:    cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cl, err := writeClient(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if err := cl.DeleteComment(cmd.Context(), args[0], args[1]); err != nil {
+				return err
+			}
+			if !flagQuiet {
+				fmt.Printf("deleted comment %s\n", args[1])
+			}
+			return nil
+		},
+	}
 }
 
 // ---- render --------------------------------------------------------------
 
 type commentJSON struct {
-	ID         int64  `json:"id"`
-	TaskID     string `json:"task_id"`
-	AuthorID   string `json:"author_id"`
-	AuthorName string `json:"author"`
-	Text       string `json:"text"`
-	CreatedAt  string `json:"created_at"`
+	ID        string `json:"id"`
+	Author    string `json:"author"`
+	Text      string `json:"text"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
-func toCommentJSON(c comments.Comment) commentJSON {
+func toCommentJSON(c rpcclient.Comment) commentJSON {
 	return commentJSON{
-		ID:         c.ID,
-		TaskID:     c.TaskID,
-		AuthorID:   c.AuthorID,
-		AuthorName: c.AuthorName,
-		Text:       c.Text,
-		CreatedAt:  c.CreatedAt.Format(time.RFC3339),
+		ID:        c.ID,
+		Author:    c.Author,
+		Text:      c.Text,
+		CreatedAt: c.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt: c.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
-func emitComment(c comments.Comment) error {
+func emitComment(c rpcclient.Comment) error {
 	if flagQuiet {
 		return nil
 	}
 	if flagJSON {
 		return json.NewEncoder(os.Stdout).Encode(toCommentJSON(c))
 	}
-	// Human text output: local TZ + 'YYYY-MM-DD HH:MM:SS'. The JSON
-	// form (toCommentJSON) and the LLM-facing comments.RenderForPrompt
-	// stay on RFC3339 UTC — see internal/comments/store.go.
-	fmt.Printf("[%s@%s] (id=%d):\n%s\n",
-		c.AuthorName, timeformat.FormatDateTime(c.CreatedAt), c.ID, c.Text)
+	fmt.Printf("[%s@%s] (id=%s):\n%s\n",
+		c.Author, timeformat.FormatDateTime(c.CreatedAt), c.ID, c.Text)
 	return nil
 }
 
-func emitComments(cs []comments.Comment) error {
+func emitComments(cs []rpcclient.Comment) error {
 	if flagJSON {
 		out := make([]commentJSON, len(cs))
 		for i, c := range cs {
@@ -165,12 +201,9 @@ func emitComments(cs []comments.Comment) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tAUTHOR\tCREATED\tTEXT")
 	for _, c := range cs {
-		text := strings.ReplaceAll(c.Text, "\n", " ")
-		if len(text) > 80 {
-			text = text[:77] + "…"
-		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\n",
-			c.ID, c.AuthorName, timeformat.FormatDateTime(c.CreatedAt), text)
+		text := truncRunes(strings.ReplaceAll(c.Text, "\n", " "), 80, "…")
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+			c.ID, c.Author, timeformat.FormatDateTime(c.CreatedAt), text)
 	}
 	return w.Flush()
 }
