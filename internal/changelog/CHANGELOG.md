@@ -17,6 +17,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > rows or installed npm-package agents.
 
 ### Added
+- **CI: continuous npm + GHCR publishing on `main`.** A new
+  `.github/workflows/publish.yml` runs after a green `CI` run on a push to `main`
+  and publishes every version-bumped `@autosk/*` package to npm via OIDC trusted
+  publishing (no `NPM_TOKEN`, automatic provenance), and pushes the `pi-runtime`
+  + `claude-runtime` GHCR images multi-arch tagged `latest` + `sha-<short>`
+  (ask-92ce08).
+- **macOS Homebrew cask** (`brew install --cask wierdbytes/autosk/autosk`): a
+  signed, notarized, stapled Apple-Silicon `autosk.app` that embeds the `autosk`
+  CLI/TUI and `autoskd` daemon as Tauri sidecars and symlinks both onto `PATH`,
+  so a Finder launch auto-spawns the daemon with no shell `PATH`; bumped on
+  stable tags only (ask-92ce08).
+- **Linux GUI release assets.** Tagged releases now attach an
+  `autosk_<ver>_amd64.AppImage` (and a best-effort `.deb`) to the GitHub Release
+  alongside the `autosk`/`autoskd` Linux binaries (ask-92ce08).
+- **iOS TestFlight pipeline.** Every tag (including pre-releases) builds the GUI
+  with Tauri iOS automatic signing (one shared App Store Connect API key, no
+  manual cert/profile) and uploads the IPA to TestFlight with a monotonic build
+  number (ask-92ce08).
 - **`@autosk/claude-agent` (Claude Code headless agent).** A second shipped
   agent that drives Claude Code (`claude -p` stream-json) as an autoskd v2 agent
   — the structural twin of `@autosk/pi-agent`, with Claude Code as the harness
@@ -246,6 +264,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads); the Claude `dockerSandbox` workflow itself is deferred.
 
 ### Changed
+- **Install + release distribution.** Install instructions now describe a
+  per-platform matrix — macOS via the Homebrew cask, Linux via GitHub Release
+  assets (no Homebrew), source via `make install` — and `release.yml` now
+  produces signed app artifacts (macOS DMG, Linux AppImage/`.deb`, iOS
+  TestFlight) in addition to the `autosk`/`autoskd` binaries (ask-92ce08).
 - **Isolation providers dropped from the GUI extension browser.** The shipped
   isolation providers `@autosk/worktree` (0.1.3) and `@autosk/docker` (0.1.1) no
   longer carry the `autosk-extension` npm keyword, so they no longer appear in
@@ -344,6 +367,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removed (ask-709e5a).
 
 ### Removed
+- **Homebrew formula.** The tap is now cask-only — the `release.yml` formula
+  bump job is gone and `Casks/autosk.rb` is the published artifact, so
+  `brew install autosk` resolves unambiguously to the cask on macOS; Linux moves
+  to GitHub Release assets / npm (ask-92ce08).
 - **agents (inline-step redesign):** the `autosk agent list/show` CLI, the
   `enroll` / `create` `--agent` flag (and the `single:<agent>` synthetic
   workflow it materialised), the `registry.agent.list` RPC verb + the `AgentInfo`

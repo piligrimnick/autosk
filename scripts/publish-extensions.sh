@@ -112,10 +112,13 @@ images=(
 
 # publish_images <dry|publish> — build + push each image to GHCR (multi-arch via
 # buildx). Needs `docker login ghcr.io` and a docker with buildx; a missing docker
-# is a non-fatal skip. Tag with $IMAGE_TAG (default latest); platforms via
-# $IMAGE_PLATFORMS (default linux/amd64,linux/arm64).
+# is a non-fatal skip. Tags come from $IMAGE_TAGS (space-separated; e.g.
+# "latest sha-abc123" for rollback pins) and default to $IMAGE_TAG (default
+# latest); platforms via $IMAGE_PLATFORMS (default linux/amd64,linux/arm64). All
+# tags are pushed from a SINGLE buildx build (multiple `-t` flags).
 publish_images() {
-  local m="$1" tag="${IMAGE_TAG:-latest}" platforms="${IMAGE_PLATFORMS:-linux/amd64,linux/arm64}"
+  local m="$1" platforms="${IMAGE_PLATFORMS:-linux/amd64,linux/arm64}"
+  local tags="${IMAGE_TAGS:-${IMAGE_TAG:-latest}}"
   local docker_bin="${DOCKER:-docker}"
   if ! command -v "$docker_bin" >/dev/null 2>&1; then
     echo "== skip images: $docker_bin not on PATH =="; return 0
@@ -123,17 +126,20 @@ publish_images() {
   local builder="autosk-images"
   for entry in "${images[@]}"; do
     local image="${entry%%=*}" ctx="$repo_root/${entry#*=}"
+    # One image, many tags → one build with repeated `-t image:tag`.
+    local tag_args=() t
+    for t in $tags; do tag_args+=(-t "$image:$t"); done
     if [ "$m" = "dry" ]; then
-      echo "== DRY RUN image: $image:$tag ($ctx) for $platforms =="
+      echo "== DRY RUN image: $image [$tags] ($ctx) for $platforms =="
       continue
     fi
-    echo "== publish image: $image:$tag ($ctx) for $platforms =="
+    echo "== publish image: $image [$tags] ($ctx) for $platforms =="
     if ! "$docker_bin" buildx inspect "$builder" >/dev/null 2>&1; then
       "$docker_bin" buildx create --name "$builder" --use >/dev/null
     else
       "$docker_bin" buildx use "$builder"
     fi
-    "$docker_bin" buildx build --platform "$platforms" -t "$image:$tag" --push "$ctx"
+    "$docker_bin" buildx build --platform "$platforms" "${tag_args[@]}" --push "$ctx"
   done
 }
 

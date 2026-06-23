@@ -12,8 +12,11 @@ switches.
 > the namespaced proto-v2 JSON-RPC surface (`meta.*` / `project.*` / `task.*` /
 > `task.comment.*` / `registry.*` / `session.*`). Canonical plan:
 > [`docs/plans/20260612-Bun-Daemon-Extensions.md`](../docs/plans/20260612-Bun-Daemon-Extensions.md)
-> (§3.2 sessions/transcript, §4 RPC v2, §6 P8). Bundling `autoskd` as a sidecar
-> and CI release gates remain follow-ups.
+> (§3.2 sessions/transcript, §4 RPC v2, §6 P8). The macOS release now **bundles**
+> the `autosk` CLI/TUI + `autoskd` daemon as Tauri sidecars and ships a signed,
+> notarized Homebrew cask; CI release gates are wired in
+> [`.github/workflows/release.yml`](../.github/workflows/release.yml) (see
+> [Distribution](#distribution)).
 >
 > The desktop UI is a **frameless two-panel workspace** — a left sidebar that
 > stacks Tasks / Sessions / Workflows as a lazygit-style accordion, and a main
@@ -233,15 +236,38 @@ Mode is an app setting (persisted; editable from the in-app **Settings** view):
   explicitly (you cannot auto-spawn a process on another host). Behaviour is
   identical to local because the frontend is transport-agnostic.
 
-## Known limitations / Phase-5 follow-ups
+## Distribution
 
-- **`autoskd` is not yet bundled as a Tauri sidecar.** `tauri.conf.json` has no
-  `bundle.externalBin`, and nothing drops `autoskd` into the app bundle. Local
-  mode relies on the runtime path resolver (`$AUTOSKD_BIN` → app-exe/`Resources`
-  dir → `PATH`), so a packaged `.app` only works in local mode if `autoskd` is
-  already on `PATH`. This is fine for the `npm run tauri:dev` milestone; wiring
-  the real `externalBin` + per-target-triple sidecar drop is a **Phase 5**
-  (release/CI) task.
+Release builds are produced by
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) on a semver
+tag:
+
+- **macOS — Homebrew cask.** A signed + notarized `autosk_<ver>_aarch64.dmg`
+  (Apple Silicon). The `.app` **embeds** the `autosk` CLI/TUI and `autoskd`
+  daemon as Tauri sidecars; the cask (`wierdbytes/autosk/autosk`) symlinks both
+  onto `PATH` and a Finder launch auto-spawns the embedded daemon. Bumped on
+  **stable** tags only.
+- **Linux.** `autosk_<ver>_amd64.AppImage` (and a best-effort `.deb`) attached to
+  the GitHub Release; the `autosk`/`autoskd` binaries ship as separate Release
+  assets. No Homebrew on Linux.
+- **iOS.** Every tag (including pre-releases) uploads a build to **TestFlight**
+  via automatic signing with the shared App Store Connect API key.
+
+See [`../docs/gui-release.md`](../docs/gui-release.md) for the full install /
+self-build guide.
+
+## Known limitations / follow-ups
+
+- **`autoskd` sidecar bundling is release-only (macOS).** The base
+  `tauri.conf.json` carries no `bundle.externalBin` — so `npm run tauri:dev` and
+  the `cargo check` backend check stay clean — and local mode relies on the
+  runtime path resolver (`$AUTOSKD_BIN` → app-exe/`Resources` dir → `PATH`). The
+  **macOS release** job stages `autosk-cli` + `autoskd` as sidecars and applies
+  the `externalBin` + hardened-runtime overrides from
+  `src-tauri/macos-release.conf.json` via `tauri build --config`, so the signed
+  cask app auto-spawns the embedded daemon with no shell `PATH`. Linux and iOS
+  builds do **not** embed the daemon (Linux ships the binaries separately; iOS
+  runs in Remote mode).
 - **Live runtime is built-to-contract, not headlessly exercised.**
   `npm run tauri:dev` needs a display and the full webkit bundle, so end-to-end
   behaviour (live streaming, composer round-trips, remote-mode parity) is built
