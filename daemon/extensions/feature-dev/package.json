@@ -1,6 +1,6 @@
 {
   "name": "@autosk/feature-dev",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "feature-dev (dev → review → docs → validator → accept) wired to @autosk/pi-agent roles and an @autosk/sandbox worktree + cleanup step.",
   "license": "MIT",
   "author": "wierdbytes",
