@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Hardened-runtime entitlements for the signed/notarized macOS app and its
+	  embedded sidecars (the Go `autosk` CLI/TUI + the Bun `autoskd` daemon).
+	  `autoskd` is a `bun build --compile` binary that embeds the Bun runtime,
+	  which JITs JavaScript at startup, so it needs the JIT exceptions below to
+	  run under hardened runtime (a notarization prerequisite). The local signing
+	  spike (plan §10) confirmed these embed cleanly and the signed binary still
+	  executes.
+	-->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
+	<true/>
+</dict>
+</plist>

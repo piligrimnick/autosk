@@ -8,6 +8,9 @@ dist-ssr/
 # Tauri backend build output + generated schemas
 src-tauri/target/
 src-tauri/gen/
+# Tauri externalBin sidecars (the Go CLI + Bun daemon) are STAGED here by the
+# macOS release job (release.yml); they are build artifacts, never committed.
+src-tauri/binaries/
 
 # logs / local
 *.log
