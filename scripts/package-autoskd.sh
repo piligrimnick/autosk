@@ -28,6 +28,11 @@ bun="${BUN:-bun}"
 command -v "$bun" >/dev/null 2>&1 || { echo "package-autoskd: bun not found on PATH" >&2; exit 1; }
 
 mkdir -p "$out/bin"
+# Absolutize the out dir: the `bun build` below runs inside a `cd "$daemon"`
+# subshell, so a RELATIVE --outfile (e.g. `dist/pkg`, as release.yml passes)
+# would resolve against $daemon and land the binary in daemon/dist/pkg/bin/
+# instead of the caller's dist/pkg/bin/. mkdir above already created $out.
+out="$(cd "$out" && pwd)"
 
 echo "package-autoskd: bun install (workspace)"
 (cd "$daemon" && "$bun" install --frozen-lockfile >/dev/null 2>&1 || "$bun" install)
