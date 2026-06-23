@@ -193,6 +193,19 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
             -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           rm -f "$RUNNER_TEMP/cert.p12"
+          # Fail fast (and BEFORE the ~3 min Rust build) if the keychain holds no
+          # usable codesigning identity, and surface the exact identity name so a
+          # mismatch with APPLE_SIGNING_IDENTITY is obvious in the log.
+          echo "Codesigning identities visible to the build:"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+          if ! security find-identity -v -p codesigning "$KEYCHAIN" \
+               | grep -q 'Developer ID Application'; then
+            echo "::error::No valid 'Developer ID Application' identity in keychain." \
+                 "Check the APPLE_CERTIFICATE secret (.p12 must contain BOTH the" \
+                 "Developer ID Application certificate AND its private key) and that" \
+                 "APPLE_SIGNING_IDENTITY matches the identity name printed above."
+            exit 1
+          fi
 
       # The shared App Store Connect API key (.p8) drives notarytool below.
       - name: materialize App Store Connect API key (.p8)
