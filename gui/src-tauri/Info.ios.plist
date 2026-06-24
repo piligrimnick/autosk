@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  iOS-only Info.plist overlay. tauri-cli merges this on top of the generated
+	  gen/apple Info.plist (after the shared src-tauri/Info.plist) on every
+	  `tauri ios init` / `ios build`, so iOS keys live here, never hand-edited in
+	  the gitignored gen/apple project.
+
+	  App Store / TestFlight asks an "export compliance" (encryption) question on
+	  every upload. The app only uses standard HTTPS / OS-provided crypto, which
+	  is exempt, so declare it up front and skip the manual prompt.
+	-->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+
+	<!--
+	  autosk discovers and connects to the autoskd daemon over the local network
+	  (Bonjour service _autosk._tcp). iOS 14+ gates local-network access behind a
+	  user prompt that REQUIRES NSLocalNetworkUsageDescription, and Bonjour
+	  browsing/advertising requires the service type to be declared in
+	  NSBonjourServices — without these the connection is silently blocked.
+	-->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>autosk connects to the autoskd daemon running on your local network.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_autosk._tcp</string>
+	</array>
+</dict>
+</plist>
