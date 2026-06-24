@@ -16,6 +16,7 @@ import { Engine, type EngineOptions } from "../engine/index.ts";
 import { ProjectManager } from "../project/index.ts";
 import { consoleLogger, type Logger } from "../store/index.ts";
 import { Daemon } from "./daemon.ts";
+import { enrichProcessPath } from "./path-env.ts";
 import { resolveIdleWindowMs, resolveSocketPath } from "./paths.ts";
 import { RpcServer } from "./server.ts";
 import { ensureToken, resolveTokenPath } from "./token.ts";
@@ -129,6 +130,13 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<StartD
   // (concurrent first-callers hung on a request the daemon never read).
   server.serve(unix.server, { isTcp: false, requireAuth: false });
   await unix.listen();
+
+  // Enrich PATH from the operator's login shell BEFORE anything is spawned, so a
+  // daemon launched by a macOS .app bundle (minimal launchd PATH, no Homebrew)
+  // can still reach `git-lfs` / `npm` / `docker` / the agent binaries. Done after
+  // the socket is accepting (so the Go/GUI auto-spawn readiness wait is not held
+  // up) but before the first-run bootstrap below — the npm install benefits too.
+  await enrichProcessPath(logger);
 
   // Kick off the first-run bootstrap AFTER the socket is accepting, so the Go
   // auto-spawn readiness wait is never blocked by an `npm install`. A project

@@ -68,6 +68,9 @@ func ensureTestDaemon(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("AUTOSK_SOCK", sock)
 	t.Setenv("AUTOSK_IDLE_SECS", "0")
+	// Skip the daemon's login-shell PATH probe: it adds startup latency and would
+	// make the suite depend on the host operator's shell rc files.
+	t.Setenv("AUTOSK_SKIP_SHELL_PATH", "1")
 	// Hermetic project selection: a verb test pins its project via runRoot's
 	// os.Chdir(t.TempDir()). But callerCwd() honours $AUTOSK_CWD ahead of the
 	// process cwd, and a workflow agent's environment carries AUTOSK_CWD=<real

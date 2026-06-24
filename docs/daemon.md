@@ -90,7 +90,25 @@ Environment knobs:
 | `AUTOSK_TOKEN_FILE` | Path to the TCP auth token file (default `~/.autosk/daemon-token`). |
 | `AUTOSK_NPM_BIN` | `npm` binary used for every extension install — the first-run bootstrap, the auto-install reconcile, the registry version check + re-install behind `autosk ext update`, and an explicit `autosk ext add npm:<spec>` (default `npm` on `PATH`). |
 | `AUTOSK_NO_AUTO_INSTALL` | When set (to any value other than empty / `0` / `false`), disables the automatic first-run bootstrap *and* the reconcile pass; explicit `autosk ext add` / `autosk ext update` still work. |
+| `AUTOSK_SKIP_SHELL_PATH` | When set (to any value other than empty / `0`), skips the startup login-shell `PATH` probe (see below). |
 | `AUTOSKD_BIN` | (front-end side) explicit path to the `autoskd` binary for auto-spawn. |
+
+#### Login-shell `PATH` enrichment
+
+A daemon launched from a macOS `.app` bundle (or any Finder/launchd/GUI context)
+inherits the **minimal launchd `PATH`** — `/usr/bin:/bin:/usr/sbin:/sbin` — which
+omits Homebrew (`/opt/homebrew/bin`), nvm, asdf, pyenv, and friends. Every child
+the daemon then spawns breaks with *command not found*: `git worktree add` shells
+out to `git-lfs`, the first-run bootstrap to `npm`, the Docker sandbox to
+`docker`, and the agent steps to `pi` / `claude`.
+
+To prevent this, at startup the daemon asks the operator's **login shell**
+(`$SHELL -ilc`, so it sources `.zprofile` *and* `.zshrc`) for its real `PATH`
+and merges any missing directories into its own `process.env.PATH` (login-shell
+entries take precedence, matching the terminal). The probe is bounded by a 2s
+timeout and is a no-op when it finds nothing new — so a terminal-launched daemon
+(already-rich `PATH`) is unaffected. It is skipped on Windows, under `bun test`,
+and whenever `AUTOSK_SKIP_SHELL_PATH` is set.
 
 ### One daemon per host, many projects
 
@@ -455,4 +473,5 @@ autosk version                       # CLI + daemon version
 ```
 
 The Tauri GUI and `autosk lazy` render the same surface live via the subscribe
-streams.
+streams. For the complete CLI verb/flag/env reference, see
+[docs/cli.md](cli.md).

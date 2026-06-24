@@ -55,6 +55,8 @@ func seedProject(t *testing.T, _ string) (proj, sock string) {
 	}
 	sock = filepath.Join(sockDir, "d.sock")
 	t.Setenv("AUTOSK_SOCK", sock)
+	// Skip the daemon's login-shell PATH probe (host-shell-dependent + slow).
+	t.Setenv("AUTOSK_SKIP_SHELL_PATH", "1")
 	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 	t.Cleanup(func() {
 		// Best-effort: the connector spawns the daemon detached, so kill it by
