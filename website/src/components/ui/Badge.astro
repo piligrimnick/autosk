@@ -1,0 +1,23 @@
+---
+/**
+ * Status / entity pill reusing the brand status hues (plan §5/§7). `tone`
+ * mirrors a real task status so the visuals teach the model.
+ */
+interface Props {
+  tone?: "new" | "work" | "human" | "done" | "cancel" | "neutral";
+  class?: string;
+}
+const { tone = "neutral", class: cls = "" } = Astro.props;
+
+const tones: Record<string, string> = {
+  new: "bg-[rgba(138,160,198,0.18)] text-status-new",
+  work: "bg-[rgba(76,141,255,0.18)] text-status-work",
+  human: "bg-[rgba(242,193,78,0.18)] text-status-human",
+  done: "bg-[rgba(74,222,128,0.16)] text-status-done",
+  cancel: "bg-[rgba(107,114,128,0.18)] text-status-cancel",
+  neutral: "bg-bg-3 text-fg-dim",
+};
+---
+<span
+  class={`inline-flex items-center rounded-full px-2.5 py-0.5 font-mono text-[11px] font-semibold lowercase tracking-wide ${tones[tone]} ${cls}`}
+><slot /></span>

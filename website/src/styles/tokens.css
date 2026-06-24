@@ -1,0 +1,47 @@
+/*
+ * Brand tokens — adopted verbatim from the autosk desktop GUI
+ * (gui/src/styles/base.css) so the marketing surface reads as "the same
+ * product." Dark-first, TokyoNight-ish palette. See plan §5.
+ */
+:root {
+  /* surfaces (dark-first) */
+  --bg: #16181d;
+  --bg-1: #1c1f26;
+  --bg-2: #22262e;
+  --bg-3: #2a2f39;
+  --border: #333a45;
+
+  /* text */
+  --fg: #e6e9ef;
+  --fg-dim: #9aa3b0;
+  --fg-mute: #828b9c;
+
+  /* brand accents */
+  --accent: #4c8dff;
+  --accent-2: #6ee7b7;
+  --danger: #ef5350;
+  --warn: #f2c14e;
+  --ok: #4ade80;
+
+  /* status hues (status machine: new/work/human/done/cancel) */
+  --status-new: #8aa0c6;
+  --status-work: #4c8dff;
+  --status-human: #f2c14e;
+  --status-done: #4ade80;
+  --status-cancel: #6b7280;
+
+  /* entity hues (reused in diagrams/code: task/session/workflow/step/agent) */
+  --task-id: #7aa2f7;
+  --session-id: #bb9af7;
+  --workflow-name: #e0af68;
+  --step-name: #9d7cd8;
+  --agent-name: #7dcfff;
+
+  --radius: 8px;
+
+  /* typography — mono matches the GUI's system mono stack; sans matches the
+   * GUI body stack. A self-hosted display font is intentionally avoided for v1
+   * (licensing/weight — see plan §3 / §10). */
+  --mono: "SFMono-Regular", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}

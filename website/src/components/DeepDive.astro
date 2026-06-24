@@ -1,0 +1,40 @@
+---
+import Icon from "./ui/Icon.astro";
+
+/**
+ * Alternating image/text block (plan §7). The media side is a slot, so callers
+ * can drop in a CodeBlock, an illustration, or an <img>. `side` controls which
+ * side the media sits on at desktop width; it always stacks media-first on
+ * mobile.
+ */
+interface Props {
+  eyebrow?: string;
+  heading: string;
+  body: string;
+  bullets?: string[];
+  side?: "left" | "right";
+}
+const { eyebrow, heading, body, bullets = [], side = "right" } = Astro.props;
+const mediaOrder = side === "right" ? "lg:order-2" : "lg:order-1";
+const textOrder = side === "right" ? "lg:order-1" : "lg:order-2";
+---
+<div class="grid items-center gap-8 lg:grid-cols-2 lg:gap-14">
+  <div class={`reveal ${textOrder}`}>
+    {eyebrow && <p class="eyebrow mb-3">{eyebrow}</p>}
+    <h3 class="text-balance text-2xl font-semibold tracking-tight text-fg sm:text-3xl">{heading}</h3>
+    <p class="mt-4 text-base leading-relaxed text-fg-dim">{body}</p>
+    {bullets.length > 0 && (
+      <ul class="mt-5 space-y-2.5">
+        {bullets.map((b) => (
+          <li class="flex gap-2.5 text-sm leading-relaxed text-fg-dim">
+            <Icon name="check" size={18} class="mt-0.5 shrink-0 text-accent-2" />
+            <span>{b}</span>
+          </li>
+        ))}
+      </ul>
+    )}
+  </div>
+  <div class={`reveal ${mediaOrder}`}>
+    <slot />
+  </div>
+</div>

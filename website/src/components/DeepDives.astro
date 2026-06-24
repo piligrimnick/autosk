@@ -1,0 +1,126 @@
+---
+import Section from "./ui/Section.astro";
+import DeepDive from "./DeepDive.astro";
+import CodeBlock from "./ui/CodeBlock.astro";
+import Badge from "./ui/Badge.astro";
+
+const wfSnippet = `<span class="tok-step">export</span> <span class="tok-step">const</span> featureDev = defineWorkflow({
+  name: <span class="tok-workflow">"feature-dev"</span>,
+  steps: {
+    dev: devAgent,
+    review: reviewAgent,        <span class="tok-comment">// → dev | docs</span>
+    docs: docsAgent,
+    validator: validatorAgent,  <span class="tok-comment">// → dev | accept</span>
+    accept: acceptAgent,
+    cleanup: cleanupAgent,
+    human: statusStep(<span class="tok-ok">"human"</span>), <span class="tok-comment">// escape hatch</span>
+  },
+});`;
+
+const isoSnippet = `<span class="tok-accent">$</span> git worktree list
+<span class="tok-comment">/repo                  </span><span class="tok-comment">[main]</span>
+<span class="tok-comment">/repo/.autosk/wt/...   </span><span class="tok-task">[autosk/ask-3f9b2c]</span>
+<span class="tok-comment">/repo/.autosk/wt/...   </span><span class="tok-task">[autosk/ask-77c1a0]</span>
+
+<span class="tok-comment"># two agents, two branches, zero collisions</span>`;
+---
+<Section id="deep-dives" eyebrow="up close" heading="The flagship features, with room to breathe." center>
+  <div class="mt-16 space-y-24">
+    {/* DD-1 — Workflows you can read in a diff */}
+    <DeepDive
+      eyebrow="workflows as code"
+      heading="Workflows you can read in a diff."
+      body="A workflow is a TypeScript graph of steps. Each step is owned by an agent and declares its transitions. It lives in your repo, evolves in code review, and carries no hidden state."
+      bullets={[
+        "Process is code — versioned, reviewable, testable.",
+        "The step key is the agent's name; no separate registry.",
+        "A statusStep is a human gate — the only non-agent step.",
+      ]}
+      side="right"
+    >
+      <CodeBlock title="feature-dev.ts" code={wfSnippet} />
+    </DeepDive>
+
+    {/* DD-2 — Handoffs with a human escape hatch */}
+    <DeepDive
+      eyebrow="handoffs + guardrails"
+      heading="Handoffs with a human escape hatch."
+      body="Agents collaborate by leaving comments; every prior comment is injected at the top of the next step's prompt, so context carries from coder to reviewer. step_visits caps the loop — after N bounces a task parks for a person."
+      bullets={[
+        "Comments are the shared, durable channel between steps.",
+        "step_visits stops an agent from looping forever.",
+        "When in doubt, work parks to human — never lost.",
+      ]}
+      side="left"
+    >
+      <div class="space-y-3 rounded-xl border border-border bg-bg-1 p-5">
+        <div class="rounded-lg border border-border bg-bg-2 p-3">
+          <div class="flex items-center gap-2 font-mono text-xs">
+            <span class="tok-agent">dev</span>
+            <span class="text-fg-mute">→</span>
+            <span class="tok-task">ask-3f9b2c</span>
+          </div>
+          <p class="mt-1.5 text-sm text-fg-dim">Implemented the auth flow; tests pass locally. Handing to review.</p>
+        </div>
+        <div class="rounded-lg border border-border bg-bg-2 p-3">
+          <div class="flex items-center gap-2 font-mono text-xs">
+            <span class="tok-step">review</span>
+            <span class="text-fg-mute">→</span>
+            <span class="tok-task">ask-3f9b2c</span>
+          </div>
+          <p class="mt-1.5 text-sm text-fg-dim">Token refresh isn't covered. Bouncing back to dev for a test.</p>
+        </div>
+        <div class="flex items-center justify-between rounded-lg border border-status-human/30 bg-[rgba(242,193,78,0.07)] p-3">
+          <div class="flex items-center gap-2 font-mono text-xs text-fg-dim">
+            <span class="tok-task">ask-3f9b2c</span>
+            <Badge tone="human">human</Badge>
+          </div>
+          <span class="font-mono text-xs text-fg-mute">step_visits.dev = 3</span>
+        </div>
+      </div>
+    </DeepDive>
+
+    {/* DD-3 — Isolation without orchestration glue */}
+    <DeepDive
+      eyebrow="agent-owned sandboxes"
+      heading="Isolation without orchestration glue."
+      body="Each task runs in its own git worktree (autosk/<task-id>) or a per-task Docker container. Parallel agents never clobber each other's files — and the engine knows nothing about sandboxes. Agents own them."
+      bullets={[
+        "True parallelism: one worktree (or container) per task.",
+        "A final cleanup step tears the worktree down on the way to done.",
+        "Swap worktreeSandbox() for dockerSandbox() — same contract.",
+      ]}
+      side="right"
+    >
+      <CodeBlock title="isolation" code={isoSnippet} />
+    </DeepDive>
+
+    {/* DD-4 — Watch the work, not just the result */}
+    <DeepDive
+      eyebrow="live observability"
+      heading="Watch the work, not just the result."
+      body="The agent's pi-format transcript streams live into the detail pane of the TUI and the GUI — text, thinking, and tool calls — and persists to disk. Steer it mid-turn, or abort. It's observability you don't get from a headless one-shot."
+      bullets={[
+        "One live transcript, three front ends, one daemon.",
+        "Thinking + tool calls are first-class, not hidden.",
+        "Steer or abort a running session without losing the record.",
+      ]}
+      side="left"
+    >
+      <div class="rounded-xl border border-border bg-[#101216] p-4 font-mono text-[13px] leading-relaxed">
+        <div class="flex items-center gap-2 border-b border-border/60 pb-2">
+          <span class="tok-session">session 9b2c</span>
+          <Badge tone="work">work</Badge>
+          <span class="streaming-dot ml-auto">● streaming</span>
+        </div>
+        <div class="space-y-1.5 pt-3 text-fg-dim">
+          <p><span class="tok-agent">dev</span> reading <span class="text-fg">src/auth/flow.ts</span></p>
+          <p class="text-fg-mute">› thinking: the refresh path needs a guard…</p>
+          <p><span class="tok-accent">tool</span> edit <span class="text-fg">src/auth/flow.ts</span> <span class="text-status-done">+18 −2</span></p>
+          <p><span class="tok-accent">tool</span> bash <span class="text-fg">go test ./...</span> <span class="text-status-done">ok</span></p>
+          <p class="text-fg">Implemented. Transitioning → <span class="tok-step">review</span>.</p>
+        </div>
+      </div>
+    </DeepDive>
+  </div>
+</Section>

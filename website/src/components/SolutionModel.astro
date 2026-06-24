@@ -1,0 +1,135 @@
+---
+import Section from "./ui/Section.astro";
+import Diagram from "./ui/Diagram.astro";
+
+/**
+ * The feature-dev pipeline, drawn with the real graph + status/entity hues so
+ * the visual teaches the model (plan §6.4). review and validator draw a
+ * bounce-back arrow to dev.
+ */
+const NODE_W = 118;
+const NODE_H = 56;
+const GAP = 20;
+const TOP = 84;
+const CY = TOP + NODE_H / 2;
+const BOT = TOP + NODE_H;
+
+type Node = { step: string; agent: string; color: string };
+const steps: Node[] = [
+  { step: "dev", agent: "@claude", color: "#4c8dff" },
+  { step: "review", agent: "@codex", color: "#9d7cd8" },
+  { step: "docs", agent: "@claude", color: "#7dcfff" },
+  { step: "validator", agent: "@your-agent", color: "#4ade80" },
+  { step: "accept", agent: "human", color: "#f2c14e" },
+  { step: "cleanup", agent: "your-script.ts", color: "#828b9c" },
+  { step: "done", agent: "status", color: "#4ade80" },
+];
+const x = (i: number) => 20 + i * (NODE_W + GAP);
+const cx = (i: number) => x(i) + NODE_W / 2;
+const W = x(steps.length - 1) + NODE_W + 20;
+const H = 250;
+---
+<Section
+  id="model"
+  eyebrow="the model"
+  heading="Tasks → workflows (as code) → agents the daemon drives."
+  lead="autosk gives agent work structure (tasks with dependencies), process (workflows written in TypeScript, versioned in your repo), and observability (live transcripts) — while everything stays local and file-based under .autosk/."
+>
+  <div class="mt-12">
+    <Diagram label="feature-dev: dev → review → docs → validator → accept → cleanup → done, with bounce-backs to dev">
+      <svg viewBox={`0 0 ${W} ${H}`} class="h-auto w-full" role="img" aria-label="feature-dev workflow graph" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="#9aa3b0" />
+          </marker>
+          <marker id="arrow-bounce" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="#f2c14e" />
+          </marker>
+        </defs>
+
+        {/* forward connectors */}
+        {steps.slice(0, -1).map((_, i) => (
+          <line
+            x1={x(i) + NODE_W}
+            y1={CY}
+            x2={x(i + 1) - 4}
+            y2={CY}
+            stroke="#9aa3b0"
+            stroke-width="1.6"
+            marker-end="url(#arrow)"
+          />
+        ))}
+
+        {/* bounce-backs (changes requested → back to dev) */}
+        <path
+          class="bounce-arrow"
+          d={`M ${cx(1)} ${BOT} C ${cx(1) - 12} ${BOT + 54}, ${cx(0) + 29} ${BOT + 54}, ${cx(0) + 17} ${BOT + 2}`}
+          fill="none"
+          stroke="#f2c14e"
+          stroke-width="1.6"
+          stroke-dasharray="4 4"
+          marker-end="url(#arrow-bounce)"
+        />
+        <path
+          class="bounce-arrow"
+          d={`M ${cx(3)} ${BOT} C ${cx(3) - 22} ${BOT + 86}, ${cx(0) - 7} ${BOT + 86}, ${cx(0) - 19} ${BOT + 2}`}
+          fill="none"
+          stroke="#f2c14e"
+          stroke-width="1.6"
+          stroke-dasharray="4 4"
+          marker-end="url(#arrow-bounce)"
+        />
+        <text x={cx(2)} y={BOT + 100} text-anchor="middle" fill="#828b9c" font-size="12">
+          changes requested → back to dev
+        </text>
+
+        {/* nodes */}
+        {steps.map((n, i) => (
+          <g>
+            <rect
+              x={x(i)}
+              y={TOP}
+              width={NODE_W}
+              height={NODE_H}
+              rx="9"
+              fill="#22262e"
+              stroke={n.step === "done" ? n.color : "#333a45"}
+              stroke-width={n.step === "done" ? 1.6 : 1.2}
+            />
+            <rect x={x(i)} y={TOP} width={NODE_W} height="4" rx="2" fill={n.color} />
+            <text x={cx(i)} y={TOP + 28} text-anchor="middle" fill="#e6e9ef" font-size="14" font-weight="600">
+              {n.step}
+            </text>
+            <text x={cx(i)} y={TOP + 45} text-anchor="middle" fill="#828b9c" font-size="10.5">
+              {n.agent}
+            </text>
+          </g>
+        ))}
+      </svg>
+    </Diagram>
+
+    <div class="mt-8 grid gap-4 sm:grid-cols-3">
+      <div class="rounded-xl border border-border bg-bg-1 p-5">
+        <h3 class="font-mono text-sm font-semibold text-task-id">structure</h3>
+        <p class="mt-2 text-sm leading-relaxed text-fg-dim">
+          Tasks with ids, statuses, blockers, and a free-form metadata bag — a real backlog the
+          engine can pull a ready set from.
+        </p>
+      </div>
+      <div class="rounded-xl border border-border bg-bg-1 p-5">
+        <h3 class="font-mono text-sm font-semibold text-workflow-name">process</h3>
+        <p class="mt-2 text-sm leading-relaxed text-fg-dim">
+          A workflow is a TypeScript graph of steps, each owned by an agent. It lives in your repo
+          and evolves in code review.
+        </p>
+      </div>
+      <div class="rounded-xl border border-border bg-bg-1 p-5">
+        <h3 class="font-mono text-sm font-semibold text-agent-name">observability</h3>
+        <p class="mt-2 text-sm leading-relaxed text-fg-dim">
+          Every run streams a live transcript — text, thinking, tool calls — to disk and to any
+          attached front end.
+        </p>
+      </div>
+    </div>
+  </div>
+</Section>

@@ -1,0 +1,40 @@
+---
+import Section from "./ui/Section.astro";
+import Icon from "./ui/Icon.astro";
+
+const pains = [
+  {
+    icon: "handoff",
+    title: "No handoffs",
+    body: "The coder and the reviewer are the same forgetful chat. Nothing carries from one role to the next.",
+  },
+  {
+    icon: "shield",
+    title: "No guardrails",
+    body: "Nothing stops an agent looping on the same failing step until it runs out of tokens — or your patience.",
+  },
+  {
+    icon: "database",
+    title: "No memory",
+    body: "Context dies when the tab closes. Why work parked, what came next — none of it lands anywhere.",
+  },
+];
+---
+<Section
+  id="problem"
+  eyebrow="the problem"
+  heading="One chat window is not a process."
+  lead="Coding agents are powerful but unmanaged. One context, no memory of what's next, no handoff from a coder to a reviewer, no record of why work parked. So you re-prompt, copy-paste context between tabs, and hope the agent transitions cleanly."
+>
+  <div class="mt-12 grid gap-4 md:grid-cols-3">
+    {pains.map((p) => (
+      <div class="reveal rounded-xl border border-border bg-bg-1 p-5">
+        <span class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-bg-2 text-danger">
+          <Icon name={p.icon} size={20} />
+        </span>
+        <h3 class="mt-4 text-base font-semibold text-fg">{p.title}</h3>
+        <p class="mt-2 text-sm leading-relaxed text-fg-dim">{p.body}</p>
+      </div>
+    ))}
+  </div>
+</Section>

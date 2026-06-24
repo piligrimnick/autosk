@@ -1,0 +1,29 @@
+---
+import Base from "../layouts/Base.astro";
+import Button from "../components/ui/Button.astro";
+import Icon from "../components/ui/Icon.astro";
+import { GITHUB_URL } from "../data/nav.ts";
+---
+<Base title="404 — not found · autosk">
+  <main
+    id="main"
+    class="relative mx-auto flex min-h-screen max-w-[1120px] flex-col items-center justify-center px-5 text-center"
+  >
+    <div class="page-aurora"></div>
+    <p class="eyebrow relative">error</p>
+    <h1 class="relative mt-4 font-mono text-6xl font-semibold text-fg">404</h1>
+    <p class="relative mt-4 max-w-md text-base leading-relaxed text-fg-dim">
+      That page parked somewhere we can't reach. Let's get you back on the happy path.
+    </p>
+    <div class="relative mt-8 flex flex-wrap items-center justify-center gap-3">
+      <Button href="/">
+        <Icon name="arrow" size={15} />
+        Back home
+      </Button>
+      <Button href={GITHUB_URL} variant="ghost" external>
+        <Icon name="github" size={16} />
+        GitHub
+      </Button>
+    </div>
+  </main>
+</Base>

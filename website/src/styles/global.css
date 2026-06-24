@@ -1,0 +1,161 @@
+@import "tailwindcss";
+@import "./tokens.css";
+
+/*
+ * Bridge the brand CSS variables (tokens.css) into Tailwind v4's theme so they
+ * become first-class utilities (bg-bg, text-fg, border-border, text-accent, …).
+ * `inline` makes Tailwind emit `var(--bg)` directly in the utility, so the
+ * runtime value still resolves from :root (and stays overridable).
+ */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-1: var(--bg-1);
+  --color-bg-2: var(--bg-2);
+  --color-bg-3: var(--bg-3);
+  --color-border: var(--border);
+
+  --color-fg: var(--fg);
+  --color-fg-dim: var(--fg-dim);
+  --color-fg-mute: var(--fg-mute);
+
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-ok: var(--ok);
+
+  --color-status-new: var(--status-new);
+  --color-status-work: var(--status-work);
+  --color-status-human: var(--status-human);
+  --color-status-done: var(--status-done);
+  --color-status-cancel: var(--status-cancel);
+
+  --color-task-id: var(--task-id);
+  --color-session-id: var(--session-id);
+  --color-workflow-name: var(--workflow-name);
+  --color-step-name: var(--step-name);
+  --color-agent-name: var(--agent-name);
+
+  --font-mono: var(--mono);
+  --font-sans: var(--sans);
+
+  --radius-brand: var(--radius);
+}
+
+/* ---- base ---- */
+html {
+  scroll-behavior: smooth;
+  /* offset anchored jumps so the sticky nav doesn't cover section headings */
+  scroll-padding-top: 5rem;
+  background: var(--bg);
+}
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--fg);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* A subtle top-of-page brand glow behind the hero. */
+.page-aurora {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 720px;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(60% 50% at 20% 0%, rgba(76, 141, 255, 0.16), transparent 70%),
+    radial-gradient(50% 45% at 85% 5%, rgba(110, 231, 183, 0.10), transparent 70%);
+}
+
+/* Selection uses the brand accent. */
+::selection {
+  background: rgba(76, 141, 255, 0.32);
+  color: var(--fg);
+}
+
+/* Thin, dark scrollbars to match the app. */
+* {
+  scrollbar-color: var(--bg-3) transparent;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* ---- reusable bits ---- */
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+}
+
+.link-underline {
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.link-underline:hover {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+
+/* Entity coloring inside code/diagrams (mirrors lazy mode). */
+.tok-task { color: var(--task-id); }
+.tok-session { color: var(--session-id); }
+.tok-workflow { color: var(--workflow-name); }
+.tok-step { color: var(--step-name); }
+.tok-agent { color: var(--agent-name); }
+.tok-comment { color: var(--fg-mute); }
+.tok-accent { color: var(--accent); }
+.tok-ok { color: var(--accent-2); }
+
+/* Animated reveal on scroll — gated behind motion preference AND JS presence.
+ * The `html.js` scope means a no-JS (or script-failure) visitor never has
+ * content hidden: the `js` class is only added by the inline head script, and
+ * only then does the reveal-on-scroll JS run to add `.is-visible`. */
+@media (prefers-reduced-motion: no-preference) {
+  html.js .reveal {
+    opacity: 0;
+    transform: translateY(14px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  html.js .reveal.is-visible {
+    opacity: 1;
+    transform: none;
+  }
+  .bounce-arrow {
+    animation: dash 1.6s linear infinite;
+  }
+}
+
+/* Live "streaming" indicator dot (DD-4 transcript mock). */
+.streaming-dot {
+  color: var(--accent-2);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .streaming-dot {
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes dash {
+  to {
+    stroke-dashoffset: -16;
+  }
+}

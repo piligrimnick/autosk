@@ -1,0 +1,124 @@
+---
+import "../styles/global.css";
+
+interface Props {
+  title?: string;
+  description?: string;
+  /** Path (relative to site root) of the social card image. */
+  ogImage?: string;
+}
+const {
+  title = "autosk — run your coding agents in a loop",
+  description = "Local-first task tracking and code-defined workflows that drive your coding agents through a real pipeline you can watch, steer, and trust.",
+  ogImage = "/media/hero.png",
+} = Astro.props;
+
+const canonical = new URL(Astro.url.pathname, Astro.site);
+const ogURL = new URL(ogImage, Astro.site);
+---
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Mark JS as present BEFORE first paint so the reveal-on-scroll CSS only
+         hides content when JS can reveal it again. No-JS visitors never get the
+         `js` class, so every section stays visible (see global.css). -->
+    <script is:inline>document.documentElement.classList.add("js");</script>
+    <meta name="generator" content={Astro.generator} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="canonical" href={canonical} />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#16181d" />
+
+    <title>{title}</title>
+    <meta name="description" content={description} />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogURL} />
+    <meta property="og:site_name" content="autosk" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogURL} />
+  </head>
+  <body class="min-h-screen bg-bg text-fg antialiased">
+    <a
+      href="#main"
+      class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-accent focus:px-3 focus:py-2 focus:text-white"
+      >Skip to content</a
+    >
+    <slot />
+
+    <!-- Click-to-copy: any element with [data-copy] writes its value to the
+         clipboard and flips its label/icon briefly. Pure progressive
+         enhancement; the page is fully usable without JS. -->
+    <script>
+      function flash(btn: HTMLElement) {
+        const copyI = btn.querySelector<HTMLElement>(".copy-i");
+        const checkI = btn.querySelector<HTMLElement>(".check-i");
+        const label = btn.querySelector<HTMLElement>(".copy-label");
+        const prev = label?.textContent ?? "";
+        copyI?.classList.add("hidden");
+        checkI?.classList.remove("hidden");
+        if (label) label.textContent = "Copied";
+        window.setTimeout(() => {
+          copyI?.classList.remove("hidden");
+          checkI?.classList.add("hidden");
+          if (label) label.textContent = prev || "Copy";
+        }, 1400);
+      }
+
+      document.querySelectorAll<HTMLElement>("[data-copy]").forEach((el) => {
+        el.addEventListener("click", async () => {
+          const text = el.getAttribute("data-copy") ?? "";
+          try {
+            await navigator.clipboard.writeText(text);
+          } catch {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            try {
+              document.execCommand("copy");
+            } catch {
+              /* clipboard unavailable — no-op */
+            }
+            ta.remove();
+          }
+          flash(el);
+        });
+      });
+    </script>
+
+    <!-- Reveal-on-scroll, gated entirely on prefers-reduced-motion. -->
+    <script>
+      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const els = document.querySelectorAll<HTMLElement>(".reveal");
+      if (reduce || !("IntersectionObserver" in window)) {
+        els.forEach((el) => el.classList.add("is-visible"));
+      } else {
+        const io = new IntersectionObserver(
+          (entries) => {
+            for (const e of entries) {
+              if (e.isIntersecting) {
+                e.target.classList.add("is-visible");
+                io.unobserve(e.target);
+              }
+            }
+          },
+          { rootMargin: "0px 0px -8% 0px", threshold: 0.06 },
+        );
+        els.forEach((el) => io.observe(el));
+      }
+    </script>
+  </body>
+</html>
