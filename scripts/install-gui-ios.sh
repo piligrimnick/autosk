@@ -90,6 +90,7 @@ tauri() {
 # --open short-circuits the CLI build/install flow.
 if [ "$open_xcode" -eq 1 ]; then
   [ -d "$apple" ] || tauri ios init
+  "$repo_root/scripts/sync-gui-ios-icons.sh"
   echo "install-gui-ios: opening Xcode project — select your device and press Run"
   tauri ios open
   exit 0
@@ -104,6 +105,11 @@ if [ "$skip_build" -eq 0 ]; then
       echo "install-gui-ios: WARNING: APPLE_DEVELOPMENT_TEAM is unset; 'tauri ios init' may prompt for a signing team" >&2
     tauri ios init
   fi
+  # `tauri ios init` seeds the asset catalog with the stock Tauri logo and
+  # ignores gui/src-tauri/icons/ios/, so sync the committed custom icon set into
+  # the (gitignored, regenerated) catalog before every build — this also fixes
+  # an existing gen/apple created before the custom icons were committed.
+  "$repo_root/scripts/sync-gui-ios-icons.sh"
   echo "install-gui-ios: building release IPA (export-method=$export_method, target=$target)"
   tauri ios build --export-method "$export_method" --target "$target"
 fi

@@ -424,8 +424,12 @@ jobs:
             > "$GITHUB_WORKSPACE/private_keys/AuthKey_${APPLE_API_KEY}.p8"
 
       # gen/apple is gitignored and regenerated here every run, so every iOS
-      # customization (bundle id app.autosk.gui, icons, capabilities) MUST live
-      # in tauri.conf.json — never hand-edited in the generated Xcode project.
+      # customization (bundle id app.autosk.gui, capabilities) MUST live in
+      # tauri.conf.json — never hand-edited in the generated Xcode project.
+      # The one exception is the app icon: `tauri ios init` seeds the asset
+      # catalog with the stock Tauri logo and ignores gui/src-tauri/icons/ios/,
+      # so sync-gui-ios-icons.sh copies the committed custom icon set into the
+      # regenerated catalog (run between `ios init` and `ios build` below).
       #
       # Invoke the CLI via `npm exec` (NOT `./node_modules/.bin/tauri`): `ios init`
       # bakes the "Build Rust Code" Xcode phase command from how the CLI was
@@ -456,6 +460,7 @@ jobs:
           IOS_MOBILE_PROVISION: ${{ secrets.APPLE_IOS_MOBILE_PROVISION }}
         run: |
           npm exec -- tauri ios init
+          ../scripts/sync-gui-ios-icons.sh
           npm exec -- tauri ios build \
             --export-method app-store-connect \
             --build-number "${{ github.run_number }}"
