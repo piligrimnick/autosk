@@ -31,20 +31,24 @@ skill).
 
 ## B. CLI (`autosk`)
 
-- [ ] **B1.** Global behavior — `--json`, `-q/--quiet`; daemon auto-spawn; read- vs write-clients
-- [ ] **B2.** `init` + implicit auto-init (env: `AUTOSK_NO_AUTOINIT`, `AUTOSK_AUTOINIT_ASSUME_YES`)
-- [ ] **B3.** Task lifecycle reads/edits — `create`, `show`, `list`/`ls`, `ready`, `next`, `update`
-- [ ] **B4.** Status flips — `done`, `cancel`, `reopen`
-- [ ] **B5.** Workflow ops — `enroll` (`--workflow`/`--step`), `resume` (`--to`)
-- [ ] **B6.** Dependencies — `block`, `unblock` (`--all`), `dep list`
-- [ ] **B7.** `comment` (add / list / edit / delete, `--author`)
-- [ ] **B8.** `metadata` (show / set / unset)
-- [ ] **B9.** `workflow` (list / show) — read-only
-- [ ] **B10.** `session`/`sess` (list / get / transcript / abort / input `--followup`)
-- [ ] **B11.** `project` (list / add / diagnostics)
-- [ ] **B12.** `ext` (add / list / remove / update; `-l/--local`, `--global`, `--dry-run`/`--check`)
-- [ ] **B13.** `version` (no auto-spawn)
-- [ ] **B14.** CLI env vars — `AUTOSK_AGENT`, `AUTOSK_CWD`, `AUTOSK_SOCK`, `AUTOSKD_BIN`
+> Documented in **[docs/cli.md](../cli.md)** (complete verb/flag/env reference +
+> scripting recipes). Cross-linked from `README.md`, `AGENTS.md`,
+> `docs/concepts.md`, `docs/daemon.md`.
+
+- [x] **B1.** Global behavior — `--json`, `-q/--quiet`; daemon auto-spawn; read- vs write-clients
+- [x] **B2.** `init` + implicit auto-init (env: `AUTOSK_NO_AUTOINIT`, `AUTOSK_AUTOINIT_ASSUME_YES`)
+- [x] **B3.** Task lifecycle reads/edits — `create`, `show`, `list`/`ls`, `ready`, `next`, `update`
+- [x] **B4.** Status flips — `done`, `cancel`, `reopen`
+- [x] **B5.** Workflow ops — `enroll` (`--workflow`/`--step`), `resume` (`--to`)
+- [x] **B6.** Dependencies — `block`, `unblock` (`--all`), `dep list`
+- [x] **B7.** `comment` (add / list / edit / delete, `--author`)
+- [x] **B8.** `metadata` (show / set / unset)
+- [x] **B9.** `workflow` (list / show) — read-only
+- [x] **B10.** `session`/`sess` (list / get / transcript / abort / input `--followup`)
+- [x] **B11.** `project` (list / add / diagnostics)
+- [x] **B12.** `ext` (add / list / remove / update; `-l/--local`, `--global`, `--dry-run`/`--check`)
+- [x] **B13.** `version` (no auto-spawn)
+- [x] **B14.** CLI env vars — `AUTOSK_AGENT`, `AUTOSK_CWD`, `AUTOSK_SOCK`, `AUTOSKD_BIN`
 
 ## C. Lazy TUI (`autosk lazy`)
 

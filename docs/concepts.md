@@ -446,6 +446,8 @@ the full reconciliation rules.
 
 ## Where to next
 
+- **Run every verb** → [docs/cli.md](cli.md) (the `autosk` CLI reference:
+  global behavior, all verbs + flags, env vars, scripting recipes).
 - **Drive tasks through a pipeline** → [docs/workflows.md](workflows.md)
   (workflows & agents as code, the `feature-dev` reference workflow, isolation).
 - **Teach a project new workflows/agents** → [docs/extensions.md](extensions.md).

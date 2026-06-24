@@ -114,6 +114,9 @@ iPad, or iPhone (a compact single-pane layout), see
 
 ### CLI
 
+The `autosk` CLI is the scriptable front end — every verb, flag, env var, and a
+few scripting recipes are in **[docs/cli.md](docs/cli.md)**. A taste:
+
 1. **Create your first task.** using the CLI:
    ```bash
    cd ~/your/project
