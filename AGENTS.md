@@ -75,6 +75,18 @@ Backend check runs from `gui/src-tauri/`:
 
 - `cargo check` — typecheck the Tauri backend (a self-contained crate)
 
+### Marketing site (`website/`)
+
+The landing page is a static **Astro + Tailwind v4** site (dark-first, reuses the
+GUI brand tokens) with **no backend** — `npm run build` emits a plain `dist/`
+deployable to any static host. Checks run from `website/`:
+
+- `npm install` — install (uses `website/package-lock.json`)
+- `npm run dev` — `astro dev` at http://localhost:4321
+- `npm run build` — `astro build` → `website/dist/`
+- `npm run check` — `astro check` (type/diagnostics)
+- `npm run preview` — serve the built `dist/` locally
+
 App icons: sources live in `gui/src-tauri/icons/src/` (`autosk.icon` +
 `autosk.png`) and all binary icon artifacts under `icons/` are stored in Git LFS
 (run `git lfs install` after cloning). Regenerate the Liquid Glass `Assets.car` +
@@ -114,6 +126,9 @@ is in the script header.
     installed by the daemon's first-run bootstrap
 - `gui/` — the Tauri desktop app: `src/` (React + Vite front end), `src-tauri/`
   (thin Tauri backend, a pure JSON-RPC client of `autoskd`; standalone cargo crate)
+- `website/` — the marketing landing page: a static Astro + Tailwind v4 site
+  (dark-first, reuses the GUI brand tokens), no backend; `npm run build` →
+  `website/dist/`, deployable to any static host (see `website/README.md`)
 - `scripts/` — `package-autoskd.sh` (release packaging of the `autoskd` binary),
   `publish-extensions.sh` (publish the `@autosk/*` extension packages to npm),
   `clean-layout-test.sh` (the clean-machine auto-spawn smoke),
@@ -133,6 +148,7 @@ is in the script header.
 - `docs/lazy.md` — the `autosk lazy` interactive TUI
 - `gui/README.md` — the Tauri desktop GUI (architecture, scripts, local vs remote modes)
 - `daemon/README.md` — the Bun daemon workspace overview
+- `website/README.md` — the marketing landing page (Astro + Tailwind stack, dev/build/preview commands, structure)
 
 ## Conventions
 
