@@ -11,6 +11,11 @@ For distribution it is compiled to a standalone binary with `bun build
 --compile`, which embeds the Bun runtime — **no global `bun` is needed at
 runtime**.
 
+> **New here?** [docs/daemon-tutorial.md](daemon-tutorial.md) is the
+> learn-by-doing companion: run your own daemon, drive a task through a live
+> session + transcript, serve two projects from one daemon, and expose it over
+> TCP for the GUI.
+
 > **Clean break from v1.** `autoskd` stores tasks as **files** under `.autosk/`.
 > It does **not** read the old `.autosk/db` database; there is no migrator. A
 > project that still has a v1 `.autosk/db` must be opened with the last v1

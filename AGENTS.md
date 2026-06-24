@@ -124,6 +124,7 @@ is in the script header.
 - `docs/plans/yyyymmdd-*.md` — design plans for feature development
 - `docs/concepts.md` — core concepts & data model (task model, status machine + ready set, blockers, metadata/`step_visits`, comments, `.autosk/` layout + hybrid ownership)
 - `docs/daemon.md` — `autoskd`, the Bun daemon (JSON-RPC, auto-spawn, sole owner of `.autosk/`)
+- `docs/daemon-tutorial.md` — learn-by-doing: run your own daemon, watch a live session, serve many projects, expose it over TCP
 - `docs/workflows.md` — code-based workflows + agents (the `@autosk/sdk` contracts)
 - `docs/extensions.md` — the extension system (discovery, factory, AutoskAPI, bundled extensions)
 - `docs/extensions-tutorial.md` — learn-by-doing: write, run, break & recover your first extension

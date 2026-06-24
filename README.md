@@ -245,6 +245,10 @@ What the daemon does for each task in `work` status:
 
 If the agent fails to transition cleanly, the daemon parks the task to `human` and waits for you to resume it (`autosk resume <id>`).
 
+Want to see all of this for yourself? The [daemon tutorial](docs/daemon-tutorial.md)
+walks you through running your own daemon, watching a live session + transcript,
+serving two projects from one daemon, and exposing it over TCP for the GUI.
+
 ```bash
 autosk session list                  # one row per agent run in this project
 autosk session get <id>

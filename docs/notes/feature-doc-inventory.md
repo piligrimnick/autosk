@@ -80,9 +80,11 @@ skill).
 
 ## E. Daemon (`autoskd`)
 
-> Documented in **[docs/daemon.md](../daemon.md)** (cross-linked from
-> `README.md`, `AGENTS.md`, `docs/concepts.md`, `docs/workflows.md`,
-> `docs/extensions.md`, `docs/gui-release.md`).
+> Documented in **[docs/daemon.md](../daemon.md)** (reference) plus the
+> learn-by-doing **[docs/daemon-tutorial.md](../daemon-tutorial.md)** (run your
+> own daemon → live session + transcript → multi-project → TCP for the GUI).
+> Cross-linked from `README.md`, `AGENTS.md`, `docs/concepts.md`,
+> `docs/workflows.md`, `docs/extensions.md`, `docs/gui-release.md`.
 
 - [x] **E1.** Overview & architecture (one daemon per host, sole owner of `.autosk/`, pure-client front ends)
 - [x] **E2.** Lifecycle — auto-spawn, single-instance lock, crash recovery, idle-shutdown
