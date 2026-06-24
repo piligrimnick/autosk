@@ -284,6 +284,10 @@ You wrote a real autosk extension and saw the whole lifecycle:
 
 ### Where to go next
 
+- **A real agent.** Tutorial 2,
+  [a practical Claude Code workflow](extensions-tutorial-claude.md), replaces the
+  toy `onRun` with `@autosk/claude-agent` — Claude codes in a per-task git
+  worktree, parks at a human gate, and leaves its work on a branch you merge.
 - **A whole pipeline.** The reference workflow `feature-dev` chains several
   `@autosk/pi-agent` roles (`dev → review → docs → validator → accept`). See
   [docs/workflows.md → The reference workflow](workflows.md#the-reference-workflow-feature-dev).

@@ -490,7 +490,9 @@ discovery/override rules.
 
 > Prefer a guided walkthrough? The
 > [extension tutorial](extensions-tutorial.md) builds a runnable workflow from
-> an empty directory, then shows the discover → run → break → recover loop.
+> an empty directory, then shows the discover → run → break → recover loop; the
+> [Claude Code workflow tutorial](extensions-tutorial-claude.md) wires a real
+> `claudeAgent` into a per-task worktree end to end.
 
 A minimal two-step flow with a human gate:
 

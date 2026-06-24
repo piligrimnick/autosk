@@ -9,9 +9,11 @@ the hooks your code registers.
 
 This page covers how extensions are discovered and loaded. For the
 `WorkflowDefinition` / `AgentDefinition` contracts your extension registers, see
-[docs/workflows.md](workflows.md). If you'd rather learn by building one, the
-[extension tutorial](extensions-tutorial.md) walks you from an empty directory
-to a workflow you can run (and deliberately break) in a few minutes.
+[docs/workflows.md](workflows.md). If you'd rather learn by building one, two
+tutorials walk you through it: the [extension tutorial](extensions-tutorial.md)
+goes from an empty directory to a workflow you can run (and deliberately break)
+in a few minutes, and the [Claude Code workflow tutorial](extensions-tutorial-claude.md)
+wires a real `@autosk/claude-agent` agent into a per-task git worktree.
 
 ## The entry point — a default-export factory
 

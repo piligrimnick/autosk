@@ -162,8 +162,9 @@ iPad, or iPhone (a compact single-pane layout), see
    `autosk ext remove` to inspect or drop entries, or `autosk ext update` to
    bump floating npm extensions to their latest registry version. New to
    extensions? The [extension tutorial](docs/extensions-tutorial.md) builds one
-   from scratch; [docs/extensions.md](docs/extensions.md) is the full contract,
-   and [docs/workflows.md](docs/workflows.md) covers full workflows.
+   from scratch and the [Claude Code workflow tutorial](docs/extensions-tutorial-claude.md)
+   wires in a real agent; [docs/extensions.md](docs/extensions.md) is the full
+   contract, and [docs/workflows.md](docs/workflows.md) covers full workflows.
 
 ## How it works
 
