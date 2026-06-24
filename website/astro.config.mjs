@@ -3,9 +3,9 @@ import { defineConfig } from "astro/config";
 import tailwindcss from "@tailwindcss/vite";
 
 // Static, zero-backend marketing site. `site` is used for absolute OG/canonical
-// URLs; update it once the hosting/domain decision (plan §10) is made.
+// URLs (Cloudflare Pages, custom domain autosk.app).
 export default defineConfig({
-  site: "https://autosk.dev",
+  site: "https://autosk.app",
   vite: {
     plugins: [tailwindcss()],
   },
