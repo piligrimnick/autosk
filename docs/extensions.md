@@ -385,6 +385,11 @@ Not every extension is bootstrapped. These you add explicitly (with
   the mounted `~/.pi`. Not bootstrapped: `autosk ext add npm:@autosk/feature-dev-docker`.
   Docker isolation is just `dockerSandbox({ image })` from the bootstrapped
   `@autosk/sandbox` — there is no separate isolation-provider extension to add.
+- **[`@autosk/merge-to-current`](../daemon/extensions/merge-to-current/README.md)** —
+  a single-step workflow that merges a task's `autosk/<task-id>` branch **into
+  the branch you currently have checked out**, running non-isolated in the
+  project's working tree (`merge → done | human`, with full rollback on failure).
+  Not bootstrapped: `autosk ext add npm:@autosk/merge-to-current`.
 
 The agent the Claude workflows use is **not** provisioned by the bootstrap — it
 is an opt-in alternative harness you can also wire into your own workflow
@@ -401,6 +406,10 @@ is an opt-in alternative harness you can also wire into your own workflow
   neither `autosk` nor a mounted daemon socket. (The standalone
   [`autoskd mcp`](daemon.md#the-autoskd-mcp-tool-server) stdio server stays for
   external use.)
+
+For the full catalog of these shipped workflows and agents — graphs, step
+tables, config knobs, install/enroll how-tos, and an end-to-end tutorial — see
+**[docs/shipped.md](shipped.md)**.
 
 ## Writing your own
 

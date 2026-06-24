@@ -126,6 +126,7 @@ is in the script header.
 - `docs/daemon.md` — `autoskd`, the Bun daemon (JSON-RPC, auto-spawn, sole owner of `.autosk/`)
 - `docs/daemon-tutorial.md` — learn-by-doing: run your own daemon, watch a live session, serve many projects, expose it over TCP
 - `docs/workflows.md` — code-based workflows + agents (the `@autosk/sdk` contracts)
+- `docs/shipped.md` — catalog of the shipped workflows (`feature-dev`(`-cc`/`-docker`), `merge-to-current`) and agents (`pi-agent`, `claude-agent`): reference + how-to + tutorial
 - `docs/extensions.md` — the extension system (discovery, factory, AutoskAPI, bundled extensions)
 - `docs/extensions-tutorial.md` — learn-by-doing: write, run, break & recover your first extension
 - `docs/extensions-tutorial-claude.md` — learn-by-doing: a practical Claude Code workflow (claude-agent + worktree)

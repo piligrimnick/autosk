@@ -486,6 +486,25 @@ your `feature-dev` then replaces the provisioned one. See
 [docs/extensions.md → Writing your own](extensions.md#writing-your-own) for the
 discovery/override rules.
 
+## Other shipped workflows
+
+`feature-dev` is one of several workflows that ship as `@autosk/*` packages.
+Three more are **opt-in** (add them with
+[`autosk ext add`](extensions.md#managing-extensions)):
+
+- **`@autosk/feature-dev-cc`** — the Claude Code twin of `feature-dev` (the same
+  graph driven by [`claudeAgent`](#agent-definitions) roles).
+- **`@autosk/feature-dev-docker`** — `feature-dev` with each agent step in a
+  per-task [`dockerSandbox`](#dockersandbox-image--a-per-task-container) container.
+- **`@autosk/merge-to-current`** — a single non-isolated `merge` step that
+  integrates a task's `autosk/<task-id>` branch into the branch you currently
+  have checked out (`merge → done | human`), with full rollback on failure.
+
+See **[docs/shipped.md](shipped.md)** for the full catalog — graphs, step
+tables, config knobs, install/enroll how-tos, and an end-to-end tutorial — and
+for the two shipped agents ([`@autosk/pi-agent`](shipped.md#autoskpi-agent) /
+[`@autosk/claude-agent`](shipped.md#autoskclaude-agent)).
+
 ## Make your own workflow
 
 > Prefer a guided walkthrough? The

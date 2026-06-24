@@ -98,19 +98,31 @@ skill).
 
 ## F. Workflows (shipped)
 
-- [ ] **F1.** Workflow concepts (`WorkflowDefinition`, `firstStep`, steps, `onTransit`, visit caps, `statusStep`)
-- [ ] **F2.** `@autosk/feature-dev` — reference workflow, bootstrapped on first run
-- [ ] **F3.** `@autosk/feature-dev-cc` — Claude Code variant
-- [ ] **F4.** `@autosk/feature-dev-docker` — Docker-isolation variant
-- [ ] **F5.** `@autosk/merge-to-current` — single-step merge of the task branch
-- [ ] **F6.** Writing your own workflow
+> Shipped catalog (reference + how-to + tutorial) in
+> **[docs/shipped.md](../shipped.md)**; the `WorkflowDefinition` / `onTransit` /
+> `statusStep` contracts and "Make your own workflow" live in
+> **[docs/workflows.md](../workflows.md)**. Cross-linked from `README.md`,
+> `AGENTS.md`, `docs/extensions.md`.
+
+- [x] **F1.** Workflow concepts (`WorkflowDefinition`, `firstStep`, steps, `onTransit`, visit caps, `statusStep`)
+- [x] **F2.** `@autosk/feature-dev` — reference workflow, bootstrapped on first run
+- [x] **F3.** `@autosk/feature-dev-cc` — Claude Code variant
+- [x] **F4.** `@autosk/feature-dev-docker` — Docker-isolation variant
+- [x] **F5.** `@autosk/merge-to-current` — single-step merge of the task branch
+- [x] **F6.** Writing your own workflow
 
 ## G. Agents (shipped)
 
-- [ ] **G1.** `AgentDefinition` contract + `AgentRunContext` (onRun/onSteer/onFollowup/onAbort)
-- [ ] **G2.** `@autosk/pi-agent` (`pi --mode rpc`)
-- [ ] **G3.** `@autosk/claude-agent` (Claude Code `claude -p`)
-- [ ] **G4.** Interactive (taskless) chat sessions & named agents
+> Shipped agents (reference + interactive-chat how-to) in
+> **[docs/shipped.md](../shipped.md)**; the `AgentDefinition` /
+> `AgentRunContext` contract and named-agent / interactive-session model live in
+> **[docs/workflows.md](../workflows.md)** and
+> **[docs/daemon.md](../daemon.md#interactive-taskless-sessions)**.
+
+- [x] **G1.** `AgentDefinition` contract + `AgentRunContext` (onRun/onSteer/onFollowup/onAbort)
+- [x] **G2.** `@autosk/pi-agent` (`pi --mode rpc`)
+- [x] **G3.** `@autosk/claude-agent` (Claude Code `claude -p`)
+- [x] **G4.** Interactive (taskless) chat sessions & named agents
 
 ## H. Sandboxes / isolation (`@autosk/sandbox`)
 
@@ -135,7 +147,7 @@ skill).
 
 ## Doc-fix items (found during inventory)
 
-- [ ] **FIX-1.** `@autosk/merge-to-current` is shipped + documented at the package level but **missing** from `docs/workflows.md` and `docs/extensions.md` — add it when documenting F5.
+- [x] **FIX-1.** `@autosk/merge-to-current` is shipped + documented at the package level but **missing** from `docs/workflows.md` and `docs/extensions.md` — add it when documenting F5. *(Resolved: added to `docs/workflows.md` → Other shipped workflows, `docs/extensions.md` → Opt-in extensions, and the new `docs/shipped.md` catalog.)*
 
 ### Verified non-issues (no action)
 

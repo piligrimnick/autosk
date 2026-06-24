@@ -219,8 +219,12 @@ run and makes it available to every project. For a one-off
 agent, register a tiny workflow with a single agent step (plus a terminal
 `statusStep`).
 
-See [Make your own workflow](docs/workflows.md#make-your-own-workflow) to adapt
-it for your dev pipeline, and [docs/extensions.md](docs/extensions.md) for how
+The catalog of ready-to-use workflows and agents that ship as `@autosk/*`
+packages — `feature-dev` and its Claude Code / Docker twins, the
+`merge-to-current` integration step, and the `pi`/`claude` agents — is documented
+in [docs/shipped.md](docs/shipped.md). See
+[Make your own workflow](docs/workflows.md#make-your-own-workflow) to adapt one
+for your dev pipeline, and [docs/extensions.md](docs/extensions.md) for how
 extensions are discovered and loaded.
 
 ### The [daemon](docs/daemon.md)
