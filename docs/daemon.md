@@ -35,7 +35,8 @@ plain files the daemon writes atomically (tmp + rename):
 Because tasks are files, you can read or hand-edit them. The daemon picks up
 external edits via a startup scan + filesystem watcher (see [Hybrid file
 ownership](#hybrid-file-ownership) below). The registry of known projects lives
-at `~/.autosk/projects.json`.
+at `~/.autosk/projects.json`. For the task model, status machine, blockers, and
+`metadata` that these files hold, see [docs/concepts.md](concepts.md).
 
 ## Running it
 

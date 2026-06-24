@@ -32,7 +32,8 @@ A task has one of five statuses (unchanged from v1):
 
 `autosk ready` returns the *ready set*: `new` tasks with no open blocker. That's
 what humans and agents pull from. Enrolling a task moves it to `work`; the engine
-takes over from there.
+takes over from there. For the full task model, blockers, and `metadata` /
+`step_visits`, see [docs/concepts.md](concepts.md).
 
 ## Workflow definitions
 

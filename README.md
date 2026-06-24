@@ -167,6 +167,7 @@ iPad, or iPhone (a compact single-pane layout), see
 ## How it works
 
 autosk has four moving parts. You only need to touch them as you grow into them.
+For the full mental model, see [docs/concepts.md](docs/concepts.md).
 
 ### Tasks
 

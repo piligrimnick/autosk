@@ -18,13 +18,16 @@ skill).
 
 ## A. Core concepts & data model
 
-- [ ] **A1.** Project overview — what autosk is (task tracker + workflow engine + three front ends)
-- [ ] **A2.** Task model — `id ask-XXXXXX`, title, description, workflow/step, timestamps
-- [ ] **A3.** Task status machine (`new` / `work` / `human` / `done` / `cancel`) and the *ready set*
-- [ ] **A4.** Blockers & dependency graph (`blocked_by` / `blocks`)
-- [ ] **A5.** Free-form `metadata` bag + reserved `step_visits` (visit caps, manual reset)
-- [ ] **A6.** Task comments as the cross-agent channel
-- [ ] **A7.** On-disk `.autosk/` layout (tasks/, sessions/, extensions/, settings.json); manual editing; hybrid file ownership
+> Documented in **[docs/concepts.md](../concepts.md)** (cross-linked from
+> `README.md`, `AGENTS.md`, `docs/daemon.md`, `docs/workflows.md`).
+
+- [x] **A1.** Project overview — what autosk is (task tracker + workflow engine + three front ends)
+- [x] **A2.** Task model — `id ask-XXXXXX`, title, description, workflow/step, timestamps
+- [x] **A3.** Task status machine (`new` / `work` / `human` / `done` / `cancel`) and the *ready set*
+- [x] **A4.** Blockers & dependency graph (`blocked_by` / `blocks`)
+- [x] **A5.** Free-form `metadata` bag + reserved `step_visits` (visit caps, manual reset)
+- [x] **A6.** Task comments as the cross-agent channel
+- [x] **A7.** On-disk `.autosk/` layout (tasks/, sessions/, extensions/, settings.json); manual editing; hybrid file ownership
 
 ## B. CLI (`autosk`)
 
