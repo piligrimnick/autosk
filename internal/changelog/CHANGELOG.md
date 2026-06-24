@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-06-24
+
 ### Added
 - **`AUTOSK_SKIP_SHELL_PATH`** env knob disables the daemon's startup login-shell `PATH` probe.
 
