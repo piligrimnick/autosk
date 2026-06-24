@@ -46,8 +46,9 @@ for the full design.
     (interrupted
     sessions → `failed: daemon_restart`, task → `human`).
   - **JSON-RPC v2 server** (`src/rpc/`) — JSON-lines over UDS (default
-    `~/.autosk/daemon.sock`, `$AUTOSK_SOCK`) plus an opt-in TCP transport with
-    token auth; single-instance via an atomic pidfile lock; notification fan-out
+    `~/.autosk/daemon.sock`, `$AUTOSK_SOCK`) plus a TCP transport with token auth
+    (on by default at `0.0.0.0:7077`, override via `--tcp [HOST:]PORT`);
+    single-instance via an atomic pidfile lock; notification fan-out
     (`task-changed`, `session-event`, `project-changed`); `session.subscribe`
     replay-then-tail; and idle-shutdown.
 

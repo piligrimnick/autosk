@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`autoskd` now listens on TCP `0.0.0.0:7077` by default**; override via `autoskd serve --tcp [HOST:]PORT`.
+
 ## [0.2.0] — 2026-06-24
 
 > **Clean break — autosk v2.** A full rewrite: tasks, comments, and sessions are

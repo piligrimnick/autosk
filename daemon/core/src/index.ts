@@ -19,6 +19,17 @@ export { VERSION, commit } from "./version.ts";
 import { startDaemon } from "./rpc/index.ts";
 import { runMcpServer } from "./mcp/index.ts";
 
+/**
+ * Default TCP address the daemon also listens on (token auth) unless an explicit
+ * `--tcp [HOST:]PORT` overrides it. Enabled by default so an auto-spawned
+ * daemon is reachable over TCP (e.g. for the GUI / remote tools) with zero
+ * configuration; `0.0.0.0` binds all interfaces (LAN-reachable, token-gated).
+ * The bind is non-fatal (falls back to UDS-only if the port is taken). A TCP
+ * listener also keeps the daemon long-lived (idle-shutdown off).
+ */
+const DEFAULT_TCP_HOST = "0.0.0.0";
+const DEFAULT_TCP_PORT = 7077;
+
 /** Parsed `serve` flags. */
 interface ServeArgs {
   sock?: string;
@@ -79,7 +90,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   const result = await startDaemon({
     socketPath: args.sock,
-    tcp: args.tcp ?? null,
+    tcp: args.tcp ?? { host: DEFAULT_TCP_HOST, port: DEFAULT_TCP_PORT },
     engineOptions: args.workers !== undefined ? { workers: args.workers } : undefined,
   });
 

@@ -60,9 +60,9 @@ To run a daemon yourself (e.g. as a service, or to watch its logs), run the
 binary directly:
 
 ```bash
-autoskd                      # serve on the default socket
+autoskd                      # serve on the default socket + TCP 0.0.0.0:7077
 autoskd serve --sock /tmp/autosk.sock
-autoskd serve --tcp 0.0.0.0:7777     # also listen on TCP (token auth, see below)
+autoskd serve --tcp 0.0.0.0:7777     # override the default TCP address (token auth, see below)
 autoskd serve --workers 8            # worker-pool size (default 4)
 ```
 
@@ -72,7 +72,7 @@ autoskd serve --workers 8            # worker-pool size (default 4)
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--sock PATH` | `$AUTOSK_SOCK` → `~/.autosk/daemon.sock` | Unix-domain socket path. |
-| `--tcp [HOST:]PORT` | off | Also accept connections over TCP (token auth). Bare `PORT` binds `127.0.0.1`. |
+| `--tcp [HOST:]PORT` | `0.0.0.0:7077` | TCP listener address (token auth). Bare `PORT` binds `127.0.0.1`. Pass this to change host/port; TCP is on by default. |
 | `--workers N` | `4` | Size of the global FIFO worker pool (shared across all projects). |
 
 Environment knobs:
@@ -363,15 +363,21 @@ A few RPC semantics worth knowing:
 - **UDS (default).** A Unix-domain socket; parent dir `0700`, socket `0600`. No
   auth — filesystem permissions are the gate. Single-instance is enforced by an
   atomic pidfile lock (`<sock>.lock`, with dead-pid reclaim).
-- **TCP (opt-in).** `--tcp [HOST:]PORT` adds a TCP listener gated by a token: the
-  first request on a TCP connection must be `meta.auth {token}`. The token lives
-  at `~/.autosk/daemon-token` (`$AUTOSK_TOKEN_FILE`) and is created on first use.
-  Remote front ends (e.g. the GUI in remote mode) use this; a remote daemon must
-  be started explicitly (you can't auto-spawn across hosts).
-- **Idle-shutdown.** A UDS-mode daemon shuts itself down after the idle window
+- **TCP (on by default).** The daemon also listens on `0.0.0.0:7077` (all
+  interfaces, even when auto-spawned), gated by a token: the first request on a
+  TCP connection must be `meta.auth {token}`. The token lives at
+  `~/.autosk/daemon-token` (`$AUTOSK_TOKEN_FILE`) and is created on first use.
+  `--tcp [HOST:]PORT` overrides the address — e.g. `--tcp 127.0.0.1:7077` to
+  restrict it to loopback. Remote front ends (the GUI in remote mode) connect to
+  this; a remote daemon must be started explicitly (you can't auto-spawn across
+  hosts). A TCP bind failure (e.g. port in use) is non-fatal — the daemon logs it
+  and keeps serving UDS-only.
+- **Idle-shutdown.** A daemon shuts itself down after the idle window
   (`AUTOSK_IDLE_SECS`, default 30 min) when there are no live connections, no
   queued/running sessions, and no `status=work` tasks across loaded projects.
-  Disabled with `0`, and always off in TCP mode (a remote daemon is a service).
+  Disabled with `0`, and always off when a TCP listener is active (a TCP daemon
+  is a service) — which, since TCP is on by default, means idle-shutdown is off
+  unless the TCP bind fails.
 
 ## Inspecting the daemon from the CLI
 
