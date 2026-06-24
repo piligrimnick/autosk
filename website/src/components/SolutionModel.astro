@@ -16,12 +16,12 @@ const BOT = TOP + NODE_H;
 
 type Node = { step: string; agent: string; color: string };
 const steps: Node[] = [
-  { step: "dev", agent: "dev", color: "#4c8dff" },
-  { step: "review", agent: "review", color: "#9d7cd8" },
-  { step: "docs", agent: "docs", color: "#7dcfff" },
-  { step: "validator", agent: "validator", color: "#f2c14e" },
-  { step: "accept", agent: "accept", color: "#4ade80" },
-  { step: "cleanup", agent: "cleanup", color: "#828b9c" },
+  { step: "dev", agent: "@claude", color: "#4c8dff" },
+  { step: "review", agent: "@codex", color: "#9d7cd8" },
+  { step: "docs", agent: "@claude", color: "#7dcfff" },
+  { step: "validator", agent: "@your-agent", color: "#4ade80" },
+  { step: "accept", agent: "human", color: "#f2c14e" },
+  { step: "cleanup", agent: "your-script.ts", color: "#828b9c" },
   { step: "done", agent: "status", color: "#4ade80" },
 ];
 const x = (i: number) => 20 + i * (NODE_W + GAP);

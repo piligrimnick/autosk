@@ -45,7 +45,7 @@ website/
       404.astro
     layouts/Base.astro        # <head>, meta/OG, copy + reveal scripts
     components/
-      Nav · Hero · LogoStrip · Problem · SolutionModel · HowItWorks
+      Nav · Hero · Problem · SolutionModel · HowItWorks
       FeatureGrid · DeepDives (DeepDive) · Comparison · TrustBand
       FinalCTA · Footer
       ui/  Section · Button · Card · Badge · CodeBlock · Diagram · Icon

@@ -18,7 +18,7 @@ const heroSnippet = `<span class="tok-accent">$</span> autosk create <span class
         class="mt-5 text-balance text-4xl font-semibold leading-[1.08] tracking-tight text-fg sm:text-5xl md:text-6xl"
       >
         You don't need a smarter agent.<br class="hidden sm:block" />
-        <span class="text-accent"> You need a way to run them in a loop.</span>
+        <span class="text-accent"> You need a way to run them in <span class="marker-circle">loops<svg viewBox="0 0 240 100" aria-hidden="true" preserveAspectRatio="none"><path d="M42 34 C16 44 14 66 44 78 C92 94 168 92 204 76 C230 64 230 40 198 28 C150 12 74 14 40 32 C30 37 28 44 40 50" /></svg></span>.</span>
       </h1>
       <p class="mx-auto mt-6 max-w-2xl text-pretty text-base leading-relaxed text-fg-dim sm:text-lg">
         Local-first task tracking and code-defined workflows that drive your coding agents —
@@ -69,3 +69,45 @@ const heroSnippet = `<span class="tok-accent">$</span> autosk create <span class
     </div>
   </div>
 </section>
+
+<style>
+  .marker-circle {
+    position: relative;
+    display: inline-block;
+    white-space: nowrap;
+  }
+  .marker-circle > svg {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 150%;
+    height: 174%;
+    transform: translate(-50%, -44%) rotate(-3deg);
+    overflow: visible;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .marker-circle > svg path {
+    fill: none;
+    stroke: #ef4444;
+    stroke-width: 3.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: 0.92;
+    filter: drop-shadow(0 0 1px rgba(239, 68, 68, 0.4));
+    stroke-dasharray: 760;
+    stroke-dashoffset: 760;
+    animation: marker-draw 0.9s ease-out 0.45s forwards;
+  }
+  @keyframes marker-draw {
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .marker-circle > svg path {
+      animation: none;
+      stroke-dashoffset: 0;
+    }
+  }
+</style>
