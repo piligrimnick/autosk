@@ -1,0 +1,17 @@
+---
+import Section from "./ui/Section.astro";
+import Card from "./ui/Card.astro";
+import { features } from "../data/features.ts";
+---
+<Section
+  id="features"
+  eyebrow="why autosk"
+  heading="Depth where it counts."
+  lead="The selling points lead with what is genuinely new: process as code, agents that hand off with guardrails, and a local file model with nothing to migrate."
+>
+  <div class="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    {features.map((f) => (
+      <Card icon={f.icon} title={f.title} accent={f.accent}>{f.body}</Card>
+    ))}
+  </div>
+</Section>

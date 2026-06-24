@@ -1,0 +1,31 @@
+---
+/**
+ * Section wrapper — max-width container with consistent vertical rhythm plus
+ * optional mono eyebrow + heading + lead slots (plan §7).
+ */
+interface Props {
+  id?: string;
+  eyebrow?: string;
+  heading?: string;
+  lead?: string;
+  /** Center the header block + constrain its width. */
+  center?: boolean;
+  class?: string;
+}
+const { id, eyebrow, heading, lead, center = false, class: cls = "" } = Astro.props;
+const hasHeader = Boolean(eyebrow || heading || lead);
+---
+<section id={id} class={`relative mx-auto w-full max-w-[1120px] px-5 py-20 sm:px-8 sm:py-24 ${cls}`}>
+  {hasHeader && (
+    <header class={`reveal ${center ? "mx-auto max-w-2xl text-center" : "max-w-3xl"}`}>
+      {eyebrow && <p class="eyebrow mb-3">{eyebrow}</p>}
+      {heading && (
+        <h2 class="text-balance text-3xl font-semibold tracking-tight text-fg sm:text-4xl">
+          {heading}
+        </h2>
+      )}
+      {lead && <p class="mt-4 text-base leading-relaxed text-fg-dim sm:text-lg">{lead}</p>}
+    </header>
+  )}
+  <slot />
+</section>

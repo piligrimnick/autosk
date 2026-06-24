@@ -1,0 +1,61 @@
+---
+import Icon from "./Icon.astro";
+
+/**
+ * Terminal-styled code block (plan §7): mono, window chrome, optional title and
+ * a copy button. Pass the snippet as a pre-colored HTML string via the `code`
+ * prop — it is rendered verbatim with `set:html`, so literal newlines survive
+ * Astro's build-time `compressHTML` (slot children do not: their whitespace is
+ * collapsed before projection into the <pre>). Callers may color tokens with
+ * <span class="tok-*">. `copyText` is the plain text the copy button writes to
+ * the clipboard.
+ */
+interface Props {
+  title?: string;
+  copyText?: string;
+  /** Pre-colored HTML snippet, rendered verbatim (whitespace preserved). */
+  code?: string;
+  /** Hide the macOS-style traffic-light chrome (for inline snippets). */
+  bare?: boolean;
+  class?: string;
+}
+const { title, copyText, code, bare = false, class: cls = "" } = Astro.props;
+---
+<div
+  class={`group/code relative overflow-hidden rounded-xl border border-border bg-[#101216] shadow-[0_18px_50px_-24px_rgba(0,0,0,0.8)] ${cls}`}
+>
+  {!bare && (
+    <div class="flex items-center gap-3 border-b border-border/70 bg-bg-1 px-4 py-2.5">
+      <span class="flex gap-1.5" aria-hidden="true">
+        <span class="h-3 w-3 rounded-full bg-[#ef5350]/70"></span>
+        <span class="h-3 w-3 rounded-full bg-[#f2c14e]/70"></span>
+        <span class="h-3 w-3 rounded-full bg-[#4ade80]/70"></span>
+      </span>
+      {title && <span class="font-mono text-xs text-fg-mute">{title}</span>}
+      {copyText && (
+        <button
+          type="button"
+          data-copy={copyText}
+          class="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border bg-bg-2 px-2 py-1 font-mono text-[11px] text-fg-dim transition-colors hover:border-[#41495a] hover:text-fg"
+          aria-label="Copy to clipboard"
+        >
+          <Icon name="copy" size={13} class="copy-i" />
+          <Icon name="check" size={13} class="check-i hidden text-accent-2" />
+          <span class="copy-label">Copy</span>
+        </button>
+      )}
+    </div>
+  )}
+  {bare && copyText && (
+    <button
+      type="button"
+      data-copy={copyText}
+      class="absolute right-2 top-2 z-10 inline-flex items-center rounded-md border border-border bg-bg-2 p-1.5 text-fg-dim transition-colors hover:border-[#41495a] hover:text-fg"
+      aria-label="Copy to clipboard"
+    >
+      <Icon name="copy" size={13} class="copy-i" />
+      <Icon name="check" size={13} class="check-i hidden text-accent-2" />
+    </button>
+  )}
+  <pre class="overflow-x-auto px-4 py-4 font-mono text-[13px] leading-relaxed text-fg">{code ? <code set:html={code}></code> : <code><slot /></code>}</pre>
+</div>

@@ -1,0 +1,69 @@
+---
+import Section from "./ui/Section.astro";
+import CodeBlock from "./ui/CodeBlock.astro";
+
+const steps = [
+  {
+    n: "01",
+    title: "Create a task",
+    body: "A task is a small local file with an id, a title, and a status. No project to set up — the first write creates .autosk/.",
+    cmd: "autosk create",
+  },
+  {
+    n: "02",
+    title: "Enroll into a workflow",
+    body: "Hand the task to feature-dev (or your own workflow). The daemon picks it up and starts driving it through the graph.",
+    cmd: "autosk enroll",
+  },
+  {
+    n: "03",
+    title: "Watch it run",
+    body: "Open the lazy TUI or the GUI and the agent's transcript streams live into the detail pane — text, thinking, tool calls. Steer or abort mid-turn.",
+    cmd: "autosk lazy",
+  },
+];
+
+const snippet = `<span class="tok-comment"># 1. create a task</span>
+<span class="tok-accent">$</span> autosk create <span class="tok-ok">"Wire up the auth flow"</span>
+<span class="tok-task">ask-3f9b2c</span>
+
+<span class="tok-comment"># 2. enroll it into a workflow</span>
+<span class="tok-accent">$</span> autosk enroll <span class="tok-task">ask-3f9b2c</span> --workflow <span class="tok-workflow">feature-dev</span>
+
+<span class="tok-comment"># 3. watch the agents run, live</span>
+<span class="tok-accent">$</span> autosk lazy`;
+---
+<Section
+  id="how-it-works"
+  eyebrow="30 seconds"
+  heading="Create. Enroll. Watch."
+  lead="Almost no ceremony. Three commands take a one-line task from your head to a running agent pipeline you can observe."
+>
+  <div class="mt-12 grid gap-10 lg:grid-cols-[1.1fr_1fr] lg:items-start">
+    <ol class="space-y-4">
+      {steps.map((s) => (
+        <li class="reveal flex gap-4 rounded-xl border border-border bg-bg-1 p-5">
+          <span class="font-mono text-lg font-semibold text-accent">{s.n}</span>
+          <div>
+            <h3 class="text-base font-semibold text-fg">
+              {s.title}
+              <code class="ml-2 rounded bg-bg-3 px-1.5 py-0.5 font-mono text-xs font-normal text-fg-dim">{s.cmd}</code>
+            </h3>
+            <p class="mt-1.5 text-sm leading-relaxed text-fg-dim">{s.body}</p>
+          </div>
+        </li>
+      ))}
+    </ol>
+
+    <div class="reveal lg:sticky lg:top-24">
+      <CodeBlock
+        title="create → enroll → watch"
+        code={snippet}
+        copyText={`autosk create "Wire up the auth flow"\nautosk enroll ask-3f9b2c --workflow feature-dev\nautosk lazy`}
+      />
+      <p class="mt-3 text-center font-mono text-xs text-fg-mute">
+        Prefer the desktop app? The GUI shows the same live transcript.
+      </p>
+    </div>
+  </div>
+</Section>

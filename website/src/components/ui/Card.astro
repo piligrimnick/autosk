@@ -1,0 +1,33 @@
+---
+import Icon from "./Icon.astro";
+
+/** Feature card: icon chip + title + body (plan §7). */
+interface Props {
+  icon?: string;
+  title: string;
+  accent?: "accent" | "accent-2" | "human" | "step" | "agent";
+  class?: string;
+}
+const { icon, title, accent = "accent", class: cls = "" } = Astro.props;
+
+const chipColor: Record<string, string> = {
+  accent: "text-accent",
+  "accent-2": "text-accent-2",
+  human: "text-status-human",
+  step: "text-step-name",
+  agent: "text-agent-name",
+};
+---
+<article
+  class={`reveal group relative flex h-full flex-col rounded-xl border border-border bg-bg-1 p-5 transition-colors duration-150 hover:border-[#41495a] hover:bg-bg-2 ${cls}`}
+>
+  {icon && (
+    <span
+      class={`mb-4 inline-flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-bg-2 ${chipColor[accent]}`}
+    >
+      <Icon name={icon} size={20} />
+    </span>
+  )}
+  <h3 class="text-base font-semibold text-fg">{title}</h3>
+  <p class="mt-2 text-sm leading-relaxed text-fg-dim"><slot /></p>
+</article>

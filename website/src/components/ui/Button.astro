@@ -1,0 +1,45 @@
+---
+/**
+ * Button / link. Variants: primary (accent), ghost (outlined), link.
+ * Renders an <a> when `href` is set, otherwise a <button>. When `copy` is
+ * provided it becomes a click-to-copy control (handled by CodeBlock's global
+ * copy script via the data-copy attribute).
+ */
+interface Props {
+  href?: string;
+  variant?: "primary" | "ghost" | "link";
+  size?: "md" | "lg";
+  copy?: string;
+  external?: boolean;
+  class?: string;
+}
+const {
+  href,
+  variant = "primary",
+  size = "md",
+  copy,
+  external = false,
+  class: cls = "",
+} = Astro.props;
+
+const base =
+  "inline-flex items-center justify-center gap-2 rounded-[var(--radius)] font-medium transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
+const sizes: Record<string, string> = {
+  md: "px-4 py-2 text-sm",
+  lg: "px-5 py-2.5 text-[0.95rem]",
+};
+const variants: Record<string, string> = {
+  primary: "bg-accent text-white hover:bg-[#3d7df0] shadow-[0_1px_0_rgba(255,255,255,0.08)_inset]",
+  ghost: "border border-border bg-bg-2 text-fg hover:bg-bg-3 hover:border-[#41495a]",
+  link: "text-accent hover:text-fg px-0 py-0",
+};
+const klass = `${base} ${variant === "link" ? "" : sizes[size]} ${variants[variant]} ${cls}`;
+
+const copyAttrs = copy ? { "data-copy": copy } : {};
+const relAttrs = external ? { target: "_blank", rel: "noopener noreferrer" } : {};
+---
+{href ? (
+  <a href={href} class={klass} {...relAttrs}><slot /></a>
+) : (
+  <button type="button" class={klass} {...copyAttrs}><slot /></button>
+)}

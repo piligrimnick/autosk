@@ -1,0 +1,71 @@
+---
+import Button from "./ui/Button.astro";
+import CodeBlock from "./ui/CodeBlock.astro";
+import Icon from "./ui/Icon.astro";
+import { GITHUB_URL, BREW_INSTALL } from "../data/nav.ts";
+
+const heroSnippet = `<span class="tok-accent">$</span> autosk create <span class="tok-ok">"Wire up the auth flow"</span>
+<span class="tok-task">ask-3f9b2c</span>
+<span class="tok-accent">$</span> autosk enroll <span class="tok-task">ask-3f9b2c</span> --workflow <span class="tok-workflow">feature-dev</span>
+<span class="tok-comment"># the daemon runs the agent pipeline and returns when done or parked</span>`;
+---
+<section id="top" class="relative overflow-hidden">
+  <div class="page-aurora"></div>
+  <div class="relative mx-auto max-w-[1120px] px-5 pb-8 pt-16 sm:px-8 sm:pt-24">
+    <div class="reveal is-visible mx-auto max-w-3xl text-center">
+      <p class="eyebrow">task manager + workflow engine for coding agents</p>
+      <h1
+        class="mt-5 text-balance text-4xl font-semibold leading-[1.08] tracking-tight text-fg sm:text-5xl md:text-6xl"
+      >
+        You don't need a smarter agent.<br class="hidden sm:block" />
+        <span class="text-accent"> You need a way to run them in a loop.</span>
+      </h1>
+      <p class="mx-auto mt-6 max-w-2xl text-pretty text-base leading-relaxed text-fg-dim sm:text-lg">
+        Local-first task tracking and code-defined workflows that drive your coding agents —
+        Claude Code, pi, or your own — through a real pipeline you can watch, steer, and trust.
+      </p>
+
+      <div class="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+        <Button copy={BREW_INSTALL} size="lg" class="w-full sm:w-auto">
+          <Icon name="terminal" size={16} />
+          Install for macOS
+          <Icon name="copy" size={14} class="copy-i opacity-70" />
+          <Icon name="check" size={14} class="check-i hidden text-white" />
+        </Button>
+        <Button href={GITHUB_URL} variant="ghost" size="lg" external class="w-full sm:w-auto">
+          <Icon name="github" size={16} />
+          View on GitHub
+        </Button>
+      </div>
+      <p class="mt-3 font-mono text-xs text-fg-mute">
+        macOS · Linux · iOS — open source, MIT
+      </p>
+    </div>
+
+    <!-- Three front ends, side by side. -->
+    <div class="reveal mt-14">
+      <div
+        class="mx-auto max-w-5xl overflow-hidden rounded-2xl border border-border bg-bg-1 shadow-[0_40px_120px_-40px_rgba(0,0,0,0.85)]"
+      >
+        <img
+          src="/media/hero.png"
+          width="2560"
+          height="1440"
+          alt="autosk across three front ends: the lazy TUI streaming a transcript, the desktop GUI detail pane, and the mobile web view"
+          class="block h-auto w-full"
+          fetchpriority="high"
+          decoding="async"
+        />
+      </div>
+    </div>
+
+    <!-- Instant proof-of-simplicity terminal snippet. -->
+    <div class="reveal mx-auto mt-12 max-w-2xl">
+      <CodeBlock
+        title="terminal"
+        code={heroSnippet}
+        copyText={`autosk create "Wire up the auth flow"\nautosk enroll ask-3f9b2c --workflow feature-dev`}
+      />
+    </div>
+  </div>
+</section>

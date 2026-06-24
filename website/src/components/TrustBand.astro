@@ -1,0 +1,40 @@
+---
+import Section from "./ui/Section.astro";
+import Icon from "./ui/Icon.astro";
+
+const claims = [
+  {
+    icon: "database",
+    title: "No database",
+    body: "Everything is files in your repo — hand-editable and git-diffable.",
+  },
+  {
+    icon: "lifebuoy",
+    title: "Parks, never crashes",
+    body: "Interrupted work always lands in human, ready for a person to resume.",
+  },
+  {
+    icon: "code",
+    title: "Open source, MIT",
+    body: "Yours to read, fork, and run. No telemetry, no lock-in.",
+  },
+  {
+    icon: "lock",
+    title: "Signed & notarized",
+    body: "macOS cask; Linux binaries + AppImage/.deb; iOS via TestFlight.",
+  },
+];
+---
+<Section id="trust" eyebrow="yours to run" heading="Local, file-based, and open." center>
+  <div class="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    {claims.map((c) => (
+      <div class="reveal rounded-xl border border-border bg-bg-1 p-5 text-center">
+        <span class="mx-auto inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border bg-bg-2 text-accent-2">
+          <Icon name={c.icon} size={22} />
+        </span>
+        <h3 class="mt-4 text-base font-semibold text-fg">{c.title}</h3>
+        <p class="mt-2 text-sm leading-relaxed text-fg-mute">{c.body}</p>
+      </div>
+    ))}
+  </div>
+</Section>

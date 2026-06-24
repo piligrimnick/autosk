@@ -1,0 +1,45 @@
+---
+import Section from "./ui/Section.astro";
+import Icon from "./ui/Icon.astro";
+
+const cols = [
+  {
+    title: "Why not just use an agent directly?",
+    points: [
+      "You get a pipeline — multi-step, multi-role, with handoffs and guardrails — instead of one ephemeral chat.",
+      "You get parallelism — a sandbox per task — instead of stepping on your own working tree.",
+      "You get observability — live and persistent transcripts — instead of a headless one-shot you can't watch.",
+    ],
+  },
+  {
+    title: "Why not a task tracker (Jira / Linear)?",
+    points: [
+      "autosk isn't a ticket board — it's a runtime. Tasks aren't tickets; they're units the engine executes through agents.",
+      "Process lives in code, not a config UI, so it evolves with your repo in code review.",
+      "And you can still stop at step one and use it as a plain, file-based backlog.",
+    ],
+  },
+];
+---
+<Section
+  id="why-not"
+  eyebrow="why not just…"
+  heading="It's a runtime, not another chat or another board."
+  center
+>
+  <div class="mt-12 grid gap-4 md:grid-cols-2">
+    {cols.map((c) => (
+      <div class="reveal rounded-2xl border border-border bg-bg-1 p-6">
+        <h3 class="text-lg font-semibold text-fg">{c.title}</h3>
+        <ul class="mt-4 space-y-3">
+          {c.points.map((p) => (
+            <li class="flex gap-3 text-sm leading-relaxed text-fg-dim">
+              <Icon name="check" size={18} class="mt-0.5 shrink-0 text-accent" />
+              <span>{p}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    ))}
+  </div>
+</Section>
