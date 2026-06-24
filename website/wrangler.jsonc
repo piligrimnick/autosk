@@ -1,0 +1,13 @@
+{
+  // Static-assets-only Worker for the autosk marketing site.
+  // The Astro build emits `dist/`; Cloudflare serves it directly with no
+  // server script (no `main` entrypoint needed). Deploy with `npx wrangler deploy`.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "autosk",
+  "compatibility_date": "2026-06-01",
+  "assets": {
+    "directory": "./dist",
+    // Multi-page site: serve the generated 404.html for unmatched routes.
+    "not_found_handling": "404-page"
+  }
+}
