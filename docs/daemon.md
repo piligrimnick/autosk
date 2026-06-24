@@ -123,6 +123,49 @@ which the spawning agent bakes into the `--mcp-config` env block. `autosk` must
 be on `PATH` (or `$AUTOSK_BIN`); a missing binary returns a clear actionable
 error, not a silent failure.
 
+The **same three tools** (`transit` / `task` / `comment`) are also served by the
+daemon's other MCP surface — the [per-session host HTTP server](#the-per-session-host-http-mcp-server)
+below — over a different transport (HTTP, not stdio) and with a *direct-store*
+backend instead of the `autosk` shell-out. One tool surface, two transports.
+
+### The per-session host HTTP MCP server
+
+The `autoskd mcp` stdio server is for **external** harnesses you wire up
+yourself. The shipped agents get the same tools over a different transport,
+minted by the engine — you never start this one by hand: on every run-start the
+engine mints a **per-session, host-side HTTP MCP server** behind
+`ctx.newMCPServer()` (the agent-facing SDK detail is in
+[workflows.md → The host-side MCP server](workflows.md#the-host-side-mcp-server-ctxnewmcpserver)).
+It is the reachability seam for a **sandboxed** harness — a Claude Code process
+in a container, or a `pi` run in a worktree — that cannot see the daemon's Unix
+socket and may not have `autosk` on `PATH`.
+
+It is a hand-rolled `Bun.serve()` Streamable-HTTP endpoint (again no
+`@modelcontextprotocol/sdk`, so it survives `bun build --compile`):
+
+- **Ephemeral port, bound `0.0.0.0`.** It binds `port: 0` on all interfaces so a
+  Linux container reaching the host over the docker bridge
+  (`host.docker.internal`) connects — a loopback-only bind would refuse it. The
+  returned `url` still reads loopback (`http://127.0.0.1:<port>`) for the
+  host/worktree case.
+- **Bearer-token auth.** Each server mints a fresh 32-byte token; a `POST` whose
+  `Authorization: Bearer <token>` is wrong or missing is a hard `401`. The
+  **token + ephemeral port are the security boundary**, not the bind interface.
+- **Stateless `POST` → JSON.** One JSON-RPC request per `POST`, one response as
+  `application/json`; no `Mcp-Session-Id`.
+- **Direct-store backend.** Where the stdio server shells out to `autosk … --json`,
+  this runs `task` / `comment` straight against the daemon's own store (and the
+  engine for a workflow enroll) with **no `autosk` child** — so a thin container
+  image needs neither the CLI nor a mounted socket. Results are byte-identical to
+  the shell-out path. `transit` stays ack-only (advertised in task mode), exactly
+  as on the stdio server.
+
+The agent gets back `{ url, port, token, close }`, rewrites the host for its
+isolation topology with `sandbox.endpointFor(port)`, and hands the harness the
+bearer. `close()` is an explicit early release; the engine is the backstop owner
+and closes every minted server on each settle / finaliser / detach, so a
+forgetful agent never leaks a port across steps.
+
 ## What the daemon does for each task
 
 The engine has exactly one scheduling rule:
@@ -139,9 +182,10 @@ For each such task:
    not the engine's:** a step's agent may wrap its harness in a
    [sandbox](workflows.md#isolation-agent-owned-sandboxes) (a git worktree or a
    container) and run it there, but the engine knows nothing about it.
-2. On run start the engine mints a per-session, host-side HTTP MCP server
-   (`ctx.newMCPServer()`) for a sandboxed harness's tool surface, and closes it
-   on every settle / finaliser / detach so no port leaks across steps.
+2. On run start the engine mints a [per-session, host-side HTTP MCP
+   server](#the-per-session-host-http-mcp-server) (`ctx.newMCPServer()`) for a
+   sandboxed harness's tool surface, and closes it on every settle / finaliser /
+   detach so no port leaks across steps.
 3. The agent must call `ctx.transit(target)` exactly once — a sibling step, or a
    terminal/park status (`done` / `cancel` / `human`). `transit` validates the
    target through the workflow's `onTransit` hook, atomically updates `task.json`,
@@ -334,21 +378,31 @@ RFC3339 UTC. The wire types are defined once in
 | --- | --- |
 | meta | `version`, `auth`, `healthz`, `shutdown` |
 | project | `list`, `add`, `remove`, `init`, `diagnostics` (extension load errors), `subscribe`/`unsubscribe` |
-| task | `list`, `get`, `create`, `update`, `enroll {workflow}`, `resume {to?}`, `done`, `cancel`, `reopen`, `block`/`unblock`, `metadata.set`/`metadata.unset`, `comment.add/list/edit/delete`, `subscribe`/`unsubscribe` |
+| task | `list`, `get`, `create`, `update`, `enroll {workflow, step?}`, `resume {to?}`, `done`, `cancel`, `reopen`, `block`/`unblock`, `metadata.set`/`metadata.unset`, `comment.add/list/edit/delete`, `subscribe`/`unsubscribe` |
 | registry | `workflow.list`, `workflow.get`, `agent.list` (rendered from code — read-only) |
-| session | `list {task_id?}`, `get`, `transcript {from_line?, limit?}`, `subscribe`/`unsubscribe` (replay-then-tail), `input {message, kind}`, `abort`, `create {agent}` (open an interactive session), `end` (gracefully end one → `done`) |
+| extension | `install`, `remove`, `update`, `list` — the `autosk ext` family; see [docs/extensions.md](extensions.md) for the management how-to |
+| session | `list {task_id?}`, `get`, `transcript {from_line?, limit?}`, `subscribe`/`unsubscribe` (per-session replay-then-tail), `subscribeProject`/`unsubscribeProject` (project-scope lifecycle pushes), `input {message, kind}`, `abort`, `create {agent}` (open an interactive session), `end` (gracefully end one → `done`) |
 
 Notifications (server→client push): `task-changed`, `project-changed`,
-`session-event` (`message`|`status`|`done`|`error`|`partial`). These are fed by
-engine events and the fs watcher (so external file edits surface too). The
-`partial` frame is the ephemeral live-streaming channel — see [Streaming partial
-messages](#streaming-partial-messages) below; it is delivered only to
-per-session subscribers and is **not** broadcast on `session-changed`.
+`session-event` (`message`|`status`|`done`|`error`|`partial`), and
+`session-changed` (a project-scope push of one session's decorated meta on every
+create / status change — delivered to `session.subscribeProject` connections, and
+never carrying transcript lines, so a client keeps its session list live without
+subscribing per-session). All are fed by engine events and the fs watcher (so
+external file edits surface too). The `partial` frame is the ephemeral
+live-streaming channel — see [Streaming partial
+messages](#streaming-partial-messages) above; it is delivered only to
+per-session (`session.subscribe`) subscribers and is **not** broadcast on
+`session-changed`.
 
-**Error codes.** The reserved JSON-RPC range carries protocol failures; the
-domain errors live in the `1xxx` range: `PROJECT_NOT_FOUND` (1001),
-`INVALID_PROJECT` (1002), `NOT_FOUND` (1003), `CONFLICT` (1004 — the entity
-exists but isn't in a state that accepts the request now; retryable).
+**Error codes.** The reserved JSON-RPC range carries protocol failures
+(`PARSE_ERROR` -32700, `INVALID_REQUEST` -32600, `METHOD_NOT_FOUND` -32601,
+`INVALID_PARAMS` -32602, `INTERNAL_ERROR` -32603); the domain errors live in the
+`1xxx` range: `PROJECT_NOT_FOUND` (1001 — the `{cwd}` selector did not resolve to
+a project), `INVALID_PROJECT` (1002 — a malformed/empty/non-absolute cwd),
+`NOT_FOUND` (1003), `CONFLICT` (1004 — the entity exists but isn't in a state
+that accepts the request now; retryable). Code 1005 (`ENVIRONMENT_DIRTY`) is
+reserved-retired and never emitted (terminals no longer tear down isolation).
 
 A few RPC semantics worth knowing:
 

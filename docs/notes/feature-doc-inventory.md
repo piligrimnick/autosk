@@ -80,15 +80,19 @@ skill).
 
 ## E. Daemon (`autoskd`)
 
-- [ ] **E1.** Overview & architecture (one daemon per host, sole owner of `.autosk/`, pure-client front ends)
-- [ ] **E2.** Lifecycle — auto-spawn, single-instance lock, crash recovery, idle-shutdown
-- [ ] **E3.** `autoskd serve` flags (`--sock`, `--tcp`, `--workers`) + env (`AUTOSK_IDLE_SECS`, `AUTOSK_TOKEN_FILE`, `AUTOSK_NPM_BIN`, `AUTOSK_NO_AUTO_INSTALL`)
-- [ ] **E4.** Transports & auth (UDS perms, TCP token auth)
-- [ ] **E5.** JSON-RPC proto-v2 surface (meta / project / task / registry / session + push notifications + error codes)
-- [ ] **E6.** Sessions & transcripts (pi-format, partial messages, steer/abort)
-- [ ] **E7.** `autoskd mcp` — standalone stdio MCP server
-- [ ] **E8.** Per-session host HTTP MCP server (`ctx.newMCPServer()`)
-- [ ] **E9.** MCP tool surface (`transit` / `task` / `comment`)
+> Documented in **[docs/daemon.md](../daemon.md)** (cross-linked from
+> `README.md`, `AGENTS.md`, `docs/concepts.md`, `docs/workflows.md`,
+> `docs/extensions.md`, `docs/gui-release.md`).
+
+- [x] **E1.** Overview & architecture (one daemon per host, sole owner of `.autosk/`, pure-client front ends)
+- [x] **E2.** Lifecycle — auto-spawn, single-instance lock, crash recovery, idle-shutdown
+- [x] **E3.** `autoskd serve` flags (`--sock`, `--tcp`, `--workers`) + env (`AUTOSK_IDLE_SECS`, `AUTOSK_TOKEN_FILE`, `AUTOSK_NPM_BIN`, `AUTOSK_NO_AUTO_INSTALL`)
+- [x] **E4.** Transports & auth (UDS perms, TCP token auth)
+- [x] **E5.** JSON-RPC proto-v2 surface (meta / project / task / registry / extension / session + push notifications + error codes)
+- [x] **E6.** Sessions & transcripts (pi-format, partial messages, steer/abort)
+- [x] **E7.** `autoskd mcp` — standalone stdio MCP server
+- [x] **E8.** Per-session host HTTP MCP server (`ctx.newMCPServer()`)
+- [x] **E9.** MCP tool surface (`transit` / `task` / `comment`)
 
 ## F. Workflows (shipped)
 
