@@ -488,6 +488,10 @@ discovery/override rules.
 
 ## Make your own workflow
 
+> Prefer a guided walkthrough? The
+> [extension tutorial](extensions-tutorial.md) builds a runnable workflow from
+> an empty directory, then shows the discover → run → break → recover loop.
+
 A minimal two-step flow with a human gate:
 
 ```ts

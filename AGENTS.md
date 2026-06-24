@@ -126,6 +126,7 @@ is in the script header.
 - `docs/daemon.md` — `autoskd`, the Bun daemon (JSON-RPC, auto-spawn, sole owner of `.autosk/`)
 - `docs/workflows.md` — code-based workflows + agents (the `@autosk/sdk` contracts)
 - `docs/extensions.md` — the extension system (discovery, factory, AutoskAPI, bundled extensions)
+- `docs/extensions-tutorial.md` — learn-by-doing: write, run, break & recover your first extension
 - `docs/lazy.md` — the `autosk lazy` interactive TUI
 - `gui/README.md` — the Tauri desktop GUI (architecture, scripts, local vs remote modes)
 - `daemon/README.md` — the Bun daemon workspace overview

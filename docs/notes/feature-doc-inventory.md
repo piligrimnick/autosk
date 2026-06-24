@@ -115,10 +115,15 @@ skill).
 
 ## I. Extension system
 
-- [ ] **I1.** Extension model (default-export factory + `AutoskAPI`: `registerWorkflow` / `registerAgent`)
-- [ ] **I2.** Discovery & precedence (project-local / global / settings npm, name-collision overrides)
-- [ ] **I3.** Provisioning — first-run bootstrap + auto-install reconcile + opt-out
-- [ ] **I4.** Error isolation & `project diagnostics`
+> Documented in **[docs/extensions.md](../extensions.md)** (reference +
+> explanation + management how-to) and the learn-by-doing
+> **[docs/extensions-tutorial.md](../extensions-tutorial.md)** (write → run →
+> break → recover). Cross-linked from `README.md` and `AGENTS.md`.
+
+- [x] **I1.** Extension model (default-export factory + `AutoskAPI`: `registerWorkflow` / `registerAgent`)
+- [x] **I2.** Discovery & precedence (project-local / global / settings npm, name-collision overrides)
+- [x] **I3.** Provisioning — first-run bootstrap + auto-install reconcile + opt-out
+- [x] **I4.** Error isolation & `project diagnostics`
 
 ---
 

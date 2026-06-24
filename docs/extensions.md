@@ -9,7 +9,9 @@ the hooks your code registers.
 
 This page covers how extensions are discovered and loaded. For the
 `WorkflowDefinition` / `AgentDefinition` contracts your extension registers, see
-[docs/workflows.md](workflows.md).
+[docs/workflows.md](workflows.md). If you'd rather learn by building one, the
+[extension tutorial](extensions-tutorial.md) walks you from an empty directory
+to a workflow you can run (and deliberately break) in a few minutes.
 
 ## The entry point — a default-export factory
 
@@ -62,6 +64,31 @@ export default function (autosk: AutoskAPI) {
 It writes into **that project's** registry. The daemon imports TypeScript
 natively (it runs on Bun), so an extension can be plain `.ts` — no build step.
 
+### What a valid registration requires
+
+Both methods **validate** what you hand them. A violation is never fatal: the
+offending registration is **skipped** and recorded as a
+[`project.diagnostics`](#error-isolation--projectdiagnostics) entry, while the
+rest of the same factory keeps running. So one bad workflow in a factory that
+registers three leaves the other two registered.
+
+`registerWorkflow(workflow)` requires:
+
+- `name` — a **non-empty string**, and **unique** in the project's registry
+  (a duplicate is rejected; the first-registered, higher-precedence definition
+  keeps the name).
+- `steps` — a present **object** (step name → definition).
+- `firstStep` — a key that **exists in `steps`**.
+- each **step value** — either an **agent** (an object with an `onRun`
+  function; the step key is the agent name) or a `statusStep` whose `status` is
+  one of `done` / `cancel` / `human`. Any other shape (or a `statusStep` with a
+  different status) is rejected.
+
+`registerAgent({ name, description?, agent })` requires:
+
+- `name` — a **non-empty string**, and **unique** among registered agents.
+- `agent.onRun` — a **function** (the same `onRun` an inline agent step uses).
+
 ## Discovery order
 
 For each project, the daemon discovers extensions from three sources and merges
@@ -81,6 +108,19 @@ There is **no daemon-bundled source**: the reference `@autosk/feature-dev`
 workflow is an ordinary npm package that the daemon **provisions on first run**
 (see [First-run bootstrap](#first-run-bootstrap)) into source (3), so every
 project discovers it with no per-project files.
+
+At a glance:
+
+| # | Source | Where it lives | Dedup within the source |
+|---|--------|----------------|-------------------------|
+| 1 | project-local dir | `./.autosk/extensions/` | by entry path |
+| 2 | global dir | `~/.autosk/extensions/` | by entry path |
+| 3 | settings packages | `settings.json#extensions` (project file, then global file) | npm by **name**, local by **path** — project beats global |
+
+Across all three, the final list is then deduped **by entry path** (the first,
+highest-precedence occurrence wins), and a **name collision** between two loaded
+definitions is resolved **first-registered-wins** — so a higher-precedence
+source always keeps the name.
 
 Within a directory, discovery is one level deep, in sorted filename order:
 
@@ -361,6 +401,10 @@ is an opt-in alternative harness you can also wire into your own workflow
   external use.)
 
 ## Writing your own
+
+> New to this? Follow the step-by-step [extension tutorial](extensions-tutorial.md)
+> instead — it builds the example below in a throwaway project and shows the
+> discover → run → break → recover loop end to end.
 
 The smallest extension is a single file:
 
