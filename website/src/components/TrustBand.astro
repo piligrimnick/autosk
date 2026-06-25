@@ -1,6 +1,7 @@
 ---
 import Section from "./ui/Section.astro";
 import Icon from "./ui/Icon.astro";
+import { TESTFLIGHT_URL } from "../data/nav.ts";
 
 const claims = [
   {
@@ -21,7 +22,7 @@ const claims = [
   {
     icon: "lock",
     title: "Signed & notarized",
-    body: "macOS cask; Linux binaries + AppImage/.deb; iOS via TestFlight.",
+    body: `macOS cask; Linux binaries + AppImage/.deb; <a href="${TESTFLIGHT_URL}" target="_blank" rel="noopener noreferrer" class="link-underline">iOS via TestFlight</a>.`,
   },
 ];
 ---
@@ -33,7 +34,7 @@ const claims = [
           <Icon name={c.icon} size={22} />
         </span>
         <h3 class="mt-4 text-base font-semibold text-fg">{c.title}</h3>
-        <p class="mt-2 text-sm leading-relaxed text-fg-mute">{c.body}</p>
+        <p class="mt-2 text-sm leading-relaxed text-fg-mute" set:html={c.body}></p>
       </div>
     ))}
   </div>

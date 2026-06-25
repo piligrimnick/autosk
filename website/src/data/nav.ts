@@ -5,6 +5,8 @@ export const RELEASES_URL = "https://github.com/wierdbytes/autosk/releases";
 export const CHANGELOG_URL = "https://github.com/wierdbytes/autosk/blob/main/CHANGELOG.md";
 export const LICENSE_URL = "https://github.com/wierdbytes/autosk/blob/main/LICENSE";
 export const LATEST_RELEASE_URL = "https://github.com/wierdbytes/autosk/releases/latest";
+/** Public TestFlight invite for the iOS app (beta). */
+export const TESTFLIGHT_URL = "https://testflight.apple.com/join/jYDpqT2v";
 
 export type NavLink = { label: string; href: string };
 
