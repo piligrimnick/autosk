@@ -21,8 +21,10 @@ import { basename } from "node:path";
 import {
   ErrorCodes,
   RPC_METHODS,
+  type ExtensionReloadResult,
   type ProjectChangedParams,
   type ProjectInfo,
+  type RegistryChangedParams,
   type ResultOf,
   type RpcMethod,
   type SessionChangedParams,
@@ -222,6 +224,99 @@ export class Daemon {
     const params: ProjectChangedParams = { project };
     for (const conn of this.connections) {
       if (conn.wantsProject) conn.send({ method: "project-changed", params });
+    }
+  }
+
+  /**
+   * Pushes `registry-changed` for `root` to every connection subscribed to that
+   * project (via `task.subscribe`, which is what a GUI/TUI issues to watch a
+   * project) so it re-fetches `registry.workflow.list` / `extension.list` /
+   * `project.diagnostics`. The CLI never needs it (it re-reads synchronously).
+   */
+  private emitRegistryChanged(root: string): void {
+    const params: RegistryChangedParams = { root };
+    for (const conn of this.connections) {
+      if (conn.taskRoots.has(root)) conn.send({ method: "registry-changed", params });
+    }
+  }
+
+  // -- extension hot-reload ------------------------------------------------
+
+  /**
+   * Rebuilds + atomically swaps one open project's extension registry (plan
+   * §1-2): {@link ProjectManager.rebuildRegistry} swaps the handle, then — when
+   * the project was open — {@link Engine.setProjectRegistry} swaps the engine's
+   * copy and a `registry-changed` notification is emitted. The two swaps are
+   * adjacent + synchronous (the registry is fully built off to the side first),
+   * so no concurrent dispatch/read observes a half-built registry. Returns
+   * whether a live reload was applied plus the wire result for the explicit
+   * `extension.reload`.
+   */
+  private async applyExtensionReload(root: string): Promise<{ reloaded: boolean; result: ExtensionReloadResult }> {
+    const summary = await this.projectManager.rebuildRegistry(root);
+    const result: ExtensionReloadResult = {
+      root,
+      diagnostics: summary.diagnostics,
+      workflows: summary.workflows,
+      parked: summary.parked.map((p) => ({ task_id: p.taskId, error: p.error })),
+    };
+    if (summary.open && summary.registry) {
+      // Gate `reloaded` on the engine ACTUALLY swapping its copy, not merely on
+      // the project being open in the manager: `setProjectRegistry` is a no-op
+      // when the root isn't engine-registered, so reporting the manager's view
+      // could otherwise claim "applied live" while the engine still schedules
+      // over the old registry. The two stay in lockstep via this boolean.
+      const swapped = this.engine.setProjectRegistry(root, summary.registry);
+      if (swapped) {
+        this.emitRegistryChanged(root);
+        return { reloaded: true, result };
+      }
+    }
+    return { reloaded: false, result };
+  }
+
+  /**
+   * Reloads the project(s) affected by an `ext add`/`remove` and returns how many
+   * OPEN projects were hot-reloaded (drives the CLI's “applied to N” line). A
+   * `scope:"project"` change reloads only the project at `cwd`; a `scope:"global"`
+   * change reloads every currently-open project (each re-merges global + its own
+   * settings). A not-open project counts as 0 — it picks the change up on its
+   * first open.
+   */
+  private async reloadAfterChange(scope: "global" | "project", cwd: string): Promise<number> {
+    if (scope === "project") {
+      let root: string;
+      try {
+        root = await resolveProjectRoot(cwd);
+      } catch {
+        return 0; // no project at cwd (shouldn't happen for a project-scope change)
+      }
+      return (await this.tryReload(root)) ? 1 : 0;
+    }
+    let count = 0;
+    for (const handle of this.projectManager.loaded()) {
+      if (await this.tryReload(handle.root)) count++;
+    }
+    return count;
+  }
+
+  /**
+   * Reloads one project for an auto-trigger (`ext add`/`remove`), error-isolated.
+   * The disk change (`npm install` + `settings.json`) has ALREADY committed by
+   * the time this runs, so a post-change reload failure must NOT reject the
+   * install/remove RPC nor abort a global loop over the other open projects — it
+   * degrades to "not reloaded" (the change still lands on the project's next
+   * open). `loadProjectRegistry` never throws, but the hazard guard's store
+   * writes can; this contains that. The EXPLICIT `extension.reload` deliberately
+   * does NOT use this — an operator asking for a reload wants the error surfaced.
+   */
+  private async tryReload(root: string): Promise<boolean> {
+    try {
+      const { reloaded } = await this.applyExtensionReload(root);
+      return reloaded;
+    } catch (e) {
+      this.logger.warn(`extension reload failed for ${root}: ${errStr(e)}`);
+      return false;
     }
   }
 
@@ -538,11 +633,19 @@ export class Daemon {
       // requires a project at cwd.
       "extension.install": async (params) => {
         const o = asObj(params);
-        return this.projectManager.installExtension(reqCwd(o), reqString(o, "source"), optBool(o, "local") ?? false);
+        const cwd = reqCwd(o);
+        const result = await this.projectManager.installExtension(cwd, reqString(o, "source"), optBool(o, "local") ?? false);
+        // Hot-apply the add to every affected OPEN project (no daemon restart):
+        // a project add reloads only that project; a global add reloads them all.
+        const reloadedProjects = await this.reloadAfterChange(result.scope, cwd);
+        return { ...result, reloaded: reloadedProjects > 0, reloaded_projects: reloadedProjects };
       },
       "extension.remove": async (params) => {
         const o = asObj(params);
-        return this.projectManager.removeExtension(reqCwd(o), reqString(o, "source"), optBool(o, "local") ?? false);
+        const cwd = reqCwd(o);
+        const result = await this.projectManager.removeExtension(cwd, reqString(o, "source"), optBool(o, "local") ?? false);
+        const reloadedProjects = await this.reloadAfterChange(result.scope, cwd);
+        return { ...result, reloaded: reloadedProjects > 0, reloaded_projects: reloadedProjects };
       },
       "extension.list": async (params) => {
         const o = asObj(params);
@@ -559,6 +662,13 @@ export class Daemon {
           scope,
           dryRun: optBool(o, "dry_run") ?? false,
         });
+      },
+      "extension.reload": async (params) => {
+        // Open (and engine-register) the project first so the swap lands on a
+        // live EngineProject; the rebuild re-merges global + project settings.
+        const handle = await this.resolveHandle(reqCwd(asObj(params)));
+        const { result } = await this.applyExtensionReload(handle.root);
+        return result;
       },
 
       // ---- session -------------------------------------------------------

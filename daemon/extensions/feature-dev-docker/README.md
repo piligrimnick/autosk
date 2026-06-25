@@ -33,7 +33,7 @@ swapping the default `worktreeSandbox()` for a credential- and git-aware
 # 1. build (or pull) the pi-runtime image
 daemon/extensions/pi-agent/docker/build.sh
 
-# 2. install this extension + restart the daemon
+# 2. install this extension (hot-applies to open projects, no restart)
 autosk ext add npm:@autosk/feature-dev-docker     # or: autosk ext add /path/to/feature-dev-docker
 
 # 3. enroll a task

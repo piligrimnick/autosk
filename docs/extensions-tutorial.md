@@ -277,8 +277,10 @@ You wrote a real autosk extension and saw the whole lifecycle:
   `registerWorkflow`s a workflow whose steps are inline agents.
 - **Discovery.** Dropping a `.ts` file into `./.autosk/extensions/` is all it
   takes for *this* project to pick it up — no install, no config.
-- **No hot-reload.** The registry is built once per project open; editing the
-  code means restarting the daemon.
+- **Reload model.** Editing an installed extension's *code* is restart-only (the
+  registry is cached for the daemon's lifetime). Adding or removing an extension
+  hot-applies to open projects — `autosk ext add`/`remove` do it automatically,
+  and `autosk ext reload` re-applies a directory drop-in on demand.
 - **Error isolation.** A throwing factory becomes a `project.diagnostics` entry,
   not a crash.
 

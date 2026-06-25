@@ -234,6 +234,20 @@ func (c *Client) UpdateExtensions(ctx context.Context, source, scope string, dry
 	return out, err
 }
 
+// ReloadExtensions rebuilds the current project's merged (global + project)
+// extension registry and atomically swaps it onto the live daemon — no restart.
+// Returns the rebuilt project's root, the new registry's load diagnostics, its
+// registered workflow names, and any non-live work tasks parked because their
+// workflow/step disappeared. Add/remove apply this automatically; this is the
+// explicit `autosk ext reload` escape hatch (also picks up a brand-new / removed
+// local .autosk/extensions file — editing an existing file's code still needs a
+// restart, the Bun module-cache wall).
+func (c *Client) ReloadExtensions(ctx context.Context) (ExtensionReloadResult, error) {
+	var out ExtensionReloadResult
+	err := c.call(ctx, "extension.reload", c.selector(nil), &out)
+	return out, err
+}
+
 // stepTargetParam renders a StepTarget into its wire object ({step} XOR
 // {status}).
 func stepTargetParam(t api.StepTarget) map[string]any {

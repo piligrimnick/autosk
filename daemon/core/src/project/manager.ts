@@ -18,6 +18,7 @@
 import type {
   ExtensionInstallResult,
   ExtensionListResult,
+  ExtensionLoadError,
   ExtensionRemoveResult,
   ExtensionUpdateResult,
   ProjectInfo,
@@ -43,6 +44,7 @@ import {
   type ExtensionRegistry,
   type ExtensionSource,
   type NpmViewVersion,
+  type ParkedTask,
 } from "../extensions/index.ts";
 import { systemClock, type Clock } from "../store/clock.ts";
 import { KeyedMutex } from "../store/lock.ts";
@@ -64,6 +66,25 @@ export interface ProjectHandle {
   extensions: ExtensionRegistry;
   /** RFC3339 UTC time the project was opened (for `healthz`). */
   opened_at: string;
+}
+
+/**
+ * The outcome of a {@link ProjectManager.rebuildRegistry} (extension hot-reload).
+ * `open` is false when the root is not currently open — there is nothing to
+ * rebuild in memory (its registry is built fresh on first open), so the daemon
+ * skips the engine swap + the `registry-changed` notification.
+ */
+export interface RebuildRegistryResult {
+  /** Whether the root was open and its handle's registry was swapped. */
+  open: boolean;
+  /** The freshly-built registry (only when `open`). */
+  registry?: ExtensionRegistry;
+  /** Load diagnostics raised by the rebuilt registry. */
+  diagnostics: ExtensionLoadError[];
+  /** Workflow names registered after the rebuild (sorted). */
+  workflows: string[];
+  /** Non-live `work` tasks parked because their workflow/step disappeared. */
+  parked: ParkedTask[];
 }
 
 export interface ProjectManagerOptions {
@@ -219,22 +240,9 @@ export class ProjectManager {
         // error isolation), then run the live-code hazard guard against the
         // just-loaded store: a `work` task whose workflow/step vanished from the
         // registry is parked to `human` before the scheduler can ever pick it up.
+        // No live sessions exist on a fresh open, so no skip-live predicate.
         const extensions = await loadProjectRegistry(root, this.extensionsEnv);
-        // Surface load diagnostics in the daemon log too (not only via the
-        // `project.diagnostics` RPC): a CLI-only operator who never calls that
-        // RPC would otherwise have zero signal that an extension failed to load.
-        const diags = extensions.diagnostics;
-        if (diags.length > 0) {
-          const sources = [...new Set(diags.map((d) => d.source))].join(", ");
-          this.logger.warn(
-            `extensions: ${diags.length} load diagnostic(s) opening ${root} ` +
-              `(sources: ${sources}); see project.diagnostics`,
-          );
-        }
-        const parked = await validateInFlightTasks(store, extensions);
-        for (const p of parked) {
-          this.logger.warn(`live-code hazard: parked ${p.taskId} to human (${p.error})`);
-        }
+        await this.applyLoadedRegistry(root, store, extensions, { verb: "opening" });
         const handle: ProjectHandle = { root, store, extensions, opened_at: this.clock() };
         this.projects.set(root, handle);
         return handle;
@@ -246,6 +254,74 @@ export class ProjectManager {
         throw e;
       }
     });
+  }
+
+  /**
+   * Rebuilds a currently-open project's extension registry from disk and swaps
+   * it onto the handle in place (extension hot-reload, plan §1-2). Returns a
+   * summary; `open:false` when the root is not open (nothing to do — it rebuilds
+   * naturally on first open). The build runs OFF to the side and the swap is a
+   * single synchronous assignment, so no concurrent `registry.*`/`project.diagnostics`
+   * read ever observes a half-built registry. Serialised against first-open and
+   * other rebuilds of the same root under {@link openLocks}.
+   *
+   * After the swap it runs the live-code hazard guard against the NEW registry,
+   * skipping any task with a live session (do not park out from under a running
+   * session — it self-heals via the engine's park-on-missing dispatch path once
+   * it settles). The engine's `EngineProject.registry` swap is the daemon's job
+   * (it owns the engine); this only touches the handle + the store.
+   */
+  async rebuildRegistry(root: string): Promise<RebuildRegistryResult> {
+    if (!this.projects.has(root)) {
+      return { open: false, diagnostics: [], workflows: [], parked: [] };
+    }
+    return this.openLocks.run(root, async () => {
+      const handle = this.projects.get(root);
+      if (!handle) return { open: false, diagnostics: [], workflows: [], parked: [] };
+      const next = await loadProjectRegistry(root, this.extensionsEnv);
+      // Atomic swap: a single synchronous reassignment of the handle field the
+      // RPC read handlers (`registry.*`, `project.diagnostics`) consult fresh.
+      handle.extensions = next;
+      // Re-run the hazard guard against the NEW registry, but skip any task with
+      // a live session (do not park out from under a running session — it
+      // self-heals via the engine's park-on-missing dispatch path once it settles).
+      const parked = await this.applyLoadedRegistry(root, handle.store, next, {
+        verb: "reloading",
+        isLive: (id) => handle.store.sessions.hasLiveSession(id),
+      });
+      return { open: true, registry: next, diagnostics: next.diagnostics, workflows: next.workflowNames(), parked };
+    });
+  }
+
+  /**
+   * Logs a freshly-built registry's load diagnostics to the daemon log (so a
+   * CLI-only operator who never calls `project.diagnostics` still has a signal
+   * that an extension failed to load or collided) and runs the live-code hazard
+   * guard against `store`, logging each park. Shared by first-{@link open}
+   * (`verb:"opening"`, no live sessions → no `isLive`) and {@link rebuildRegistry}
+   * (`verb:"reloading"` + an `isLive` predicate that skips a task with a running
+   * session). Keeping the log wording + guard options in ONE place stops the two
+   * paths from drifting. Returns the parked tasks.
+   */
+  private async applyLoadedRegistry(
+    root: string,
+    store: Store,
+    registry: ExtensionRegistry,
+    opts: { verb: string; isLive?: (taskId: string) => boolean },
+  ): Promise<ParkedTask[]> {
+    const diags = registry.diagnostics;
+    if (diags.length > 0) {
+      const sources = [...new Set(diags.map((d) => d.source))].join(", ");
+      this.logger.warn(
+        `extensions: ${diags.length} load diagnostic(s) ${opts.verb} ${root} ` +
+          `(sources: ${sources}); see project.diagnostics`,
+      );
+    }
+    const parked = await validateInFlightTasks(store, registry, { isLive: opts.isLive });
+    for (const p of parked) {
+      this.logger.warn(`live-code hazard: parked ${p.taskId} to human (${p.error})`);
+    }
+    return parked;
   }
 
   /** Currently-loaded project handles (order unspecified). */
@@ -306,8 +382,9 @@ export class ProjectManager {
    * Installs an extension into a scope. `local` → the project resolved from
    * `cwd` (its `<root>/.autosk/{packages,settings.json}`); else the global home
    * (`<home>/.autosk/{packages,settings.json}`). An explicit install always runs
-   * — it is NOT gated by `AUTOSK_NO_AUTO_INSTALL`. No hot-reload: the new package
-   * is picked up on the next daemon start / first project open.
+   * — it is NOT gated by `AUTOSK_NO_AUTO_INSTALL`. The DAEMON hot-applies the add
+   * to open projects after this returns (`Daemon.applyExtensionReload`), so no
+   * restart is needed; the in-memory swap is not this disk-only method's job.
    */
   async installExtension(cwd: string, source: string, local: boolean): Promise<ExtensionInstallResult> {
     const scopeDirs = await this.scopeDirs(cwd, local);

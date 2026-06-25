@@ -1,9 +1,9 @@
 // InstallScopeModal — the second modal opened from a row's Install button:
 // "Where to install this extension?" with two choices, Globally (local:false)
 // and To this project (local:true). Both call the daemon's `extension.install`
-// RPC with the package name as the source. On success it surfaces the restart
-// hint (workflows are picked up on the next project open — no hot-reload) and
-// closes both modals.
+// RPC with the package name as the source. The daemon hot-applies the install
+// (the workflow is schedulable immediately), but this panel refreshes its list
+// on the next project open, so the notice still asks to reopen. Closes both modals.
 
 import { useState } from "react";
 import { useStore } from "@/state/store";

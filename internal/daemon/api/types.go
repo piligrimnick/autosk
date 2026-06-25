@@ -216,21 +216,46 @@ type ProjectDiagnostics struct {
 // ExtensionInstallResult is the extension.install result. Scope is
 // "global"|"project"; Source is the canonical settings entry written
 // (npm:<spec> | <abs-path>); Installed reports whether an npm install ran
-// (false for a local-path source).
+// (false for a local-path source). Reloaded/ReloadedProjects report the live
+// hot-reload applied to open projects (no daemon restart): Reloaded is true
+// when ≥1 open project's registry was rebuilt, ReloadedProjects is the count.
 type ExtensionInstallResult struct {
-	Scope        string `json:"scope"`
-	Source       string `json:"source"`
-	SettingsPath string `json:"settings_path"`
-	Installed    bool   `json:"installed"`
+	Scope            string `json:"scope"`
+	Source           string `json:"source"`
+	SettingsPath     string `json:"settings_path"`
+	Installed        bool   `json:"installed"`
+	Reloaded         bool   `json:"reloaded"`
+	ReloadedProjects int    `json:"reloaded_projects"`
 }
 
 // ExtensionRemoveResult is the extension.remove result. Removed reports whether
 // a matching settings entry was dropped (node_modules is left untouched).
+// Reloaded/ReloadedProjects mirror ExtensionInstallResult (live hot-reload of
+// open projects, no restart).
 type ExtensionRemoveResult struct {
-	Scope        string `json:"scope"`
-	Source       string `json:"source"`
-	SettingsPath string `json:"settings_path"`
-	Removed      bool   `json:"removed"`
+	Scope            string `json:"scope"`
+	Source           string `json:"source"`
+	SettingsPath     string `json:"settings_path"`
+	Removed          bool   `json:"removed"`
+	Reloaded         bool   `json:"reloaded"`
+	ReloadedProjects int    `json:"reloaded_projects"`
+}
+
+// ExtensionReloadParkedTask is one task parked by a hot-reload because its
+// workflow/step vanished from the rebuilt registry.
+type ExtensionReloadParkedTask struct {
+	TaskID string `json:"task_id"`
+	Error  string `json:"error"`
+}
+
+// ExtensionReloadResult is the extension.reload result: the rebuilt project's
+// root, the new registry's load diagnostics, its registered workflow names, and
+// any non-live work tasks parked because their workflow/step disappeared.
+type ExtensionReloadResult struct {
+	Root        string                      `json:"root"`
+	Diagnostics []ExtensionLoadError        `json:"diagnostics"`
+	Workflows   []string                    `json:"workflows"`
+	Parked      []ExtensionReloadParkedTask `json:"parked"`
 }
 
 // ExtensionEntryInfo is one classified settings.json#extensions entry
@@ -314,6 +339,14 @@ type SessionEventParams struct {
 type SessionChangedParams struct {
 	Root    string      `json:"root"`
 	Session SessionMeta `json:"session"`
+}
+
+// RegistryChangedParams is the `registry-changed` payload: a project's extension
+// registry was hot-reloaded (an ext add/remove/reload rebuilt + swapped it).
+// Carries only the affected Root; subscribers re-fetch registry.workflow.list /
+// extension.list / project.diagnostics to refresh their view.
+type RegistryChangedParams struct {
+	Root string `json:"root"`
 }
 
 // ---------------------------------------------------------------------------

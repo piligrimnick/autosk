@@ -96,6 +96,239 @@ func TestExtAddListRemove(t *testing.T) {
 	}
 }
 
+// TestExtHotReload exercises the headline feature: `ext add` of a NEW workflow
+// makes it enrollable + listable on the SAME running daemon with no restart, and
+// the CLI drops the restart hint (printing what it applied instead); `ext remove`
+// then drops it live the same way. A human-only workflow keeps the assertion
+// race-free (the scheduler parks at `human` and never runs an agent).
+func TestExtHotReload(t *testing.T) {
+	dir := initProject(t)
+
+	// Open the project on the daemon first; the workflow does not exist yet.
+	if list, err := runRoot(t, dir, "workflow", "list"); err != nil {
+		t.Fatalf("workflow list: %v\n%s", err, list)
+	} else if strings.Contains(list, "hot-human") {
+		t.Fatalf("hot-human must not exist before the add:\n%s", list)
+	}
+
+	// A NEW local extension (outside .autosk/extensions, so only the explicit add
+	// surfaces it) registering a human-only workflow. Use the symlink-resolved
+	// project dir so the absolute settings entry is canonical: the compiled autoskd
+	// imports an extension by its file:// path, and macOS's /var → /private/var
+	// symlink in t.TempDir() would otherwise make a fresh import fail to resolve.
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("eval symlinks: %v", err)
+	}
+	extPath := filepath.Join(realDir, "hot.js")
+	extSrc := "export default function (autosk) {\n" +
+		"  autosk.registerWorkflow({ name: \"hot-human\", firstStep: \"review\", steps: {\n" +
+		"    review: { status: \"human\" }, accept: { status: \"human\" },\n" +
+		"  } });\n}\n"
+	if err := os.WriteFile(extPath, []byte(extSrc), 0o644); err != nil {
+		t.Fatalf("write ext: %v", err)
+	}
+
+	// add -l: hot-applies to the one open project, no restart hint.
+	add, err := runRoot(t, dir, "ext", "add", extPath, "-l")
+	if err != nil {
+		t.Fatalf("ext add: %v\n%s", err, add)
+	}
+	if !strings.Contains(add, "applied live to 1 open project") {
+		t.Errorf("expected an 'applied live' line, got:\n%s", add)
+	}
+	if strings.Contains(add, "restart the daemon") {
+		t.Errorf("a hot-applied add must NOT print the restart hint, got:\n%s", add)
+	}
+
+	// The new workflow is now listable WITHOUT a daemon restart ...
+	list, err := runRoot(t, dir, "workflow", "list")
+	if err != nil {
+		t.Fatalf("workflow list (post-add): %v\n%s", err, list)
+	}
+	if !strings.Contains(list, "hot-human") {
+		t.Errorf("hot-human missing after a hot add:\n%s", list)
+	}
+
+	// ... and enrollable: a task enrolls into it (parking at human), proving the
+	// engine schedules over the freshly-added workflow with no restart.
+	id := createTask(t, dir, "enroll into hot-human")
+	enr, err := runRoot(t, dir, "enroll", id, "--workflow", "hot-human", "--json")
+	if err != nil {
+		t.Fatalf("enroll into hot-added workflow: %v\n%s", err, enr)
+	}
+	var tv map[string]any
+	if err := json.Unmarshal([]byte(enr), &tv); err != nil {
+		t.Fatalf("unmarshal enroll: %v\n%s", err, enr)
+	}
+	if tv["workflow"] != "hot-human" {
+		t.Errorf("expected workflow hot-human after enroll, got %v", tv["workflow"])
+	}
+
+	// remove -l: drops it live the same way (no restart hint).
+	rem, err := runRoot(t, dir, "ext", "remove", extPath, "-l")
+	if err != nil {
+		t.Fatalf("ext remove: %v\n%s", err, rem)
+	}
+	if !strings.Contains(rem, "applied live to 1 open project") {
+		t.Errorf("expected an 'applied live' line on remove, got:\n%s", rem)
+	}
+	if strings.Contains(rem, "restart the daemon") {
+		t.Errorf("a hot-applied remove must NOT print the restart hint, got:\n%s", rem)
+	}
+	list2, err := runRoot(t, dir, "workflow", "list")
+	if err != nil {
+		t.Fatalf("workflow list (post-remove): %v\n%s", err, list2)
+	}
+	if strings.Contains(list2, "hot-human") {
+		t.Errorf("hot-human still listed after a hot remove:\n%s", list2)
+	}
+}
+
+// TestExtReloadVerb checks `autosk ext reload`: a brand-new local extension file
+// dropped into .autosk/extensions/ is picked up on demand, with the reload
+// summary reporting the rebuilt workflow set.
+func TestExtReloadVerb(t *testing.T) {
+	dir := initProject(t)
+	// Open the project; reloadable workflow not present yet.
+	if _, err := runRoot(t, dir, "workflow", "list"); err != nil {
+		t.Fatalf("workflow list: %v", err)
+	}
+
+	extDir := filepath.Join(dir, ".autosk", "extensions")
+	if err := os.MkdirAll(extDir, 0o755); err != nil {
+		t.Fatalf("mkdir extensions: %v", err)
+	}
+	extSrc := "export default function (autosk) {\n" +
+		"  autosk.registerWorkflow({ name: \"reload-human\", firstStep: \"review\", steps: {\n" +
+		"    review: { status: \"human\" },\n" +
+		"  } });\n}\n"
+	if err := os.WriteFile(filepath.Join(extDir, "reload.js"), []byte(extSrc), 0o644); err != nil {
+		t.Fatalf("write ext: %v", err)
+	}
+
+	out, err := runRoot(t, dir, "ext", "reload", "--json")
+	if err != nil {
+		t.Fatalf("ext reload: %v\n%s", err, out)
+	}
+	var res struct {
+		Root      string   `json:"root"`
+		Workflows []string `json:"workflows"`
+		Parked    []struct {
+			TaskID string `json:"task_id"`
+			Error  string `json:"error"`
+		} `json:"parked"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("unmarshal reload: %v\n%s", err, out)
+	}
+	var found bool
+	for _, w := range res.Workflows {
+		if w == "reload-human" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("reload summary missing reload-human: %+v", res.Workflows)
+	}
+	if len(res.Parked) != 0 {
+		t.Errorf("expected no parked tasks, got %+v", res.Parked)
+	}
+	// The registry view reflects the reload without a restart.
+	list, err := runRoot(t, dir, "workflow", "list")
+	if err != nil {
+		t.Fatalf("workflow list (post-reload): %v\n%s", err, list)
+	}
+	if !strings.Contains(list, "reload-human") {
+		t.Errorf("reload-human missing after ext reload:\n%s", list)
+	}
+}
+
+// TestExtReloadDiagnostics is the safety guarantee (acceptance criterion 8): a
+// bad extension dropped alongside a good one is recorded as a diagnostic on the
+// reload result (and printed on the human path), the daemon does NOT crash, and
+// the sibling good workflow stays loaded + listable. Exercises the Go mirror of
+// ExtensionReloadResult.diagnostics + renderExtReload.
+func TestExtReloadDiagnostics(t *testing.T) {
+	dir := initProject(t)
+	// Open the project on the daemon first.
+	if _, err := runRoot(t, dir, "workflow", "list"); err != nil {
+		t.Fatalf("workflow list: %v", err)
+	}
+
+	extDir := filepath.Join(dir, ".autosk", "extensions")
+	if err := os.MkdirAll(extDir, 0o755); err != nil {
+		t.Fatalf("mkdir extensions: %v", err)
+	}
+	// A GOOD human-only workflow next to a BAD extension whose factory throws.
+	good := "export default function (autosk) {\n" +
+		"  autosk.registerWorkflow({ name: \"diag-good\", firstStep: \"review\", steps: {\n" +
+		"    review: { status: \"human\" },\n  } });\n}\n"
+	if err := os.WriteFile(filepath.Join(extDir, "good.js"), []byte(good), 0o644); err != nil {
+		t.Fatalf("write good ext: %v", err)
+	}
+	bad := "export default function () { throw new Error(\"boom\"); }\n"
+	if err := os.WriteFile(filepath.Join(extDir, "bad.js"), []byte(bad), 0o644); err != nil {
+		t.Fatalf("write bad ext: %v", err)
+	}
+
+	// --json: the reload SUCCEEDS (no crash) and carries the diagnostic.
+	out, err := runRoot(t, dir, "ext", "reload", "--json")
+	if err != nil {
+		t.Fatalf("ext reload --json: %v\n%s", err, out)
+	}
+	var res struct {
+		Workflows   []string `json:"workflows"`
+		Diagnostics []struct {
+			Source string `json:"source"`
+			Error  string `json:"error"`
+		} `json:"diagnostics"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("unmarshal reload: %v\n%s", err, out)
+	}
+	if len(res.Diagnostics) == 0 {
+		t.Fatalf("expected a load diagnostic for the bad extension, got none:\n%s", out)
+	}
+	var sawThrew bool
+	for _, d := range res.Diagnostics {
+		if strings.Contains(d.Error, "factory threw") {
+			sawThrew = true
+		}
+	}
+	if !sawThrew {
+		t.Errorf("expected a 'factory threw' diagnostic, got: %+v", res.Diagnostics)
+	}
+	var sawGood bool
+	for _, w := range res.Workflows {
+		if w == "diag-good" {
+			sawGood = true
+		}
+	}
+	if !sawGood {
+		t.Errorf("the sibling good workflow must stay loaded despite the bad one, got: %+v", res.Workflows)
+	}
+
+	// Human path: the diagnostic is printed (renderExtReload, on stderr) and the
+	// command still exits cleanly.
+	human, err := runRoot(t, dir, "ext", "reload")
+	if err != nil {
+		t.Fatalf("ext reload (human): %v\n%s", err, human)
+	}
+	if !strings.Contains(human, "load diagnostic") {
+		t.Errorf("human reload output must surface the load diagnostic, got:\n%s", human)
+	}
+	if !strings.Contains(human, "diag-good") {
+		t.Errorf("human reload output must still list the good workflow, got:\n%s", human)
+	}
+
+	// The good workflow is genuinely usable after the bad reload: enroll succeeds.
+	id := createTask(t, dir, "enroll into diag-good")
+	if enr, err := runRoot(t, dir, "enroll", id, "--workflow", "diag-good", "--json"); err != nil {
+		t.Fatalf("enroll into good workflow after a bad reload: %v\n%s", err, enr)
+	}
+}
+
 // TestExtAddRejectsBareSource verifies the explicit-source rule: a bare token
 // (neither npm: nor a path) is rejected with a clear error.
 func TestExtAddRejectsBareSource(t *testing.T) {

@@ -529,6 +529,7 @@ autosk ext add    <source> [-l|--local]
 autosk ext list
 autosk ext remove <source> [-l|--local]
 autosk ext update [source] [-l|--local] [--global] [--dry-run|--check]
+autosk ext reload
 ```
 
 Manage the extensions recorded in `settings.json`. A **source** is either an
@@ -540,24 +541,38 @@ npm packages install into a packages prefix; a local path is referenced in place
 By default these target the **global** scope (`~/.autosk`); `-l/--local` targets
 the current project's `.autosk/`.
 
-- `add` — install/register a source and record it. Prints the scope and
-  `settings.json` path, plus a **restart hint** (there is no hot-reload — a new
-  extension is picked up on the next daemon start / first project open).
+- `add` — install/register a source and record it, then **hot-apply** it to open
+  projects (no daemon restart). Prints the scope, `settings.json` path, and
+  `applied live to N open project(s)` (a global add reloads every open project,
+  `-l/--local` reloads just that one); when no project is open it prints a soft
+  restart hint instead (the change lands on the next open).
 - `list` — installed extensions across both scopes (`SCOPE KIND RESOLVED
   SOURCE`).
 - `remove` — drop the entry from `settings.json` (match npm by name, local by
-  path). `node_modules` is left untouched.
+  path); `node_modules` is left untouched. Also hot-applies (no restart): a
+  removed workflow stops being scheduled and any non-live `work` task on it
+  parks to `human`.
 - `update` — bump **floating** npm entries (`npm:foo`) to newer registry
   versions in place. Version-pinned (`npm:foo@1.2.3`) and local-path entries are
   skipped. Outside a project it updates global only; inside, the union of global
   + project (force with `--global` / `-l/--local`, which are mutually
   exclusive). `--dry-run` (alias `--check`) reports without installing.
+  **Still restart-only** — editing installed code in place (the Bun module-cache
+  wall) — so it keeps its restart hint when something changed.
+- `reload` — rebuild the current project's merged (global + project) registry
+  and swap it onto the live daemon on demand. Picks up added/removed extensions
+  (including a brand-new or deleted `.autosk/extensions/` file); prints the
+  root, registered workflows, and any load diagnostics + parked tasks.
 
 ```text
 $ autosk ext add npm:@autosk/merge-to-current
 installed npm:@autosk/merge-to-current (global scope)
   settings: /Users/you/.autosk/settings.json
-note: restart the daemon (or reopen the project) for the change to take effect
+applied live to 2 open projects (no restart needed)
+
+$ autosk ext reload
+reloaded /Users/you/code/app
+  workflows: feature-dev, merge-to-current
 
 $ autosk ext list
 SCOPE   KIND  RESOLVED  SOURCE
@@ -570,7 +585,7 @@ global  @autosk/feature-dev      1.2.0  1.3.0  available
 available 1 · unknown 0 · up-to-date 0 · skipped 0
 ```
 
-All four honor `--json`. `ext update` **exits non-zero** if any package failed
+All five honor `--json`. `ext update` **exits non-zero** if any package failed
 (both `--json` and table modes). For the discovery/precedence model, see
 [docs/extensions.md](extensions.md).
 

@@ -181,6 +181,7 @@ autosk ext list                             # both scopes: kind + resolved
 autosk ext remove npm:@acme/review-bot      # drop the entry (matches any version)
 autosk ext update                           # bump floating npm entries to latest
 autosk ext update --dry-run                 # report available updates, install nothing
+autosk ext reload                           # re-apply the registry live (no restart)
 ```
 
 - **Sources.** An `npm:<spec>` source `npm install`s the package (the `<spec>`
@@ -209,6 +210,13 @@ autosk ext update --dry-run                 # report available updates, install 
   entry goes. Because `remove` takes a valid source, an
   `invalid` entry that `ext list` flags must be cleared by hand-editing
   `settings.json`.
+- **`ext reload`.** Rebuilds the current project's merged (global + project)
+  registry on demand and atomically swaps it onto the live daemon — no restart.
+  Picks up added/removed extensions (including a brand-new or deleted file under
+  `.autosk/extensions/`) and prints the root, its registered workflows, and any
+  load diagnostics + parked tasks (the diagnostics/parks go to stderr). Editing
+  an installed extension's *code in place* (or `ext update`) still needs a
+  restart — the Bun module-cache wall.
 - **`ext update [source]`.** Bumps installed **floating** npm extensions
   (`npm:foo`) to their newest registry version, in place. The version check is
   `npm view <name> version` against the installed
@@ -239,13 +247,29 @@ autosk ext update --dry-run                 # report available updates, install 
   [first-run bootstrap](#first-run-bootstrap) and
   [reconcile](#auto-install-reconcile-every-start).
 
-**When it takes effect — no hot-reload.** A project's registry is built once,
-when the project is first opened, and cached for the daemon's lifetime (see
-[The live-code hazard](#the-live-code-hazard)). A freshly-installed package or
-local path is therefore picked up only on the **next daemon start / first
-project open** — there is deliberately no in-process hot-reload (it would risk
-active sessions and the engine). The `ext` commands print a hint to restart
-the daemon (or reopen the project) whenever they change `node_modules`.
+**When it takes effect — `add`/`remove` hot-reload.** `autosk ext add` and
+`autosk ext remove` apply **live**: the daemon rebuilds the affected project's
+extension registry and atomically swaps it in, so a newly-added workflow/agent
+is immediately schedulable and a removed one stops being scheduled — **no
+restart**. A **global** add/remove reloads every currently-open project; a
+`-l/--local` one reloads just that project. The command reports `applied live
+to N open project(s)` instead of a restart hint (when no project is open the
+change simply lands on the next open, and the soft restart hint is printed
+instead).
+
+**Running sessions are never disturbed.** A live session keeps the
+workflow/agent objects it captured at dispatch and finishes on that code; only
+new dispatch / enroll / resume / interactive-create see the new registry. A task
+whose workflow was just removed mid-session is **not** parked out from under its
+run — it parks only after the session settles (see
+[The live-code hazard](#the-live-code-hazard)).
+
+**Update / in-place edits are still restart-only.** `autosk ext update` and
+editing an installed extension's *code in place* re-use the same module path,
+which Bun will not re-import with new code in one process (the module-cache
+wall) — so `ext update` keeps its restart hint. Adding a brand-new file or
+deleting one under `.autosk/extensions/` *is* an add/remove and hot-applies; use
+[`autosk ext reload`](#managing-extensions) to pick those up on demand.
 
 **From the GUI.** The desktop app offers an equivalent install path for npm
 extensions: the **Workflows** panel header has a `＋` action (shown when a
@@ -253,9 +277,11 @@ project is active) that opens a browser of npm packages published with the
 `autosk-extension` keyword, sorted by weekly downloads. Picking **Install** asks
 whether to install **Globally** or **To this project**, then calls the same
 `extension.install` RPC (`{ local: false | true }`) these `autosk ext add` /
-`autosk ext add -l` commands use. Like the CLI, it shows a restart hint —
-the new workflow(s) appear only after the project is reopened. The GUI install
-covers `npm:` packages only; local-path sources are still CLI-only.
+`autosk ext add -l` commands use. The daemon hot-applies the install the same
+way (the workflow is schedulable immediately), but the desktop app's Workflows
+panel currently refreshes its list on the next project open, so it still shows a
+reopen hint. The GUI install covers `npm:` packages only; local-path sources are
+still CLI-only.
 
 ## No trust model
 
@@ -288,13 +314,22 @@ autosk project diagnostics
 
 ## The live-code hazard
 
-Because workflows are code, editing them can leave in-flight tasks pointing at a
-workflow or step that no longer exists. There are no frozen copies and no
-versioning — **the registry at daemon start is the truth**. On project (re)load,
-every `work` / `human` task is validated against the registry; a task whose
-workflow or step has vanished is parked to `human` with
-`error="workflow_missing: …"`. Fix the code (or restore the name) and resume the
-task.
+Because workflows are code, removing or editing them can leave in-flight tasks
+pointing at a workflow or step that no longer exists. There are no frozen copies
+and no versioning — **the current registry is the truth**. The registry is
+validated against in-flight tasks at project open **and on every hot-reload**
+(`ext add` / `remove` / `reload`): every `work` / `human` task whose workflow or
+step has vanished is parked to `human` with `error="workflow_missing: …"`. Fix
+the code (or restore the name) and resume the task.
+
+A task that currently has a **live session** is exempt from this guard — it is
+never parked out from under a running run. Its session finishes on the
+workflow/agent objects it captured at dispatch; if the workflow is gone by then,
+the scheduler parks the task on the next scan, so a removed-mid-run task
+self-heals to `human` only after its session settles, never during it. Editing
+an installed extension's code in place still needs a restart (the Bun
+module-cache wall), so the open-time validation remains the catch-all for code
+edits.
 
 ## First-run bootstrap
 

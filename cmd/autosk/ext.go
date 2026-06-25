@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -18,9 +19,10 @@ import (
 // `../rel`, `~/path`) — there is no implicit bare-name → npm form.
 //
 // A GLOBAL operation (the default) targets ~/.autosk; `-l/--local` targets the
-// current project's .autosk/ instead. There is no hot-reload: a freshly
-// installed or updated extension is picked up on the next daemon start / first
-// project open, so the commands print a restart hint when something changed.
+// current project's .autosk/ instead. `add`/`remove` hot-apply to open projects
+// (no daemon restart) and `reload` re-applies on demand; `update` (and editing
+// installed code in place) is still restart-only — the Bun module-cache wall —
+// so it prints a restart hint when something changed.
 func newExtCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ext",
@@ -32,7 +34,7 @@ func newExtCmd() *cobra.Command {
 			"By default these target the global scope (~/.autosk); pass -l/--local to\n" +
 			"target the current project's .autosk/ instead.",
 	}
-	cmd.AddCommand(newExtAddCmd(), newExtListCmd(), newExtRemoveCmd(), newExtUpdateCmd())
+	cmd.AddCommand(newExtAddCmd(), newExtListCmd(), newExtRemoveCmd(), newExtUpdateCmd(), newExtReloadCmd())
 	return cmd
 }
 
@@ -67,7 +69,7 @@ func newExtAddCmd() *cobra.Command {
 				}
 				fmt.Printf("%s %s (%s scope)\n", verb, res.Source, res.Scope)
 				fmt.Printf("  settings: %s\n", res.SettingsPath)
-				fmt.Fprintln(os.Stderr, "note: restart the daemon (or reopen the project) for the change to take effect")
+				printExtApplied(res.Reloaded, res.ReloadedProjects)
 			}
 			return nil
 		},
@@ -134,7 +136,7 @@ func newExtRemoveCmd() *cobra.Command {
 			if !flagQuiet {
 				if res.Removed {
 					fmt.Printf("removed %s (%s scope)\n", res.Source, res.Scope)
-					fmt.Fprintln(os.Stderr, "note: restart the daemon (or reopen the project) for the change to take effect")
+					printExtApplied(res.Reloaded, res.ReloadedProjects)
 				} else {
 					fmt.Printf("no matching entry for %s (%s scope)\n", res.Source, res.Scope)
 				}
@@ -211,6 +213,79 @@ func newExtUpdateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report available updates without installing anything")
 	cmd.Flags().BoolVar(&dryRun, "check", false, "alias for --dry-run")
 	return cmd
+}
+
+// newExtReloadCmd rebuilds the current project's merged (global + project)
+// extension registry and atomically swaps it onto the live daemon — no restart.
+// Added/removed extensions (incl. brand-new or deleted .autosk/extensions files)
+// are picked up; running sessions keep the code they started with. Editing an
+// installed extension's code in place (or `ext update`) still needs a restart
+// (the Bun module-cache wall).
+func newExtReloadCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reload",
+		Short: "Reload extensions without restarting the daemon",
+		Long: "Rebuild the current project's merged (global + project) extension\n" +
+			"registry and apply it to the live daemon — no restart.\n\n" +
+			"Added or removed extensions are picked up immediately; running sessions\n" +
+			"keep the code they started with. Editing an installed extension's code in\n" +
+			"place (or `ext update`) still needs a daemon restart (the Bun module cache).",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cl, err := cliClient()
+			if err != nil {
+				return err
+			}
+			res, err := cl.ReloadExtensions(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if flagJSON {
+				return json.NewEncoder(os.Stdout).Encode(res)
+			}
+			if !flagQuiet {
+				renderExtReload(res)
+			}
+			return nil
+		},
+	}
+}
+
+// printExtApplied reports how an ext add/remove landed: a live hot-reload to N
+// open project(s) (no restart), or the soft restart hint when nothing was
+// reloaded (no project open — the change lands on the next open). Written to
+// stderr so a piped stdout stays clean.
+func printExtApplied(reloaded bool, n int) {
+	if reloaded {
+		noun := "project"
+		if n != 1 {
+			noun = "projects"
+		}
+		fmt.Fprintf(os.Stderr, "applied live to %d open %s (no restart needed)\n", n, noun)
+		return
+	}
+	fmt.Fprintln(os.Stderr, "note: restart the daemon (or reopen the project) for the change to take effect")
+}
+
+// renderExtReload prints the human-readable reload summary: the rebuilt root,
+// its registered workflows, plus any load diagnostics and parked tasks (on
+// stderr, the warning channel).
+func renderExtReload(res rpcclient.ExtensionReloadResult) {
+	fmt.Printf("reloaded %s\n", res.Root)
+	if len(res.Workflows) == 0 {
+		fmt.Println("  workflows: (none)")
+	} else {
+		fmt.Printf("  workflows: %s\n", strings.Join(res.Workflows, ", "))
+	}
+	if len(res.Diagnostics) > 0 {
+		fmt.Fprintf(os.Stderr, "%d load diagnostic(s):\n", len(res.Diagnostics))
+		for _, d := range res.Diagnostics {
+			fmt.Fprintf(os.Stderr, "  %s: %s\n", d.Source, d.Error)
+		}
+	}
+	for _, p := range res.Parked {
+		fmt.Fprintf(os.Stderr, "parked %s: %s\n", p.TaskID, p.Error)
+	}
 }
 
 // extUpdateFailed reports whether any entry left the registry in a failed state.

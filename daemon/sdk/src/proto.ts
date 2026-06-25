@@ -274,6 +274,10 @@ export interface ExtensionInstallResult {
   settings_path: string;
   /** Whether an npm install ran (false for a local-path source). */
   installed: boolean;
+  /** Whether a live hot-reload was applied to ≥1 open project (no restart needed). */
+  reloaded?: boolean;
+  /** How many currently-open projects had their registry hot-reloaded. */
+  reloaded_projects?: number;
 }
 export interface ExtensionRemoveResult {
   scope: "global" | "project";
@@ -283,6 +287,32 @@ export interface ExtensionRemoveResult {
   settings_path: string;
   /** Whether a matching entry was removed. */
   removed: boolean;
+  /** Whether a live hot-reload was applied to ≥1 open project (no restart needed). */
+  reloaded?: boolean;
+  /** How many currently-open projects had their registry hot-reloaded. */
+  reloaded_projects?: number;
+}
+/**
+ * `extension.reload` (`autosk ext reload`): rebuild the project's merged
+ * (global + project) extension registry in place and atomically swap it onto
+ * the live daemon — no restart. Running sessions keep their captured code.
+ */
+export type ExtensionReloadParams = ProjectSelector;
+/** One task parked by a hot-reload because its workflow/step vanished. */
+export interface ExtensionReloadParkedTask {
+  task_id: string;
+  /** The `workflow_missing: …` reason recorded as the park comment. */
+  error: string;
+}
+export interface ExtensionReloadResult {
+  /** The project root whose registry was rebuilt. */
+  root: string;
+  /** Load diagnostics raised by the rebuilt registry (bad/colliding extensions). */
+  diagnostics: ExtensionLoadError[];
+  /** The workflow names registered after the reload (sorted). */
+  workflows: string[];
+  /** Non-live `work` tasks parked because their workflow/step disappeared. */
+  parked: ExtensionReloadParkedTask[];
 }
 /** One classified `settings.json#extensions` entry (`extension.list`). */
 export interface ExtensionEntryInfo {
@@ -415,6 +445,7 @@ export interface RpcMethodMap {
   "extension.list": { params: ProjectSelector; result: ExtensionListResult };
   "extension.remove": { params: ExtensionRemoveParams; result: ExtensionRemoveResult };
   "extension.update": { params: ExtensionUpdateParams; result: ExtensionUpdateResult };
+  "extension.reload": { params: ExtensionReloadParams; result: ExtensionReloadResult };
 
   // session
   "session.list": { params: SessionListParams; result: SessionMeta[] };
@@ -484,6 +515,7 @@ export const RPC_METHODS = [
   "extension.list",
   "extension.remove",
   "extension.update",
+  "extension.reload",
   "session.list",
   "session.get",
   "session.transcript",
@@ -551,11 +583,22 @@ export interface SessionChangedParams {
   session: SessionMeta;
 }
 
+/**
+ * `registry-changed` payload — a project's extension registry was hot-reloaded
+ * (an `ext add`/`remove`/`reload` rebuilt + swapped it). Carries only the
+ * affected `root`; subscribers re-fetch `registry.workflow.list` /
+ * `extension.list` / `project.diagnostics` to refresh their view.
+ */
+export interface RegistryChangedParams {
+  root: string;
+}
+
 export interface RpcNotificationMap {
   "task-changed": TaskChangedParams;
   "project-changed": ProjectChangedParams;
   "session-event": SessionEventParams;
   "session-changed": SessionChangedParams;
+  "registry-changed": RegistryChangedParams;
 }
 
 /** A valid proto-v2 notification name. */
@@ -570,6 +613,7 @@ export const RPC_NOTIFICATIONS = [
   "project-changed",
   "session-event",
   "session-changed",
+  "registry-changed",
 ] as const satisfies readonly RpcNotificationMethod[];
 
 // ---------------------------------------------------------------------------

@@ -17,9 +17,12 @@
  *  - {@link listExtensionEntries} — classify the global + project settings
  *    entries with a `resolved` flag (does it actually load?).
  *
- * No hot-reload: a freshly-installed package is picked up on the next daemon
- * start / first project open (the registry is built once and cached). Callers
- * surface a restart hint.
+ * This module only touches disk (npm + `settings.json`); it never reloads the
+ * in-memory registry. The DAEMON hot-applies an add/remove after this returns
+ * by rebuilding + swapping the affected project registries (see
+ * `Daemon.applyExtensionReload`), so `ext add`/`ext remove` need no restart.
+ * `ext update` / editing installed code in place stay restart-only (the Bun
+ * module-cache wall), so the update caller still surfaces a restart hint.
  */
 
 import { mkdirSync } from "node:fs";
