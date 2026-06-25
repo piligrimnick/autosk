@@ -11,8 +11,6 @@ import {
   TESTFLIGHT_URL,
 } from "../data/nav.ts";
 
-const linuxSnippet = `<span class="tok-comment"># grab the autosk + autoskd binaries (and the GUI</span>
-<span class="tok-comment"># .AppImage / .deb) from the latest release.</span>`;
 ---
 <section id="install" class="relative overflow-hidden border-t border-border/60">
   <div class="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(60%_60%_at_50%_0%,rgba(76,141,255,0.12),transparent_70%)]"></div>
@@ -45,28 +43,21 @@ const linuxSnippet = `<span class="tok-comment"># grab the autosk + autoskd bina
             code={`<span class="tok-accent">$</span> ${BREW_INSTALL}`}
             copyText={BREW_INSTALL}
           />
-          <p class="mt-2 font-mono text-xs text-fg-mute">Signed + notarized. Bundles the CLI/TUI and the daemon.</p>
+          <p class="mt-2 font-mono text-xs text-fg-mute">Signed + notarized. Bundles the CLI/TUI/GUI and the daemon.</p>
         </div>
 
         <div id="p-linux">
-          <CodeBlock title="GitHub Release" code={linuxSnippet} />
-          <div class="mt-3">
-            <Button href={LATEST_RELEASE_URL} variant="ghost" external>
-              <Icon name="arrow" size={15} />
-              Latest GitHub Release
-            </Button>
-          </div>
+          <Button href={LATEST_RELEASE_URL} variant="ghost" external>
+            <Icon name="arrow" size={15} />
+            Latest GitHub Release
+          </Button>
         </div>
 
         <div id="p-ios">
-          <CodeBlock title="Apple TestFlight" code={`<span class="tok-comment"># install the autosk iOS app (beta) from</span>
-<span class="tok-comment"># Apple TestFlight — no App Store listing yet.</span>`} />
-          <div class="mt-3">
-            <Button href={TESTFLIGHT_URL} variant="ghost" external>
-              <Icon name="arrow" size={15} />
-              iOS App (beta)
-            </Button>
-          </div>
+          <Button href={TESTFLIGHT_URL} variant="ghost" external>
+            <Icon name="arrow" size={15} />
+            iOS App (beta)
+          </Button>
           <p class="mt-2 font-mono text-xs text-fg-mute">Requires the TestFlight app. Companion to the daemon — watch and steer sessions on the go.</p>
         </div>
 
