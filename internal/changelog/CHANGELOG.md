@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`autosk ext reload`** — rebuild a project's extension registry live, no daemon restart.
+
+### Changed
+- **`ext add` / `ext remove`** now hot-apply to open projects (no restart); running sessions undisturbed.
+
 ## [0.2.3] — 2026-06-24
 
 ### Added
