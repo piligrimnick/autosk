@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **GUI:** transcript thinking and tool-call blocks now fold (collapsed by default) with rich per-tool headers.
+
 ## [0.2.3] — 2026-06-24
 
 ### Added
