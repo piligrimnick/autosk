@@ -109,8 +109,13 @@ The design mirrors the CodexMonitor blueprint ("shared core + thin adapters"):
   transcript tail follows either the selected session or, when a task is
   selected, the task's newest running session (one `session.subscribe` at a
   time); the transcript is the pi-format `session.transcript` / `session-event`
-  line stream, deduped by the transcript line cursor. While an agent turn
-  streams, the `session-event` `kind:"partial"` frame feeds a `partialBySession`
+  line stream, deduped by the transcript line cursor. In the transcript,
+  `thinking` and tool-call blocks render as **collapsible** disclosures
+  (collapsed by default once committed): a tool call merges with its matching
+  `toolResult` (correlated by `toolCallId`) into one block with a per-tool header
+  summary (running…/error badges), and thinking auto-expands while a turn is live
+  then collapses on commit. While an agent turn streams, the `session-event`
+  `kind:"partial"` frame feeds a `partialBySession`
   slice that renders a trailing **live** assistant bubble (text / thinking /
   tool-call blocks growing in place); it is cleared the moment the durable line
   commits (or the session goes terminal / is re-subscribed), so there is no

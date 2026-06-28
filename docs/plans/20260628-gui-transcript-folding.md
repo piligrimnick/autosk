@@ -1,6 +1,6 @@
 # GUI transcript folding — collapsible thinking & tool blocks
 
-**Status:** proposed
+**Status:** implemented (GUI-only, per scope below)
 **Date:** 2026-06-28
 **Scope (this iteration):** Tauri GUI only (`gui/src`). No daemon, SDK, wire, or
 Go changes — the existing transcript data already carries everything we need.
