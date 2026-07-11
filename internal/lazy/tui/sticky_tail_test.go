@@ -153,8 +153,60 @@ func TestStickyTail_FirstFrame_StartsAtBottom(t *testing.T) {
 	}
 }
 
+// TestStickyTail_LiveOverlayVisible_ManualScrollUpPreserved pins the
+// already-visible-overlay regression: once winSessionInput has been
+// visible for a frame, a one-line manual scroll-up must survive the
+// next live redraw instead of being classified as sticky by the
+// full, overlay-covered height. This is the companion to the
+// overlay-appears case below — the threshold shrinks to the visible
+// region only after the overlay has been present across two frames.
+func TestStickyTail_LiveOverlayVisible_ManualScrollUpPreserved(t *testing.T) {
+	gu := newHeadlessGui(t, 80, 40)
+	v, err := gu.g.SetView(winDetail, 0, 0, 79, 30, 0)
+	if err != nil && !isUnknownView(err) {
+		t.Fatalf("SetView detail: %v", err)
+	}
+	if v == nil {
+		t.Fatal("SetView returned nil")
+	}
+	v.Frame = true
+	if _, err := gu.g.SetView(winSessionInput, 5, 25, 75, 29, 0); err != nil && !isUnknownView(err) {
+		t.Fatalf("SetView sessionInput: %v", err)
+	}
+
+	body := strings.Repeat("line\n", 100)
+	// First pass: the overlay is present but was NOT visible last frame
+	// (gu.lastDetailOverlay starts false), so this pass is the
+	// "overlay-appears" transition — it anchors at the bottom against
+	// the effective height and flips lastDetailOverlay to true.
+	gu.writeViewSticky(winDetail, "", body)
+	effH := gu.detailEffectiveInnerH()
+	lineCount := viewBufferLineCount(v)
+	wantBottom := lineCount - effH
+	_, oy := v.Origin()
+	if oy != wantBottom {
+		t.Fatalf("setup: expected overlay bottom anchor at oy=%d, got %d (lineCount=%d effH=%d)", wantBottom, oy, lineCount, effH)
+	}
+
+	// Simulate the operator scrolling Detail up by only one line while
+	// the session-input overlay is (still) visible. The old threshold
+	// used the full inner height, so oy+fullH still reached the tail and
+	// the next live redraw yanked the viewport back down.
+	ox, _ := v.Origin()
+	v.SetOrigin(ox, wantBottom-1)
+	want := wantBottom - 1
+	// Second pass: overlay visible both last frame and now → threshold
+	// shrinks to the effective height, so the one-line scroll-up is no
+	// longer classified as at-bottom and the origin is preserved.
+	gu.writeViewSticky(winDetail, "", body)
+	_, oy = v.Origin()
+	if oy != want {
+		t.Errorf("sticky-tail clobbered one-line manual scroll above live overlay; oy=%d want %d", oy, want)
+	}
+}
+
 // TestStickyTail_OverlayAppears_TailStaysVisible pins the
-// SUBSTANTIVE regression review flagged: when the winJobInput
+// SUBSTANTIVE regression review flagged: when the winSessionInput
 // overlay appears between frames (e.g. the cursor moves from a
 // terminal job to a non-terminal one, or a queued job promotes
 // to running) the operator's at-bottom position must be
@@ -167,8 +219,9 @@ func TestStickyTail_FirstFrame_StartsAtBottom(t *testing.T) {
 // (overlay-less) viewport, but the new effective height makes
 // the check fail, leaving the overlay covering the rows they
 // were just reading. The fix is to compute beforeSticky against
-// the full InnerSize() and use the effective height only for the
-// post-write target.
+// the full InnerSize() on the overlay-appears frame (when the
+// overlay was NOT visible last frame) and use the effective
+// height only for the post-write target.
 func TestStickyTail_OverlayAppears_TailStaysVisible(t *testing.T) {
 	gu := newHeadlessGui(t, 80, 40)
 	// Create winDetail at a known size. Inner height ~ 28.
