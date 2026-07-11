@@ -157,6 +157,20 @@ describe("validateInFlightTasks", () => {
     expect(await store.listComments(t.id)).toEqual([]);
   });
 
+  test("isLive skips a work task with a live session (hot-reload: don't park out from under it)", async () => {
+    const t = await store.createTask({ title: "running orphan" });
+    await store.setPosition(t.id, { status: "work", workflow: "feature-dev", step: "dev" });
+
+    const registry = new ExtensionRegistry(); // feature-dev gone
+    // The predicate reports this task as live, so the guard must NOT park it: the
+    // running session keeps its captured code and self-heals once it settles.
+    const parked = await validateInFlightTasks(store, registry, { isLive: (id) => id === t.id });
+
+    expect(parked).toEqual([]);
+    expect((await store.taskView(t.id)).status).toBe("work");
+    expect(await store.listComments(t.id)).toEqual([]);
+  });
+
 });
 
 describe("ProjectManager open() runs the loader + hazard guard", () => {

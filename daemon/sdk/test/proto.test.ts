@@ -59,6 +59,7 @@ const PLAN_SECTION_4_METHODS = [
   "extension.list",
   "extension.remove",
   "extension.update",
+  "extension.reload",
   // session
   "session.list",
   "session.get",
@@ -78,6 +79,7 @@ const PLAN_SECTION_4_NOTIFICATIONS = [
   "project-changed",
   "session-event",
   "session-changed",
+  "registry-changed",
 ].sort();
 
 describe("proto-v2 method manifest", () => {

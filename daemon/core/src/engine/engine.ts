@@ -118,6 +118,28 @@ export class Engine implements SessionHost {
     return [...this.projects.keys()];
   }
 
+  /**
+   * Atomically swaps the extension registry the engine schedules a project over
+   * (extension hot-reload). The {@link EngineProject.registry} field is read
+   * FRESH on every dispatch/enroll/resume/interactive-create, so a single
+   * synchronous reassignment makes every NEW scheduling decision see the new
+   * set; a {@link SessionRuntime} already running keeps the workflow/agent object
+   * it captured at construction and finishes undisturbed. Kicks a scan so a
+   * freshly-available workflow picks up any `work`/ready task waiting for it.
+   *
+   * Returns whether the swap landed: `true` when the root was engine-registered
+   * and its registry was replaced, `false` (no-op) when the root is unknown to
+   * the engine. The caller gates its "reloaded" reporting on this so the reported
+   * state can never diverge from the engine's actual scheduling registry.
+   */
+  setProjectRegistry(root: string, registry: EngineProject["registry"]): boolean {
+    const project = this.projects.get(root);
+    if (!project) return false;
+    project.registry = registry;
+    this.kickScan();
+    return true;
+  }
+
   // -- lifecycle -----------------------------------------------------------
 
   /** (Re)enables scheduling, restarts the safety rescan, and kicks a scan. */
@@ -413,10 +435,31 @@ export class Engine implements SessionHost {
     const row = await project.store.schedulingRow(taskId).catch(() => null);
     if (!row || row.status !== "work" || row.blocked) return;
     if (row.workflow === null || row.step === null) return;
+    // Parking on a missing workflow/step here is always safe, for TWO reasons —
+    // and a future reader must not move the `hasLiveSession` re-check (below) up
+    // above these branches assuming only the first holds:
+    //   (1) the enumerating scan pre-filters live tasks, so a `work` task
+    //       normally reaches `dispatch` with no live session; and
+    //   (2) a MISSING workflow means no path (dispatch/enroll/resume) can mint a
+    //       NEW session for the task, so by the time `!wf`/`!step` is reached the
+    //       task genuinely has none — even though the scan snapshot can go stale
+    //       across awaits (which is exactly why the agent-dispatch path keeps its
+    //       own `hasLiveSession` re-check further down).
+    // This self-heals an orphan after its session settled: under extension
+    // hot-reload there is no open-time hazard guard to re-run, so the scheduler
+    // itself parks a task whose workflow/step was removed out from under it (the
+    // removed workflow's live session, if any, already finished on its captured
+    // object before the next scan reaches here).
     const wf = project.registry.resolveWorkflow(row.workflow);
-    if (!wf) return; // unknown workflow — the live-code hazard guard parks it
+    if (!wf) {
+      await this.park(project, taskId, `workflow_missing: ${row.workflow}`);
+      return;
+    }
     const step = wf.steps[row.step];
-    if (!step) return; // unknown step — hazard guard parks it
+    if (!step) {
+      await this.park(project, taskId, `workflow_missing: ${row.workflow} has no step ${row.step}`);
+      return;
+    }
     if (isStatusStep(step)) return; // terminal/park step: never scheduled
     const agent = step; // an agent step IS the agent definition (inline)
     if (project.store.sessions.hasLiveSession(taskId)) return; // already running/queued

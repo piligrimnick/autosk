@@ -47,11 +47,18 @@ export interface ParkedTask {
  *
  * The status flip keeps the task's `workflow`/`step` so the operator can see
  * what it pointed at; the reason is recorded as a comment.
+ *
+ * `opts.isLive` is the hot-reload guard (plan §3): a `work` task whose workflow
+ * was just removed but is CURRENTLY running must NOT be parked out from under
+ * its session — it keeps running its captured workflow object and settles
+ * normally, then parks itself on the next scan via the engine's park-on-missing
+ * dispatch path. At project open (a fresh process) there are no live sessions,
+ * so the predicate is absent and every invalid `work` task is parked as before.
  */
 export async function validateInFlightTasks(
   store: Store,
   registry: ExtensionRegistry,
-  opts: { author?: string } = {},
+  opts: { author?: string; isLive?: (taskId: string) => boolean } = {},
 ): Promise<ParkedTask[]> {
   const author = opts.author ?? HAZARD_COMMENT_AUTHOR;
   const parked: ParkedTask[] = [];
@@ -75,6 +82,11 @@ export async function validateInFlightTasks(
     // Only park what the scheduler could actually pick up. A `human` task is
     // already parked; re-commenting on every reload would be noise.
     if (view.status !== "work") continue;
+
+    // Never park out from under a live session (hot-reload): the running session
+    // keeps its captured code and self-heals via the engine's park-on-missing
+    // dispatch path once it settles.
+    if (opts.isLive?.(view.id)) continue;
 
     await store.setPosition(view.id, {
       status: "human",

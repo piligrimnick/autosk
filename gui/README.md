@@ -141,9 +141,10 @@ The design mirrors the CodexMonitor blueprint ("shared core + thin adapters"):
   backend (`extension_search` → `registry.npmjs.org`, sorted by weekly
   downloads), rows link to npmjs.com via `@tauri-apps/plugin-opener`, and
   **Install** reuses the daemon's `extension.install` RPC to add the package
-  globally or to the active project (no new daemon RPC). Newly installed
-  workflows appear only after the project is reopened (no hot-reload — matches
-  the CLI). A titlebar
+  globally or to the active project (no new daemon RPC). The daemon hot-applies
+  the install (the workflow is schedulable immediately), but this panel refreshes
+  its list on the next project open, so the GUI still shows a reopen hint. A
+  titlebar
   hosts the connection indicator and the Settings modal; the titlebar project
   switcher (switch / add / init /
   remove) also surfaces a ⚠ **diagnostics** badge + list when an extension fails

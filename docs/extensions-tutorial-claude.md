@@ -163,12 +163,11 @@ autosk ext add -l ~/autosk-claude-flow
 ```
 registered /Users/you/autosk-claude-flow (project scope)
   settings: /path/to/your/git/project/.autosk/settings.json
-note: restart the daemon (or reopen the project) for the change to take effect
+applied live to 1 open project (no restart needed)
 ```
 
-The workflow appears once the project's registry is built (a fresh project just
-works; if it was already open, `pkill autoskd` first). Confirm it resolved
-cleanly:
+The add hot-applies to the open project (no restart) — the workflow is
+immediately schedulable. Confirm it resolved cleanly:
 
 ```bash
 autosk ext list

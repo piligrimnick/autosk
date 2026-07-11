@@ -403,16 +403,19 @@ RFC3339 UTC. The wire types are defined once in
 | project | `list`, `add`, `remove`, `init`, `diagnostics` (extension load errors), `subscribe`/`unsubscribe` |
 | task | `list`, `get`, `create`, `update`, `enroll {workflow, step?}`, `resume {to?}`, `done`, `cancel`, `reopen`, `block`/`unblock`, `metadata.set`/`metadata.unset`, `comment.add/list/edit/delete`, `subscribe`/`unsubscribe` |
 | registry | `workflow.list`, `workflow.get`, `agent.list` (rendered from code — read-only) |
-| extension | `install`, `remove`, `update`, `list` — the `autosk ext` family; see [docs/extensions.md](extensions.md) for the management how-to |
+| extension | `install`, `remove`, `update`, `list`, `reload` — the `autosk ext` family (`install`/`remove`/`reload` hot-apply the rebuilt registry to open projects, no restart); see [docs/extensions.md](extensions.md) for the management how-to |
 | session | `list {task_id?}`, `get`, `transcript {from_line?, limit?}`, `subscribe`/`unsubscribe` (per-session replay-then-tail), `subscribeProject`/`unsubscribeProject` (project-scope lifecycle pushes), `input {message, kind}`, `abort`, `create {agent}` (open an interactive session), `end` (gracefully end one → `done`) |
 
 Notifications (server→client push): `task-changed`, `project-changed`,
-`session-event` (`message`|`status`|`done`|`error`|`partial`), and
+`session-event` (`message`|`status`|`done`|`error`|`partial`),
 `session-changed` (a project-scope push of one session's decorated meta on every
 create / status change — delivered to `session.subscribeProject` connections, and
 never carrying transcript lines, so a client keeps its session list live without
-subscribing per-session). All are fed by engine events and the fs watcher (so
-external file edits surface too). The `partial` frame is the ephemeral
+subscribing per-session), and `registry-changed` (a project's extension registry
+was hot-reloaded by an `ext add` / `remove` / `reload`; it carries only the
+affected `root`, and subscribers re-fetch `registry.workflow.list` /
+`extension.list` / `project.diagnostics` to refresh their view). All are fed by
+engine events and the fs watcher (so external file edits surface too). The `partial` frame is the ephemeral
 live-streaming channel — see [Streaming partial
 messages](#streaming-partial-messages) above; it is delivered only to
 per-session (`session.subscribe`) subscribers and is **not** broadcast on
@@ -435,6 +438,12 @@ A few RPC semantics worth knowing:
 - `project.remove` is **lazy**: it forgets the project in the registry and emits
   `project-changed`, but leaves an already-open handle running until the next
   daemon start.
+- `extension.install` / `extension.remove` / `extension.reload` **hot-apply** the
+  rebuilt extension registry to open projects (no daemon restart) and emit
+  `registry-changed`; a running session keeps the workflow/agent code it captured
+  at dispatch, and a task whose workflow vanished parks only after its session
+  settles. `extension.update` (and editing installed code in place) stays
+  restart-only (the Bun module-cache wall).
 
 ## Transports, auth, single-instance, idle-shutdown
 

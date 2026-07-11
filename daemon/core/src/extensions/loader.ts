@@ -149,17 +149,25 @@ function errMsg(e: unknown): string {
  * mode is caught + recorded as a diagnostic — this never throws. Bun imports
  * `.ts`/`.js` natively, so no jiti/transpile step is needed.
  *
- * **Reload semantics (plan §3.6: "the registry at daemon start is the truth").**
- * A project's registry is built once, when the project is first opened, and is
- * then cached on the project handle for the daemon's lifetime. Bun caches every
- * imported module by its resolved specifier for the life of the process, and
- * there is no reliable in-process ESM cache invalidation (a query-string
- * cache-bust is silently ignored for `file://` URLs, and copying the entry to a
- * unique path would break its relative / `@autosk/sdk` imports). So editing an
- * extension's code is reflected only after a **daemon restart** — a fresh
- * process rebuilds every registry from the current on-disk code. The live-code
- * hazard guard (`hazard.ts`) handles the consequence: a restart whose new code
- * dropped a workflow/step parks the now-orphaned in-flight tasks to `human`.
+ * **Reload semantics (extension hot-reload, plan §20260625).**
+ * ADDING or REMOVING an extension is now hot-applied without a daemon restart:
+ * `ProjectManager.rebuildRegistry` re-runs this loader off to the side and
+ * `Daemon.applyExtensionReload` atomically swaps the fresh registry onto both
+ * the project handle and the engine's `EngineProject` (see those methods).
+ * Add/remove dodge Bun's module cache by construction — an ADD imports a
+ * never-before-seen path (fresh code), and a REMOVE simply stops discovering a
+ * path (its stale cached module is never imported again).
+ *
+ * EDITING an installed extension's code IN PLACE (incl. `ext update`) is still
+ * **restart-only**: Bun caches every imported module by its resolved specifier
+ * for the life of the process, and there is no reliable in-process ESM cache
+ * invalidation (a query-string cache-bust is silently ignored — and now hangs —
+ * for `file://` URLs, and copying the entry to a unique path would break its
+ * relative / `@autosk/sdk` imports). So the SAME path re-imported yields the
+ * cached OLD code; only a fresh process rebuilds it. The live-code hazard guard
+ * (`hazard.ts`) handles the consequence on both paths: a reload/restart whose
+ * new code dropped a workflow/step parks the now-orphaned in-flight tasks to
+ * `human` (skipping any with a live session, which self-heal once they settle).
  */
 async function loadEntry(registry: ExtensionRegistry, entry: ExtensionEntry): Promise<void> {
   let mod: unknown;

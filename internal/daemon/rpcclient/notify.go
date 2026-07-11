@@ -17,7 +17,7 @@ import (
 // refetch): `task-changed` carries {root, task}, `project-changed` carries
 // {project}, `session-changed` carries {root, session}.
 type Notification struct {
-	Method string          // "task-changed" | "project-changed" | "session-changed"
+	Method string          // "task-changed" | "project-changed" | "session-changed" | "registry-changed"
 	Params json.RawMessage // raw notification params (kept opaque; callers refetch)
 }
 
@@ -134,7 +134,7 @@ func (s *NoteStream) readLoop(ch chan<- Notification, subID uint64) {
 			return // EOF / connection closed
 		}
 		switch raw.Method {
-		case "task-changed", "project-changed", "session-changed":
+		case "task-changed", "project-changed", "session-changed", "registry-changed":
 			select {
 			case ch <- Notification{Method: raw.Method, Params: raw.Params}:
 			case <-s.closed:

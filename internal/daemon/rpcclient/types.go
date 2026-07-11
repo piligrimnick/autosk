@@ -32,6 +32,7 @@ type (
 	ExtensionListResult    = api.ExtensionListResult
 	ExtensionUpdateEntry   = api.ExtensionUpdateEntry
 	ExtensionUpdateResult  = api.ExtensionUpdateResult
+	ExtensionReloadResult  = api.ExtensionReloadResult
 )
 
 // TaskListFilter narrows Tasks. A nil OR empty Statuses sends no status filter

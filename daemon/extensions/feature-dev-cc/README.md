@@ -84,19 +84,18 @@ autosk ext add /ABS/PATH/TO/autosk/daemon/extensions/feature-dev-cc
 # or scope it to the current project only
 autosk ext add -l /ABS/PATH/TO/autosk/daemon/extensions/feature-dev-cc
 
-# the registry is built once per daemon start, so restart / reopen the project:
+# the add hot-applies to open projects (no restart):
 autosk workflow list            # feature-dev-cc should appear
 autosk enroll <task-id> --workflow feature-dev-cc
 # or create + enroll in one shot:
 autosk create "Fix the flaky test" --workflow feature-dev-cc
 ```
 
-Extensions are loaded once when a project is first opened and cached for the
-daemon's lifetime — a freshly-added extension is picked up only on the **next
-daemon start / first project open**, so restart the daemon (or reopen the
-project) after `ext add`. If the workflow does not show up, check
-`autosk project diagnostics` for a load error (e.g. an unresolved
-`@autosk/claude-agent`).
+`autosk ext add` hot-applies the new extension to every open project (no daemon
+restart) — the workflow is immediately schedulable. Editing an installed
+extension's code *in place* is still restart-only (the Bun module-cache wall).
+If the workflow does not show up, check `autosk project diagnostics` for a load
+error (e.g. an unresolved `@autosk/claude-agent`).
 
 ## Configuration
 

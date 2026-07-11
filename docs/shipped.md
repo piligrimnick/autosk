@@ -137,12 +137,11 @@ workflow.
 
 ### How to run `feature-dev-cc`
 
-`feature-dev-cc` is **not** bootstrapped — add it, then restart the daemon (a
-project's registry is built once per daemon start; there is no hot-reload):
+`feature-dev-cc` is **not** bootstrapped — add it (the add hot-applies to open
+projects, no restart):
 
 ```bash
-autosk ext add npm:@autosk/feature-dev-cc   # or a local checkout path
-# restart the daemon (or reopen the project) so the registry rebuilds:
+autosk ext add npm:@autosk/feature-dev-cc   # or a local checkout path; hot-applies
 autosk workflow list                        # feature-dev-cc should appear
 autosk create "Fix the flaky auth test" --workflow feature-dev-cc
 ```
@@ -184,7 +183,7 @@ every agent step runs inside a **per-task `docker run -i --rm` container**
 # 1. build (or pull) the pi-runtime image
 daemon/extensions/pi-agent/docker/build.sh
 
-# 2. install the extension, then restart the daemon
+# 2. install the extension (hot-applies to open projects, no restart)
 autosk ext add npm:@autosk/feature-dev-docker
 autosk workflow list                        # feature-dev-docker should appear
 
@@ -243,7 +242,7 @@ The branch `autosk/<task-id>` is produced by a worktree-based workflow (e.g.
 your current branch after acceptance:
 
 ```bash
-autosk ext add npm:@autosk/merge-to-current   # restart the daemon afterwards
+autosk ext add npm:@autosk/merge-to-current   # hot-applies to open projects (no restart)
 
 git switch main                               # check out wherever you want it to land
 autosk enroll <task-id> --workflow merge-to-current
