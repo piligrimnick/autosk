@@ -60,7 +60,15 @@ describe("engine — interactive chat over a stub claude", () => {
     expect(before).not.toContain("ack:");
 
     // The first composer message (a followup) reaches the idle claude as a fresh turn.
-    const res = await engine.sessionInput(p.root, meta.id, { kind: "followup", message: "HELLO_CHAT" });
+    // The store flips status→running inside the atomic queued→running claim a beat
+    // BEFORE the runtime sets `started`/`ctx`, so a followup landing in that window
+    // returns {handled:false}. Retry the input until the runtime is live (the stub
+    // echoes each turn, so a duplicate followup is harmless).
+    let res!: { handled: boolean };
+    await waitFor(async () => {
+      res = await engine.sessionInput(p.root, meta.id, { kind: "followup", message: "HELLO_CHAT" });
+      return res.handled;
+    }, 15000);
     expect(res.handled).toBe(true);
     await waitFor(async () => (await transcript(p, meta.id)).includes("ack: HELLO_CHAT"), 15000);
 
