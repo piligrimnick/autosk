@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -176,5 +178,107 @@ func TestRPC_WritesDispatch(t *testing.T) {
 	}
 	if err := ds.AddComment(ctx, "ask-1", "hi"); err != nil {
 		t.Errorf("AddComment err = %v, want nil", err)
+	}
+}
+
+// recordingDaemon is a line-delimited JSON-RPC server that echoes a canned
+// result AND captures the params of each request so tests can assert the exact
+// wire shape the datasource dispatched (issue #8: the enroll picker's selected
+// step must reach task.enroll, not get dropped to first_step).
+func recordingDaemon(t *testing.T, result any) (*RPC, func() map[string]any) {
+	t.Helper()
+	// Short prefix (not t.TempDir()) keeps the UNIX socket path under macOS's
+	// ~104-byte sun_path limit even for long test names.
+	dir, err := os.MkdirTemp("", "as")
+	if err != nil {
+		t.Fatalf("tempdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "d.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	var (
+		mu   sync.Mutex
+		last map[string]any
+	)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				line, err := bufio.NewReader(c).ReadBytes('\n')
+				if err != nil {
+					return
+				}
+				var req struct {
+					ID     uint64         `json:"id"`
+					Method string         `json:"method"`
+					Params map[string]any `json:"params"`
+				}
+				_ = json.Unmarshal(line, &req)
+				mu.Lock()
+				last = req.Params
+				mu.Unlock()
+				resp := map[string]any{"id": req.ID, "result": result}
+				b, _ := json.Marshal(resp)
+				_, _ = c.Write(append(b, '\n'))
+			}(conn)
+		}
+	}()
+	cli, err := rpcclient.New(rpcclient.Options{Sock: sock, Cwd: "/repo", NoAutoSpawn: true})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	return NewRPC(cli), func() map[string]any {
+		mu.Lock()
+		defer mu.Unlock()
+		return last
+	}
+}
+
+// TestRPC_EnrollWorkflow_ForwardsStep proves the datasource forwards BOTH the
+// workflow and the operator-selected step to task.enroll. Regression guard for
+// issue #8, where the lazy enroll picker's step was dropped and the task always
+// started at first_step.
+func TestRPC_EnrollWorkflow_ForwardsStep(t *testing.T) {
+	enrolled := map[string]any{
+		"id": "ask-000009", "title": "t", "description": "", "status": "work",
+		"workflow": "feature-dev", "step": "review", "blocked": false,
+		"blocked_by": []any{}, "blocks": []any{}, "comment_count": 0,
+		"created_at": "2023-11-14T22:15:00Z", "updated_at": "2023-11-14T22:15:00Z",
+	}
+	ctx := context.Background()
+
+	// Non-first step: both workflow and step must reach the request.
+	ds, lastParams := recordingDaemon(t, enrolled)
+	if err := ds.EnrollWorkflow(ctx, "ask-000009", "feature-dev", "review"); err != nil {
+		t.Fatalf("EnrollWorkflow: %v", err)
+	}
+	p := lastParams()
+	if p["workflow"] != "feature-dev" {
+		t.Errorf("workflow param = %v, want feature-dev", p["workflow"])
+	}
+	if p["step"] != "review" {
+		t.Errorf("step param = %v, want review", p["step"])
+	}
+
+	// First-step enrollment: an empty step is omitted from the request so the
+	// daemon applies first_step (unchanged behavior).
+	ds2, lastParams2 := recordingDaemon(t, enrolled)
+	if err := ds2.EnrollWorkflow(ctx, "ask-000009", "feature-dev", ""); err != nil {
+		t.Fatalf("EnrollWorkflow (first step): %v", err)
+	}
+	p2 := lastParams2()
+	if p2["workflow"] != "feature-dev" {
+		t.Errorf("workflow param = %v, want feature-dev", p2["workflow"])
+	}
+	if _, ok := p2["step"]; ok {
+		t.Errorf("step param present for first-step enroll: %v", p2["step"])
 	}
 }

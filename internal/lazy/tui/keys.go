@@ -1186,7 +1186,7 @@ func (gu *Gui) taskReopen(*gocui.Gui, *gocui.View) error {
 // taskEnroll opens the two-pane workflow + step picker. On open the
 // workflow cursor pre-selects the task's current workflow when it
 // exists in the cached slice; otherwise row 0. Enter on the step
-// pane dispatches Datasource.Enroll(ctx, taskID, wfName, stepName).
+// pane dispatches Datasource.EnrollWorkflow(ctx, taskID, wfName, stepName).
 func (gu *Gui) taskEnroll(*gocui.Gui, *gocui.View) error {
 	t, ok := gu.st.selectedTaskLocked()
 	if !ok {
@@ -1208,7 +1208,7 @@ func (gu *Gui) taskEnroll(*gocui.Gui, *gocui.View) error {
 		wfs, wfCursor, stepCursor, false,
 		func(wfName, stepName string) error {
 			gu.runDispatch(func() {
-				if err := gu.ds.EnrollWorkflow(gu.ctx, taskID, wfName); err != nil {
+				if err := gu.ds.EnrollWorkflow(gu.ctx, taskID, wfName, stepName); err != nil {
 					gu.flashf("err", "enroll: %v", err)
 					return
 				}

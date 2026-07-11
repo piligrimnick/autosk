@@ -291,8 +291,8 @@ func (r *RPC) UpdateTask(ctx context.Context, id string, title, description *str
 	return err
 }
 
-func (r *RPC) EnrollWorkflow(ctx context.Context, id, workflow string) error {
-	_, err := r.cli.EnrollWorkflow(ctx, id, workflow, "")
+func (r *RPC) EnrollWorkflow(ctx context.Context, id, workflow, step string) error {
+	_, err := r.cli.EnrollWorkflow(ctx, id, workflow, step)
 	return err
 }
 

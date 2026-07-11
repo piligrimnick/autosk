@@ -68,7 +68,7 @@ func (f *refreshFakeDS) TaskReopen(_ context.Context, _ string) error {
 func (f *refreshFakeDS) UpdateTask(_ context.Context, _ string, _, _ *string) error {
 	return datasource.ErrDaemonRequired
 }
-func (f *refreshFakeDS) EnrollWorkflow(_ context.Context, _, _ string) error {
+func (f *refreshFakeDS) EnrollWorkflow(_ context.Context, _, _, _ string) error {
 	return datasource.ErrDaemonRequired
 }
 func (f *refreshFakeDS) Resume(_ context.Context, _, _ string) error {

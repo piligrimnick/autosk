@@ -142,8 +142,8 @@ func (w *timeoutWrapper) TaskReopen(ctx context.Context, id string) error {
 func (w *timeoutWrapper) UpdateTask(ctx context.Context, id string, title, description *string) error {
 	return w.ds.UpdateTask(ctx, id, title, description)
 }
-func (w *timeoutWrapper) EnrollWorkflow(ctx context.Context, id, workflow string) error {
-	return w.ds.EnrollWorkflow(ctx, id, workflow)
+func (w *timeoutWrapper) EnrollWorkflow(ctx context.Context, id, workflow, step string) error {
+	return w.ds.EnrollWorkflow(ctx, id, workflow, step)
 }
 func (w *timeoutWrapper) Resume(ctx context.Context, id, toStep string) error {
 	return w.ds.Resume(ctx, id, toStep)

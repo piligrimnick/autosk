@@ -228,9 +228,10 @@ type Datasource interface {
 	TaskReopen(ctx context.Context, id string) error
 	// UpdateTask replaces UpdateTitleDescription - uses pointers for optional updates
 	UpdateTask(ctx context.Context, id string, title, description *string) error
-	// EnrollWorkflow enrolls a task into a workflow at its first step. (The wire
-	// verb also accepts an explicit step; the TUI picker doesn't expose it yet.)
-	EnrollWorkflow(ctx context.Context, id, workflow string) error
+	// EnrollWorkflow enrolls a task into a workflow. An empty step enrolls at the
+	// workflow's first step; a non-empty step starts the task at exactly that step
+	// (the enroll picker forwards the operator's selected step).
+	EnrollWorkflow(ctx context.Context, id, workflow, step string) error
 	// Resume maps to Resume(id, nil) for "resume from human" or Resume(id, &StepTarget{Step:toStep})
 	Resume(ctx context.Context, id, toStep string) error
 	Block(ctx context.Context, id, blocker string) error
