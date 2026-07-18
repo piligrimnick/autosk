@@ -16,6 +16,9 @@
     "core:app:default",
     "core:webview:default",
     "core:webview:allow-set-webview-zoom",
-    { "identifier": "opener:allow-open-url", "allow": [{ "url": "https://www.npmjs.com/*" }] }
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "http://*" }, { "url": "https://*" }]
+    }
   ]
 }
