@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`ext add` / `ext remove`** now hot-apply to open projects (no restart); running sessions undisturbed.
 
 ### Fixed
+- **GUI:** restore the last active project after restarting the desktop application.
 - **lazy:** enroll picker now starts the task at the selected step instead of the first step.
 - **lazy:** manual Detail scroll-up now survives live redraws while the session input overlay is visible.
 

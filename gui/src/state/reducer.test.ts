@@ -195,6 +195,42 @@ describe("projectsSlice projects/loaded", () => {
     expect(s.activeProject).toBeNull();
     expect(s.projectsLoaded).toBe(true);
   });
+
+  // ask-8c2aee: activeProject may now be pre-seeded by hydration from
+  // localStorage (store.tsx's hydratedInitialState) BEFORE this action ever
+  // fires. These cases pin the same reducer logic for that pre-seeded value.
+
+  it("keeps a hydrated/persisted active project even when it is NOT the first registry entry", () => {
+    // "/z" is lexicographically last; a naive re-implementation that always
+    // picks projects[0] would wrongly override it.
+    let s = initialState();
+    s = { ...s, activeProject: "/z", byProject: { "/z": emptyProjectSlice() } };
+
+    s = rootReducer(s, { type: "projects/loaded", projects: [project("/a"), project("/m"), project("/z")] });
+    expect(s.activeProject).toBe("/z");
+  });
+
+  it("preserves the selection when the restored (non-first) active project is confirmed", () => {
+    let s: AppState = {
+      ...initialState(),
+      activeProject: "/z",
+      byProject: { "/z": emptyProjectSlice() },
+      selection: { kind: "task", taskId: "t1" },
+    };
+
+    s = rootReducer(s, { type: "projects/loaded", projects: [project("/a"), project("/z")] });
+    expect(s.activeProject).toBe("/z");
+    expect(s.selection).toEqual({ kind: "task", taskId: "t1" });
+  });
+
+  it("falls back to null when the registry loads empty even though a project was active/persisted", () => {
+    let s = initialState();
+    s = { ...s, activeProject: "/a", byProject: { "/a": emptyProjectSlice() } };
+
+    s = rootReducer(s, { type: "projects/loaded", projects: [] });
+    expect(s.activeProject).toBeNull();
+    expect(s.projectsLoaded).toBe(true);
+  });
 });
 
 describe("selection + sessions slices", () => {
