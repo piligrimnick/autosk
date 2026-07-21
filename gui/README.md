@@ -42,7 +42,8 @@ gui/
 │   ├── types.ts                # wire types (mirror daemon/sdk/src/{types,proto,transcript})
 │   ├── services/
 │   │   ├── ipc.ts              # the ONLY `invoke` site (typed shim per proto-v2 RPC method)
-│   │   └── events.ts           # the ONLY `listen` site (ref-counted fan-out hub)
+│   │   ├── events.ts           # the ONLY `listen` site (ref-counted fan-out hub)
+│   │   └── opener.ts           # validated HTTP(S) links → system browser
 │   ├── state/
 │   │   ├── selection.ts        # entity-selection union (task|session|workflow|none)
 │   │   ├── reducer.ts          # normalized, slice-composed reducer
@@ -65,7 +66,7 @@ gui/
 │   │   ├── projects/           # ProjectSwitcher (+ diagnostics), AddProjectModal
 │   │   ├── settings/          # SettingsModal
 │   │   └── shared/             # Menu (portal dropdown)
-│   └── components/             # shared primitives: Modal, Markdown, NoticeBar, common
+│   └── components/             # shared primitives: Modal, Markdown, link context menu, common
 └── src-tauri/                  # Tauri (Rust) backend — a self-contained
     │                           # cargo crate (no root cargo workspace)
     ├── tauri.conf.json
@@ -92,6 +93,14 @@ The design mirrors the CodexMonitor blueprint ("shared core + thin adapters"):
 - **One listen chokepoint.** `src/services/events.ts` is the only file that
   calls Tauri `listen`. It is a ref-counted fan-out hub: one Tauri listener per
   event name serves N React subscribers.
+- **External-link boundary.** Shared Markdown content, including session
+  transcripts, opens absolute HTTP(S) links in the system browser without
+  navigating the autosk WebView. Primary and middle clicks open links directly;
+  right-click offers a native **Open in Browser** action. Unsupported schemes
+  and protocol-relative URLs are blocked, while relative paths, queries, and
+  fragments retain their prior WebView behavior. `src/services/opener.ts`
+  validates the scheme again before calling the Tauri opener, whose capability
+  is limited to HTTP(S).
 - **Transport-agnostic backend.** The Rust `daemon_request` command is the
   local-vs-remote switch (`if remote { tcp.call } else { uds.call }`).
   `autoskd` JSON-RPC notifications (`session-event`, `task-changed`,
