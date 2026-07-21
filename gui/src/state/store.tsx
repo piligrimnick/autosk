@@ -42,6 +42,7 @@ import {
 } from "./types";
 import { NO_SELECTION, selectedSessionId, selectedTaskId } from "./selection";
 import { loadUiScale, saveUiScale } from "@/features/layout/utils/uiScale";
+import { loadActiveProject, saveActiveProject } from "@/features/projects/utils/activeProject";
 
 // localStorage keys for the sidebar geometry (layout-only UI state; not part of
 // the daemon's domain, so it lives in the browser, not the project DB).
@@ -52,19 +53,21 @@ const LS_SIDEBAR_WIDTH = "autosk.sidebarWidth";
 // already correct (no width/collapse flash). Pure in non-browser test runs
 // (`window` is undefined under vitest's node environment), where it returns the
 // plain `initialState()`.
-function hydratedInitialState(): AppState {
+export function hydratedInitialState(): AppState {
   const base = initialState();
-  if (typeof window === "undefined") return base;
+  const activeProject = loadActiveProject();
+  if (typeof window === "undefined") return { ...base, activeProject };
   try {
     const collapsed = window.localStorage.getItem(LS_SIDEBAR_COLLAPSED) === "1";
     const widthRaw = window.localStorage.getItem(LS_SIDEBAR_WIDTH);
     const sidebarWidth = widthRaw ? clampSidebarWidth(Number(widthRaw)) : base.ui.sidebarWidth;
     return {
       ...base,
+      activeProject,
       ui: { ...base.ui, sidebarCollapsed: collapsed, sidebarWidth, uiScale: loadUiScale() },
     };
   } catch {
-    return base;
+    return { ...base, activeProject };
   }
 }
 
@@ -542,7 +545,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // project on launch (and after a registry change).
   useEffect(() => {
     const root = state.activeProject;
-    if (!root) return;
+    // A hydrated root is only a local preference until the registry has
+    // confirmed it. In particular, task.subscribe opens the project in the
+    // daemon, so never let a stale preference open or schedule an unregistered
+    // project while bootstrap is still loading the registry.
+    if (!root || !state.projectsLoaded) return;
     // Front-end-issued task.subscribe + session.subscribeProject (v2 requires
     // {cwd} + opens the project; both are per-connection state).
     void ipc.taskSubscribe(root).catch(() => {});
@@ -555,7 +562,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       void ipc.taskUnsubscribe(root).catch(() => {});
       void ipc.sessionUnsubscribeProject(root).catch(() => {});
     };
-  }, [state.activeProject, effects]);
+  }, [state.activeProject, state.projectsLoaded, effects]);
 
   // Bootstrap once on mount. `effects` is stable (useMemo []), so the empty
   // dep array is intentional — bootstrap runs exactly once.
@@ -578,6 +585,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     saveUiScale(state.ui.uiScale);
   }, [state.ui.uiScale]);
+
+  // Persist every reducer-resolved project change, including registry fallbacks.
+  useEffect(() => {
+    saveActiveProject(state.activeProject);
+  }, [state.activeProject]);
 
   const value = useMemo<StoreValue>(
     () => ({ state, dispatch, effects, cwd: state.activeProject ?? "" }),
