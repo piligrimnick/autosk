@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **GUI:** restore the last active project after restarting the desktop application.
+- **GUI:** session-log HTTP(S) links open externally without leaving autosk (ask-acf7cc).
 - **lazy:** enroll picker now starts the task at the selected step instead of the first step.
 - **lazy:** manual Detail scroll-up now survives live redraws while the session input overlay is visible.
 

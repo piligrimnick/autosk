@@ -32,8 +32,8 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", 
 # (ring + webpki roots) keeps this OpenSSL-free across platforms; `json`
 # deserialises the search response directly.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-# Open a package's npmjs.com page in the user's default browser (scoped in
-# capabilities/default.json to https://www.npmjs.com/*).
+# Open validated HTTP(S) links in the user's default browser (scoped in
+# capabilities/default.json to those schemes).
 tauri-plugin-opener = "2"
 
 [features]

@@ -26,7 +26,11 @@ export function ExtensionRow({ ext, installedScope, onInstall }: ExtensionRowPro
         type="button"
         className="ext-main"
         title={`Open ${ext.name} on npmjs.com`}
-        onClick={() => void openExternal(ext.npm_url)}
+        onClick={() =>
+          // openExternal now rejects for non-HTTP(S) URLs; catch so a malformed
+          // npm_url cannot surface as an unhandled promise rejection.
+          void openExternal(ext.npm_url).catch((error) => console.error(error))
+        }
       >
         <span className="ext-head">
           <span className="ext-name">{ext.name}</span>
