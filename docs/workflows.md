@@ -499,6 +499,9 @@ Three more are **opt-in** (add them with
 - **`@autosk/merge-to-current`** — a single non-isolated `merge` step that
   integrates a task's `autosk/<task-id>` branch into the branch you currently
   have checked out (`merge → done | human`), with full rollback on failure.
+- **`@autosk/gh-review`** — reviews a GitHub issue/PR (URL in the task title) in
+  a per-task `dockerSandbox` container with a READ-ONLY `gh`
+  (`review → accept (human) → cleanup → done`).
 
 See **[docs/shipped.md](shipped.md)** for the full catalog — graphs, step
 tables, config knobs, install/enroll how-tos, and an end-to-end tutorial — and

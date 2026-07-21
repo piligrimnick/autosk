@@ -3,8 +3,9 @@
 The thin operator image `dockerSandbox({ image })` runs the **pi** harness inside
 (used by [`@autosk/feature-dev-docker`](../../feature-dev-docker/README.md)). It
 carries `pi` plus the autosk build/test toolchain (Go 1.25, Bun, git, make,
-golangci-lint, Node) and **nothing else** — no `socat`, no `autosk`/`autoskd`, no
-mounted daemon socket.
+golangci-lint, Node) and the GitHub CLI (`gh`, for the read-only reviews of
+[`@autosk/gh-review`](../../gh-review/README.md)) and **nothing else** — no
+`socat`, no `autosk`/`autoskd`, no mounted daemon socket.
 
 pi runs **thin**: under a `dockerSandbox` (`sandbox.thin === true`) `@autosk/pi-agent`
 mints the per-session **host HTTP MCP server**, injects the ack-only
@@ -57,6 +58,10 @@ Per task it mounts:
 
 - host `~/.pi` → `/home/agent/.pi` (rw — `auth.json`, `models.json`, `settings.json`, extensions, skills);
 - the per-task project `.git` → its identical host path (so the git worktree resolves its commondir).
+
+`@autosk/gh-review` additionally injects the operator's read-only gh token
+(`~/.autosk/github/ro-token.json` on the host) as the container's `GH_TOKEN`
+env — gh's native mechanism; there is NO gh config file in the container.
 
 > Host-only pi extensions (voice / statusline) that shell out to macOS binaries
 > may warn under Linux; `pi --mode rpc` is headless so they are typically inert.

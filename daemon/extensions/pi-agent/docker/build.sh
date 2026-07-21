@@ -9,7 +9,7 @@
 #   GOLANGCI_VERSION golangci-lint         (default 2.9.0)
 #   BUN_VERSION      Bun                   (default 1.3.14)
 #   NODE_MAJOR       Node.js major         (default 22)
-#   PI_VERSION       pi CLI version        (default 0.79.10; use 'latest' to track host)
+#   PI_VERSION       pi CLI version        (default 0.81.1; use 'latest' to track host)
 #   DOCKER           docker binary         (default docker; honours podman)
 set -euo pipefail
 
@@ -25,7 +25,7 @@ echo ">> building ${IMAGE}:${TAG} (local, single-arch)"
   --build-arg GOLANGCI_VERSION="${GOLANGCI_VERSION:-2.9.0}" \
   --build-arg BUN_VERSION="${BUN_VERSION:-1.3.14}" \
   --build-arg NODE_MAJOR="${NODE_MAJOR:-22}" \
-  --build-arg PI_VERSION="${PI_VERSION:-0.79.10}" \
+  --build-arg PI_VERSION="${PI_VERSION:-0.81.1}" \
   -t "${IMAGE}:${TAG}" \
   "$here"
 

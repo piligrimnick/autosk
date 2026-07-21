@@ -1,0 +1,49 @@
+{
+  "name": "@autosk/gh-review",
+  "version": "0.1.0",
+  "description": "gh-review — review a GitHub issue or PR (URL in the task title) with a pi agent in a per-task dockerSandbox and a READ-ONLY gh; review → accept (human) → cleanup → done.",
+  "license": "MIT",
+  "author": "wierdbytes",
+  "homepage": "https://github.com/wierdbytes/autosk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wierdbytes/autosk.git",
+    "directory": "daemon/extensions/gh-review"
+  },
+  "bugs": {
+    "url": "https://github.com/wierdbytes/autosk/issues"
+  },
+  "keywords": [
+    "autosk",
+    "autosk-extension",
+    "autosk-workflow",
+    "docker",
+    "github",
+    "review"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": "./index.ts"
+  },
+  "types": "./index.ts",
+  "autosk": {
+    "extensions": ["./index.ts"]
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "prompts/",
+    "README.md"
+  ],
+  "dependencies": {
+    "@autosk/pi-agent": "^0.1.0",
+    "@autosk/sandbox": "^0.1.0",
+    "@autosk/sdk": "^0.1.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

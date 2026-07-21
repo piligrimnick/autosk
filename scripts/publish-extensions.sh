@@ -19,6 +19,9 @@
 #   - `@autosk/feature-dev-docker` (the feature-dev pi workflow with every agent
 #     step in a per-task dockerSandbox; deps @autosk/sdk + @autosk/sandbox +
 #     @autosk/feature-dev).
+#   - `@autosk/gh-review` (a workflow that reviews a GitHub issue/PR — URL in the
+#     task title — in a per-task dockerSandbox with a READ-ONLY gh; deps
+#     @autosk/sdk + @autosk/sandbox + @autosk/pi-agent).
 #   - `@autosk/merge-to-current` (a standalone workflow that merges a task branch
 #     into the project's current branch; deps @autosk/sdk + @autosk/pi-agent).
 #
@@ -98,6 +101,7 @@ packages=(
   "daemon/extensions/claude-agent"
   "daemon/extensions/feature-dev"
   "daemon/extensions/feature-dev-docker"
+  "daemon/extensions/gh-review"
   "daemon/extensions/feature-dev-cc"
   "daemon/extensions/merge-to-current"
   "pi-tools"

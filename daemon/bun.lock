@@ -27,14 +27,14 @@
     },
     "extensions/claude-agent": {
       "name": "@autosk/claude-agent",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "@autosk/sdk": "^0.1.0",
       },
     },
     "extensions/feature-dev": {
       "name": "@autosk/feature-dev",
-      "version": "0.1.3",
+      "version": "0.1.5",
       "dependencies": {
         "@autosk/pi-agent": "^0.1.0",
         "@autosk/sandbox": "^0.1.0",
@@ -43,7 +43,7 @@
     },
     "extensions/feature-dev-cc": {
       "name": "@autosk/feature-dev-cc",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "dependencies": {
         "@autosk/claude-agent": "^0.1.0",
         "@autosk/sandbox": "^0.1.0",
@@ -59,9 +59,18 @@
         "@autosk/sdk": "^0.1.0",
       },
     },
+    "extensions/gh-review": {
+      "name": "@autosk/gh-review",
+      "version": "0.1.0",
+      "dependencies": {
+        "@autosk/pi-agent": "^0.1.0",
+        "@autosk/sandbox": "^0.1.0",
+        "@autosk/sdk": "^0.1.0",
+      },
+    },
     "extensions/merge-to-current": {
       "name": "@autosk/merge-to-current",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "dependencies": {
         "@autosk/pi-agent": "^0.1.0",
         "@autosk/sdk": "^0.1.0",
@@ -69,7 +78,7 @@
     },
     "extensions/pi-agent": {
       "name": "@autosk/pi-agent",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "dependencies": {
         "@autosk/sdk": "^0.1.0",
       },
@@ -83,7 +92,7 @@
     },
     "sdk": {
       "name": "@autosk/sdk",
-      "version": "0.1.0",
+      "version": "0.1.1",
     },
   },
   "packages": {
@@ -96,6 +105,8 @@
     "@autosk/feature-dev-cc": ["@autosk/feature-dev-cc@workspace:extensions/feature-dev-cc"],
 
     "@autosk/feature-dev-docker": ["@autosk/feature-dev-docker@workspace:extensions/feature-dev-docker"],
+
+    "@autosk/gh-review": ["@autosk/gh-review@workspace:extensions/gh-review"],
 
     "@autosk/merge-to-current": ["@autosk/merge-to-current@workspace:extensions/merge-to-current"],
 

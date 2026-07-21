@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **`autosk ext reload`** — rebuild a project's extension registry live, no daemon restart.
+- **`gh-review` workflow** — opt-in: review a GitHub issue/PR in docker with read-only `gh`.
 
 ### Changed
 - **`ext add` / `ext remove`** now hot-apply to open projects (no restart); running sessions undisturbed.

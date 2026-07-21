@@ -25,6 +25,7 @@ explicitly with [`autosk ext add`](extensions.md#managing-extensions). For the
 | [`@autosk/feature-dev`](#autoskfeature-dev) | workflow | pi (`pi --mode rpc`) | per-task git worktree | first-run bootstrap | `--workflow feature-dev` |
 | [`@autosk/feature-dev-cc`](#autoskfeature-dev-cc) | workflow | Claude Code (`claude -p`) | per-task git worktree | opt-in | `autosk ext add npm:@autosk/feature-dev-cc` |
 | [`@autosk/feature-dev-docker`](#autoskfeature-dev-docker) | workflow | pi, in a container | per-task `docker run` | opt-in | `autosk ext add npm:@autosk/feature-dev-docker` |
+| [`@autosk/gh-review`](#autoskgh-review) | workflow | pi, in a container (read-only `gh`) | per-task `docker run` | opt-in | `autosk ext add npm:@autosk/gh-review` |
 | [`@autosk/merge-to-current`](#autoskmerge-to-current) | workflow | pi (`pi --mode rpc`) | none (host working tree) | opt-in | `autosk ext add npm:@autosk/merge-to-current` |
 | [`@autosk/pi-agent`](#autoskpi-agent) | agent | pi (`pi --mode rpc`) | per-step (caller's) | bootstrap (transitive) | inline step value / `"pi"` chat |
 | [`@autosk/claude-agent`](#autoskclaude-agent) | agent | Claude Code (`claude -p`) | per-step (caller's) | opt-in | inline step value / `"@autosk/claude-agent"` chat |
@@ -40,7 +41,9 @@ bootstrapped machine. Everything else you add explicitly.
 
 All three `feature-dev*` workflows share one graph and differ only in the
 **harness** (pi vs Claude Code) and the **sandbox** (host worktree vs container).
-`merge-to-current` is a separate, single-step integration workflow.
+`gh-review` is a separate single-step review workflow (a GitHub issue/PR,
+read-only `gh` in a container), and `merge-to-current` a single-step branch
+integration workflow.
 
 ## `@autosk/feature-dev`
 
@@ -193,6 +196,68 @@ autosk enroll <task-id> --workflow feature-dev-docker
 
 Docker isolation here is just `dockerSandbox({ image })` from the bootstrapped
 `@autosk/sandbox` — there is no separate isolation-provider extension to add.
+
+## `@autosk/gh-review`
+
+A **single-step review workflow**: enroll a task whose **title carries a GitHub
+issue/PR URL** (`https://github.com/<owner>/<repo>/issues/9` or `…/pull/12`) and
+a pi agent reviews it inside a per-task
+[`dockerSandbox`](workflows.md#dockersandbox-image--a-per-task-container)
+container (`ghcr.io/wierdbytes/pi-runtime`, which ships `gh`) — with a
+**READ-ONLY** GitHub token. The verdict lands as one structured comment on the
+autosk task; nothing is ever written to GitHub.
+
+```text
+review ──▶ accept (human) ──▶ cleanup ──▶ done
+```
+
+| Step | Kind | What it does |
+| --- | --- | --- |
+| `review` | `piAgent` (xhigh) | first/only agent step: reads the issue/PR with `gh` (clones the repo inside the container when the diff is not enough), posts the review as a task comment, transits to `accept` |
+| `accept` | `statusStep("human")` | parks the task so you can read the review |
+| `cleanup` | `sandboxCleanupStep` | removes the per-task worktree/container, transits to `done` |
+
+- **Enroll is validated before any agent runs** (`onTransit`): a task with no
+  parsable GitHub URL (title, falling back to the description) is rejected with
+  an explanatory comment and stays `new`; so is an enroll when the daemon has no
+  gh config.
+- **Read-only `gh`.** The operator provisions a fine-grained PAT (Permissions:
+  `Contents`, `Issues`, `Pull requests`, `Metadata` — all **Read**; restricted
+  to the repos to review) in `~/.autosk/github/ro-token.json`
+  (`{ "token": "github_pat_…" }`). The extension reads the file at
+  container-start and passes the token as the `GH_TOKEN` env — gh's native
+  mechanism: no gh config file exists in the container, so gh never tries to
+  rewrite one (gh ≥2.40 rewrites `hosts.yml` on most invocations, which breaks
+  a read-only config mount). The token is visible in `docker inspect` while the
+  container lives; every write is rejected by GitHub (403) regardless.
+- **Thin image, host MCP / git** — same mechanics as `feature-dev-docker` above
+  (host MCP over `host.docker.internal`, `~/.pi` mounted rw, the project `.git`
+  layered in at its identical path).
+
+| Env var | Default | What |
+| --- | --- | --- |
+| `AUTOSK_GH_REVIEW_IMAGE` | `ghcr.io/wierdbytes/pi-runtime:latest` | image to run (must ship `gh`) |
+| `AUTOSK_GH_DIR` | `~/.autosk/github` | dir holding `ro-token.json` (read fresh per run) |
+| `AUTOSK_PI_DIR` | `~/.pi` | host pi config (auth + models) bind-mounted into the container |
+
+### How to run `gh-review`
+
+```bash
+# 1. build (or pull) the pi-runtime image (ships gh)
+daemon/extensions/pi-agent/docker/build.sh
+
+# 2. provision the read-only gh token (fine-grained PAT, see README)
+mkdir -p ~/.autosk/github
+echo '{ "token": "github_pat_…" }' > ~/.autosk/github/ro-token.json && chmod 600 ~/.autosk/github/ro-token.json
+
+# 3. install the extension (hot-applies to open projects, no restart)
+autosk ext add npm:@autosk/gh-review
+
+# 4. enroll a task whose title carries the URL
+autosk create "https://github.com/wierdbytes/autosk/pull/12" --workflow gh-review
+# the review comment lands on the task, which parks at `accept`:
+autosk resume <id> --to cleanup            # → done
+```
 
 ## `@autosk/merge-to-current`
 

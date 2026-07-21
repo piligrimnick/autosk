@@ -4,7 +4,9 @@
 # Contract (docs/workflows.md → dockerSandbox, daemon/extensions/sandbox/README.md):
 #   - ships the harness (`pi`, authenticated at RUNTIME via a mounted ~/.pi —
 #     NOT baked in) plus the build/test toolchain (Go, Bun, git, make,
-#     golangci-lint, Node);
+#     golangci-lint, Node) and the GitHub CLI (`gh`, for the read-only reviews
+#     of @autosk/gh-review — authenticated at RUNTIME via a GH_TOKEN env the
+#     workflow injects from the operator's ~/.autosk/github/ro-token.json);
 #   - NO socat, NO autosk/autoskd, NO mounted daemon socket — pi reaches the
 #     per-session host HTTP MCP server over host.docker.internal via the injected
 #     `pi-mcp-extension.ts` (bind-mounted by the agent), so the image is thin;
@@ -22,7 +24,7 @@ ARG BUN_VERSION=1.3.14
 ARG NODE_MAJOR=22
 # pi is a Node CLI (engines: node >=22.19); pin to the operator's version,
 # override with PI_VERSION=latest when you bump the host pi.
-ARG PI_VERSION=0.79.10
+ARG PI_VERSION=0.81.1
 # buildx sets this; default via dpkg for a plain `docker build`.
 ARG TARGETARCH
 
@@ -69,6 +71,22 @@ RUN set -eux; \
     curl -fsSL "https://raw.githubusercontent.com/golangci/golangci-lint/v${GOLANGCI_VERSION}/install.sh" \
       | sh -s -- -b /usr/local/bin "v${GOLANGCI_VERSION}"; \
     golangci-lint version
+
+# --- GitHub CLI (gh) — read-only reviews (@autosk/gh-review) -----------------
+# Auth is NOT baked in and NOT a mounted config file: gh-review injects the
+# operator's read-only fine-grained PAT (from ~/.autosk/github/ro-token.json on
+# the host) as the container's GH_TOKEN env — gh's native token mechanism (gh
+# ≥2.40 rewrites a mounted hosts.yml, so a config-file mount does not work).
+RUN set -eux; \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /usr/share/keyrings/githubcli-archive-keyring.gpg; \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg; \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gh; \
+    rm -rf /var/lib/apt/lists/*; \
+    gh --version
 
 # --- arbitrary-uid HOME -----------------------------------------------------
 # dockerSandbox passes `--user <host uid:gid>` (e.g. macOS 501:20), which need

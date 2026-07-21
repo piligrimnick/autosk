@@ -124,6 +124,9 @@ is in the script header.
   - `daemon/extensions/feature-dev/` — `@autosk/feature-dev`: the reference
     workflow (`dev → review → docs → validator → accept`), published to npm and
     installed by the daemon's first-run bootstrap
+  - `daemon/extensions/gh-review/` — `@autosk/gh-review`: reviews a GitHub
+    issue/PR (URL in the task title) in a per-task docker container with a
+    READ-ONLY `gh` (`review → accept (human) → cleanup → done`)
 - `gui/` — the Tauri desktop app: `src/` (React + Vite front end), `src-tauri/`
   (thin Tauri backend, a pure JSON-RPC client of `autoskd`; standalone cargo crate)
 - `website/` — the marketing landing page: a static Astro + Tailwind v4 site
