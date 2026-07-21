@@ -61,7 +61,8 @@ describe("engine — interactive (taskless) sessions", () => {
 
   test("createInteractiveSession dispatches a running, taskless session in interactive mode", async () => {
     const mode: { value?: string } = {};
-    const { p, engine } = await setup(chatAgent({ mode }));
+    const started = gate();
+    const { p, engine } = await setup(chatAgent({ mode, started: () => started.open() }));
     const meta = await engine.createInteractiveSession(p.root, "chat");
     expect(meta.kind).toBe("interactive");
     expect(meta.task_id).toBe("");
@@ -70,6 +71,9 @@ describe("engine — interactive (taskless) sessions", () => {
     expect(meta.agent).toBe("chat");
     expect(meta.status).toBe("queued");
 
+    // mode.value is set inside onRun; the engine persists `running` BEFORE onRun
+    // starts, so wait for onRun to actually run (started) before asserting it.
+    await started.wait;
     await waitForStatus(p, meta.id, "running");
     expect(mode.value).toBe("interactive");
     // No task was created to host the session.
@@ -241,9 +245,11 @@ describe("engine — interactive (taskless) sessions", () => {
     // meta and fans it out (status session-event / session-changed) WITHOUT
     // touching the lifecycle `status`, which stays `running` throughout.
     let ctxRef: AgentRunContext | undefined;
+    const started = gate();
     const agent: AgentDefinition = {
       async onRun(ctx) {
         ctxRef = ctx;
+        started.open();
         await new Promise<void>((resolve) => {
           if (ctx.signal.aborted) return resolve();
           ctx.signal.addEventListener("abort", () => resolve(), { once: true });
@@ -252,6 +258,9 @@ describe("engine — interactive (taskless) sessions", () => {
     };
     const { p, engine } = await setup(agent);
     const meta = await engine.createInteractiveSession(p.root, "chat");
+    // Wait for onRun to actually start (ctxRef assigned) — status `running` is
+    // persisted by the engine BEFORE onRun is invoked, so it alone races ctxRef.
+    await started.wait;
     await waitForStatus(p, meta.id, "running");
     // Opened idle.
     expect((await p.store.sessions.getMeta(meta.id))?.activity).toBe("idle");

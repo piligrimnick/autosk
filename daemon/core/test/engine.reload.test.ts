@@ -68,7 +68,11 @@ describe("engine — extension hot-reload", () => {
     await p.store.setPosition(task.id, { status: "work", workflow: "ghost", step: "go" });
     await engine.addProject(p.project); // kicks a scan → dispatch → park
 
-    await waitFor(async () => (await p.store.taskView(task.id)).status === "human");
+    // park() flips the status to `human` and THEN writes the comment, so wait for
+    // the comment to land (which implies the status flip already applied).
+    await waitFor(async () =>
+      (await p.store.listComments(task.id)).some((c) => c.text === "workflow_missing: ghost"),
+    );
     const view = await p.store.taskView(task.id);
     expect(view.status).toBe("human");
     expect(view.workflow).toBe("ghost"); // position preserved for the operator
@@ -108,7 +112,11 @@ describe("engine — extension hot-reload", () => {
     // Let the captured dev agent finish: it transits to `review` (W is captured),
     // the session settles, and the NEXT scan dispatches review → W is gone → park.
     g.open();
-    await waitFor(async () => (await p.store.taskView(task.id)).status === "human");
+    // park() flips the status to `human` and THEN writes the comment, so wait for
+    // the comment to land (which implies the status flip already applied).
+    await waitFor(async () =>
+      (await p.store.listComments(task.id)).some((c) => c.text === "workflow_missing: W"),
+    );
     const view = await p.store.taskView(task.id);
     expect(view.status).toBe("human");
     const comments = await p.store.listComments(task.id);
