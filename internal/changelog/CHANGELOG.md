@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] — 2026-07-21
+
 ### Added
 - **`autosk ext reload`** — rebuild a project's extension registry live, no daemon restart.
 - **`gh-review` workflow** — opt-in: review a GitHub issue/PR in docker with read-only `gh`.
