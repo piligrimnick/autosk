@@ -143,6 +143,8 @@ interface NotificationFrame {
 /** A minimal JSON-lines RPC client for tests (UDS or TCP). */
 export class RpcClient {
   private buffer = "";
+  /** Streaming decoder so a multibyte rune split across two socket chunks survives. */
+  private readonly decoder = new TextDecoder();
   private nextId = 1;
   private readonly pending = new Map<number, (frame: ResponseFrame) => void>();
   readonly notifications: NotificationFrame[] = [];
@@ -177,7 +179,7 @@ export class RpcClient {
   }
 
   private feed(chunk: Buffer): void {
-    this.buffer += chunk.toString("utf8");
+    this.buffer += this.decoder.decode(chunk, { stream: true });
     let nl: number;
     while ((nl = this.buffer.indexOf("\n")) >= 0) {
       const line = this.buffer.slice(0, nl);
@@ -229,6 +231,26 @@ export class RpcClient {
   /** Writes a raw line (for the malformed-line resilience test). */
   sendRawLine(line: string): void {
     this.socket.write(line + "\n");
+  }
+
+  /**
+   * Sends a request but flushes its bytes in TWO separate socket writes, split
+   * one byte into the first (multibyte) rune of `needle`, with a real gap in
+   * between so the daemon observes two distinct `data` chunks. Reproduces a
+   * UTF-8 sequence straddling a transport chunk boundary (issue #15): the byte
+   * before the split ends chunk one, the continuation byte starts chunk two.
+   */
+  async callRawRuneSplit(method: string, params: unknown, needle: string): Promise<ResponseFrame> {
+    const id = this.nextId++;
+    const frame = Buffer.from(JSON.stringify({ id, method, params }) + "\n", "utf8");
+    const at = frame.indexOf(Buffer.from(needle, "utf8"));
+    if (at < 0) throw new Error("callRawRuneSplit: needle not found in the encoded frame");
+    const splitByte = at + 1; // needle[0] MUST be a multibyte rune → split inside it
+    const promise = new Promise<ResponseFrame>((resolve) => this.pending.set(id, resolve));
+    await new Promise<void>((r) => this.socket.write(frame.subarray(0, splitByte), () => r()));
+    await new Promise<void>((r) => setTimeout(r, 10)); // force two separate server-side chunks
+    await new Promise<void>((r) => this.socket.write(frame.subarray(splitByte), () => r()));
+    return promise;
   }
 
   waitForNotification(pred: (n: NotificationFrame) => boolean, timeoutMs = 2000): Promise<NotificationFrame> {

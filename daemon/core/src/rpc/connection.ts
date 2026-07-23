@@ -52,6 +52,14 @@ export class Connection {
   readonly sessionSubs = new Map<string, SessionSubscription>();
 
   private buffer = "";
+  /**
+   * Streaming UTF-8 decoder for the read path. A large request can span several
+   * socket `data` chunks and a chunk boundary may fall *inside* a multibyte
+   * rune; decoding each chunk independently (`chunk.toString("utf8")`) would emit
+   * a U+FFFD for each half and silently corrupt the payload. `TextDecoder` with
+   * `{ stream: true }` holds the trailing partial sequence until the next chunk.
+   */
+  private readonly decoder = new TextDecoder();
   private writeChain: Promise<void> = Promise.resolve();
   private reqChain: Promise<void> = Promise.resolve();
   private closed = false;
@@ -78,7 +86,7 @@ export class Connection {
   // -- read path -----------------------------------------------------------
 
   private feed(chunk: Buffer): void {
-    this.buffer += chunk.toString("utf8");
+    this.buffer += this.decoder.decode(chunk, { stream: true });
     let nl: number;
     while ((nl = this.buffer.indexOf("\n")) >= 0) {
       const line = this.buffer.slice(0, nl);

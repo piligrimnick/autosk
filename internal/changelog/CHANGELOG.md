@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **daemon:** large task descriptions no longer corrupt a multibyte UTF-8 char at a transport chunk boundary (#15).
+
 ## [0.2.5] — 2026-07-21
 
 ### Added
